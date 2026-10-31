@@ -208,7 +208,7 @@ class FailingTests(unittest.TestCase):
                                 verify=lambda *_: "failed to fetch the trusted root")
         self.assertIn(again, github.issues[0]["body"])
         self.assertIn(f"its version is spent. A provenance finding can also be `gh` failing to fetch its trust root: "
-                      f"{again}. https://github.com/o/r/issues/1", out)   # the run's verdict says it too
+                      f"{again}, and close its issue if it passes. https://github.com/o/r/issues/1", out)   # the run's verdict says it too
         github = FakeGitHub([release("1.4.0", 1, immutable=False)], "1.4.0")
         out = self.assert_fails(github, "1.4.0", "the release is mutable")
         self.assertNotIn(again, github.issues[0]["body"])
