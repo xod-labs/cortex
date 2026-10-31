@@ -219,7 +219,9 @@ def open_issue(github: GitHub, report: Report, label: str, url: str) -> Optional
             + "\n**It cannot be repaired.** A published release is immutable: it can only be deleted, and its "
               f"version is spent — {report.tag} can never be used again. The next patch ships what this one "
               "should have, through the release cycle.\n\n"
-              f"The guard moves `latest` off {report.tag} when it holds it, to the highest `X.Y.Z` release, not "
+            + ("A provenance finding can also be `gh` failing to fetch its trust root: run the guard again before "
+               "you delete the release.\n\n" if any(f.startswith("the provenance ") for f in report.findings) else "")
+            + f"The guard moves `latest` off {report.tag} when it holds it, to the highest `X.Y.Z` release, not "
               "marked pre-release, that carries every asset expected, if there is one: its run says whether it "
               f"could. A later guard gives `latest` only to such a release: {report.tag}, if it is one, could take "
               "it back until it is deleted. If you delete it, check that `latest` still names a "

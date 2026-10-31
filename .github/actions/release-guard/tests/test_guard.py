@@ -200,6 +200,17 @@ class FailingTests(unittest.TestCase):
         github = FakeGitHub([release("1.4.0", 1)], "1.4.0", tags={"1.4.0": "d" * 40})
         self.assert_fails(github, "1.4.0", f"the provenance does not name the tag's commit {'d' * 12}")
 
+    def test_only_a_provenance_finding_says_to_run_the_guard_again(self):
+        # gh fetches its trust root online: a provenance finding may be gh failing to, not the release.
+        again = "run the guard again before you delete the release"
+        github = FakeGitHub([release("1.4.0", 1)], "1.4.0")
+        self.assert_fails(github, "1.4.0", "the provenance does not name",
+                          verify=lambda *_: "failed to fetch the trusted root")
+        self.assertIn(again, github.issues[0]["body"])
+        github = FakeGitHub([release("1.4.0", 1, immutable=False)], "1.4.0")
+        self.assert_fails(github, "1.4.0", "the release is mutable")
+        self.assertNotIn(again, github.issues[0]["body"])
+
     def test_a_mutable_release(self):
         self.assert_fails(FakeGitHub([release("1.4.0", 1, immutable=False)], "1.4.0"), "1.4.0",
                           "the release is mutable: its assets could still be replaced")
