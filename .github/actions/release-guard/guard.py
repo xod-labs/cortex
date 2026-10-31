@@ -62,8 +62,8 @@ def attestations(github: GitHub, path: Path) -> List[Dict[str, Any]]:
     a GitHubError: the guard cannot tell, so it stops, and fails no release for it."""
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     try:
-        # One page, of up to 100: a digest gets two a build. A release builds its own commit, whose time
-        # the spec archive carries and whose version the binaries do: only builds of that commit run again add more.
+        # One page, of up to 100: a digest gets two a build. A release builds its own commit, whose id the
+        # spec archive carries and whose version the binaries do: only builds of that commit run again add more.
         return github.get(github.repo(f"/attestations/sha256:{digest}?per_page=100")).get("attestations") or []
     except GitHubError as error:
         if error.status == 404:
@@ -215,7 +215,7 @@ def run_again(report: Report) -> str:
     if not any(f.startswith("the provenance ") for f in report.findings):
         return ""
     return ("A provenance finding can also be `gh` failing to fetch its trust root: run the guard again before "
-            "you delete the release.")
+            "you delete the release, and close its issue if it passes.")
 
 
 def open_issue(github: GitHub, report: Report, label: str, url: str) -> Optional[str]:
