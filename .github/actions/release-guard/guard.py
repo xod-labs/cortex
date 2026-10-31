@@ -244,6 +244,7 @@ def main(argv: Optional[Sequence[str]] = None, github: Optional[GitHub] = None,
     github = github or GitHub(args.repository)
     expected = [n.strip() for n in args.expected.splitlines() if n.strip()]
     report: Optional[Report] = None
+    issue: Optional[str] = None
     try:
         release = next((r for r in github.releases() if r.get("tag_name") == args.tag and not r.get("draft")), None)
         if release is None:
@@ -252,7 +253,8 @@ def main(argv: Optional[Sequence[str]] = None, github: Optional[GitHub] = None,
         with tempfile.TemporaryDirectory(prefix="release-guard-") as tmp:
             report = check(github, release, expected, args.signer_workflow, Path(tmp), verify)
         # Both writes are tried, whatever the other does: `latest` moved off a release whose issue
-        # cannot be opened, and the issue opened while `latest` cannot move.
+        # cannot be opened, and the issue opened while `latest` cannot move. When both fail, the
+        # issue's error is the one printed: running the guard again tries both.
         try:
             untick_pre_release(github, release, report)
             keep_latest(github, report, expected)
@@ -260,8 +262,10 @@ def main(argv: Optional[Sequence[str]] = None, github: Optional[GitHub] = None,
             issue = open_issue(github, report, args.label, release.get("html_url", "")) if report.findings else None
     except GitHubError as error:
         print(f"::error title=release guard::{error}")
-        if report is not None:   # what the guard found before the API failed, for the log
-            print(f"No verdict on {args.tag}: the guard stopped. What it found before:\n" + "\n".join(_lines(report)))
+        if report is not None:   # the checks are done, and a write failed: what they found, for the log
+            print(f"{args.tag} {'fails' if report.findings else 'passes'} its guard, but the guard stopped before "
+                  f"it finished{f', with its issue opened: {issue}' if issue else ''}. What it found:\n"
+                  + "\n".join(_lines(report)))
         return 2
 
     lines = _lines(report)
