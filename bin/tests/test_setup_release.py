@@ -166,7 +166,8 @@ class SetupReleaseTests(unittest.TestCase):
                 "          [ \"${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}\" = false ]")
         summaries = set()
         for path in sorted((BIN.parent / ".github" / "workflows").glob("*.yml")):
-            top, block = path.read_text(encoding="utf-8").split("\njobs:\n", 1)
+            text = path.read_text(encoding="utf-8")
+            block = text.split("\njobs:\n", 1)[1]
             parts = re.split(r"(?m)^  ([A-Za-z0-9_-]+):\s*\n", block)
             jobs = dict(zip(parts[1::2], parts[2::2]))
 
@@ -180,7 +181,7 @@ class SetupReleaseTests(unittest.TestCase):
                 summaries.add(key(job, "name"))
                 others = {other for other, text in jobs.items() if other != job_id and key(text, "if") != tag_push_only}
                 with self.subTest(workflow=path.name, check=key(job, "name")):
-                    self.assertNotRegex(top, r"(?m)^defaults:")
+                    self.assertNotRegex(text, r"(?m)^[\"']?defaults[\"']?\s*:")
                     self.assertEqual(re.sub(r"(?m)^    (name|needs): .*\n", "", job).rstrip(), body)
                     self.assertEqual(set(re.findall(r"[A-Za-z0-9_-]+", key(job, "needs"))), others)
         self.assertEqual(summaries, {"builds", "cli tests", "core tests", "repo checks", "runtime tests"})
