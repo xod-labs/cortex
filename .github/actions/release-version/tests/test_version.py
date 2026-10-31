@@ -234,6 +234,23 @@ class HistoryTests(unittest.TestCase):
         self.assertIn(f"::warning title=release version::{warning}", out)
         self.assertIn(f"**Warning:** {warning}", summary.read_text(encoding="utf-8"))
 
+    def test_no_date_is_compared_without_a_released_section_of_the_version(self):
+        # A push that bypassed the gate may bring any changelog: the release goes on, with no warning.
+        for case, changelog in (("no CHANGELOG.md", None),
+                                ("a first section not released", "## [1.4.0] - 2026-10-29 — Y\n"),
+                                ("another version's first", "## [1.3.0] - 2026-10-20 — X _(Released)_\n")):
+            with self.subTest(case):
+                if changelog is None:
+                    (self.repo / "CHANGELOG.md").unlink()
+                else:
+                    self.write("CHANGELOG.md", f"# Changelog\n\n## [Unreleased]\n\n{changelog}")
+                self.write("changelog/1.4.0.md", "# 1.4.0")
+                self.commit(date="2026-10-31T12:00:00+00:00")
+                code, out, outputs = self.run_version("--event", "push", "--ref", "main", "--before", self.before,
+                                                      "--sha", self.head())
+                self.assertEqual((code, outputs.get("version")), (0, "1.4.0"), out)
+                self.assertNotIn("::warning", out)
+
     def test_the_commits_day_is_taken_in_utc(self):
         # 00:30 in Paris on 1 November is still 31 October in UTC.
         code, out, _ = self.release_dated("2026-10-31", "2026-11-01T00:30:00+01:00")
