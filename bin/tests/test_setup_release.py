@@ -152,8 +152,8 @@ class SetupReleaseTests(unittest.TestCase):
 
     def test_each_required_check_of_several_jobs_fails_when_one_of_them_does(self):
         # A summary runs whatever happened, needs every job a pull request runs — a job of a tag's
-        # push only is none — and fails on a failure or a cancellation (§3.10): all five read the same,
-        # so nothing can soften one. Read as text: the runner's Python has no YAML parser.
+        # push only is none — and fails on a failure or a cancellation (§3.10): all five read the same, and
+        # no workflow-wide `defaults:` can soften one. Read as text: the runner's Python has no YAML parser.
         tag_push_only = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')"
         body = ("    if: always()\n"
                 "    runs-on: ubuntu-latest\n"
@@ -166,7 +166,7 @@ class SetupReleaseTests(unittest.TestCase):
                 "          [ \"${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}\" = false ]")
         summaries = set()
         for path in sorted((BIN.parent / ".github" / "workflows").glob("*.yml")):
-            block = path.read_text(encoding="utf-8").split("\njobs:\n", 1)[1]
+            top, block = path.read_text(encoding="utf-8").split("\njobs:\n", 1)
             parts = re.split(r"(?m)^  ([A-Za-z0-9_-]+):\s*\n", block)
             jobs = dict(zip(parts[1::2], parts[2::2]))
 
@@ -180,6 +180,7 @@ class SetupReleaseTests(unittest.TestCase):
                 summaries.add(key(job, "name"))
                 others = {other for other, text in jobs.items() if other != job_id and key(text, "if") != tag_push_only}
                 with self.subTest(workflow=path.name, check=key(job, "name")):
+                    self.assertNotRegex(top, r"(?m)^defaults:")
                     self.assertEqual(re.sub(r"(?m)^    (name|needs): .*\n", "", job).rstrip(), body)
                     self.assertEqual(set(re.findall(r"[A-Za-z0-9_-]+", key(job, "needs"))), others)
         self.assertEqual(summaries, {"builds", "cli tests", "core tests", "repo checks", "runtime tests"})
