@@ -171,8 +171,8 @@ def untick_pre_release(github: GitHub, release: Dict[str, Any], report: Report) 
     if report.findings or not is_release(tag) or not release.get("prerelease"):
         return
     # `make_latest` false: its default, true, would make it latest whatever its version; keep_latest decides next,
-    # from the releases read again. A list that lagged behind this write would leave `latest` where it was, in a
-    # green run: nothing shows GitHub's does, and the first release unticked for real says whether `latest` moved.
+    # from the releases read again. A list that lagged behind this write would keep `latest` off this release, in
+    # a green run: nothing shows GitHub's does, and the first release unticked for real says whether `latest` moved.
     github.request("PATCH", github.repo(f"/releases/{release['id']}"), body={"prerelease": False, "make_latest": "false"})
     report.repaired.append(f"{tag} was marked pre-release; it is a release again, as its version says")
 
