@@ -126,7 +126,7 @@ class VersionTests(unittest.TestCase):
         self.assertIsNone(verdict.version)
         hand = gate.State(tags=["1.2.2", "1.3.0", "1.4.0"], releases=[release("1.2.2"), release("1.3.0")])
         self.assertEqual(decide(["1.4.0"], HEAD, BASE, repo=hand).errors, [
-            "it adds no release note of a version with no release yet: changelog/X.Y.Z.md — 1.4.0 already has a tag, with no release"])
+            "it adds no release note of a version with no release yet: changelog/X.Y.Z.md — 1.4.0 already has a tag, with no published release"])
 
     def test_a_draft_of_the_same_name_takes_it(self):
         verdict = decide(["1.4.0"], HEAD, BASE, repo=state("1.2.2", "1.3.0", drafts=["1.4.0"]))

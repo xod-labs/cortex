@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 class GitHubError(Exception):
     """An answer other than a success, or no answer at all — a network error, whose ``status`` is
-    None. Either way the API said nothing an action may act on."""
+    None. Either way the API said nothing an action may act on, but a 404, which its caller reads."""
 
     def __init__(self, status: Optional[int], message: str):
         super().__init__(f"HTTP {status}: {message}" if status is not None else f"no answer: {message}")

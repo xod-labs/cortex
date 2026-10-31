@@ -62,7 +62,9 @@ def attestations(github: GitHub, path: Path) -> List[Dict[str, Any]]:
     a GitHubError: the guard cannot tell, so it stops, and fails no release for it."""
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     try:
-        return github.get(github.repo(f"/attestations/sha256:{digest}")).get("attestations") or []
+        # One page, of up to 100: a digest gets two a release, so 50 releases that ship the very same
+        # bytes. Cortex's do not: its spec archive carries the time it was made.
+        return github.get(github.repo(f"/attestations/sha256:{digest}?per_page=100")).get("attestations") or []
     except GitHubError as error:
         if error.status == 404:
             return []
@@ -168,7 +170,9 @@ def untick_pre_release(github: GitHub, release: Dict[str, Any], report: Report) 
     tag = release["tag_name"]
     if report.findings or not is_release(tag) or not release.get("prerelease"):
         return
-    # `make_latest` false: its default, true, would make it latest whatever its version; keep_latest decides next.
+    # `make_latest` false: its default, true, would make it latest whatever its version; keep_latest decides next,
+    # from the releases read again. A list that lagged behind this write would leave `latest` where it was, in a
+    # green run: nothing shows GitHub's does, and the first release unticked for real says whether `latest` moved.
     github.request("PATCH", github.repo(f"/releases/{release['id']}"), body={"prerelease": False, "make_latest": "false"})
     report.repaired.append(f"{tag} was marked pre-release; it is a release again, as its version says")
 
@@ -217,7 +221,9 @@ def open_issue(github: GitHub, report: Report, label: str, url: str) -> Optional
             + "\n**It cannot be repaired.** A published release is immutable: it can only be deleted, and its "
               f"version is spent — {report.tag} can never be used again. The next patch ships what this one "
               "should have, through the release cycle.\n\n"
-              f"The guard moves `latest` off {report.tag} when it holds it, to the highest `X.Y.Z` release, not "
+            + ("A provenance finding can also be `gh` failing to fetch its trust root: run the guard again before "
+               "you delete the release.\n\n" if any(f.startswith("the provenance ") for f in report.findings) else "")
+            + f"The guard moves `latest` off {report.tag} when it holds it, to the highest `X.Y.Z` release, not "
               "marked pre-release, that carries every asset expected, if there is one: its run says whether it "
               f"could. A later guard gives `latest` only to such a release: {report.tag}, if it is one, could take "
               "it back until it is deleted. If you delete it, check that `latest` still names a "
@@ -238,6 +244,7 @@ def main(argv: Optional[Sequence[str]] = None, github: Optional[GitHub] = None,
     github = github or GitHub(args.repository)
     expected = [n.strip() for n in args.expected.splitlines() if n.strip()]
     report: Optional[Report] = None
+    issue: Optional[str] = None
     try:
         release = next((r for r in github.releases() if r.get("tag_name") == args.tag and not r.get("draft")), None)
         if release is None:
@@ -246,7 +253,8 @@ def main(argv: Optional[Sequence[str]] = None, github: Optional[GitHub] = None,
         with tempfile.TemporaryDirectory(prefix="release-guard-") as tmp:
             report = check(github, release, expected, args.signer_workflow, Path(tmp), verify)
         # Both writes are tried, whatever the other does: `latest` moved off a release whose issue
-        # cannot be opened, and the issue opened while `latest` cannot move.
+        # cannot be opened, and the issue opened while `latest` cannot move. When both fail, the
+        # issue's error is the one printed: running the guard again tries both.
         try:
             untick_pre_release(github, release, report)
             keep_latest(github, report, expected)
@@ -254,8 +262,10 @@ def main(argv: Optional[Sequence[str]] = None, github: Optional[GitHub] = None,
             issue = open_issue(github, report, args.label, release.get("html_url", "")) if report.findings else None
     except GitHubError as error:
         print(f"::error title=release guard::{error}")
-        if report is not None:   # what the guard found before the API failed, for the log
-            print(f"No verdict on {args.tag}: the guard stopped. What it found before:\n" + "\n".join(_lines(report)))
+        if report is not None:   # the checks are done, and a write failed: what they found, for the log
+            print(f"{args.tag} {'fails' if report.findings else 'passes'} its guard, but the guard stopped before "
+                  f"it finished{f', with its issue opened: {issue}' if issue else ''}. What it found:\n"
+                  + "\n".join(_lines(report)))
         return 2
 
     lines = _lines(report)

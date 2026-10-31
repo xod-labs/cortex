@@ -5,6 +5,7 @@ import copy
 import hashlib
 import io
 import json
+import re
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -66,7 +67,8 @@ class FakeGitHub:
                 raise GitHubError(404, "no latest")
             return {"tag_name": self.latest}
         if path.startswith("/repos/o/r/attestations/sha256:"):
-            digest = path.rsplit(":", 1)[1]
+            # The most a page holds: 30 by default, where a digest gets two attestations a release.
+            digest = re.fullmatch(r"/repos/o/r/attestations/sha256:([0-9a-f]{64})\?per_page=100", path).group(1)
             if self.attestations_fail:
                 raise self.attestations_fail
             if digest in self.unattested:
@@ -197,6 +199,17 @@ class FailingTests(unittest.TestCase):
     def test_a_tag_on_another_commit_than_the_provenance_names(self):
         github = FakeGitHub([release("1.4.0", 1)], "1.4.0", tags={"1.4.0": "d" * 40})
         self.assert_fails(github, "1.4.0", f"the provenance does not name the tag's commit {'d' * 12}")
+
+    def test_only_a_provenance_finding_says_to_run_the_guard_again(self):
+        # gh fetches its trust root online: a provenance finding may be gh failing to, not the release.
+        again = "run the guard again before you delete the release"
+        github = FakeGitHub([release("1.4.0", 1)], "1.4.0")
+        self.assert_fails(github, "1.4.0", "the provenance does not name",
+                          verify=lambda *_: "failed to fetch the trusted root")
+        self.assertIn(again, github.issues[0]["body"])
+        github = FakeGitHub([release("1.4.0", 1, immutable=False)], "1.4.0")
+        self.assert_fails(github, "1.4.0", "the release is mutable")
+        self.assertNotIn(again, github.issues[0]["body"])
 
     def test_a_mutable_release(self):
         self.assert_fails(FakeGitHub([release("1.4.0", 1, immutable=False)], "1.4.0"), "1.4.0",
@@ -345,9 +358,24 @@ class LatestTests(unittest.TestCase):
         github.issue_fails = True
         code, out = run(github, "4.0.0")
         self.assertEqual(code, 2, out)
-        self.assertIn("No verdict on 4.0.0: the guard stopped. What it found before:", out)
+        self.assertIn("4.0.0 fails its guard, but the guard stopped before it finished. What it found:", out)
         self.assertIn("- ✗ assets missing", out)
         self.assertIn("- ↺ latest was 4.0.0; it is 3.0.1 again", out)
+
+    def test_the_issue_opened_is_named_when_the_guard_stops(self):
+        github = FakeGitHub([release("4.0.0", 1, {}), release("3.0.1", 2)], latest="4.0.0")
+        github.patch_fails = True
+        code, out = run(github, "4.0.0")
+        self.assertEqual(code, 2, out)
+        self.assertIn("4.0.0 fails its guard, but the guard stopped before it finished, with its issue opened: "
+                      "https://github.com/o/r/issues/1. What it found:", out)
+
+    def test_a_release_that_passes_is_said_to_when_a_write_stops_the_guard(self):
+        github = FakeGitHub([release("2.1.0", 1, prerelease=True), release("2.0.0", 2)], latest="2.0.0")
+        github.patch_fails = True
+        code, out = run(github, "2.1.0")
+        self.assertEqual((code, github.issues), (2, []), out)
+        self.assertIn("2.1.0 passes its guard, but the guard stopped before it finished. What it found:", out)
 
     def test_latest_is_repaired_even_when_the_release_fails(self):
         github = FakeGitHub([release("1.5.1", 1, immutable=False), release("2.0.0", 2)], latest="1.5.1")
