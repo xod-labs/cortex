@@ -5,6 +5,7 @@ import copy
 import hashlib
 import io
 import json
+import re
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -66,7 +67,8 @@ class FakeGitHub:
                 raise GitHubError(404, "no latest")
             return {"tag_name": self.latest}
         if path.startswith("/repos/o/r/attestations/sha256:"):
-            digest = path.rsplit(":", 1)[1]
+            # The most a page holds: 30 by default, where a digest gets two attestations a release.
+            digest = re.fullmatch(r"/repos/o/r/attestations/sha256:([0-9a-f]{64})\?per_page=100", path).group(1)
             if self.attestations_fail:
                 raise self.attestations_fail
             if digest in self.unattested:

@@ -62,7 +62,9 @@ def attestations(github: GitHub, path: Path) -> List[Dict[str, Any]]:
     a GitHubError: the guard cannot tell, so it stops, and fails no release for it."""
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     try:
-        return github.get(github.repo(f"/attestations/sha256:{digest}")).get("attestations") or []
+        # One page, of up to 100: a digest gets two a release, so 50 releases that ship the very same
+        # bytes. Cortex's do not: its spec archive carries the time it was made.
+        return github.get(github.repo(f"/attestations/sha256:{digest}?per_page=100")).get("attestations") or []
     except GitHubError as error:
         if error.status == 404:
             return []
