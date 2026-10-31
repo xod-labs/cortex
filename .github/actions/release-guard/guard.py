@@ -215,7 +215,7 @@ def run_again(report: Report) -> str:
     if not any(f.startswith("the provenance ") for f in report.findings):
         return ""
     return ("A provenance finding can also be `gh` failing to fetch its trust root: run the guard again before "
-            "you delete the release.")
+            "you delete the release, and close its issue if it passes.")
 
 
 def open_issue(github: GitHub, report: Report, label: str, url: str) -> Optional[str]:
