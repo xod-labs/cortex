@@ -174,7 +174,8 @@ def other_rulesets(gh: Gh, repository: str, found: List[Dict[str, Any]], default
     """Every other active ruleset that requires checks of the default branch or of a line's.
 
     Left as they are, since the only such ruleset is Cortex's own `Block default`: a pattern's
-    `exclude` is not read; `fnmatch`'s `*` crosses a `/`, where GitHub's does not; one page of
+    `exclude` is not read; `fnmatch`'s `*` crosses a `/`, where GitHub's does not, and its `**/`
+    needs one, where GitHub's matches none, so a ruleset on `refs/heads/**/*` is missed; one page of
     rulesets is read, and an organisation's are not listed."""
     refs = [f"refs/heads/{b}" for b in [default, "0.x", *lines]]
     result = []

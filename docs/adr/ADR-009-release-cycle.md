@@ -518,6 +518,6 @@ The repository was deleted after the run.
   1. the final pull request merges, and `release.yml` drafts `1.3.0`;
   2. that draft is deleted. It has no tag, so `1.3.0` is not spent. *Run workflow* refuses a pre-release while a draft waits;
   3. `1.3.0-rc.1` is cut by *Run workflow* from the integration branch, restored, then published and checked by its guard. It is installed by `install.sh 1.3.0-rc.1` on a clean machine, and pinned and synced by a throwaway project;
-  4. the run of the merge is run again, drafts `1.3.0`, and `1.3.0` is published.
+  4. the run of the merge is run again with *Re-run all jobs*, so that its `version` job reads the draft gone and the candidate published, drafts `1.3.0`, and `1.3.0` is published.
 
   The first publication of the new pipeline is a pre-release, as §3.7 wants, and it holds the very tree `1.3.0` ships. A defect it finds is fixed in `1.3.1`: `main` already has `1.3.0`'s section, so `1.3.0` would never be published. Every later release cuts its candidates before its pull request into `main`, as §3.7 says.
