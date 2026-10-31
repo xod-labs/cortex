@@ -262,7 +262,7 @@ def main(argv: Optional[Sequence[str]] = None, github: Optional[GitHub] = None,
             issue = open_issue(github, report, args.label, release.get("html_url", "")) if report.findings else None
     except GitHubError as error:
         print(f"::error title=release guard::{error}")
-        if report is not None:   # the checks are done, and a write failed: what they found, for the log
+        if report is not None:   # the checks are done, and a call after them failed: what they found, for the log
             print(f"{args.tag} {'fails' if report.findings else 'passes'} its guard, but the guard stopped before "
                   f"it finished{f', with its issue opened: {issue}' if issue else ''}. What it found:\n"
                   + "\n".join(_lines(report)))
