@@ -10,6 +10,11 @@ the core's own, and the core parses them. The command only says which two roots 
 
 A project whose spec is missing, or synced for another version than the one ``cortex.toml`` pins,
 is not validated: it would be checked against a spec it does not use.
+
+A spec of a known version is also checked against ``cortex.lock`` (ADR-010 §3.4): a missing lock, a
+lock of another version, a spec whose digest is not the lock's. Warnings, by the version rule of
+ADR-008 §9 — a project of 1.3 has no lock — which ``--strict`` makes errors. A checkout synced
+with ``--from`` has no version, and no lock.
 """
 
 from __future__ import annotations
@@ -46,8 +51,27 @@ def _synced_version(project: config.Project, base: str) -> str:
     return resolved.name if resolved.parent.name == "versions" and store.Version.valid(resolved.name) else ""
 
 
-def roots(cwd: str) -> Tuple[str, str]:
-    """The project root and the base root to validate from ``cwd``."""
+def lock_warnings(project: config.Project, base: str) -> List[Tuple[str, str, str]]:
+    """What ``cortex.lock`` says of the spec at ``base``, a spec of the pinned version."""
+    try:
+        lock = config.load_lock(project.root)
+    except config.ConfigError as error:
+        return [(config.LOCK_FILE, "LOCK_INVALID", f"{error} — run `cortex sync`, which writes it again")]
+    if lock is None:
+        return [(config.LOCK_FILE, "LOCK_MISSING", "no cortex.lock — run `cortex sync`, then commit it")]
+    if lock.version != project.version:
+        return [(config.LOCK_FILE, "LOCK_STALE", f"cortex.lock names Cortex {lock.version}, and cortex.toml pins "
+                 f"{project.version} — run `cortex sync`, then commit it")]
+    actual = store.digest(Path(base))
+    if actual != lock.digest:
+        return [(config.LOCK_FILE, "LOCK_DIGEST", f"the spec synced is {actual}, and cortex.lock names {lock.digest} — "
+                 "run `cortex sync`, which puts it in the store again")]
+    return []
+
+
+def roots(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]]]:
+    """The project root and the base root to validate from ``cwd``, and the warnings of the
+    project itself."""
     root = config.find_project(cwd)
     if root is not None:
         try:
@@ -71,9 +95,9 @@ def roots(cwd: str) -> Tuple[str, str]:
                 raise RootsError(f"{sync.LINK}/ no longer holds what sync copied — {len(off)} file(s) added, changed "
                                  f"or missing, {shown(off[0])} first: it would be validated against another spec. "
                                  "Run `cortex sync`, which says what to do")
-        return root, base
+        return root, base, lock_warnings(project, base) if synced else []
     if sync.is_checkout(Path(cwd)) and os.path.isfile(os.path.join(cwd, "templates", "bootstrap-instructions.md")):
-        return cwd, cwd
+        return cwd, cwd, []
     hint = (" — a cortex/ submodule or clone is here: `cortex init` says how to leave it"
             if os.path.isdir(os.path.join(cwd, "cortex")) else "")
     raise RootsError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory a "
@@ -84,9 +108,10 @@ def run(args: List[str]) -> int:
     if any(arg in ("-h", "--help") for arg in args):
         return validate.main(args, project_root=".", base_root="cortex", prog="cortex validate")
     try:
-        project_root, base_root = roots(working_directory())
+        project_root, base_root, warnings = roots(working_directory())
     except RootsError as error:
         return sync.failed("cortex validate", str(error), 2)
     except OSError as error:
         return sync.failed("cortex validate", sync.os_error(error), 2)
-    return validate.main(args, project_root=project_root, base_root=base_root, prog="cortex validate")
+    return validate.main(args, project_root=project_root, base_root=base_root, prog="cortex validate",
+                         project_warnings=warnings)

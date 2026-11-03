@@ -6,6 +6,9 @@ without asking (``claude_access``). ``cortex.local.toml``, next to it and ignore
 developer on this machine: a ``theme`` and a ``claude_access`` of their own, and the ``spec``
 ``cortex sync`` writes. An unknown key is an error, never a warning: these are the files a later
 ADR extends, and a typo that silently does nothing is the failure they must not start with.
+
+``cortex.lock``, next to ``cortex.toml`` and committed, is the spec the project resolved: its
+version and its digest (ADR-010 §3.2). ``cortex sync`` writes it whole; nobody edits it.
 """
 
 from __future__ import annotations
@@ -18,13 +21,14 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 from cortex_core import project
-from cortex_core.project import LOCAL_FILE, MODES, PROJECT_FILE  # noqa: F401 — part of this module's API
+from cortex_core.project import LOCAL_FILE, LOCK_FILE, MODES, PROJECT_FILE  # noqa: F401 — part of this module's API
 
 from .semver import Version
 
 PROJECT_HEADER = "# Written by `cortex init`. Committed: the Cortex version this project uses, and the team's theme.\n"
 LOCAL_HEADER = ("# This developer, on this machine — ignored by git (ADR-008 §3.4).\n"
                 "# `cortex sync` writes spec. A theme set here overrides cortex.toml's.\n")
+LOCK_HEADER = "# Written by `cortex sync`: the spec this project resolved. Committed — do not edit (ADR-010 §3.2).\n"
 
 
 class ConfigError(Exception):
@@ -58,6 +62,12 @@ class Project:
             return None
         spec = self.spec
         return spec if os.path.isabs(spec) else f"{self.root}/{spec}"
+
+
+@dataclass
+class Lock:
+    version: Version
+    digest: str
 
 
 def find_project(start: str) -> Optional[str]:
@@ -230,3 +240,27 @@ def write_local(root: str, values: Dict[str, object], comments: Optional[Dict[st
 def write_spec(root: str, spec: str) -> None:
     """Set ``spec`` in ``cortex.local.toml``, creating the file if needed."""
     write_local_text(root, render_spec(root, spec))
+
+
+def load_lock(root: str) -> Optional[Lock]:
+    """The project's ``cortex.lock``, checked with the core's grammar; ``None`` when there is none."""
+    path = os.path.join(root, LOCK_FILE)
+    if not os.path.isfile(path):
+        return None
+    data = _read(path)
+    try:
+        project.check_lock(data)
+    except project.LaterFormatError as error:
+        raise ConfigError(f"{error}: upgrade this cortex — the install script installs the latest")
+    except project.ProjectFileError as error:
+        raise ConfigError(str(error))
+    return Lock(version=Version(data["version"]), digest=data["digest"])
+
+
+def render_lock(version: Version, digest: str) -> str:
+    return (LOCK_HEADER + f"format = {project.LOCK_FORMAT}\n" + f"version = {toml_string(str(version))}\n"
+            + f"digest = {toml_string(digest)}\n")
+
+
+def write_lock(root: str, version: Version, digest: str) -> None:
+    write_text(os.path.join(root, LOCK_FILE), render_lock(version, digest))

@@ -22,7 +22,7 @@ import io
 import os
 import re
 import sys
-from typing import List, Optional, TextIO
+from typing import List, Optional, Sequence, TextIO, Tuple
 
 from . import catalog, resolver
 from .workspace import find, same_directory, services  # noqa: F401 — find is part of this module's API
@@ -272,8 +272,12 @@ def overlay_roots(project_root: str, base_root: str, service: str) -> List[str]:
 # --------------------------------------------------------------------------- #
 # The run
 # --------------------------------------------------------------------------- #
-def validate(project_root: str, base_root: str, service: str, strict: bool, out: TextIO, colors: Colors) -> int:
-    """Validate every overlay under the overlay roots; return the script's exit code."""
+def validate(project_root: str, base_root: str, service: str, strict: bool, out: TextIO, colors: Colors,
+             project_warnings: Sequence[Tuple[str, str, str]] = ()) -> int:
+    """Validate every overlay under the overlay roots; return the script's exit code.
+
+    ``project_warnings`` — ``(file, code, message)`` — are what the caller found of the project
+    itself, its ``cortex.lock`` (ADR-010 §3.4): reported first, and counted as warnings."""
     c = colors
     report = Report(out, c)
     report.echo(f"{c.BOLD}{c.BLUE}Cortex overlay validator{c.NC}")
@@ -284,10 +288,19 @@ def validate(project_root: str, base_root: str, service: str, strict: bool, out:
         report.echo(f"  Service only:  {shown(display(service))}")
     report.echo("")
 
+    if project_warnings:
+        report.echo(f"{c.BOLD}── Project ──{c.NC}")
+        for rel_path, code, message in project_warnings:
+            report.warning(rel_path, code, message)
+        report.echo("")
+
     roots = overlay_roots(project_root, base_root, service)
     if not roots:
         report.echo(f"{c.YELLOW}ℹ{c.NC}  No overlay roots found (no agents/ directory at workspace or service level).")
         report.echo("   Nothing to validate. This is expected if you haven't created overlays yet.")
+        if strict and report.warnings:
+            report.echo(f"{c.RED}Strict mode: warnings count as errors.{c.NC}")
+            return 1
         return 0
 
     for root in roots:
@@ -323,7 +336,8 @@ def _stream(stream: TextIO) -> TextIO:
     return io.TextIOWrapper(stream.buffer, encoding="utf-8", errors="surrogateescape", newline="\n", write_through=True)
 
 
-def main(argv: List[str], *, project_root: str, base_root: str, prog: str = "cortex validate") -> int:
+def main(argv: List[str], *, project_root: str, base_root: str, prog: str = "cortex validate",
+         project_warnings: Sequence[Tuple[str, str, str]] = ()) -> int:
     """``cortex validate [--service PATH] [--strict] [-h|--help]``.
 
     The two roots are no options: the ``cortex`` command finds them from the project (ADR-008
@@ -335,7 +349,7 @@ def main(argv: List[str], *, project_root: str, base_root: str, prog: str = "cor
     sys.stderr.flush()
     out, err = _stream(sys.stdout), _stream(sys.stderr)
     try:
-        return _main(args, project_root, base_root, out, err, prog)
+        return _main(args, project_root, base_root, out, err, prog, project_warnings)
     finally:
         # The wrappers borrow the process's own streams: detached, returning leaves stdout and
         # stderr open for whatever runs next in this process.
@@ -344,7 +358,7 @@ def main(argv: List[str], *, project_root: str, base_root: str, prog: str = "cor
 
 
 def _main(args: List[str], project_root: str, base_root: str, out: TextIO, err: TextIO,
-          prog: str) -> int:
+          prog: str, project_warnings: Sequence[Tuple[str, str, str]] = ()) -> int:
     service, strict = "", False
     i = 0
     while i < len(args):
@@ -362,4 +376,4 @@ def _main(args: List[str], project_root: str, base_root: str, out: TextIO, err: 
             err.write(f"Unknown argument: {arg}\n")
             err.write(USAGE.format(prog=prog))
             return 2
-    return validate(project_root, base_root, service, strict, out, Colors(out.isatty()))
+    return validate(project_root, base_root, service, strict, out, Colors(out.isatty()), project_warnings)
