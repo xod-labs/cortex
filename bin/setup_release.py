@@ -18,8 +18,9 @@ and `--check` reports every setting that differs, changing nothing, and exits no
 - Head branches deleted on merge.
 - No other ruleset requiring checks of the default branch or of a line's: GitHub requires the
   checks of every ruleset, and an older one names jobs that may never report again. The script
-  asks GitHub which rules it applies to each of those branches, an organisation's included, and
-  reports such a ruleset and leaves it: removing someone's ruleset is theirs to do, by hand.
+  asks GitHub which rules it applies to each of those branches, an organisation's or an
+  enterprise's included, and reports such a ruleset and leaves it: removing someone's ruleset is
+  theirs to do, by hand.
 
 Standard library only; GitHub through `gh api`.
 """
@@ -174,8 +175,8 @@ def other_rulesets(gh: Gh, repository: str, found: List[Dict[str, Any]], default
     """Every other ruleset that requires checks of the default branch or of a line's.
 
     GitHub says which active rules it applies to a branch, each with its ruleset: an organisation's
-    included, a pattern's `exclude` read, and a line not cut yet, such as `0.x`, matched all the
-    same. The script asks it rather than matching the patterns itself (#226)."""
+    or an enterprise's included, a pattern's `exclude` read, and a line not cut yet, such as `0.x`,
+    matched all the same. The script asks it rather than matching the patterns itself (#226)."""
     mine = {r["id"] for r in found if r.get("name") in (RULESET, QUEUE_RULESET) and r.get("source_type", "Repository") == "Repository"}
     checks: Dict[int, List[str]] = {}
     for branch in [default, "0.x", *lines]:
@@ -190,7 +191,8 @@ def other_rulesets(gh: Gh, repository: str, found: List[Dict[str, Any]], default
     result = []
     for ruleset_id, contexts in checks.items():
         ruleset = gh.api(f"repos/{repository}/rulesets/{ruleset_id}?includes_parents=true")
-        owner = "the organisation's ruleset" if ruleset.get("source_type") == "Organization" else "the ruleset"
+        owner = {"Organization": "the organisation's ruleset", "Enterprise": "the enterprise's ruleset"}.get(
+            ruleset.get("source_type"), "the ruleset")
         result.append(Setting(f"{owner} {ruleset.get('name')!r}, which the cycle does not set", [
             f"it requires {len(contexts)} check(s) of its own — {', '.join(contexts)}: GitHub requires every "
             "ruleset's, so remove it by hand"], None))
