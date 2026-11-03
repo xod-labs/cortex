@@ -831,8 +831,9 @@ class ValidateTests(SyncTestCase):
                 self.assertIn(escaped, proc.err)
 
 
-class LockTests(SyncTestCase):
-    """``cortex.lock`` — the spec a project resolved (ADR-010 §3.2 to §3.4)."""
+class CortexLockTests(SyncTestCase):
+    """``cortex.lock`` — the spec a project resolved (ADR-010 §3.2 to §3.4). Not ``LockTests``: that
+    name is the project lock's, above, which a second class of it would hide."""
 
     OTHER = "sha256:" + "0" * 64
 
