@@ -174,8 +174,8 @@ usually delivering something the issues do not describe.
 ## 6. Commits and closing keywords
 
 Commits follow the [convention in CONTRIBUTING.md](../../CONTRIBUTING.md#commit-message-convention)
-— gitmoji, Conventional Commits, one line, no body, no trailer. ADR work adds the task number
-immediately before the subject:
+— gitmoji, Conventional Commits, one line, no body, no trailer. A commit that delivers an issue
+— an ADR task, or any other — adds its number immediately before the subject:
 
 ```text
 <gitmoji> <type>(<scope>): #<issue> <subject>

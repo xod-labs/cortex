@@ -1,7 +1,7 @@
 name: commit messages
 
 # Every commit a pull request brings, against CONTRIBUTING's convention (ADR-009 §3.8):
-# `<gitmoji> <type>(<scope>): <subject>`, with `#<issue>` before the subject for ADR work, the
+# `<gitmoji> <type>(<scope>): <subject>`, with `#<issue>` before the subject when it delivers one, the
 # subject within 72 characters, no body but a BREAKING CHANGE footer, no trailer. Merge commits are
 # GitHub's and are left out. Pull requests are checked, not history: a commit already on the base
 # is never checked again, and the pull request into main carries every commit of its stack.
