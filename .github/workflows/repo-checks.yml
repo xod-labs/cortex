@@ -211,8 +211,9 @@ jobs:
       - name: bin/tests
         run: python3 -m unittest discover -s bin/tests -p 'test_*.py' -v
 
-  # The one check the ruleset requires of this workflow, by a name no matrix changes: it fails when
-  # a job it needs failed or was cancelled, and passes when each passed (ADR-009 §3.10).
+  # The one check the ruleset requires of this workflow, by a name no matrix changes: it passes
+  # when each job it needs passed or was skipped, and fails on any other result — `abandoned` too,
+  # which GitHub gives a job no runner took (ADR-009 §3.10, #236).
   summary:
     name: repo checks
     if: always()
@@ -224,4 +225,4 @@ jobs:
           RESULTS: ${{ toJSON(needs.*.result) }}
         run: |
           echo "$RESULTS"
-          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = false ]
+          echo "$RESULTS" | jq -e 'all(.[]; . == "success" or . == "skipped")' > /dev/null

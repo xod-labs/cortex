@@ -78,8 +78,9 @@ jobs:
         working-directory: runtime
         run: python -m unittest discover -s tests -v
 
-  # The one check the ruleset requires of this workflow, by a name no matrix changes: it fails when
-  # a job it needs failed or was cancelled, and passes when each passed or was skipped (§3.10).
+  # The one check the ruleset requires of this workflow, by a name no matrix changes: it passes
+  # when each job it needs passed or was skipped, and fails on any other result — `abandoned` too,
+  # which GitHub gives a job no runner took (§3.10, #236).
   summary:
     name: runtime tests
     if: always()
@@ -91,4 +92,4 @@ jobs:
           RESULTS: ${{ toJSON(needs.*.result) }}
         run: |
           echo "$RESULTS"
-          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = false ]
+          echo "$RESULTS" | jq -e 'all(.[]; . == "success" or . == "skipped")' > /dev/null

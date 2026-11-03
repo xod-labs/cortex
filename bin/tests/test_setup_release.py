@@ -3,7 +3,10 @@ second run changes nothing (ADR-009 §3.10). The live check is on a throwaway re
 
 import copy
 import io
+import os
 import re
+import shutil
+import subprocess
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -12,6 +15,18 @@ from pathlib import Path
 BIN = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BIN))
 import setup_release as sr  # noqa: E402
+
+
+# The summary job of each workflow that gates a merge, but its `name` and `needs` (ADR-009 §3.10).
+SUMMARY = ("    if: always()\n"
+           "    runs-on: ubuntu-latest\n"
+           "    steps:\n"
+           "      - name: Every job passed, or was skipped\n"
+           "        env:\n"
+           "          RESULTS: ${{ toJSON(needs.*.result) }}\n"
+           "        run: |\n"
+           "          echo \"$RESULTS\"\n"
+           "          echo \"$RESULTS\" | jq -e 'all(.[]; . == \"success\" or . == \"skipped\")' > /dev/null")
 
 
 def github_matches(pattern, branch):
@@ -177,18 +192,10 @@ class SetupReleaseTests(unittest.TestCase):
 
     def test_each_required_check_of_several_jobs_fails_when_one_of_them_does(self):
         # A summary runs whatever happened, needs every job a pull request runs — a job of a tag's
-        # push only is none — and fails on a failure or a cancellation (§3.10): all five read the same, and
-        # no workflow-wide `defaults:` can soften one. Read as text: the runner's Python has no YAML parser.
+        # push only is none — and passes on success or skipped only (§3.10, #236): all five read the same,
+        # and no workflow-wide `defaults:` can soften one. Read as text: the runner's Python has no YAML parser.
         tag_push_only = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')"
-        body = ("    if: always()\n"
-                "    runs-on: ubuntu-latest\n"
-                "    steps:\n"
-                "      - name: Every job passed, or was skipped\n"
-                "        env:\n"
-                "          RESULTS: ${{ toJSON(needs.*.result) }}\n"
-                "        run: |\n"
-                "          echo \"$RESULTS\"\n"
-                "          [ \"${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}\" = false ]")
+        body = SUMMARY
         summaries = set()
         for path in sorted((BIN.parent / ".github" / "workflows").glob("*.yml")):
             text = path.read_text(encoding="utf-8")
@@ -210,6 +217,20 @@ class SetupReleaseTests(unittest.TestCase):
                     self.assertEqual(re.sub(r"(?m)^    (name|needs): .*\n", "", job).rstrip(), body)
                     self.assertEqual(set(re.findall(r"[A-Za-z0-9_-]+", key(job, "needs"))), others)
         self.assertEqual(summaries, {"builds", "cli tests", "core tests", "repo checks", "runtime tests"})
+
+    @unittest.skipUnless(shutil.which("bash") and shutil.which("jq"), "bash and jq, which GitHub's Ubuntu runners have")
+    def test_a_summary_passes_on_success_and_skipped_only(self):
+        # GitHub gives `abandoned` to a job no runner took: a condition listing what fails let it
+        # through, and the merge queue merged 1.3.1 without its macOS build (#236).
+        condition = SUMMARY.splitlines()[-1].strip()
+        cases = {'["success"]': 0, '["success", "skipped"]': 0, '["skipped", "skipped"]': 0,
+                 '["success", "failure"]': 1, '["success", "cancelled"]': 1, '["success", "abandoned"]': 1,
+                 '["timed_out"]': 1}
+        for results, expected in cases.items():
+            with self.subTest(results=results):
+                done = subprocess.run(["bash", "-c", condition], env=dict(os.environ, RESULTS=results),
+                                      capture_output=True, text=True)
+                self.assertEqual(done.returncode, expected, done.stderr)
 
     def test_a_disabled_or_loosened_ruleset_is_drift(self):
         gh = FakeGh()

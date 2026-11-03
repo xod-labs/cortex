@@ -217,7 +217,9 @@ jobs:
 
   # The one check the ruleset requires of the builds: `build (…)` and `glibc 2.28 (…)` are matrix
   # jobs, whose names change with their matrix, and a job skipped before its matrix expands reports
-  # as `glibc 2.28 (${{ matrix.target }})` (ADR-009 §3.10).
+  # as `glibc 2.28 (${{ matrix.target }})` (ADR-009 §3.10). It passes when each job it needs passed or
+  # was skipped, and fails on any other result — `abandoned` too, which GitHub gives a job no runner
+  # took (#236).
   summary:
     name: builds
     if: always()
@@ -229,4 +231,4 @@ jobs:
           RESULTS: ${{ toJSON(needs.*.result) }}
         run: |
           echo "$RESULTS"
-          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = false ]
+          echo "$RESULTS" | jq -e 'all(.[]; . == "success" or . == "skipped")' > /dev/null
