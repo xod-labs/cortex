@@ -7,6 +7,15 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-11-03 — Somebody Else's Problem _(Released)_
+[Full notes](changelog/1.3.2.md)
+
+### Fixed
+- **A required check passes only when every job behind it passed or was skipped** ([#236](https://github.com/xod-labs/cortex/issues/236)). It passed on a job GitHub abandoned for want of a runner, a result GitHub does not document, and the merge queue merged 1.3.1 without its macOS build. ADR-009 records the change.
+
+### Changed
+- **The binary replays the CLI's suite in parallel** ([#229](https://github.com/xod-labs/cortex/issues/229)), twice as many workers as CPUs, every test still through the binary. The Windows job takes 324 s instead of 664 s.
+
 ## [1.3.1] - 2026-11-03 — Wildly Inaccurate _(Released)_
 [Full notes](changelog/1.3.1.md)
 
