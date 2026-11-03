@@ -20,7 +20,12 @@ pip install -e core -e cli                         # a `cortex` on PATH, from th
 
 The tests run the command from source, with nothing but `core/` and `cli/` on `sys.path`. With
 `CORTEX_TEST_BINARY` naming a built binary, they run through it instead — which is how CI
-checks each binary it builds.
+checks each binary it builds. CI runs that replay with `tests/parallel.py`, which runs the same
+tests in several workers at once and exits as `unittest` would:
+
+```bash
+cd cli && CORTEX_TEST_BINARY=build/dist/cortex python3 tests/parallel.py   # --workers N; twice the CPUs by default
+```
 
 ## Version
 
