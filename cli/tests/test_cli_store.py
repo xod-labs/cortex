@@ -358,6 +358,26 @@ class DigestTests(unittest.TestCase):
         (self.tree / "docs" / "\u00e9.md").write_bytes(b"d\n")
         self.assertNotEqual(store.digest(self.tree), before)
 
+    def test_a_checkouts_theme_marker_is_not_the_spec(self):
+        (self.tree / "agents" / "personalities").mkdir(parents=True)
+        before = store.digest(self.tree)
+        (self.tree / "agents" / "personalities" / ".active-h2g2").write_text("", encoding="utf-8")
+        the_store = store.Store(home=self.tmp / "d", own_version="9.9.9", embedded=None, checkout=self.tree,
+                                fetch=None, known={})
+        the_store.ensure(Version("9.9.9"))
+        self.assertEqual(the_store.digest(Version("9.9.9")), before)
+
+    def test_a_version_that_cannot_be_had_again_is_put_back(self):
+        # Offline, or a download refused: the version is not lost for it.
+        the_store = store.Store(home=self.tmp / "e", own_version="9.9.9", embedded=None, checkout=self.tree,
+                                fetch=None, known={})
+        the_store.ensure(Version("9.9.9"))
+        the_store.checkout = None
+        with self.assertRaises(store.StoreError):
+            the_store.replace(Version("9.9.9"))
+        self.assertTrue(the_store.has(Version("9.9.9")))
+        self.assertEqual([p.name for p in the_store.versions.iterdir()], ["9.9.9"])
+
     def test_a_version_put_in_again_is_whole(self):
         the_store = store.Store(home=self.tmp / "c", own_version="9.9.9", embedded=None, checkout=self.tree,
                                 fetch=None, known={})

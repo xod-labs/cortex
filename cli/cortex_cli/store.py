@@ -147,15 +147,16 @@ def digest(directory: Path) -> str:
     its three trees — the path relative to ``directory``, with ``/`` — in the order of the paths'
     UTF-8 bytes, then the SHA-256 of those lines. The files' bytes only: the same version gives
     the same digest, downloaded or written from this binary, on any system."""
-    lines = []
-    for tree in SPEC_TREES:
-        for path in (directory / tree).rglob("*"):
-            if path.is_file():
-                lines.append((path.relative_to(directory).as_posix().encode("utf-8"),
-                              hashlib.sha256(path.read_bytes()).hexdigest().encode("ascii")))
+    return digest_of({path.relative_to(directory).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                      for tree in SPEC_TREES for path in (directory / tree).rglob("*") if path.is_file()})
+
+
+def digest_of(files: Dict[str, str]) -> str:
+    """The digest of a spec from the SHA-256 of each of its files, by path — as a copy's manifest
+    holds them. A path outside the three trees is not the spec's."""
     total = hashlib.sha256()
-    for rel, sha in sorted(lines):
-        total.update(sha + b"  " + rel + b"\n")
+    for rel, sha in sorted((rel.encode("utf-8"), sha) for rel, sha in files.items() if rel.split("/")[0] in SPEC_TREES):
+        total.update(sha.encode("ascii") + b"  " + rel + b"\n")
     return f"sha256:{total.hexdigest()}"
 
 
@@ -181,20 +182,45 @@ class Store:
     def digest(self, version: Version) -> str:
         return digest(self.path(version))
 
-    def remove(self, version: Version) -> None:
-        """Take ``version`` out of the store: renamed out of its name — in the same directory, so
-        that a read-only one moves too — then deleted. A sync meanwhile finds it whole or absent; a
-        removal cut short leaves a staging, which the store removes a day later."""
+    def _aside(self, version: Version) -> Path:
+        """Rename ``version`` out of its name — in the same directory, so that a read-only one moves
+        too: a sync meanwhile finds it whole or absent. Dated now, so that no other sync takes it
+        for a staging a day old."""
         aside = self.versions / f".{version}-removed-{os.getpid()}-{time.time_ns()}"
         os.rename(self.path(version), aside)
-        remove_tree(aside)
+        try:
+            os.utime(aside)
+        except OSError:
+            pass
+        return aside
+
+    @staticmethod
+    def _discard(aside: Path) -> None:
+        try:
+            remove_tree(aside)
+        except FileNotFoundError:   # another sync's tidying took it first
+            pass
+
+    def remove(self, version: Version) -> None:
+        """Take ``version`` out of the store. A removal cut short leaves a staging, which the store
+        removes a day later."""
+        self._discard(self._aside(version))
 
     def replace(self, version: Version) -> str:
         """Put ``version`` in the store again, as ``ensure`` would — its files are not those a
-        project locked."""
-        if self.path(version).exists():
-            self.remove(version)
-        return self.ensure(version)
+        project locked. Until the new one is in place the old one is kept aside, and put back if
+        the new one cannot be had: offline, a download refused."""
+        if not self.path(version).exists():
+            return self.ensure(version)
+        aside = self._aside(version)
+        try:
+            how = self.ensure(version)
+        except BaseException:
+            if not self.path(version).exists() and aside.exists():
+                os.rename(aside, self.path(version))
+            raise
+        self._discard(aside)
+        return how
 
     def has(self, version: Version) -> bool:
         """A version is there when its three trees are — an empty directory is none."""
@@ -305,7 +331,8 @@ class Store:
 
 def _copy_trees(source: Path, staging: Path) -> None:
     for tree in SPEC_TREES:
-        shutil.copytree(source / tree, staging / tree)
+        # A checkout's theme marker is its developer's choice, never the spec's: a copy leaves it out too.
+        shutil.copytree(source / tree, staging / tree, ignore=shutil.ignore_patterns(".active-*"))
 
 
 def _extract(archive: Path, staging: Path) -> None:
