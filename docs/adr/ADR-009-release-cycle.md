@@ -521,3 +521,7 @@ The repository was deleted after the run.
   4. the run of the merge is run again with *Re-run all jobs*, so that its `version` job reads the draft gone and the candidate published, drafts `1.3.0`, and `1.3.0` is published.
 
   The first publication of the new pipeline is a pre-release, as §3.7 wants, and it holds the very tree `1.3.0` ships. A defect it finds is fixed in `1.3.1`: `main` already has `1.3.0`'s section, so `1.3.0` would never be published. Every later release cuts its candidates before its pull request into `main`, as §3.7 says.
+
+### After 1.3.0 — found in use (2026-11-03)
+
+- **`#<issue>` names the issue a commit delivers, ADR task or not** (§3.8, [#174](https://github.com/xod-labs/cortex/issues/174)). Since 1.1.2 the commits put it on every issue they deliver, and CONTRIBUTING now says so. The check is unchanged: the `#<issue>` it reads was optional already, and the 72 characters still count the `<subject>` without it. A pull request's title needs no rule of its own: every pull request merges with a merge commit, so no title becomes a commit's subject.

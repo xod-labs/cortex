@@ -29,7 +29,7 @@ shellcheck --severity=warning bin/*.sh && shellcheck --shell=sh install.sh
 
 ## Checklist
 
-- [ ] Commit subjects follow the [convention](../blob/main/CONTRIBUTING.md#commit-message-convention) — gitmoji + Conventional Commits, one line, no body, no trailer — with `#<issue>` before the subject for ADR work
+- [ ] Commit subjects follow the [convention](../blob/main/CONTRIBUTING.md#commit-message-convention) — gitmoji + Conventional Commits, one line, no body, no trailer — with `#<issue>` before the subject when it delivers an issue
 - [ ] Tests cover the change — and a bug fix has a test that **fails without it**
 - [ ] Docs updated if behaviour or setup changed (README, `docs/`, templates)
 - [ ] An [ADR](../tree/main/docs/adr) was added or amended if this changes structure or contracts

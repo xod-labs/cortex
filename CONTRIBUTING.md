@@ -216,7 +216,7 @@ The `commit messages` check reads every commit a pull request brings, merge comm
 - `<type>` — Conventional Commits type (parseable by changelog tools)
 - `<scope>` *(optional)* — component or layer affected (`runtime`, `cli`, `core`, `roles`, `capabilities`, `adr`, `docs`, `extending-layers`, …)
 - `<subject>` — in the present tense, saying what the commit does — "add the Redis capability", or "the macOS job runs the whole suite" — with no trailing period, ≤ 72 characters, the `#<issue>` not counted
-- `#<issue>` *(ADR work only)* — the task being delivered, immediately before the subject, so the issue timeline reads as a changelog: `✨ feat(core): #42 resolve the cascade from a configurable base root`
+- `#<issue>` *(when the commit delivers an issue)* — that issue, ADR task or not, immediately before the subject, so the issue timeline reads as a changelog: `✨ feat(core): #42 resolve the cascade from a configurable base root`
 
 **Why both gitmoji and Conventional Commits?** The gitmoji gives instant visual scanning of `git log`. The conventional prefix keeps commits parseable for automated changelog/release tooling. They compose cleanly — best of both worlds.
 
