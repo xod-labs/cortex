@@ -182,9 +182,11 @@ def other_rulesets(gh: Gh, repository: str, found: List[Dict[str, Any]], default
         for rule in gh.all(f"repos/{repository}/rules/branches/{branch}"):
             if rule.get("type") != "required_status_checks" or rule.get("ruleset_id") in mine:
                 continue
+            contexts = [c.get("context") for c in rule.get("parameters", {}).get("required_status_checks", [])]
+            if not contexts:
+                continue    # a rule that names no check stands in no merge's way
             have = checks.setdefault(rule["ruleset_id"], [])
-            have += [c.get("context") for c in rule.get("parameters", {}).get("required_status_checks", [])
-                     if c.get("context") not in have]
+            have += [c for c in contexts if c not in have]
     result = []
     for ruleset_id, contexts in checks.items():
         ruleset = gh.api(f"repos/{repository}/rulesets/{ruleset_id}?includes_parents=true")

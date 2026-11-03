@@ -270,15 +270,17 @@ class SetupReleaseTests(unittest.TestCase):
 
     def test_github_says_which_rulesets_apply_where_no_pattern_is_matched_here(self):
         # The script reads the rules GitHub applies to each branch (#226): a nested pattern, an
-        # exclude, a line not cut yet and an organisation's ruleset are GitHub's to resolve.
-        def ruleset(id, name, include, exclude=(), source="Repository"):
+        # exclude, a line not cut yet and an organisation's ruleset are GitHub's to resolve. A rule
+        # that names no check requires nothing.
+        def ruleset(id, name, include, exclude=(), source="Repository", checks=("ci", "lint")):
             return {"id": id, "name": name, "target": "branch", "enforcement": "active", "source_type": source,
                     "conditions": {"ref_name": {"include": include, "exclude": list(exclude)}},
                     "rules": [{"type": "required_status_checks", "parameters": {
-                        "required_status_checks": [{"context": "ci"}, {"context": "lint"}]}}]}
+                        "required_status_checks": [{"context": c} for c in checks]}}]}
         gh = FakeGh(rulesets=[ruleset(20, "nested", ["refs/heads/**/*"]),
                               ruleset(21, "all but the cycle", ["~ALL"], exclude=["~DEFAULT_BRANCH", "refs/heads/*.x"]),
-                              ruleset(22, "zero", ["refs/heads/0.x"])],
+                              ruleset(22, "zero", ["refs/heads/0.x"]),
+                              ruleset(23, "no check", ["~DEFAULT_BRANCH"], checks=())],
                     org_rulesets=[ruleset(30, "org checks", ["~DEFAULT_BRANCH"], source="Organization")])
         run(gh)
         code, out = run(gh, "--check")
@@ -289,6 +291,7 @@ class SetupReleaseTests(unittest.TestCase):
         self.assertIn("✗ the ruleset 'zero', which the cycle does not set", out)
         self.assertIn("✗ the organisation's ruleset 'org checks', which the cycle does not set", out)
         self.assertNotIn("all but the cycle", out)
+        self.assertNotIn("no check", out)
         self.assertIn("3 setting(s) differ.", out)
 
     def test_another_repositorys_checks(self):
