@@ -73,6 +73,8 @@ The command creates:
 
 The two context files are written only when missing. Running `cortex init` again keeps the instructions file, and `cortex.toml` with its version: it changes only the keys an option names — `--theme` or `--no-personality`, `--link` or `--copy`, `--claude-access`. `--force` replaces the instructions file, and only it.
 
+The instructions file is yours to adapt — retitle it, add sections — but **keep its marker line as it is**, `<!-- cortex:bootstrap layout=single format=1 -->` under the title: `cortex init` reads from that line the layout and the format the file was written for.
+
 ### Step 2 — Commit, then `cortex sync` after every clone
 
 Commit `cortex.toml`, the instructions file and the two context files. Each developer who clones the project then runs, once, at its root:
