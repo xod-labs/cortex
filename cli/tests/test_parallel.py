@@ -59,6 +59,7 @@ class ParallelTests(unittest.TestCase):
         code, out = self.run_it("--workers", "2")
         self.assertEqual(code, 1, out)
         self.assertIn("FAILED (2 failed, 0 not run)", out)
+        self.assertIn("  failed: test_a.A.test_errs\n  failed: test_a.A.test_fails\n", out)
         self.assertIn("the reason it fails", out)
         self.assertIn("the reason it errs", out)
 
@@ -74,8 +75,10 @@ class ParallelTests(unittest.TestCase):
         code, out = self.run_it("--workers", "1")
         self.assertEqual(code, 0, out)
         self.assertIn("Ran 3 of 3 tests", out)
-        self.assertIn("printed by a test", out)
-        self.assertIn("written by a child", out)
+        # Each under the test it came from: a worker's log mixes dozens of tests.
+        self.assertRegex(out, r"--- written while test_a\.A\.test_prints ran \(worker-\d+\.log\)\nprinted by a test\n")
+        self.assertRegex(out, r"--- written while test_a\.A\.test_starts_a_process ran [^\n]*\n(?:[^\n]*\n)*?written by a child")
+        self.assertNotIn("test_a.A.test_after ran", out)
 
     def test_a_worker_that_dies_fails_the_run_and_names_its_test(self):
         self.suite("test_a.py", """
@@ -89,7 +92,21 @@ class ParallelTests(unittest.TestCase):
         code, out = self.run_it("--workers", "1")
         self.assertEqual(code, 1, out)
         self.assertIn("It was running one of: test_a.A.test_dies.", out)
-        self.assertIn("not run)", out)
+        self.assertIn("  not run: test_a.A.test_dies\n", out)
+        self.assertIn("  not run: test_b.B.test_never_reached\n", out)
+
+    def test_a_test_found_twice_runs_once(self):
+        # A TestCase imported into another module is found there too, under the same id.
+        self.suite("test_a.py", """
+            class A(unittest.TestCase):
+                def test_one(self): pass
+        """)
+        self.suite("test_b.py", """
+            from test_a import A
+        """)
+        code, out = self.run_it("--workers", "2")
+        self.assertEqual(code, 0, out)
+        self.assertIn("Ran 1 of 1 tests", out)
 
     def test_the_heavy_tests_start_first(self):
         self.suite("test_a.py", """

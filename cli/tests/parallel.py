@@ -80,7 +80,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--heavy", action="append", metavar="ID_PREFIX", help="a test to start first, in place of HEAVY")
     args = parser.parse_args(argv)
     heavy = HEAVY if args.heavy is None else tuple(args.heavy)
-    ids = [test.id() for test in discover(args.start_dir)]
+    # Once each: a TestCase imported into another module is found there too, under its own id.
+    ids = list(dict.fromkeys(test.id() for test in discover(args.start_dir)))
     unmatched = [prefix for prefix in heavy if not any(test_id.startswith(prefix) for test_id in ids)]
     if unmatched:
         print(f"parallel.py: no test starts with {', '.join(unmatched)}: HEAVY must name the heaviest tests",
@@ -114,10 +115,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for test_id, report in sorted(reports.items()):
         print(f"\n{'=' * 70}\n{test_id}\n{report}", end="")
     for name, text in logged.items():
-        output = [line for line in text.splitlines() if not line.startswith(RUNNING)]
-        if output:
-            print(f"\n--- what the tests of {name} and the processes they started wrote")
-            print("\n".join(output))
+        # Each test's share of its worker's log, under its id: a worker runs dozens of tests.
+        sections: List[Tuple[str, List[str]]] = [("the worker's start", [])]
+        for line in text.splitlines():
+            if line.startswith(RUNNING):
+                sections.append((line[len(RUNNING):], []))
+            else:
+                sections[-1][1].append(line)
+        for test_id, lines in sections:
+            if any(line.strip() for line in lines):
+                print(f"\n--- written while {test_id} ran ({name})")
+                print("\n".join(lines))
     if broken:
         # The test a worker died under is the last one it started, which has no outcome.
         under = []
@@ -129,12 +137,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     failed = sorted(test_id for test_id, outcome in outcomes.items() if outcome == "failed")
     skipped = sum(outcome == "skipped" for outcome in outcomes.values())
-    not_run = len(ids) - len(outcomes)
+    not_run = [test_id for test_id in ids if test_id not in outcomes]
     print(f"\nRan {len(outcomes)} of {len(ids)} tests in {time.monotonic() - start:.1f} s, {args.workers} workers at once")
     if failed or not_run:
-        print(f"FAILED ({len(failed)} failed, {not_run} not run)")
+        print(f"FAILED ({len(failed)} failed, {len(not_run)} not run)")
         for test_id in failed:
-            print(f"  {test_id}")
+            print(f"  failed: {test_id}")
+        for test_id in not_run:
+            print(f"  not run: {test_id}")
         return 1
     print(f"OK (skipped={skipped})" if skipped else "OK")
     return 0
