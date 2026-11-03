@@ -9,11 +9,13 @@ work divided by the workers, instead of waiting for one shard that drew the long
 
 It exits 0 when every test found ran and passed or was skipped, 1 on a failure, an error, a worker
 that died or a test that never ran, and 2 when ``HEAVY`` names no test. A test runs in whichever
-worker is free, after whichever tests that worker ran before: none of this suite leans on another.
+worker is free, after whichever tests that worker ran before, and while others run: none of this
+suite leans on another, nor writes where another reads.
 
 The answers come back through multiprocessing's own pipes, never the standard output: the probe of
 #229 lost tests in silence when a ``git`` that a test started wrote to the stdout its worker answered
-on. What a test, or a process it starts, writes there goes to its worker's log, printed at the end.
+on. What a test, or a process it starts, writes there goes to a log of that test's own, at the
+descriptors themselves, printed at the end.
 """
 
 from __future__ import annotations
@@ -33,9 +35,11 @@ from typing import Dict, List, Optional, Sequence, Tuple
 # The tests that take longest, by the start of their id: they start first. Each must name a test, or
 # the run stops: a rename would quietly put them last, and the run would end waiting for them alone.
 HEAVY = ("test_cli_validate.GoldenTests.",)
-RUNNING = "parallel.py running "
+# ProcessPoolExecutor takes no more on Windows.
+MAX_WORKERS = 61
 
 _tests: Dict[str, unittest.TestCase] = {}
+_logs = ""
 
 
 def discover(start: str) -> List[unittest.TestCase]:
@@ -54,18 +58,26 @@ def order(ids: Sequence[str], heavy: Sequence[str]) -> List[str]:
     return sorted(ids, key=lambda test_id: (not test_id.startswith(tuple(heavy)), test_id))
 
 
-def _start_worker(start: str, logs: str) -> None:
-    # The descriptors themselves, so that a process a test starts writes to the log too.
-    log = open(Path(logs) / f"worker-{os.getpid()}.log", "w", encoding="utf-8", errors="replace")
+def _write_to(path: Path) -> None:
+    """This process's output from now on, the descriptors themselves: a process started next writes
+    there too. Line by line, so that a worker that dies loses no more than a line."""
+    log = open(path, "w", encoding="utf-8", errors="replace", buffering=1)
     os.dup2(log.fileno(), 1)
     os.dup2(log.fileno(), 2)
     sys.stdout = sys.stderr = log
+
+
+def _start_worker(start: str, logs: str) -> None:
+    global _logs
+    _logs = logs
+    _write_to(Path(logs) / f"worker-{os.getpid()}.start")
     _tests.update((test.id(), test) for test in discover(start))
 
 
 def _run(test_id: str) -> Tuple[str, float, str]:
-    """One test, in this worker: ``ok``, ``skipped`` or ``failed``, its seconds, and its report."""
-    print(RUNNING + test_id, flush=True)   # names the test, should the worker die under it
+    """One test, in this worker: ``ok``, ``skipped`` or ``failed``, its seconds, and its report. Its log
+    names it, should the worker die under it."""
+    _write_to(Path(_logs) / f"{test_id}.log")
     report = io.StringIO()
     start = time.monotonic()
     result = unittest.TextTestRunner(stream=report, verbosity=2).run(unittest.TestSuite([_tests[test_id]]))
@@ -73,9 +85,16 @@ def _run(test_id: str) -> Tuple[str, float, str]:
     return outcome, time.monotonic() - start, report.getvalue()
 
 
+def _workers(value: str) -> int:
+    count = int(value)
+    if not 1 <= count <= MAX_WORKERS:
+        raise argparse.ArgumentTypeError(f"from 1 to {MAX_WORKERS}")
+    return count
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--workers", type=int, default=2 * (os.cpu_count() or 1))
+    parser.add_argument("--workers", type=_workers, default=min(2 * (os.cpu_count() or 1), MAX_WORKERS))
     parser.add_argument("--start-dir", default="tests", help="where discovery starts, as unittest's -s (default: tests)")
     parser.add_argument("--heavy", action="append", metavar="ID_PREFIX", help="a test to start first, in place of HEAVY")
     args = parser.parse_args(argv)
@@ -109,30 +128,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 if outcome == "failed":
                     reports[test_id] = report
                 print(f"{test_id} ... {outcome} ({seconds:.1f} s)", flush=True)
-        logged = {path.name: path.read_text(encoding="utf-8", errors="replace")
-                  for path in sorted(Path(logs).glob("worker-*.log"))}
+        logged = {path.stem if path.suffix == ".log" else f"a worker's start ({path.stem})":
+                  path.read_text(encoding="utf-8", errors="replace") for path in sorted(Path(logs).iterdir())}
 
     for test_id, report in sorted(reports.items()):
         print(f"\n{'=' * 70}\n{test_id}\n{report}", end="")
     for name, text in logged.items():
-        # Each test's share of its worker's log, under its id: a worker runs dozens of tests.
-        sections: List[Tuple[str, List[str]]] = [("the worker's start", [])]
-        for line in text.splitlines():
-            if line.startswith(RUNNING):
-                sections.append((line[len(RUNNING):], []))
-            else:
-                sections[-1][1].append(line)
-        for test_id, lines in sections:
-            if any(line.strip() for line in lines):
-                print(f"\n--- written while {test_id} ran ({name})")
-                print("\n".join(lines))
+        if text.strip():
+            print(f"\n--- written while {name} ran\n{text}", end="" if text.endswith("\n") else "\n")
     if broken:
-        # The test a worker died under is the last one it started, which has no outcome.
-        under = []
-        for text in logged.values():
-            started = [line[len(RUNNING):] for line in text.splitlines() if line.startswith(RUNNING)]
-            if started and started[-1] not in outcomes:
-                under.append(started[-1])
+        # The test a worker died under has a log and no outcome; so do those of the workers stopped then.
+        under = sorted(name for name in logged if name in ids and name not in outcomes)
         print(f"\nA worker died, so the others were stopped. It was running one of: {', '.join(under) or 'none known'}.")
 
     failed = sorted(test_id for test_id, outcome in outcomes.items() if outcome == "failed")

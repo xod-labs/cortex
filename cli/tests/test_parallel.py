@@ -70,20 +70,24 @@ class ParallelTests(unittest.TestCase):
                 def test_prints(self): print("printed by a test")
                 def test_starts_a_process(self):
                     subprocess.run([sys.executable, "-c", "import sys; print('written by a child'); sys.stderr.write('and to stderr')"])
-                def test_after(self): pass
+                def test_then_another(self): print("after")
+                def test_then_nothing(self): pass
         """)
         code, out = self.run_it("--workers", "1")
         self.assertEqual(code, 0, out)
-        self.assertIn("Ran 3 of 3 tests", out)
-        # Each under the test it came from: a worker's log mixes dozens of tests.
-        self.assertRegex(out, r"--- written while test_a\.A\.test_prints ran \(worker-\d+\.log\)\nprinted by a test\n")
-        self.assertRegex(out, r"--- written while test_a\.A\.test_starts_a_process ran [^\n]*\n(?:[^\n]*\n)*?written by a child")
-        self.assertNotIn("test_a.A.test_after ran", out)
+        self.assertIn("Ran 4 of 4 tests", out)
+        # Each under the test it came from, the next test's too though the child wrote no newline.
+        self.assertIn("--- written while test_a.A.test_prints ran\nprinted by a test\n", out)
+        self.assertRegex(out, r"--- written while test_a\.A\.test_starts_a_process ran\n(?:[^\n]*\n)*?written by a child")
+        self.assertIn("--- written while test_a.A.test_then_another ran\nafter\n", out)
+        self.assertNotIn("test_a.A.test_then_nothing ran", out)
 
     def test_a_worker_that_dies_fails_the_run_and_names_its_test(self):
         self.suite("test_a.py", """
             class A(unittest.TestCase):
-                def test_dies(self): os._exit(3)
+                def test_dies(self):
+                    print("last words")
+                    os._exit(3)
         """)
         self.suite("test_b.py", """
             class B(unittest.TestCase):
@@ -92,6 +96,7 @@ class ParallelTests(unittest.TestCase):
         code, out = self.run_it("--workers", "1")
         self.assertEqual(code, 1, out)
         self.assertIn("It was running one of: test_a.A.test_dies.", out)
+        self.assertIn("--- written while test_a.A.test_dies ran\nlast words\n", out)
         self.assertIn("  not run: test_a.A.test_dies\n", out)
         self.assertIn("  not run: test_b.B.test_never_reached\n", out)
 
@@ -130,6 +135,18 @@ class ParallelTests(unittest.TestCase):
         code, out = self.run_it()
         self.assertEqual(code, 2, out)
         self.assertIn("no test starts with test_a", out)
+
+    def test_the_workers_are_counted_from_1_to_61(self):
+        # ProcessPoolExecutor takes no more than 61 on Windows.
+        self.suite("test_a.py", """
+            class A(unittest.TestCase):
+                def test_one(self): pass
+        """)
+        for workers in ("0", "62"):
+            with self.subTest(workers=workers):
+                code, out = self.run_it("--workers", workers)
+                self.assertEqual(code, 2, out)
+                self.assertIn("from 1 to 61", out)
 
     def test_heavy_names_tests_of_this_suite(self):
         # The run stops on a name that matches nothing; this says so on the pull request already.
