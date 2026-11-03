@@ -315,8 +315,11 @@ class Store:
         downloaded, and a ``replace`` cut short had left it aside."""
         self.check_served(version)
         if self.has(version):
-            self._tidy(version)
-            return "stored"
+            try:
+                self._tidy(version)
+                return "stored"
+            except FileNotFoundError:
+                pass                # removed meanwhile — pruned, or put in again: it is written below
         if self.path(version).exists():
             raise StoreError(f"{self.path(version)} is there, and holds no complete spec — remove it, "
                              "then run the command again")
