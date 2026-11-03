@@ -275,12 +275,10 @@ cortex validate --strict; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
 To move a project to another Cortex version:
 
-1. Change `version` in `cortex.toml`
-2. Run `cortex sync` — it puts that version in the store, downloaded once per machine, and points `spec` at it. A version newer than the installed binary is refused, with the command that upgrades the binary. Teammates run `cortex sync` after they pull the change
-3. Run `cortex validate` immediately
-4. Investigate any error reported (most common: a base file was moved or renamed upstream, breaking a `Base:` header)
-5. Update overlay headers to point to the new path, OR delete the overlay if it's no longer needed
-6. Read the entry for the new version in Cortex's [`changelog/`](../changelog/) — it lists breaking renames
+1. Run `cortex upgrade --dry-run` — or `cortex upgrade X.Y.Z --dry-run` for another version than the binary's own. It puts that version in the store, says which roles, capabilities, personalities and workflows it adds, removes and changes, and checks your overlays against it. A version newer than the installed binary is refused, with the command that upgrades the binary
+2. If an overlay fails — most often a base file moved or renamed upstream, breaking a `Base:` header — update the header to the new path, OR delete the overlay if it's no longer needed. Read the entry for the new version in Cortex's [`changelog/`](../changelog/): it lists breaking renames
+3. Run `cortex upgrade` — it writes `version` in `cortex.toml`, syncs, rewrites `cortex.lock`, and rewrites the instructions file if nobody changed it and the new version's format is newer. One your team adapted is kept: `cortex init --force` writes it again, and keeps yours as `.bak`
+4. Commit `cortex.toml` and `cortex.lock`. Teammates run `cortex sync` after they pull the change
 
 Still on a git submodule or a standalone clone of Cortex? See [Moving to the `cortex` binary](migrating-to-the-binary.md).
 

@@ -73,7 +73,7 @@ The command creates:
 
 The two context files are written only when missing. Running `cortex init` again keeps the instructions file, and `cortex.toml` with its version: it changes only the keys an option names — `--theme` or `--no-personality`, `--link` or `--copy`, `--claude-access`. `--force` replaces the instructions file, and only it.
 
-The instructions file is yours to adapt — retitle it, add sections — but **keep its marker line as it is**, `<!-- cortex:bootstrap layout=single format=1 -->` under the title: `cortex init` reads from that line the layout and the format the file was written for.
+The instructions file is yours to adapt — retitle it, add sections — but **keep its marker line as it is**, `<!-- cortex:bootstrap layout=single format=1 -->` under the title: `cortex init` reads from that line the layout and the format the file was written for, and `cortex upgrade` whether it must be written again.
 
 ### Step 2 — Commit, then `cortex sync` after every clone
 
@@ -374,7 +374,7 @@ Yes. `@Hactar` invokes the Lead Backend directly. But going through the PM guara
 
 **Q: Is Cortex updated automatically?**
 No. A project stays on the `version` its `cortex.toml` pins:
-- **The project:** change `version` in `cortex.toml`, then run `cortex sync`. Each teammate runs `cortex sync` too once they pull the change — `cortex validate` refuses a spec synced for another version.
+- **The project:** run `cortex upgrade` — `--dry-run` first says what changes and checks your overlays. It writes `version` in `cortex.toml` and syncs. Each teammate runs `cortex sync` once they pull the change — `cortex validate` refuses a spec synced for another version.
 - **The binary:** run the install script again. A binary serves every version from 1.0.0 up to its own; a project pinned to a newer one is refused, with the command that upgrades the binary.
 
 Check the [changelog](../changelog/) before updating in production.
