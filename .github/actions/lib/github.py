@@ -23,6 +23,24 @@ class GitHubError(Exception):
     def __init__(self, status: Optional[int], message: str):
         super().__init__(f"HTTP {status}: {message}" if status is not None else f"no answer: {message}")
         self.status = status
+        self.message = message
+
+
+# GitHub documents a 404 for GITHUB_TOKEN on *Create a release* and *Update a release* when the
+# release's commit changes a file under .github/workflows/ against the default branch. It did not
+# enforce it when measured, on 2026-11-03: a 404 on those calls says so, in case it starts.
+WORKFLOWS_404 = ("if the release's commit changes a file under .github/workflows/, GitHub documents that "
+                 "GITHUB_TOKEN cannot create or update it: https://docs.github.com/rest/releases/releases#create-a-release")
+
+
+def write_release(github: "GitHub", method: str, path: str, body: Any) -> Any:
+    """Create or update a release; a 404 says what GitHub documents for a commit that changes a workflow."""
+    try:
+        return github.request(method, path, body=body)
+    except GitHubError as error:
+        if error.status != 404:
+            raise
+        raise GitHubError(404, f"{error.message} — {WORKFLOWS_404}") from None
 
 
 class GitHub:

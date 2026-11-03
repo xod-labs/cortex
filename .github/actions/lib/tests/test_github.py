@@ -10,7 +10,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from github import GitHub, GitHubError  # noqa: E402
+from github import GitHub, GitHubError, write_release  # noqa: E402
 
 ASSET = b"the bytes of an asset"
 
@@ -55,6 +55,31 @@ def cut_short(handler, code):
     handler.end_headers()
     handler.wfile.write(b"half")
     handler.close_connection = True
+
+
+class Answering:
+    """A GitHub whose every request fails with ``error``."""
+
+    def __init__(self, error):
+        self.error = error
+
+    def request(self, method, path, body=None):
+        raise self.error
+
+
+class WriteReleaseTests(unittest.TestCase):
+    def test_a_404_says_what_github_documents_for_a_commit_that_changes_a_workflow(self):
+        with self.assertRaises(GitHubError) as caught:
+            write_release(Answering(GitHubError(404, "POST /repos/o/r/releases: Not Found")), "POST", "/repos/o/r/releases", {})
+        self.assertEqual(caught.exception.status, 404)
+        self.assertTrue(str(caught.exception).startswith(
+            "HTTP 404: POST /repos/o/r/releases: Not Found — if the release's commit changes a file under .github/workflows/"))
+
+    def test_any_other_error_is_left_as_it_is(self):
+        for error in (GitHubError(422, "PATCH /repos/o/r/releases/1: Validation Failed"), GitHubError(None, "reset")):
+            with self.subTest(status=error.status), self.assertRaises(GitHubError) as caught:
+                write_release(Answering(error), "PATCH", "/repos/o/r/releases/1", {})
+            self.assertIs(caught.exception, error)
 
 
 class DownloadTests(unittest.TestCase):
