@@ -317,9 +317,10 @@ class Store:
         if self.has(version):
             try:
                 self._tidy(version)
-                return "stored"
             except FileNotFoundError:
-                pass                # removed meanwhile — pruned, or put in again: it is written below
+                pass
+            if self.has(version):   # still: not removed meanwhile — pruned, or put in again — by another
+                return "stored"
         if self.path(version).exists():
             raise StoreError(f"{self.path(version)} is there, and holds no complete spec — remove it, "
                              "then run the command again")
