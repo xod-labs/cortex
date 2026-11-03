@@ -38,12 +38,13 @@ is_excluded() {
     return 1
 }
 
+# NUL-separated: git quotes a path out of ASCII otherwise, and the quoted name is no file.
 files=()
-while IFS= read -r f; do
+while IFS= read -r -d '' f; do
     is_excluded "$f" && continue
     [ -f "$f" ] || continue
     files+=("$f")
-done < <(git ls-files)
+done < <(git ls-files -z)
 
 if [ "${1:-}" = "--list" ]; then
     printf '%s\n' "${files[@]}"
