@@ -43,7 +43,7 @@ class FakeGitHub:
         self.attestations_fail = attestations_fail
         self.issues = []
         self.patched = []
-        self.patch_fails = False
+        self.patch_fails = None
         self.issue_fails = False
         self.annotated = set()
         self.tags_fail = None
@@ -96,7 +96,7 @@ class FakeGitHub:
 
     def request(self, method, path, body=None, **_):
         if method == "PATCH" and self.patch_fails:
-            raise GitHubError(502, "Bad Gateway")
+            raise self.patch_fails
         if method == "PATCH":
             rid = int(path.rsplit("/", 1)[1])
             self.patched.append((rid, body))
@@ -328,7 +328,7 @@ class LatestTests(unittest.TestCase):
 
     def test_the_issue_is_opened_even_when_latest_cannot_move(self):
         github = FakeGitHub([release("4.0.0", 1, {}), release("3.0.1", 2)], latest="4.0.0")
-        github.patch_fails = True
+        github.patch_fails = GitHubError(502, "Bad Gateway")
         code, out = run(github, "4.0.0")
         self.assertEqual(code, 2, out)
         self.assertEqual([i["title"] for i in github.issues], ["Release 4.0.0 failed its guard"])
@@ -367,7 +367,7 @@ class LatestTests(unittest.TestCase):
 
     def test_the_issue_opened_is_named_when_the_guard_stops(self):
         github = FakeGitHub([release("4.0.0", 1, {}), release("3.0.1", 2)], latest="4.0.0")
-        github.patch_fails = True
+        github.patch_fails = GitHubError(502, "Bad Gateway")
         code, out = run(github, "4.0.0")
         self.assertEqual(code, 2, out)
         self.assertIn("4.0.0 fails its guard, but the guard stopped before it finished, with its issue opened: "
@@ -375,10 +375,20 @@ class LatestTests(unittest.TestCase):
 
     def test_a_release_that_passes_is_said_to_when_a_write_stops_the_guard(self):
         github = FakeGitHub([release("2.1.0", 1, prerelease=True), release("2.0.0", 2)], latest="2.0.0")
-        github.patch_fails = True
+        github.patch_fails = GitHubError(502, "Bad Gateway")
         code, out = run(github, "2.1.0")
         self.assertEqual((code, github.issues), (2, []), out)
         self.assertIn("2.1.0 passes its guard, but the guard stopped before it finished. What it found:", out)
+
+    def test_a_404_on_either_write_says_what_github_documents_for_workflows(self):
+        for tag, github in (("2.1.0", FakeGitHub([release("2.1.0", 1, prerelease=True), release("2.0.0", 2)], latest="2.0.0")),
+                            ("1.5.1", FakeGitHub([release("1.5.1", 1), release("2.0.0", 2)], latest="1.5.1"))):
+            with self.subTest(tag=tag):
+                github.patch_fails = GitHubError(404, "PATCH https://api.github.com/repos/o/r/releases/1: Not Found")
+                code, out = run(github, tag)
+                self.assertEqual(code, 2, out)
+                self.assertIn("::error title=release guard::HTTP 404: PATCH https://api.github.com/repos/o/r/releases/1: "
+                              "Not Found — if the release's commit changes a file under .github/workflows/", out)
 
     def test_latest_is_repaired_even_when_the_release_fails(self):
         github = FakeGitHub([release("1.5.1", 1, immutable=False), release("2.0.0", 2)], latest="1.5.1")
