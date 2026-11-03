@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from cortex_core import validate
 from cortex_core.project import shown
@@ -51,18 +51,19 @@ def _synced_version(project: config.Project, base: str) -> str:
     return resolved.name if resolved.parent.name == "versions" and store.Version.valid(resolved.name) else ""
 
 
-def lock_warnings(project: config.Project, base: str) -> List[Tuple[str, str, str]]:
-    """What ``cortex.lock`` says of the spec at ``base``, a spec of the pinned version."""
+def lock_warnings(project: config.Project, base: str, files: Optional[Dict[str, str]] = None) -> List[Tuple[str, str, str]]:
+    """What ``cortex.lock`` says of the spec at ``base``, a spec of the pinned version — a copy's
+    digest from its manifest, ``files``, checked already against the copy."""
     try:
         lock = config.load_lock(project.root)
     except config.ConfigError as error:
-        return [(config.LOCK_FILE, "LOCK_INVALID", f"{error} — run `cortex sync`, which writes it again")]
+        return [(config.LOCK_FILE, "LOCK_INVALID", str(error))]
     if lock is None:
         return [(config.LOCK_FILE, "LOCK_MISSING", "no cortex.lock — run `cortex sync`, then commit it")]
     if lock.version != project.version:
         return [(config.LOCK_FILE, "LOCK_STALE", f"cortex.lock names Cortex {lock.version}, and cortex.toml pins "
                  f"{project.version} — run `cortex sync`, then commit it")]
-    actual = store.digest(Path(base))
+    actual = store.digest_of(files) if files is not None else store.digest(Path(base))
     if actual != lock.digest:
         return [(config.LOCK_FILE, "LOCK_DIGEST", f"the spec synced is {actual}, and cortex.lock names {lock.digest} — "
                  "run `cortex sync`, which puts it in the store again")]
@@ -95,7 +96,7 @@ def roots(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]]]:
                 raise RootsError(f"{sync.LINK}/ no longer holds what sync copied — {len(off)} file(s) added, changed "
                                  f"or missing, {shown(off[0])} first: it would be validated against another spec. "
                                  "Run `cortex sync`, which says what to do")
-        return root, base, lock_warnings(project, base) if synced else []
+        return root, base, lock_warnings(project, base, marker.get("files") if marker else None) if synced else []
     if sync.is_checkout(Path(cwd)) and os.path.isfile(os.path.join(cwd, "templates", "bootstrap-instructions.md")):
         return cwd, cwd, []
     hint = (" — a cortex/ submodule or clone is here: `cortex init` says how to leave it"

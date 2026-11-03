@@ -298,9 +298,12 @@ def validate(project_root: str, base_root: str, service: str, strict: bool, out:
     if not roots:
         report.echo(f"{c.YELLOW}ℹ{c.NC}  No overlay roots found (no agents/ directory at workspace or service level).")
         report.echo("   Nothing to validate. This is expected if you haven't created overlays yet.")
-        if strict and report.warnings:
-            report.echo(f"{c.RED}Strict mode: warnings count as errors.{c.NC}")
-            return 1
+        if report.warnings:   # the project's own: said in the summary, as an overlay's would be
+            report.echo(SEPARATOR)
+            report.echo(f"Warnings: {c.YELLOW}{c.BOLD}{report.warnings}{c.NC}")
+            if strict:
+                report.echo(f"{c.RED}Strict mode: warnings count as errors.{c.NC}")
+                return 1
         return 0
 
     for root in roots:

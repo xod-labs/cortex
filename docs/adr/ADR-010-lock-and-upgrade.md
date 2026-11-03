@@ -100,6 +100,8 @@ After it has the pinned version in the store, `cortex sync`:
 
 - **`--from PATH`** syncs a checkout, which has no version: the lock is neither read nor written, and sync says so.
 - **The digest is computed from the store**, once per sync: a version is under a megabyte, and the cost is that of reading it.
+- **A copy follows the store**: in `copy` mode, a `cortex/` whose files are not the store's — made from a store the lock has since refused — is copied again.
+- **A version put in the store again** is renamed aside first, and put back if the new one cannot be had — offline, a download refused.
 - **`cortex init` writes the lock** through the sync it runs.
 
 ### 3.4 `cortex validate` and the lock
