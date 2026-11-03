@@ -37,11 +37,16 @@ class SpecArchiveTests(unittest.TestCase):
 
     def test_it_holds_what_git_tracks_and_nothing_else(self):
         # From the commit, never the working copy: a file nobody committed — a draft, a local
-        # note — does not ship.
-        stray = REPO / "docs" / "cortex-build-test-stray.md"
-        stray.write_text("not committed\n", encoding="utf-8")
-        self.addCleanup(stray.unlink)
-        files = sorted(m.name for m in self.members() if m.isfile())
+        # note — does not ship. Written in a worktree of its own, not in this checkout's docs/,
+        # which other tests copy while it runs (tests/parallel.py).
+        worktree = self.tmp / "worktree"
+        subprocess.run(["git", "-C", str(REPO), "worktree", "add", "--quiet", "--detach", str(worktree), "HEAD"],
+                       check=True)
+        self.addCleanup(subprocess.run, ["git", "-C", str(REPO), "worktree", "remove", "--force", str(worktree)],
+                        capture_output=True)
+        (worktree / "docs" / "cortex-build-test-stray.md").write_text("not committed\n", encoding="utf-8")
+        with unittest.mock.patch.object(build, "REPO", worktree):
+            files = sorted(m.name for m in self.members() if m.isfile())
         self.assertEqual(files, tracked("agents", "templates", "docs"))
 
     def test_nothing_in_it_is_a_link_or_leaves_its_tree(self):

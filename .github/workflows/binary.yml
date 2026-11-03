@@ -136,7 +136,9 @@ jobs:
           EOF
 
       # The suite the source runs in cli-tests, now through the binary: --version, the golden
-      # outputs of the validator byte for byte, from a CRLF checkout too.
+      # outputs of the validator byte for byte, from a CRLF checkout too. Twice as many workers as
+      # CPUs run its tests at once (#229): a test that launches the binary mostly waits for it, and
+      # one after the other, Windows took ten minutes.
       - name: The binary replays the CLI's suite, with no Python on its PATH
         working-directory: cli
         env:
@@ -144,7 +146,7 @@ jobs:
         run: |
           binary="$GITHUB_WORKSPACE/cli/build/dist/cortex"
           [ "$RUNNER_OS" = Windows ] && binary="$binary.exe"
-          CORTEX_TEST_BINARY="$binary" python -m unittest discover -s tests -v
+          CORTEX_TEST_BINARY="$binary" python tests/parallel.py
 
       # The asset just built, installed the way a user installs a release: through the install
       # script, from a release served here — its SHA256SUMS checked, the binary run once.
