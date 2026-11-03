@@ -361,3 +361,7 @@ Tracked as #118, #119 and #120.
 ### 2026-10 — the planned records are numbered one higher
 
 ADR-009 became the release cycle on 2026-10-30, and every record planned after it moved up by one. The ADR-011 this record names is now ADR-012, the multi-provider LLM abstraction ([#40](https://github.com/adorey/cortex/issues/40)).
+
+### 2026-11 — the planned records are numbered one higher again
+
+ADR-010 became `cortex.lock`, `cortex upgrade` and the bootstrap marker on 2026-11-03 ([#99](https://github.com/xod-labs/cortex/issues/99)), and every record planned after it moved up by one. The ADR-012 this record names is now ADR-013, the multi-provider LLM abstraction ([#40](https://github.com/xod-labs/cortex/issues/40)).
