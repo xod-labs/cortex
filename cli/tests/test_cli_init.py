@@ -16,8 +16,10 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
+sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
 import init_matrix as matrix  # noqa: E402
+from cortex_cli import init as init_command  # noqa: E402
 
 
 def display(path):
@@ -279,11 +281,12 @@ class OptionTests(InitTestCase):
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertTrue((self.project / ".github" / "copilot-instructions.md").is_file())
         self.assertEqual(self.read("CLAUDE.md"), older)
-        self.assertIn("CLAUDE.md is there and was kept: an older Cortex bootstrap, which does not read "
-                      "cortex.local.toml — cortex init --tool claude --force replaces it", proc.err)
+        self.assertIn("CLAUDE.md is there and was kept: an older Cortex bootstrap, written before the bootstrap "
+                      "marker — cortex init --tool claude --force replaces it", proc.err)
         proc = self.init("--tool", "claude")
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("CLAUDE.md is an older Cortex bootstrap: it does not read cortex.local.toml", proc.err)
+        self.assertIn("CLAUDE.md is an older Cortex bootstrap, written before the bootstrap marker", proc.err)
+        self.assertEqual(self.read("CLAUDE.md"), older)
 
     def test_a_kept_file_without_the_bootstrap_is_said(self):
         (self.project / "CLAUDE.md").write_text("# Our own notes\n", encoding="utf-8")
@@ -302,6 +305,19 @@ class OptionTests(InitTestCase):
         proc = self.init("--tool", "claude", "--workspace")
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn("was written for a single project", proc.err)
+
+    def test_a_bootstrap_a_team_retitled_keeps_its_layout(self):
+        # #141: the first line was compared with the template's, and a retitled workspace bootstrap was
+        # taken for a single project's. The marker says the layout, whatever the title.
+        self.assertEqual(self.init("--tool", "claude", "--workspace").returncode, 0)
+        retitled = self.read("CLAUDE.md").replace("# Cortex AI Team — Workspace Mode\n",
+                                                  "# Cortex AI Team — Workspace Mode (Acme)\n", 1)
+        self.assertIn("Workspace Mode (Acme)", retitled)
+        (self.project / "CLAUDE.md").write_text(retitled, encoding="utf-8")
+        proc = self.init("--tool", "claude", "--workspace")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertEqual([line for line in proc.err.splitlines() if line.startswith("note:") and "CLAUDE.md" in line], [])
+        self.assertEqual(self.read("CLAUDE.md"), retitled)
 
     def test_the_backup_is_said_to_be_left_to_git(self):
         (self.project / "CLAUDE.md").write_text("# mine\n", encoding="utf-8")
@@ -1181,6 +1197,55 @@ class OptionTests(InitTestCase):
         (self.project / "agents").mkdir()
         self.init("--workspace", "--service", "api")
         self.assertFalse((self.project / "agents" / "project-overview.md").exists())
+
+
+class BootstrapMarkerTests(unittest.TestCase):
+    """A kept file read through the marker of the template the pinned version writes (ADR-010 §3.1)."""
+
+    def template(self, layout="workspace", format=1):
+        return (f"# Cortex AI Team — Workspace Mode\n\n<!-- cortex:bootstrap layout={layout} format={format} -->\n"
+                "<!-- Keep the line above as it is. -->\n\nRead cortex.local.toml first.\n").encode()
+
+    def test_a_kept_file_of_the_same_format_is_a_bootstrap_of_this_version(self):
+        self.assertIsNone(init_command.kept_bootstrap(self.template(), self.template()))
+        self.assertFalse(init_command.written_for_the_other_layout(self.template(), self.template()))
+
+    def test_the_marker_says_the_layout(self):
+        self.assertTrue(init_command.written_for_the_other_layout(self.template("single"), self.template()))
+
+    def test_an_older_and_a_later_format_are_said(self):
+        older = init_command.kept_bootstrap(self.template(format=1), self.template(format=2))
+        self.assertEqual(older[0], "is an older Cortex bootstrap: format 1, where this version writes format 2")
+        later = init_command.kept_bootstrap(self.template(format=3), self.template(format=2))
+        self.assertEqual(later[0], "was written by a later Cortex: format 3, where this version writes format 2")
+
+    def test_two_markers_are_none(self):
+        twice = self.template() + b"<!-- cortex:bootstrap layout=single format=1 -->\n"
+        self.assertEqual(init_command.kept_bootstrap(twice, self.template())[0],
+                         "holds several bootstrap markers, so none is read")
+
+    def test_only_the_whole_line_is_a_marker(self):
+        for line in (b"<!-- cortex:bootstrap layout=workspace format=01 -->", b"<!-- cortex:bootstrap layout=both format=1 -->",
+                     b"  <!-- cortex:bootstrap layout=workspace format=1 -->", b"<!-- cortex:bootstrap layout=workspace format=1 --> x",
+                     b"<!--cortex:bootstrap layout=workspace format=1-->"):
+            with self.subTest(line=line):
+                self.assertEqual(init_command.markers(b"# Cortex AI Team\n\n" + line + b"\n"), [])
+        self.assertEqual(init_command.markers(b"# T\r\n<!-- cortex:bootstrap layout=single format=12 -->\r\n"), [("single", 12)])
+
+    def test_a_file_without_the_marker(self):
+        before = b"# Cortex AI Team\n\nRead cortex.local.toml first.\n"
+        self.assertEqual(init_command.kept_bootstrap(before, self.template())[0],
+                         "is an older Cortex bootstrap, written before the bootstrap marker")
+        self.assertEqual(init_command.kept_bootstrap(b"# Our notes\n", self.template())[0],
+                         "holds no Cortex bootstrap: the tool will not find Cortex")
+
+    def test_a_version_whose_templates_carry_no_marker_keeps_its_checks(self):
+        # A project pinned to 1.3: its templates have no marker, and its bootstrap is not "older".
+        old_template = b"# Cortex AI Team\n\nRead cortex.local.toml first.\n"
+        self.assertIsNone(init_command.kept_bootstrap(old_template, old_template))
+        self.assertEqual(init_command.kept_bootstrap(b"# Cortex AI Team\n\nRead cortex/ first.\n", old_template)[0],
+                         "is an older Cortex bootstrap: it does not read cortex.local.toml, which names the spec now")
+        self.assertTrue(init_command.written_for_the_other_layout(b"# Cortex AI Team \u2014 Workspace Mode\n", old_template))
 
 
 if __name__ == "__main__":
