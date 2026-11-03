@@ -211,7 +211,7 @@ For each service:
 - `{service}/project-overview.md` — with its `@alias` pre-filled
 - `{service}/project-context.md` — with its `@alias` pre-filled
 
-At the workspace root, as in single project mode: `cortex.toml`, `cortex.local.toml` (git-ignored) and the instructions file of your `--tool` — written from the workspace bootstrap, `cortex/templates/bootstrap-instructions-workspace.md`.
+At the workspace root, as in single project mode: `cortex.toml`, `cortex.local.toml` (git-ignored) and the instructions file of your `--tool` — written from the workspace bootstrap, `cortex/templates/bootstrap-instructions-workspace.md`. Its marker line is `<!-- cortex:bootstrap layout=workspace format=1 -->`: keep it as it is when you adapt the file, as in single project mode.
 
 And at the workspace root (optional) — this is your **developer** tier, not shared by default:
 - `project-overview.md` — your own notes on the global vision (shared stakeholders, common constraints)
