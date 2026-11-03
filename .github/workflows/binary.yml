@@ -136,7 +136,9 @@ jobs:
           EOF
 
       # The suite the source runs in cli-tests, now through the binary: --version, the golden
-      # outputs of the validator byte for byte, from a CRLF checkout too.
+      # outputs of the validator byte for byte, from a CRLF checkout too. Twice as many workers as
+      # CPUs run its tests at once (#229): a test that launches the binary mostly waits for it, and
+      # one after the other, Windows took ten minutes.
       - name: The binary replays the CLI's suite, with no Python on its PATH
         working-directory: cli
         env:
@@ -144,7 +146,7 @@ jobs:
         run: |
           binary="$GITHUB_WORKSPACE/cli/build/dist/cortex"
           [ "$RUNNER_OS" = Windows ] && binary="$binary.exe"
-          CORTEX_TEST_BINARY="$binary" python -m unittest discover -s tests -v
+          CORTEX_TEST_BINARY="$binary" python tests/parallel.py
 
       # The asset just built, installed the way a user installs a release: through the install
       # script, from a release served here — its SHA256SUMS checked, the binary run once.
@@ -217,7 +219,9 @@ jobs:
 
   # The one check the ruleset requires of the builds: `build (…)` and `glibc 2.28 (…)` are matrix
   # jobs, whose names change with their matrix, and a job skipped before its matrix expands reports
-  # as `glibc 2.28 (${{ matrix.target }})` (ADR-009 §3.10).
+  # as `glibc 2.28 (${{ matrix.target }})` (ADR-009 §3.10). It passes when each job it needs passed or
+  # was skipped, and fails on any other result — `abandoned` too, which GitHub gives a job no runner
+  # took (#236).
   summary:
     name: builds
     if: always()
@@ -229,4 +233,4 @@ jobs:
           RESULTS: ${{ toJSON(needs.*.result) }}
         run: |
           echo "$RESULTS"
-          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = false ]
+          echo "$RESULTS" | jq -e 'all(.[]; . == "success" or . == "skipped")' > /dev/null
