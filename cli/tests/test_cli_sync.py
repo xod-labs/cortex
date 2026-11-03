@@ -20,7 +20,9 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
+sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
+from cortex_cli.store import digest  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
 OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
@@ -105,11 +107,11 @@ class StoreModeTests(SyncTestCase):
         self.assertEqual(self.release.requested, [])
         self.assertEqual(self.spec(project), display(self.stored()))
 
-    def test_it_writes_nothing_in_the_project_but_cortex_local_toml(self):
+    def test_it_writes_nothing_in_the_project_but_cortex_local_toml_and_the_lock(self):
         project = self.project()
         before = sorted(p.name for p in project.iterdir())
         self.assert_ok(self.sync(project))
-        self.assertEqual(sorted(p.name for p in project.iterdir()), sorted(before + ["cortex.local.toml"]))
+        self.assertEqual(sorted(p.name for p in project.iterdir()), sorted(before + ["cortex.local.toml", "cortex.lock"]))
 
     def test_a_second_sync_finds_it_stored(self):
         project = self.project()
@@ -310,7 +312,7 @@ class LinkAndCopyTests(SyncTestCase):
         (project / "notes.md").write_text("mine\n", encoding="utf-8")
         self.sync(project, "--copy")
         self.assert_ok(self.sync(project))
-        self.assertEqual(sorted(p.name for p in project.iterdir()), ["cortex.local.toml", "cortex.toml", "notes.md"])
+        self.assertEqual(sorted(p.name for p in project.iterdir()), ["cortex.local.toml", "cortex.lock", "cortex.toml", "notes.md"])
         self.assertTrue(self.stored().is_dir())
 
     def test_cortex_toml_sets_the_mode_and_a_flag_overrides_it(self):
@@ -827,6 +829,111 @@ class ValidateTests(SyncTestCase):
                 self.assertNotEqual(proc.returncode, 0)
                 self.assertNotIn("\x1b", proc.err)
                 self.assertIn(escaped, proc.err)
+
+
+class LockTests(SyncTestCase):
+    """``cortex.lock`` — the spec a project resolved (ADR-010 §3.2 to §3.4)."""
+
+    OTHER = "sha256:" + "0" * 64
+
+    def lock(self, project):
+        return (project / "cortex.lock").read_text(encoding="utf-8")
+
+    def write_lock(self, project, version=OWN, digest_=None, extra=""):
+        (project / "cortex.lock").write_text(f'format = 1\nversion = "{version}"\ndigest = "{digest_ or self.OTHER}"\n{extra}',
+                                             encoding="utf-8")
+
+    def test_sync_writes_the_lock_of_the_pinned_version_then_leaves_it(self):
+        project = self.project()
+        proc = self.sync(project)
+        self.assert_ok(proc)
+        self.assertIn("cortex.lock: written — commit it", proc.out)
+        self.assertTrue(self.lock(project).endswith(f'format = 1\nversion = "{OWN}"\ndigest = "{digest(self.stored())}"\n'))
+        before = self.lock(project)
+        proc = self.sync(project)
+        self.assert_ok(proc)
+        self.assertNotIn("cortex.lock", proc.out)
+        self.assertEqual(self.lock(project), before)
+
+    def test_a_spec_changed_in_the_store_is_put_in_again(self):
+        project = self.project()
+        self.assert_ok(self.sync(project))
+        changed = self.stored() / "agents" / "roles" / "prompt-manager.md"
+        original = changed.read_bytes()
+        os.chmod(changed, 0o644)
+        changed.write_bytes(b"# not the spec\n")
+        proc = self.sync(project)
+        self.assert_ok(proc)
+        self.assertIn(f"Cortex {OWN}: put in the store again — its files were not those cortex.lock names", proc.out)
+        self.assertEqual(changed.read_bytes(), original)
+        self.assertIn(f'digest = "{digest(self.stored())}"', self.lock(project))
+
+    def test_a_release_that_is_not_the_one_locked_is_refused(self):
+        project = self.project()
+        self.write_lock(project)
+        proc = self.sync(project)
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn(f"its spec is {digest(self.stored())}, and cortex.lock names {self.OTHER}", proc.err)
+        self.assertIn("this is not the release the project locked", proc.err)
+        self.assertFalse((project / "cortex.local.toml").exists())
+        self.assertIn(self.OTHER, self.lock(project))
+
+    @DOWNLOADS
+    def test_a_lock_of_another_version_is_written_again(self):
+        project = self.project()
+        self.write_lock(project, version="9.9.8")
+        proc = self.sync(project)
+        self.assert_ok(proc)
+        self.assertIn(f"cortex.lock: Cortex {OWN}, where it named 9.9.8 — commit it", proc.out)
+        self.assertIn(f'version = "{OWN}"', self.lock(project))
+
+    def test_a_checkout_has_no_lock(self):
+        project = self.project()
+        self.write_lock(project)
+        before = self.lock(project)
+        proc = self.sync(project, "--from", str(harness.REPO))
+        self.assert_ok(proc)
+        self.assertIn("cortex.lock: neither read nor written — a checkout has no version (--from)", proc.out)
+        self.assertEqual(self.lock(project), before)
+
+    def test_a_lock_that_is_not_one_is_refused(self):
+        project = self.project()
+        for text, fragment in (("format = 1\nversion = \"1.0.0\"\ndigest = \"x\"\n", 'digest "x" is no digest'),
+                               (f'format = 1\nversion = "1.0.0"\ndigest = "{self.OTHER}"\nnote = "x"\n', 'unknown key "note"'),
+                               (f'format = 2\nversion = "1.0.0"\ndigest = "{self.OTHER}"\n',
+                                "format 2 is written by a later Cortex — this one reads format 1: upgrade this cortex")):
+            with self.subTest(fragment=fragment):
+                (project / "cortex.lock").write_text(text, encoding="utf-8")
+                proc = self.sync(project)
+                self.assertEqual(proc.returncode, 1, proc.err)
+                self.assertIn(f"cortex.lock: {fragment}", proc.err)
+                self.assertFalse((project / "cortex.local.toml").exists())
+
+    def test_validate_warns_on_the_lock(self):
+        project = self.project()
+        self.assert_ok(self.sync(project))
+        proc = self.validate(project)
+        self.assert_ok(proc)
+        self.assertNotIn("LOCK_", proc.out)
+        good = self.lock(project)
+        for change, code in ((lambda: (project / "cortex.lock").unlink(), "LOCK_MISSING"),
+                             (lambda: self.write_lock(project, version="9.9.8", digest_=digest(self.stored())), "LOCK_STALE"),
+                             (lambda: self.write_lock(project), "LOCK_DIGEST"),
+                             (lambda: (project / "cortex.lock").write_text("format = 9\n", encoding="utf-8"), "LOCK_INVALID")):
+            with self.subTest(code=code):
+                (project / "cortex.lock").write_text(good, encoding="utf-8")
+                change()
+                proc = self.validate(project)
+                self.assertEqual(proc.returncode, 0, proc.out)
+                self.assertIn(code, proc.out)
+                self.assertEqual(self.validate(project, "--strict").returncode, 1)
+
+    def test_validate_of_a_project_without_a_lock_passes_without_strict(self):
+        # A project of 1.3: synced by a cortex that wrote no lock.
+        project = self.project()
+        self.assert_ok(self.sync(project))
+        (project / "cortex.lock").unlink()
+        self.assertEqual(self.validate(project).returncode, 0)
 
 
 if __name__ == "__main__":

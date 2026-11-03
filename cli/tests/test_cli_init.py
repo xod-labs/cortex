@@ -94,6 +94,7 @@ class MatrixTests(InitTestCase):
                 if HAS_GIT:
                     self.assertIn("cortex.local.toml", self.read(".gitignore").splitlines())
                 self.assertIn("spec = ", self.read("cortex.local.toml"))
+                self.assertIn(f'version = "{OWN}"', self.read("cortex.lock"))
 
     def test_the_comparison_catches_one_byte(self):
         self.run_case("single-claude")
