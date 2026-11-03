@@ -192,7 +192,7 @@ irm https://raw.githubusercontent.com/xod-labs/cortex/main/install.ps1 | iex    
 
 The binary goes into `~/.cortex/bin` (`%USERPROFILE%\.cortex\bin` on Windows): `install.ps1` adds that directory to your user `PATH`, `install.sh` prints the line to add to your shell profile. When another `cortex` command comes first on `PATH`, the scripts install it as `cortex-ai` instead; `--name cortex` (`-Name cortex` for `install.ps1`) forces the name. Running a script again upgrades the binary. Built for Linux x86_64 and aarch64 (glibc 2.28 or later), macOS on Apple silicon and Windows x86_64.
 
-The spec lives in the store, `~/.cortex/versions/X.Y.Z`: one read-only directory per version, filled on demand — the binary's own version from itself, any other downloaded and checked against its release's `SHA256SUMS`. `$CORTEX_HOME` moves `~/.cortex` elsewhere. `cortex prune ~/code` removes the versions that no project under `~/code` pins — the binary's own, and each `--keep`, are kept; `--dry-run` only lists them. A project elsewhere gets its version back at its next `cortex sync`, checked against its `cortex.lock`.
+The spec lives in the store, `~/.cortex/versions/X.Y.Z`: one read-only directory per version, filled on demand — the binary's own version from itself, any other downloaded and checked against its release's `SHA256SUMS`. `$CORTEX_HOME` moves `~/.cortex` elsewhere. `cortex prune ~/code` removes the versions that no project under `~/code` uses — the binary's own, and each `--keep`, are kept; `--dry-run` only lists them. A project elsewhere gets its version back at its next `cortex sync`, checked against its `cortex.lock`.
 
 ### 2. Make a project a Cortex project
 
