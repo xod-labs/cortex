@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
-from github import GitHub, GitHubError, quote  # noqa: E402
+from github import GitHub, GitHubError, quote, write_release  # noqa: E402
 
 
 class Refused(Exception):
@@ -58,7 +58,7 @@ def draft(github: GitHub, version: str, target: str, body: str, prerelease: bool
         print(f"The draft {version} of this commit, left by a run that failed, is made again.")
         github.request("DELETE", github.repo(f"/releases/{found['id']}"))
 
-    release = github.request("POST", github.repo("/releases"), body={
+    release = write_release(github, "POST", github.repo("/releases"), {
         "tag_name": version, "target_commitish": target, "name": version, "body": body, "draft": True,
         "prerelease": prerelease, "make_latest": "true" if latest else "false"})
     upload = release["upload_url"].split("{", 1)[0]

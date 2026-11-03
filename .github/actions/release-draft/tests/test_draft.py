@@ -19,8 +19,9 @@ SIX = ["SHA256SUMS", "cortex-linux-aarch64.tar.gz", "cortex-linux-x86_64.tar.gz"
 
 
 class FakeGitHub:
-    def __init__(self, releases=(), fail_upload_after=None, upload_error=None):
+    def __init__(self, releases=(), fail_upload_after=None, upload_error=None, create_error=None):
         self.releases_ = {r["id"]: dict(r, assets=list(r.get("assets", []))) for r in releases}
+        self.create_error = create_error
         self.calls = []
         self.fail_upload_after = fail_upload_after
         self.upload_error = upload_error or GitHubError(502, "upload cut")
@@ -42,6 +43,8 @@ class FakeGitHub:
             del self.releases_[int(path.rsplit("/", 1)[1])]
             return None
         if method == "POST" and path == "/repos/o/r/releases":
+            if self.create_error:
+                raise self.create_error
             rid = max(self.releases_, default=0) + 1
             self.releases_[rid] = dict(body, id=rid, assets=[], upload_url=f"https://uploads/{rid}/assets{{?name,label}}",
                                        html_url=f"https://github.com/o/r/releases/tag/untagged-{rid}")
@@ -110,6 +113,13 @@ class DraftTests(unittest.TestCase):
         code, out = self.run_draft(github)
         self.assertEqual((code, github.calls), (1, []))
         self.assertIn("a draft 1.4.0 of another commit", out)
+
+    def test_a_404_on_creating_the_draft_says_what_github_documents_for_workflows(self):
+        github = FakeGitHub(create_error=GitHubError(404, "POST https://api.github.com/repos/o/r/releases: Not Found"))
+        code, out = self.run_draft(github)
+        self.assertEqual(code, 2)
+        self.assertIn("::error title=release draft::HTTP 404: POST https://api.github.com/repos/o/r/releases: Not Found — "
+                      "if the release's commit changes a file under .github/workflows/", out)
 
     def test_a_run_cut_while_uploading_then_its_re_run_leave_one_complete_draft(self):
         # GitHub answering an error, or the connection cut under the upload.

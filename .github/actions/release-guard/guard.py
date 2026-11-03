@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
-from github import GitHub, GitHubError, quote  # noqa: E402
+from github import GitHub, GitHubError, quote, write_release  # noqa: E402
 from semver import Version, highest, is_prerelease, is_release  # noqa: E402
 
 SUMS = "SHA256SUMS"
@@ -173,7 +173,7 @@ def untick_pre_release(github: GitHub, release: Dict[str, Any], report: Report) 
     # `make_latest` false: its default, true, would make it latest whatever its version; keep_latest decides next,
     # from the releases read again. A list that lagged behind this write would keep `latest` off this release, in
     # a green run: nothing shows GitHub's does, and the first release unticked for real says whether `latest` moved.
-    github.request("PATCH", github.repo(f"/releases/{release['id']}"), body={"prerelease": False, "make_latest": "false"})
+    write_release(github, "PATCH", github.repo(f"/releases/{release['id']}"), {"prerelease": False, "make_latest": "false"})
     report.repaired.append(f"{tag} was marked pre-release; it is a release again, as its version says")
 
 
@@ -205,7 +205,7 @@ def keep_latest(github: GitHub, report: Report, expected: Sequence[str]) -> None
         report.passed.append(f"latest is {top}, the highest version" + (" with every asset expected" if failing else ""))
         return
     target = next(r for r in published if r["tag_name"] == str(top))
-    github.request("PATCH", github.repo(f"/releases/{target['id']}"), body={"make_latest": "true"})
+    write_release(github, "PATCH", github.repo(f"/releases/{target['id']}"), {"make_latest": "true"})
     why = f"the highest version with every asset expected, while {failing} fails" if failing and failing == current else "the highest version"
     report.repaired.append(f"latest was {current or 'none'}; it is {top} again, {why}")
 
