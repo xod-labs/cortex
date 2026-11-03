@@ -14,13 +14,23 @@ sys.path.insert(0, str(BIN))
 import setup_release as sr  # noqa: E402
 
 
+def github_matches(pattern, branch):
+    """A ref pattern against a branch, as GitHub reads it: File.fnmatch with FNM_PATHNAME."""
+    if pattern in ("~ALL", "~DEFAULT_BRANCH"):
+        return pattern == "~ALL" or branch == "main"
+    regex = re.escape(pattern).replace(r"\*\*/", "(?:.*/)?").replace(r"\*", "[^/]*").replace(r"\?", "[^/]")
+    return re.fullmatch(regex, f"refs/heads/{branch}") is not None
+
+
 class FakeGh(sr.Gh):
     """One repository's settings, as GitHub's API serves and takes them."""
 
-    def __init__(self, owner_type="Organization", rulesets=None, immutable=False, delete_on_merge=False, branches=("main",)):
+    def __init__(self, owner_type="Organization", rulesets=None, immutable=False, delete_on_merge=False, branches=("main",),
+                 org_rulesets=None):
         self.owner_type = owner_type
         self.branches = list(branches)
         self.rulesets = {r["id"]: r for r in (rulesets or [])}
+        self.org_rulesets = {r["id"]: r for r in (org_rulesets or [])}   # in no listing of the repository's own
         self.immutable = immutable
         self.delete_on_merge = delete_on_merge
         self.writes = []
@@ -45,7 +55,22 @@ class FakeGh(sr.Gh):
             new = dict(copy.deepcopy(body), id=len(self.rulesets) + 100)
             self.rulesets[new["id"]] = new
             return new
-        match = re.fullmatch(r"repos/o/r/rulesets/(\d+)", path)
+        match = re.fullmatch(r"repos/o/r/rules/branches/(.+)\?per_page=100&page=(\d+)", path)
+        if match:
+            # Every active rule GitHub applies to the branch, whether it exists or not, with its ruleset.
+            branch, every = match.group(1), {**self.rulesets, **self.org_rulesets}
+            if match.group(2) != "1":
+                return []
+            return [dict(copy.deepcopy(rule), ruleset_id=i, ruleset_source_type=r.get("source_type", "Repository"))
+                    for i, r in every.items()
+                    if r.get("enforcement") == "active" and r.get("target", "branch") == "branch"
+                    and any(github_matches(p, branch) for p in r["conditions"]["ref_name"]["include"])
+                    and not any(github_matches(p, branch) for p in r["conditions"]["ref_name"].get("exclude", []))
+                    for rule in r.get("rules", [])]
+        match = re.fullmatch(r"repos/o/r/rulesets/(\d+)\?includes_parents=true", path)
+        if match and int(match.group(1)) in self.org_rulesets:
+            return copy.deepcopy(self.org_rulesets[int(match.group(1))])
+        match = re.fullmatch(r"repos/o/r/rulesets/(\d+)(\?includes_parents=true)?", path)
         if match:
             if method == "PUT":
                 self.rulesets[int(match.group(1))] = dict(copy.deepcopy(body), id=int(match.group(1)))
@@ -242,6 +267,29 @@ class SetupReleaseTests(unittest.TestCase):
         for id in (7, 12, 13):
             del gh.rulesets[id]
         self.assertEqual(run(gh, "--check")[0], 0)
+
+    def test_github_says_which_rulesets_apply_where_no_pattern_is_matched_here(self):
+        # The script reads the rules GitHub applies to each branch (#226): a nested pattern, an
+        # exclude, a line not cut yet and an organisation's ruleset are GitHub's to resolve.
+        def ruleset(id, name, include, exclude=(), source="Repository"):
+            return {"id": id, "name": name, "target": "branch", "enforcement": "active", "source_type": source,
+                    "conditions": {"ref_name": {"include": include, "exclude": list(exclude)}},
+                    "rules": [{"type": "required_status_checks", "parameters": {
+                        "required_status_checks": [{"context": "ci"}, {"context": "lint"}]}}]}
+        gh = FakeGh(rulesets=[ruleset(20, "nested", ["refs/heads/**/*"]),
+                              ruleset(21, "all but the cycle", ["~ALL"], exclude=["~DEFAULT_BRANCH", "refs/heads/*.x"]),
+                              ruleset(22, "zero", ["refs/heads/0.x"])],
+                    org_rulesets=[ruleset(30, "org checks", ["~DEFAULT_BRANCH"], source="Organization")])
+        run(gh)
+        code, out = run(gh, "--check")
+        self.assertEqual(code, 1)
+        # On main and 0.x both, reported once, its checks once.
+        self.assertIn("✗ the ruleset 'nested', which the cycle does not set\n"
+                      "    it requires 2 check(s) of its own — ci, lint", out)
+        self.assertIn("✗ the ruleset 'zero', which the cycle does not set", out)
+        self.assertIn("✗ the organisation's ruleset 'org checks', which the cycle does not set", out)
+        self.assertNotIn("all but the cycle", out)
+        self.assertIn("3 setting(s) differ.", out)
 
     def test_another_repositorys_checks(self):
         gh = FakeGh()
