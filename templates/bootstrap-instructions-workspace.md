@@ -1,5 +1,8 @@
 # Cortex AI Team — Workspace Mode
 
+<!-- cortex:bootstrap layout=workspace format=1 -->
+<!-- Keep the line above as it is: `cortex init` and `cortex upgrade` read it. -->
+
 ## Where the spec is — read this first
 
 In these instructions, `cortex/` is the directory that `spec` names in `cortex.local.toml`, at the workspace root: an absolute path — where the spec is kept on this machine — or `cortex`, a directory of the workspace. Read `cortex.local.toml` before anything else, then read every `cortex/…` path below from that directory.
