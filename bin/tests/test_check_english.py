@@ -37,6 +37,16 @@ class CheckEnglishTests(unittest.TestCase):
         self.assertIn(f"{NAME}:1:", out)
         self.assertEqual(self.check("--list"), (0, f"{NAME}\n"))
 
+    def test_a_name_that_is_sed_syntax_is_reported(self):
+        # A | ended the sed expression that prefixed each hit: no hit, and "all English".
+        for name in ("a|b.md", "a&b.md", "a\\b.md"):
+            with self.subTest(name=name):
+                self.track(name, FRENCH)
+                code, out = self.check()
+                self.assertEqual(code, 1, out)
+                self.assertIn(f"{name}:1:", out)
+                subprocess.run(["git", "rm", "-q", "--cached", "--", name], cwd=self.repo, check=True)
+
     def test_english_passes_under_any_name(self):
         self.track("na\u00efve notes.md", "The rules are in the file.\n")
         code, out = self.check()

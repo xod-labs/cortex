@@ -55,9 +55,9 @@ hits=0
 for f in "${files[@]}"; do
     while IFS= read -r line; do
         case "$line" in *english-check:ignore*) continue ;; esac
-        printf '%s\n' "$line"
+        printf '%s:%s\n' "$f" "$line"    # the name as it is: in sed, a | or a & in it would be syntax
         hits=$((hits + 1))
-    done < <(grep -nIE "$ACCENTS|$FRENCH_WORDS" "$f" 2>/dev/null | sed "s|^|$f:|")
+    done < <(grep -nIE "$ACCENTS|$FRENCH_WORDS" "$f" 2>/dev/null)
 done
 
 if [ "$hits" -gt 0 ]; then
