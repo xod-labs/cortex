@@ -195,7 +195,6 @@ class SetupReleaseTests(unittest.TestCase):
         # push only is none — and passes on success or skipped only (§3.10, #236): all five read the same,
         # and no workflow-wide `defaults:` can soften one. Read as text: the runner's Python has no YAML parser.
         tag_push_only = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')"
-        body = SUMMARY
         summaries = set()
         for path in sorted((BIN.parent / ".github" / "workflows").glob("*.yml")):
             text = path.read_text(encoding="utf-8")
@@ -214,7 +213,7 @@ class SetupReleaseTests(unittest.TestCase):
                 others = {other for other, text in jobs.items() if other != job_id and key(text, "if") != tag_push_only}
                 with self.subTest(workflow=path.name, check=key(job, "name")):
                     self.assertNotRegex(text, r"(?m)^[\"']?defaults[\"']?\s*:")
-                    self.assertEqual(re.sub(r"(?m)^    (name|needs): .*\n", "", job).rstrip(), body)
+                    self.assertEqual(re.sub(r"(?m)^    (name|needs): .*\n", "", job).rstrip(), SUMMARY)
                     self.assertEqual(set(re.findall(r"[A-Za-z0-9_-]+", key(job, "needs"))), others)
         self.assertEqual(summaries, {"builds", "cli tests", "core tests", "repo checks", "runtime tests"})
 
