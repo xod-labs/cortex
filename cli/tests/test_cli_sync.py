@@ -907,7 +907,30 @@ class LockTests(SyncTestCase):
                 proc = self.sync(project)
                 self.assertEqual(proc.returncode, 1, proc.err)
                 self.assertIn(f"cortex.lock: {fragment}", proc.err)
+                if "later" not in fragment:
+                    self.assertIn("delete it, and `cortex sync` writes it again", proc.err)
                 self.assertFalse((project / "cortex.local.toml").exists())
+        (project / "cortex.lock").write_text("<<<<<<< ours\n", encoding="utf-8")    # a merge's markers
+        proc = self.sync(project)
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn("delete it, and `cortex sync` writes it again", proc.err)
+
+    def test_a_copy_of_a_spec_the_lock_refuses_is_copied_again(self):
+        project = self.project(extra='sync = "copy"\n')
+        self.assert_ok(self.sync(project))
+        team_lock = self.lock(project)
+        prompt = self.stored() / "agents" / "roles" / "prompt-manager.md"
+        genuine = prompt.read_bytes()
+        os.chmod(prompt, 0o644)
+        prompt.write_bytes(b"# altered\n")
+        (project / "cortex.lock").unlink()          # a lock of the altered store, and a copy of it
+        self.assert_ok(self.sync(project))
+        self.assertEqual((project / "cortex" / "agents" / "roles" / "prompt-manager.md").read_bytes(), b"# altered\n")
+        (project / "cortex.lock").write_text(team_lock, encoding="utf-8")    # the team's, pulled
+        proc = self.sync(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "cortex" / "agents" / "roles" / "prompt-manager.md").read_bytes(), genuine)
+        self.assertNotIn("LOCK_", self.validate(project).out)
 
     def test_validate_warns_on_the_lock(self):
         project = self.project()
@@ -926,6 +949,7 @@ class LockTests(SyncTestCase):
                 proc = self.validate(project)
                 self.assertEqual(proc.returncode, 0, proc.out)
                 self.assertIn(code, proc.out)
+                self.assertIn("Warnings: 1", proc.out)
                 self.assertEqual(self.validate(project, "--strict").returncode, 1)
 
     def test_validate_of_a_project_without_a_lock_passes_without_strict(self):

@@ -247,13 +247,16 @@ def load_lock(root: str) -> Optional[Lock]:
     path = os.path.join(root, LOCK_FILE)
     if not os.path.isfile(path):
         return None
-    data = _read(path)
+    again = "delete it, and `cortex sync` writes it again"     # a merge left conflict markers in it, say
     try:
+        data = _read(path)
         project.check_lock(data)
+    except ConfigError as error:
+        raise ConfigError(f"{error} — {again}")
     except project.LaterFormatError as error:
         raise ConfigError(f"{error}: upgrade this cortex — the install script installs the latest")
     except project.ProjectFileError as error:
-        raise ConfigError(str(error))
+        raise ConfigError(f"{error} — {again}")
     return Lock(version=Version(data["version"]), digest=data["digest"])
 
 

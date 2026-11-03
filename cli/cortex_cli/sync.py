@@ -568,8 +568,7 @@ def tidy(root: Path) -> None:
     which git does not ignore, or a ``cortex.lock`` half written. Run under the project's lock: no
     other sync is using them. A link among them names this machine's store, and `/cortex` does not
     keep it out of a commit."""
-    left = [entry for name in (config.LOCAL_FILE, config.LOCK_FILE) for entry in root.glob(f"{name}.*.tmp")
-            if LEFT_LOCAL.fullmatch(entry.name)]
+    left = [entry for entry in root.glob("*.tmp") if LEFT_LOCAL.fullmatch(entry.name)]
     for entry in [*root.glob(f"{STAGING}*"), *left]:
         try:
             _discard(entry)
@@ -761,7 +760,8 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     elif mode == "copy":
         marker = read_marker(target) if existing == "copy" else None
         keep = bool(marker) and source is None and marker.get("version") == str(project.version) \
-            and marker.get("from") is None
+            and marker.get("from") is None \
+            and store.digest_of(marker.get("files") or {}) == the_store.digest(project.version)   # the store's, as locked
         missing = missing_files(target, marker) if keep else []
         if missing:
             keep = False
@@ -771,6 +771,10 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
                                            display(str(spec_source)) if source else None)
     if keep and mode == "copy":
         _seal(target)                          # a sync cut short between its rename and the seal left it open
+    if lock is not None:
+        # Before the swap: a lock that cannot be written stops the sync with nothing moved. It names
+        # what cortex.toml pins, whatever comes next.
+        config.write_lock(root, project.version, lock[0])
     try:
         aside = None if keep else swap(target, new, existing)
     except BaseException:
@@ -785,8 +789,6 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         raise
     if aside is not None:
         _discard(aside)
-    if lock is not None:
-        config.write_lock(root, project.version, lock[0])
 
     if mode == "store":
         out.write("The spec is read where it is: nothing of it is in the project.\n")
