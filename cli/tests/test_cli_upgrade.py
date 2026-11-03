@@ -1,0 +1,195 @@
+"""``cortex upgrade`` — a project moved to another version, said first (ADR-010 §3.5).
+
+From source the command stands for Cortex 9.9.9, written to the store from this checkout, and the
+fake releases 9.9.7 and 9.9.8 are served from this machine (``release_fixture``): 9.9.8's spec is
+four files, so that moving between the two adds or removes most of the agents. A built binary is a
+build of no release and downloads nothing: the tests that need a second version skip there.
+"""
+
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
+sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
+import cli_harness as harness  # noqa: E402
+from cortex_cli import init  # noqa: E402
+from cortex_cli.store import digest  # noqa: E402
+from release_fixture import FakeRelease  # noqa: E402
+
+OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
+DOWNLOADS = unittest.skipIf(harness.BINARY, "a build of no release downloads no version")
+OLD_BOOTSTRAP = b"# Cortex AI Team\n\nWritten by 9.9.8: read cortex.local.toml first.\n"
+OVERLAY = ("<!-- OVERLAY\n     Base: cortex/agents/roles/engineering/architect.md\n     Scope: workspace\n"
+           "     Semantic: additive\n-->\n\n# Architect — our rules\n")
+
+
+def snapshot(root):
+    return {str(p.relative_to(root)): p.read_bytes() if p.is_file() else "dir" for p in sorted(root.rglob("*"))
+            if not os.path.islink(p)}
+
+
+class UpgradeTestCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="cortex-upgrade-")).resolve()
+        self.addCleanup(self.cleanup)
+        self.home = self.tmp / "cortex-home"
+        self.release = FakeRelease(("9.9.7", "9.9.8"))
+        self.addCleanup(self.release.close)
+        self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": OLD_BOOTSTRAP})
+        self.env = harness.environment(CORTEX_HOME=str(self.home), CORTEX_RELEASES_URL=self.release.url,
+                                       CORTEX_SOURCE_VERSION=OWN)
+
+    def cleanup(self):
+        for directory, subdirs, files in os.walk(self.tmp):
+            for name in subdirs + files:
+                path = os.path.join(directory, name)
+                if not os.path.islink(path):
+                    os.chmod(path, 0o700 if os.path.isdir(path) else 0o600)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def project(self, version):
+        root = self.tmp / "app"
+        root.mkdir(parents=True)
+        (root / "cortex.toml").write_text(f'# ours\nversion = "{version}"  # the team\'s pin\ntheme = "h2g2"\n',
+                                          encoding="utf-8")
+        self.assert_ok(self.run_cortex(root, "sync"))
+        return root
+
+    def run_cortex(self, project, *args):
+        proc = harness.run(*args, cwd=project, env=self.env)
+        proc.out, proc.err = proc.stdout.decode(), proc.stderr.decode()
+        return proc
+
+    def upgrade(self, project, *args):
+        return self.run_cortex(project, "upgrade", *args)
+
+    def assert_ok(self, proc):
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+
+    def pinned(self, project):
+        return (project / "cortex.toml").read_text(encoding="utf-8")
+
+
+@DOWNLOADS
+class UpgradeTests(UpgradeTestCase):
+    def test_it_moves_the_project_to_this_cortex_and_says_what_changes(self):
+        project = self.project("9.9.8")
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn(f"Cortex 9.9.8 → {OWN}: an upgrade — the release notes: {self.release.url}/tag/{OWN}", proc.out)
+        self.assertRegex(proc.out, r"  roles +\d+ added")
+        self.assertIn("      + engineering/architect\n", proc.out)
+        self.assertIn("  templates ", proc.out)
+        self.assertEqual(self.pinned(project), f'# ours\nversion = "{OWN}"  # the team\'s pin\ntheme = "h2g2"\n')
+        lock = (project / "cortex.lock").read_text(encoding="utf-8")
+        self.assertIn(f'version = "{OWN}"', lock)
+        self.assertIn(f'digest = "{digest(self.home / "versions" / OWN)}"', lock)
+        self.assertIn(f"versions/{OWN}", (project / "cortex.local.toml").read_text(encoding="utf-8"))
+        self.assertIn(f"Cortex {OWN} is ready. Commit cortex.toml, cortex.lock;", proc.out)
+
+    def test_to_an_older_version_is_a_downgrade(self):
+        project = self.project(OWN)
+        proc = self.upgrade(project, "9.9.8")
+        self.assert_ok(proc)
+        self.assertIn(f"Cortex {OWN} → 9.9.8: a downgrade", proc.out)
+        self.assertIn("      - engineering/architect\n", proc.out)
+        self.assertIn('version = "9.9.8"', self.pinned(project))
+        self.assertIn('version = "9.9.8"', (project / "cortex.lock").read_text(encoding="utf-8"))
+
+    def test_the_pinned_version_moves_nothing(self):
+        project = self.project(OWN)
+        before = snapshot(project)
+        proc = self.upgrade(project, OWN)
+        self.assert_ok(proc)
+        self.assertIn(f"Cortex {OWN}: already on it — nothing to move", proc.out)
+        self.assertEqual(snapshot(project), before)
+
+    def test_a_version_newer_than_this_cortex_is_refused_with_the_upgrade_command(self):
+        project = self.project("9.9.8")
+        proc = self.upgrade(project, "9.10.0")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn(f"Cortex 9.10.0 is newer than this cortex, {OWN} — upgrade this cortex first:", proc.err)
+        self.assertIn("install", proc.err)
+        self.assertIn('version = "9.9.8"', self.pinned(project))
+
+    def test_a_malformed_version_exits_2(self):
+        project = self.project("9.9.8")
+        for version in ("1.4", "v1.4.0", "1.4.0\n"):
+            with self.subTest(version=version):
+                proc = self.upgrade(project, version)
+                self.assertEqual(proc.returncode, 2, proc.err)
+                self.assertIn("is no version", proc.err)
+
+    def test_dry_run_changes_nothing_in_the_project(self):
+        project = self.project("9.9.8")
+        before = snapshot(project)
+        proc = self.upgrade(project, "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn("--dry-run: nothing of the project was changed", proc.out)
+        self.assertIn("      + engineering/architect\n", proc.out)
+        self.assertEqual(snapshot(project), before)
+
+    def test_an_overlay_the_target_breaks_stops_it_unless_forced(self):
+        project = self.project(OWN)
+        overlay = project / "agents" / "roles" / "engineering" / "architect.md"
+        overlay.parent.mkdir(parents=True)
+        overlay.write_text(OVERLAY, encoding="utf-8")
+        before = snapshot(project)
+        proc = self.upgrade(project, "9.9.8")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("BASE_NOT_FOUND", proc.out)
+        self.assertIn("the overlays would fail against Cortex 9.9.8 — nothing was changed", proc.err)
+        self.assertEqual(snapshot(project), before)
+        self.assertEqual(self.upgrade(project, "9.9.8", "--dry-run").returncode, 1)
+        proc = self.upgrade(project, "9.9.8", "--force")
+        self.assert_ok(proc)
+        self.assertIn('version = "9.9.8"', self.pinned(project))
+
+    def test_a_bootstrap_nobody_changed_is_written_again(self):
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s template — no one changed it", proc.out)
+        template = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes()
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.instructions(template, True))
+        self.assertIn("Commit cortex.toml, cortex.lock, CLAUDE.md;", proc.out)
+
+    def test_a_bootstrap_a_team_changed_is_kept(self):
+        project = self.project("9.9.8")
+        ours = OLD_BOOTSTRAP + b"\n## Our own rules\n"
+        (project / "CLAUDE.md").write_bytes(ours)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), ours)
+        self.assertIn("CLAUDE.md is a bootstrap without the marker, and the target writes format 1 — a team changed it, "
+                      "so it is kept: cortex init --force writes it again, and keeps yours as .bak", proc.err)
+
+    def test_a_sync_that_fails_leaves_the_pin_as_it_was(self):
+        project = self.project("9.9.8")
+        (project / "cortex").mkdir()
+        (project / "cortex" / "notes.md").write_text("ours\n", encoding="utf-8")    # sync refuses a cortex/ of others
+        before = self.pinned(project)
+        proc = self.upgrade(project)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertEqual(self.pinned(project), before)
+        self.assertIn('version = "9.9.8"', (project / "cortex.lock").read_text(encoding="utf-8"))
+
+
+class UpgradeHelpTests(unittest.TestCase):
+    def test_the_command_is_listed(self):
+        self.assertIn(b"  upgrade ", harness.run("--help").stdout)
+
+    def test_outside_a_project_it_says_so(self):
+        with tempfile.TemporaryDirectory() as empty:
+            proc = harness.run("upgrade", cwd=empty, env=harness.environment(CORTEX_HOME=os.path.join(empty, "h")))
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(b"no cortex.toml", proc.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()
