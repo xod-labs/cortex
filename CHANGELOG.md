@@ -7,6 +7,17 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-03 — Wildly Inaccurate _(Released)_
+[Full notes](changelog/1.3.1.md)
+
+### Fixed
+- **`bin/setup-release.sh` reads the rules GitHub applies to each branch** ([#226](https://github.com/xod-labs/cortex/issues/226)), so it reports an organisation's ruleset, one whose pattern excludes or nests, or one on a second page. It used to match the patterns itself.
+- **`bin/check-english.sh` scans a file whose path is not ASCII** ([#227](https://github.com/xod-labs/cortex/issues/227)). It used to skip it.
+
+### Changed
+- **A 404 on creating or updating a release says what GitHub documents** ([#225](https://github.com/xod-labs/cortex/issues/225)): `GITHUB_TOKEN` cannot write a release whose commit changes a workflow. Measured on 2026-11-03, GitHub does not enforce it, and the cycle is unchanged. ADR-009 records the measurement.
+- **`#<issue>` goes before the subject of any commit that delivers an issue**, ADR task or not ([#174](https://github.com/xod-labs/cortex/issues/174)).
+
 ## [1.3.0] - 2026-10-31 — Lunchtime Doubly So _(Released)_
 [Full notes](changelog/1.3.0.md)
 
