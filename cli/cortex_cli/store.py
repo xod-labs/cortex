@@ -15,6 +15,11 @@ A download is checked against ``SHA256SUMS``, which comes from where the archive
 proves it whole, not who published it. A built binary also carries the checksum of every spec
 archive released before it, taken when it was built: a spec archive of those versions replaced
 since — a release overwritten — is refused, whatever its ``SHA256SUMS`` says.
+
+A project's ``cortex.lock`` names the digest of the spec it resolved (ADR-010 §3.2): one SHA-256
+over the files of a version's three trees, the same however the version reached the store. A
+version is removed — put in again, or pruned — by a rename out of its name first, so that a sync
+running meanwhile finds it whole or not at all.
 """
 
 from __future__ import annotations
@@ -137,6 +142,23 @@ def remove_tree(root: Path) -> None:
     shutil.rmtree(root)
 
 
+def digest(directory: Path) -> str:
+    """The digest of the spec at ``directory`` (ADR-010 §3.2): ``sha256sum``'s line for each file of
+    its three trees — the path relative to ``directory``, with ``/`` — in the order of the paths'
+    UTF-8 bytes, then the SHA-256 of those lines. The files' bytes only: the same version gives
+    the same digest, downloaded or written from this binary, on any system."""
+    lines = []
+    for tree in SPEC_TREES:
+        for path in (directory / tree).rglob("*"):
+            if path.is_file():
+                lines.append((path.relative_to(directory).as_posix().encode("utf-8"),
+                              hashlib.sha256(path.read_bytes()).hexdigest().encode("ascii")))
+    total = hashlib.sha256()
+    for rel, sha in sorted(lines):
+        total.update(sha + b"  " + rel + b"\n")
+    return f"sha256:{total.hexdigest()}"
+
+
 # --------------------------------------------------------------------------- #
 # The store
 # --------------------------------------------------------------------------- #
@@ -155,6 +177,24 @@ class Store:
 
     def path(self, version: Version) -> Path:
         return self.versions / str(version)
+
+    def digest(self, version: Version) -> str:
+        return digest(self.path(version))
+
+    def remove(self, version: Version) -> None:
+        """Take ``version`` out of the store: renamed out of its name — in the same directory, so
+        that a read-only one moves too — then deleted. A sync meanwhile finds it whole or absent; a
+        removal cut short leaves a staging, which the store removes a day later."""
+        aside = self.versions / f".{version}-removed-{os.getpid()}-{time.time_ns()}"
+        os.rename(self.path(version), aside)
+        remove_tree(aside)
+
+    def replace(self, version: Version) -> str:
+        """Put ``version`` in the store again, as ``ensure`` would — its files are not those a
+        project locked."""
+        if self.path(version).exists():
+            self.remove(version)
+        return self.ensure(version)
 
     def has(self, version: Version) -> bool:
         """A version is there when its three trees are — an empty directory is none."""

@@ -319,5 +319,56 @@ class NetTests(unittest.TestCase):
             net.get("https://github.com/xod-labs/cortex/releases/download/0.0.0-no-such-release/SHA256SUMS", 1024)
 
 
+class DigestTests(unittest.TestCase):
+    """The digest of a spec (ADR-010 §3.2): its files' bytes, however they reached the store."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="cortex-digest-"))
+        self.addCleanup(lambda: (store.make_writable(self.tmp), shutil.rmtree(self.tmp, ignore_errors=True)))
+        self.tree = self.tmp / "checkout"
+        for rel, text in (("agents/roles/a.md", "A\n"), ("agents/roles/b.md", "B\n"), ("templates/t.md", "T\n"),
+                          ("docs/\u00e9.md", "D\n")):
+            (self.tree / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.tree / rel).write_bytes(text.encode("utf-8"))
+
+    def test_the_digest_is_sha256sum_of_the_files_in_the_order_of_their_paths(self):
+        lines = sorted((rel.encode("utf-8"), hashlib.sha256(text.encode()).hexdigest().encode())
+                       for rel, text in (("agents/roles/a.md", "A\n"), ("agents/roles/b.md", "B\n"),
+                                         ("templates/t.md", "T\n"), ("docs/\u00e9.md", "D\n")))
+        expected = hashlib.sha256(b"".join(sha + b"  " + rel + b"\n" for rel, sha in lines)).hexdigest()
+        self.assertEqual(store.digest(self.tree), f"sha256:{expected}")
+
+    def test_written_from_an_archive_or_from_a_checkout_the_digest_is_the_same(self):
+        archive = self.tmp / "spec.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            for tree in store.SPEC_TREES:
+                tar.add(self.tree / tree, arcname=tree)
+        from_archive = store.Store(home=self.tmp / "a", own_version="9.9.9", embedded=archive, fetch=None, known={})
+        from_checkout = store.Store(home=self.tmp / "b", own_version="9.9.9", embedded=None, checkout=self.tree,
+                                    fetch=None, known={})
+        self.assertEqual(from_archive.ensure(Version("9.9.9")), "written")
+        self.assertEqual(from_checkout.ensure(Version("9.9.9")), "written")
+        self.assertEqual(from_archive.digest(Version("9.9.9")), from_checkout.digest(Version("9.9.9")))
+        self.assertEqual(from_archive.digest(Version("9.9.9")), store.digest(self.tree))
+
+    def test_one_byte_changes_it_and_a_file_outside_the_trees_does_not(self):
+        before = store.digest(self.tree)
+        (self.tree / ".synced").write_text("{}", encoding="utf-8")
+        self.assertEqual(store.digest(self.tree), before)
+        (self.tree / "docs" / "\u00e9.md").write_bytes(b"d\n")
+        self.assertNotEqual(store.digest(self.tree), before)
+
+    def test_a_version_put_in_again_is_whole(self):
+        the_store = store.Store(home=self.tmp / "c", own_version="9.9.9", embedded=None, checkout=self.tree,
+                                fetch=None, known={})
+        the_store.ensure(Version("9.9.9"))
+        path = the_store.path(Version("9.9.9")) / "agents" / "roles" / "a.md"
+        os.chmod(path, 0o644)
+        path.write_text("changed\n", encoding="utf-8")
+        self.assertEqual(the_store.replace(Version("9.9.9")), "written")
+        self.assertEqual(path.read_text(encoding="utf-8"), "A\n")
+        self.assertEqual([p.name for p in the_store.versions.iterdir()], ["9.9.9"])
+
+
 if __name__ == "__main__":
     unittest.main()
