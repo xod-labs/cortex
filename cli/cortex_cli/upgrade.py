@@ -16,7 +16,6 @@ The binary is never upgraded here: the install script does that.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import io
 import os
 import subprocess
@@ -43,32 +42,35 @@ class UpgradeError(Exception):
 # What changes
 # --------------------------------------------------------------------------- #
 
-def _files(root: Path) -> Dict[str, str]:
-    """``{path under root: SHA-256}``, every file."""
-    if not root.is_dir():
-        return {}
-    return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in root.rglob("*") if path.is_file()}
-
-
 def compare(old: Dict[str, str], new: Dict[str, str]) -> Tuple[List[str], List[str], List[str]]:
     """The paths added, removed and changed from ``old`` to ``new``."""
     return (sorted(set(new) - set(old)), sorted(set(old) - set(new)),
             sorted(path for path in set(old) & set(new) if old[path] != new[path]))
 
 
+def _under(hashes: Dict[str, str], prefix: str, agents: bool = False) -> Dict[str, str]:
+    """The files under ``prefix``, by path below it — an agent by its name, without ``.md``, and
+    never a layer's README, which is no agent."""
+    found = {}
+    for path, sha in hashes.items():
+        if not path.startswith(prefix):
+            continue
+        rel = path[len(prefix):]
+        if agents:
+            if rel.rsplit("/", 1)[-1].casefold() == "readme.md":
+                continue
+            rel = rel[:-3] if rel.endswith(".md") else rel
+        found[rel] = sha
+    return found
+
+
 def changes(old: Path, new: Path) -> List[Tuple[str, Tuple[List[str], List[str], List[str]]]]:
-    """What the spec at ``new`` changes from the one at ``old``: each agent layer, by agent — its
-    path without ``.md`` — then the templates by name, then the docs."""
-    found = []
-    for layer in LAYERS:
-        def agents(root: Path) -> Dict[str, str]:
-            return {path[:-3] if path.endswith(".md") else path: sha
-                    for path, sha in _files(root / "agents" / layer).items()
-                    if path.rsplit("/", 1)[-1].casefold() != "readme.md"}      # a layer's README is no agent
-        found.append((layer, compare(agents(old), agents(new))))
-    found.append(("templates", compare(_files(old / "templates"), _files(new / "templates"))))
-    found.append(("docs", compare(_files(old / "docs"), _files(new / "docs"))))
+    """What the spec at ``new`` changes from the one at ``old``: each agent layer, by agent, then
+    the templates by name, then the docs — from the files the store's digest reads."""
+    before, after = store.hashes(old), store.hashes(new)
+    found = [(layer, compare(_under(before, f"agents/{layer}/", True), _under(after, f"agents/{layer}/", True)))
+             for layer in LAYERS]
+    found += [(tree, compare(_under(before, f"{tree}/"), _under(after, f"{tree}/"))) for tree in ("templates", "docs")]
     return found
 
 
@@ -103,8 +105,9 @@ def _instructions_files(root: Path, named: Optional[str]) -> List[Path]:
 
 def written_by(kept: bytes, templates: Path, layouts: List[str], personality: bool) -> Optional[str]:
     """The layout ``kept`` is exactly the file of, as the templates at ``templates`` write it for
-    this personality — the team's theme decides it, as for ``cortex init``; ``None`` when a team
-    changed the file, or another version wrote it."""
+    this personality — the team's theme decides it, as for ``cortex init``; line endings aside, as
+    git may check a file out with CRLF. ``None`` when a team changed it, or another version wrote it."""
+    kept = kept.replace(b"\r\n", b"\n")
     for layout in layouts:
         template = templates / TEMPLATES[layout]
         if template.is_file() and kept == init.instructions(template.read_bytes(), personality):
@@ -132,9 +135,11 @@ def bootstrap(path: Path, current: Path, target: Path, personality: bool) -> Tup
     layout = written_by(kept, current / "templates", layouts, personality)
     if layout is None:
         what = f"format {has}" if found else "a bootstrap without the marker"
-        return None, (f"{display(str(path))} is {what}, and the target writes format {wanted} — a team changed it, so it "
-                      "is kept: cortex init --force writes it again, and keeps yours as .bak")
-    return init.instructions((target / "templates" / TEMPLATES[layout]).read_bytes(), personality), None
+        return None, (f"{display(str(path))} is {what}, and the target writes format {wanted}. It is not what the "
+                      "pinned version writes — a team changed it, or an older Cortex wrote it — so it is kept: "
+                      "cortex init --force writes it again, and keeps yours as .bak")
+    content = init.instructions((target / "templates" / TEMPLATES[layout]).read_bytes(), personality)
+    return (content.replace(b"\n", b"\r\n") if b"\r\n" in kept else content), None
 
 
 # --------------------------------------------------------------------------- #
@@ -146,6 +151,14 @@ def check_overlays(root: str, base: Path) -> Tuple[int, str]:
     report = io.StringIO()
     code = overlay_validator.validate(root, str(base), "", False, report, overlay_validator.Colors(False))
     return code, report.getvalue()
+
+
+def _shown_path(path: Path, root: str) -> str:
+    """A path as the project names it — absolute when it is elsewhere, another drive included."""
+    try:
+        return display(os.path.relpath(path, root))
+    except ValueError:
+        return display(str(path))
 
 
 def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: Optional[str],
@@ -187,13 +200,15 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
         current_path = None
 
     code, report = check_overlays(root, target_path)
+    stops = code != 0 and not force
     if code != 0:
         out.write(f"\nThe project's overlays, checked against Cortex {target}:\n{report}")
-        if not force:
+        if stops and not dry_run:
             err.write(f"cortex upgrade: the overlays would fail against Cortex {target} — nothing was changed. "
                       "Fix them, or --force moves the project anyway\n")
             return 1
-        err.write("warning: the overlays fail against the target, and --force moves the project anyway\n")
+        if not stops:
+            err.write("warning: the overlays fail against the target, and --force moves the project anyway\n")
     else:
         out.write(f"The project's overlays pass against Cortex {target}.\n")
 
@@ -204,23 +219,36 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
             err.write(f"note: {note}\n")
         if content is not None:
             rewrites.append((path, content))
-            out.write(f"{display(str(path))}: written again from Cortex {target}'s template — no one changed it\n")
 
     if dry_run:
+        for path, _ in rewrites:
+            out.write(f"{_shown_path(path, root)}: would be written again from Cortex {target}'s template — no one changed it\n")
+        if stops:
+            err.write(f"cortex upgrade: the overlays would fail against Cortex {target}, and stop it — fix them, "
+                      "or --force moves the project anyway\n")
         out.write("--dry-run: nothing of the project was changed\n")
-        return 1 if code != 0 else 0
+        return 1 if stops else 0
 
-    project_file = os.path.join(root, config.PROJECT_FILE)
-    before = Path(project_file).read_bytes()
-    config.write_text(project_file, config.render_project(root, {"version": str(target)}))
+    # The pin and the lock are what the team commits: a sync that fails leaves both as they were.
+    # What it changed on this machine — cortex.local.toml, cortex/ — the next `cortex sync` puts right.
+    committed = {name: (Path(root) / name).read_bytes() if (Path(root) / name).is_file() else None
+                 for name in (config.PROJECT_FILE, config.LOCK_FILE)}
+    config.write_text(os.path.join(root, config.PROJECT_FILE), config.render_project(root, {"version": str(target)}))
     try:
-        sync.sync(root, None, None, out, err)
+        sync.sync(root, None, None, out, err, announce=False)
     except BaseException:
-        Path(project_file).write_bytes(before)     # the pin is as it was: the project never moved
+        for name, content in committed.items():
+            if content is None:
+                (Path(root) / name).unlink(missing_ok=True)
+            else:
+                (Path(root) / name).write_bytes(content)
+        err.write(f"note: {config.PROJECT_FILE} and {config.LOCK_FILE} are as they were — `cortex sync` puts this "
+                  "machine back on them\n")
         raise
     for path, content in rewrites:
         path.write_bytes(content)
-    written = ", ".join([config.PROJECT_FILE, config.LOCK_FILE, *(display(os.path.relpath(path, root)) for path, _ in rewrites)])
+        out.write(f"{_shown_path(path, root)}: written again from Cortex {target}'s template — no one changed it\n")
+    written = ", ".join([config.PROJECT_FILE, config.LOCK_FILE, *(_shown_path(path, root) for path, _ in rewrites)])
     out.write(f"\nCortex {target} is ready. Commit {written}; teammates run `cortex sync` after they pull.\n")
     return 0
 

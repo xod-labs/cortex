@@ -6,12 +6,15 @@ four files, so that moving between the two adds or removes most of the agents. A
 build of no release and downloads nothing: the tests that need a second version skip there.
 """
 
+import functools
+import io
 import os
 import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
@@ -90,6 +93,7 @@ class UpgradeTests(UpgradeTestCase):
         self.assertIn(f'digest = "{digest(self.home / "versions" / OWN)}"', lock)
         self.assertIn(f"versions/{OWN}", (project / "cortex.local.toml").read_text(encoding="utf-8"))
         self.assertIn(f"Cortex {OWN} is ready. Commit cortex.toml, cortex.lock;", proc.out)
+        self.assertEqual(proc.out.count("Project: "), 1)
 
     def test_to_an_older_version_is_a_downgrade(self):
         project = self.project(OWN)
@@ -145,6 +149,8 @@ class UpgradeTests(UpgradeTestCase):
         self.assertIn("the overlays would fail against Cortex 9.9.8 — nothing was changed", proc.err)
         self.assertEqual(snapshot(project), before)
         self.assertEqual(self.upgrade(project, "9.9.8", "--dry-run").returncode, 1)
+        self.assertEqual(self.upgrade(project, "9.9.8", "--dry-run", "--force").returncode, 0)   # as the real run
+        self.assertEqual(snapshot(project), before)
         proc = self.upgrade(project, "9.9.8", "--force")
         self.assert_ok(proc)
         self.assertIn('version = "9.9.8"', self.pinned(project))
@@ -159,6 +165,27 @@ class UpgradeTests(UpgradeTestCase):
         self.assertEqual((project / "CLAUDE.md").read_bytes(), init.instructions(template, True))
         self.assertIn("Commit cortex.toml, cortex.lock, CLAUDE.md;", proc.out)
 
+    def test_a_bootstrap_checked_out_with_crlf_is_still_nobodys_change(self):
+        # git's core.autocrlf, on Windows.
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True).replace(b"\n", b"\r\n"))
+        self.assert_ok(self.upgrade(project))
+        template = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes()
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.instructions(template, True).replace(b"\n", b"\r\n"))
+
+    def test_a_dry_run_says_the_bootstrap_too_when_the_overlays_stop_it(self):
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))
+        (project / "agents" / "roles" / "engineering").mkdir(parents=True)
+        (project / "agents" / "roles" / "engineering" / "architect.md").write_text(
+            OVERLAY.replace("architect.md", "nowhere.md"), encoding="utf-8")
+        before = snapshot(project)
+        proc = self.upgrade(project, "--dry-run")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"CLAUDE.md: would be written again from Cortex {OWN}'s template", proc.out)
+        self.assertIn("--dry-run: nothing of the project was changed", proc.out)
+        self.assertEqual(snapshot(project), before)
+
     def test_a_bootstrap_a_team_changed_is_kept(self):
         project = self.project("9.9.8")
         ours = OLD_BOOTSTRAP + b"\n## Our own rules\n"
@@ -166,8 +193,9 @@ class UpgradeTests(UpgradeTestCase):
         proc = self.upgrade(project)
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), ours)
-        self.assertIn("CLAUDE.md is a bootstrap without the marker, and the target writes format 1 — a team changed it, "
-                      "so it is kept: cortex init --force writes it again, and keeps yours as .bak", proc.err)
+        self.assertIn("CLAUDE.md is a bootstrap without the marker, and the target writes format 1. It is not what the "
+                      "pinned version writes — a team changed it, or an older Cortex wrote it — so it is kept: "
+                      "cortex init --force writes it again, and keeps yours as .bak", proc.err)
 
     def test_a_sync_that_fails_leaves_the_pin_as_it_was(self):
         project = self.project("9.9.8")
@@ -178,6 +206,30 @@ class UpgradeTests(UpgradeTestCase):
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertEqual(self.pinned(project), before)
         self.assertIn('version = "9.9.8"', (project / "cortex.lock").read_text(encoding="utf-8"))
+
+
+@DOWNLOADS
+class RollbackTests(UpgradeTestCase):
+    """A sync that fails once the lock is written: the pin and the lock are put back (ADR-010 §3.5, step 6)."""
+
+    def test_the_pin_and_the_lock_are_put_back(self):
+        project = self.project("9.9.8")
+        committed = {name: (project / name).read_bytes() for name in ("cortex.toml", "cortex.lock")}
+        sys.path[:0] = [str(harness.CLI), str(harness.CORE)]
+        from cortex_cli import config, store, sync, upgrade
+
+        def a_sync_that_fails_late(root, *args, **kwargs):
+            config.write_lock(root, store.Version(OWN), "sha256:" + "1" * 64)     # as sync does, before its swap
+            raise OSError("the swap failed")
+
+        environment = {"CORTEX_HOME": str(self.home), "CORTEX_RELEASES_URL": self.release.url}
+        with mock.patch.dict(os.environ, environment), mock.patch.object(sync, "sync", a_sync_that_fails_late), \
+                mock.patch.object(store.Store, "__init__", functools.partialmethod(store.Store.__init__, own_version=OWN)):
+            err = io.StringIO()
+            with self.assertRaises(OSError):
+                upgrade.upgrade(str(project), None, False, False, None, io.StringIO(), err)
+        self.assertEqual({name: (project / name).read_bytes() for name in committed}, committed)
+        self.assertIn("cortex.toml and cortex.lock are as they were", err.getvalue())
 
 
 class UpgradeHelpTests(unittest.TestCase):

@@ -687,16 +687,18 @@ def unswap(target: Path, aside: Optional[Path]) -> None:
 # --------------------------------------------------------------------------- #
 
 def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
-         claude_access: Optional[bool] = None, notes: bool = True, locked: bool = False) -> None:
+         claude_access: Optional[bool] = None, notes: bool = True, locked: bool = False,
+         announce: bool = True) -> None:
     """Sync the project at or above ``cwd``. ``notes`` off, what git ignores is left to the
     caller — ``cortex init`` writes .gitignore once ``cortex/`` has its final form. ``locked``,
-    ``cortex.lock`` is never written: a sync that would write it stops."""
+    ``cortex.lock`` is never written: a sync that would write it stops. ``announce`` off, the
+    project is not named: ``cortex upgrade`` has named it already."""
     root = config.find_project(cwd)
     if root is None:
         raise SyncError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
                         "a Cortex project")
     with project_lock(Path(root), err):
-        _sync(root, mode, source, out, err, claude_access, notes, locked)
+        _sync(root, mode, source, out, err, claude_access, notes, locked, announce)
 
 
 def check_lock(root: str, version: store.Version, the_store: store.Store, out: TextIO,
@@ -732,9 +734,10 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
 
 
 def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
-          claude_access: Optional[bool], notes: bool, locked: bool = False) -> None:
+          claude_access: Optional[bool], notes: bool, locked: bool = False, announce: bool = True) -> None:
     project = config.load(root)
-    out.write(f"Project: {display(root)}\n")
+    if announce:
+        out.write(f"Project: {display(root)}\n")
     if claude_access is not None:
         # This developer's choice, written with spec and kept for the next syncs: cortex.local.toml's
         # wins over the team's.
