@@ -77,13 +77,13 @@ The instructions file is yours to adapt — retitle it, add sections — but **k
 
 ### Step 2 — Commit, then `cortex sync` after every clone
 
-Commit `cortex.toml`, the instructions file and the two context files. Each developer who clones the project then runs, once, at its root:
+Commit `cortex.toml`, `cortex.lock`, the instructions file and the two context files. Each developer who clones the project then runs, once, at its root:
 
 ```bash
 cortex sync
 ```
 
-— as they would `npm install`. It puts the pinned version in the store if it is not there yet, and writes `spec` in their `cortex.local.toml`. Until they do, the instructions tell the AI tool to ask them to run it, and to go no further.
+— as they would `npm install`. It puts the pinned version in the store if it is not there yet, checks it against `cortex.lock`, and writes `spec` in their `cortex.local.toml`. `cortex.lock` holds the version and the digest of its spec, one SHA-256 over its files: a spec whose files differ from the ones the team locked is put in the store again, and refused if it still differs. Until they do, the instructions tell the AI tool to ask them to run it, and to go no further.
 
 **Where the spec is.** In the instructions, in these docs and in every overlay's `Base:` header, `cortex/` is the directory that `spec` names — a name, not necessarily a directory of the project. `cortex sync` has three modes, chosen by `--store`, `--link` or `--copy`:
 
@@ -221,7 +221,7 @@ If your team wants to formalize and version this instead of leaving it per-devel
 
 ### Step 3 — Commit, then `cortex sync` after every clone
 
-As in [single project mode](#step-2--commit-then-cortex-sync-after-every-clone): commit `cortex.toml` and the instructions file with the workspace root, and each developer runs `cortex sync` at the workspace root after a clone. When the root is no git repository at all (flavor 2.B without a repository of its own), there is nothing to clone: each developer runs `cortex init --workspace` there instead.
+As in [single project mode](#step-2--commit-then-cortex-sync-after-every-clone): commit `cortex.toml`, `cortex.lock` and the instructions file with the workspace root, and each developer runs `cortex sync` at the workspace root after a clone. When the root is no git repository at all (flavor 2.B without a repository of its own), there is nothing to clone: each developer runs `cortex init --workspace` there instead.
 
 ### Step 4 — Fill in the context per service
 

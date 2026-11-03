@@ -110,6 +110,8 @@ After it has the pinned version in the store, `cortex sync`:
 - a `cortex.lock` of another version than `cortex.toml`'s;
 - a spec whose digest is not the lock's.
 
+Only a spec of a known version is checked — the store's, a link to it, or a copy whose `.synced` names its version: a checkout synced with `--from` has no version, and no lock.
+
 They are warnings because a later binary warns where an earlier one passed, within a major version (ADR-008 §9): a project of 1.3 has no lock, and must still validate. `--strict` fails on them, so a CI that runs it — and installs the binary of the version `cortex.toml` pins — checks the lock.
 
 ### 3.5 `cortex upgrade`

@@ -203,7 +203,7 @@ cortex init --tool claude           # CLAUDE.md — or cursor, agents, custom --
 cortex init --no-personality        # neutral professional agents (no theme)
 ```
 
-`cortex init` writes `cortex.toml` — committed: the Cortex `version` the project uses and the team's `theme` — adds `cortex.local.toml` to `.gitignore` and runs `cortex sync`. It then writes the AI tool's instructions file, `project-overview.md` and `project-context.md` when they are missing; an existing instructions file is kept unless `--force`, which keeps the old one as `FILE.bak`. [Getting Started](docs/getting-started.md) goes through every option.
+`cortex init` writes `cortex.toml` — committed: the Cortex `version` the project uses and the team's `theme` — adds `cortex.local.toml` to `.gitignore` and runs `cortex sync`, which writes `cortex.lock`, committed too: the version and the digest of the spec the project resolved. It then writes the AI tool's instructions file, `project-overview.md` and `project-context.md` when they are missing; an existing instructions file is kept unless `--force`, which keeps the old one as `FILE.bak`. [Getting Started](docs/getting-started.md) goes through every option.
 
 ### 3. After a clone: `cortex sync`
 

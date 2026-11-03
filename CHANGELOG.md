@@ -7,6 +7,9 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+### Added
+- **`cortex.lock`** (ADR-010 §3.2). Committed beside `cortex.toml`, it holds the version a project resolved and the digest of its spec, one SHA-256 over the files of its three trees. `cortex sync` and `cortex init` write it, and check the store against it: a spec whose files differ is put in the store again, then refused if it still differs. `cortex validate` warns on a missing lock, a lock of another version and a digest that differs; `--strict` fails on them.
+
 ### Changed
 - **`cortex init` reads a kept bootstrap through its marker** ([#141](https://github.com/xod-labs/cortex/issues/141), ADR-010). Each bootstrap template carries `<!-- cortex:bootstrap layout=… format=1 -->` under its title, with a comment that asks to keep it. A team may retitle or extend the file: `cortex init` reads its layout and format from that line, and no longer takes a retitled workspace bootstrap for a single project's.
 
