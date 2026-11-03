@@ -35,19 +35,20 @@ Out of scope: the digests of images a project depends on, which #99 listed, wait
 
 ### 3.1 The bootstrap marker
 
-Each bootstrap template carries exactly one marker line, the first line after its title and a blank line:
+Each bootstrap template carries exactly one marker line, the first line after its title and a blank line, followed by a comment that asks to keep it:
 
 ```markdown
 # Cortex AI Team — Workspace Mode
 
 <!-- cortex:bootstrap layout=workspace format=1 -->
+<!-- Keep the line above as it is: `cortex init` and `cortex upgrade` read it. -->
 ```
 
 - **The form is fixed**: the whole line is `<!-- cortex:bootstrap layout=L format=N -->`, with `L` one of `single` or `workspace` and `N` a positive integer without leading zeros. Anything else on the line, or another spelling, is no marker.
 - **It is read anywhere in the file**, as a whole line: a team may add lines above it, or change the title. A file with two marker lines has none — the command says so.
 - **`layout`** is the layout of the template that wrote the file. It replaces the comparison of first lines.
 - **`format`** is the bootstrap's contract version: it is raised when a template changes what a project's file must say for the spec to be read correctly — a new rule the LLM must follow, a renamed file it must read — and not for a rewording. It replaces the search for `cortex.local.toml`. ADR-010's templates are format 1.
-- The templates and the docs ask teams to keep the line as it is. HTML comments do not render, so the file reads the same in a Markdown viewer.
+- The templates, in the comment under the marker, and the docs ask teams to keep the line as it is. HTML comments do not render, so the file reads the same in a Markdown viewer.
 
 **What `cortex init` says of a kept file** — one note, the first that applies, as today:
 
@@ -162,8 +163,8 @@ The marker in both templates; `cortex init` reads a kept file's layout and forma
 
 Acceptance criteria:
 
-- both bootstrap templates carry exactly one marker line, the third, with their layout and `format=1`
-- the init parity matrix, re-captured, differs from the previous one by that line in every bootstrap file it holds, and in nothing else
+- both bootstrap templates carry exactly one marker line, the third, with their layout and `format=1`, and the comment that asks to keep it, the fourth
+- the init parity matrix, re-captured, differs from the previous one by those two lines in every bootstrap file it holds, and in nothing else
 - a kept workspace bootstrap whose title a team changed to `# Cortex AI Team — Workspace Mode (Acme)` gets no layout note from `cortex init --workspace` — the case of #141
 - a kept file whose marker names the other layout gets the layout note; one of an older format gets the older-bootstrap note naming both formats; one with two markers is said to have none
 - a kept file with no marker but the Cortex heading gets the *written before the marker* note; one with neither gets the *no Cortex bootstrap* note
