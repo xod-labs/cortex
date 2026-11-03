@@ -76,10 +76,49 @@ class PruneTests(PruneTestCase):
         self.assert_ok(proc)
         self.assertEqual(self.in_store(), ["9.9.7", "9.9.8", OWN])
         self.assertIn("2 project(s) found under", proc.out)
-        self.assertIn(f"  kept     9.9.7 — pinned by {str(self.a).replace(os.sep, '/')}\n", proc.out)
-        self.assertIn("  kept     9.9.8 — pinned by ", proc.out)
+        self.assertIn(f"  kept     9.9.7 — used by {str(self.a).replace(os.sep, '/')}\n", proc.out)
+        self.assertIn("  kept     9.9.8 — used by ", proc.out)
         self.assertIn(f"  kept     {OWN} — this cortex's own", proc.out)
         self.assertIn("  removed  9.9.6", proc.out)
+
+    def test_the_version_a_project_reads_now_is_kept_until_it_syncs(self):
+        # A teammate's bump, pulled and not synced: cortex.toml pins 9.9.6, and spec still reads 9.9.7.
+        (self.a / "cortex.toml").write_text('version = "9.9.6"\ntheme = "h2g2"\n', encoding="utf-8")
+        proc = self.run_cortex(self.tmp, "prune", "code")
+        self.assert_ok(proc)
+        self.assertEqual(self.in_store(), ["9.9.6", "9.9.7", "9.9.8", OWN])
+
+    def test_a_key_this_cortex_does_not_know_loses_no_version(self):
+        (self.a / "cortex.toml").write_text('version = "9.9.6"\ntheme = "h2g2"\nlater = "x"\n', encoding="utf-8")
+        proc = self.run_cortex(self.tmp, "prune", "code")
+        self.assert_ok(proc)
+        self.assertIn("only its version, 9.9.6, is read", proc.err)
+        self.assertIn("9.9.6", self.in_store())
+
+    def test_a_project_is_counted_once_and_through_a_link(self):
+        elsewhere = self.tmp / "elsewhere" / "c"
+        elsewhere.mkdir(parents=True)
+        (elsewhere / "cortex.toml").write_text('version = "9.9.6"\ntheme = "h2g2"\n', encoding="utf-8")
+        try:
+            os.symlink(elsewhere, self.code / "c", target_is_directory=True)
+        except OSError:
+            self.skipTest("no symbolic link here")
+        proc = self.run_cortex(self.tmp, "prune", "code", "code/a", "code")
+        self.assert_ok(proc)
+        self.assertIn("3 project(s) found", proc.out)
+        self.assertIn("9.9.6", self.in_store())
+
+    def test_a_copy_sync_made_is_not_searched(self):
+        project = self.project("copied", "9.9.7")
+        (project / "cortex.toml").write_text('version = "9.9.7"\ntheme = "h2g2"\nsync = "copy"\n', encoding="utf-8")
+        self.assert_ok(self.run_cortex(project, "sync"))
+        copy = project / "cortex"
+        os.chmod(copy, 0o755)
+        (copy / "cortex.toml").write_text('version = "9.9.6"\ntheme = "h2g2"\n', encoding="utf-8")
+        proc = self.run_cortex(self.tmp, "prune", "code")
+        self.assert_ok(proc)
+        self.assertIn("3 project(s) found", proc.out)
+        self.assertNotIn("9.9.6", self.in_store())
 
     def test_keep_and_dry_run(self):
         proc = self.run_cortex(self.tmp, "prune", "code", "--keep", "9.9.6")
