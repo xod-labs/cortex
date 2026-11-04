@@ -262,13 +262,17 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
     target_path = the_store.path(target)
     direction = "an upgrade" if target > current else "a downgrade"
     out.write(f"Cortex {current} → {target}: {direction} — the release notes: {store.releases_url()}/tag/{target}\n")
-    try:
-        the_store.ensure(current)
-        say_changes(changes(the_store.path(current), target_path), out)
-        current_path: Optional[Path] = the_store.path(current)
-    except store.StoreError as error:
-        err.write(f"note: what changes is not said — Cortex {current} is not in the store: {error}\n")
-        current_path = None
+    current_path: Optional[Path] = None
+    if current > the_store.own:
+        # The move down the refusal names: this cortex has not the version to compare with.
+        err.write(f"note: what changes is not said — this cortex, {the_store.own}, does not serve Cortex {current}\n")
+    else:
+        try:
+            the_store.ensure(current)
+            say_changes(changes(the_store.path(current), target_path), out)
+            current_path = the_store.path(current)
+        except store.StoreError as error:
+            err.write(f"note: what changes is not said — Cortex {current} is not in the store: {error}\n")
 
     code, report = check_overlays(root, target_path)
     stops = code != 0 and not force

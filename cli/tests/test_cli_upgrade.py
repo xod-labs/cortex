@@ -507,6 +507,13 @@ class PinAfterThisCortexTests(UpgradeTestCase):
         self.assertIn(f"Cortex 9.10.0 → {OWN}: a downgrade", proc.out)
         self.assertIn(f'version = "{OWN}"', self.pinned(project))
 
+    def test_moving_down_it_says_this_cortex_does_not_serve_the_pin_and_advises_nothing(self):
+        project = self.project("9.10.0", synced=False)
+        proc = self.upgrade(project, OWN)
+        self.assert_ok(proc)
+        self.assertIn(f"note: what changes is not said — this cortex, {OWN}, does not serve Cortex 9.10.0\n", proc.err)
+        self.assertNotIn("newer than this cortex", proc.err)        # the opposite move, advised
+
 
 class UpgradeHelpTests(unittest.TestCase):
     def test_the_command_is_listed(self):
