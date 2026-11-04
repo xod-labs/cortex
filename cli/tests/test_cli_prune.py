@@ -231,6 +231,22 @@ class InProcessTests(unittest.TestCase):
         code = prune.prune([str(self.code)], [], False, out, err)
         return code, out.getvalue(), err.getvalue()
 
+    def test_a_version_renamed_out_and_not_all_deleted_is_said_to_be_out_of_the_store(self):
+        real = store.remove_tree
+
+        def half(root):
+            if root.name.startswith(".9.9.5-removed-"):
+                raise PermissionError(errno.EACCES, "Permission denied", str(root / "agents"))
+            return real(root)
+
+        with mock.patch.object(store, "remove_tree", half):
+            code, out, err = self.prune()
+        self.assertEqual(code, 1)
+        self.assertIn("cortex prune: 9.9.5 is out of the store, but not all of its files were deleted", err)
+        self.assertIn("A sync deletes what is left, a day from now", err)
+        self.assertNotIn("still in the store", err)
+        self.assertEqual(self.in_store(), ["9.9.7"])
+
     def test_a_sync_whose_version_a_prune_removes_writes_no_lock(self):
         # Removed between the sync's ensure() and its digest, the version gave the digest of no file,
         # which the lock kept: every later sync refused the project. Removed while it was read, some.

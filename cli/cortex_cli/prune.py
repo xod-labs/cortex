@@ -161,7 +161,11 @@ def prune(directories: List[str], keep: List[str], dry_run: bool, out: TextIO, e
             the_store.remove(version)
         except OSError as error:
             failed += 1
-            err.write(f"cortex prune: {version} is still in the store — {sync.os_error(error)}\n")
+            if the_store.path(version).exists():
+                err.write(f"cortex prune: {version} is still in the store — {sync.os_error(error)}\n")
+            else:   # renamed out of the store, and not all deleted: a staging, which the store deletes
+                err.write(f"cortex prune: {version} is out of the store, but not all of its files were deleted — "
+                          f"{sync.os_error(error)}. A sync deletes what is left, a day from now\n")
             continue
         out.write(f"  removed  {version}\n")
     if not removed:
