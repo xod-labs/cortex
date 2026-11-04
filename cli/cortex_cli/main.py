@@ -6,6 +6,7 @@ nothing here reads the name it was called by.
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -84,6 +85,10 @@ def usage() -> str:
 
 def main(argv: Optional[List[str]] = None) -> int:
     console.setup()
+    if os.name == "nt" and getattr(sys, "frozen", False):
+        from . import self_update
+
+        self_update.tidy()      # the binary a self-update renamed aside, now that it no longer runs
     args = sys.argv[1:] if argv is None else list(argv)
     if not args:
         sys.stderr.write(usage())
