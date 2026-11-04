@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a p
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
 from cortex_cli import binary, self_update, store  # noqa: E402
+from cortex_cli.paths import display  # noqa: E402
 from cortex_cli.self_update import SelfUpdateError  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
 from release_fixture import TARGETS, FakeRelease, build, stand_in  # noqa: E402
@@ -82,7 +83,7 @@ class SelfUpdateTests(ReleaseTestCase):
         self.assertEqual(self.binary.read_bytes(), stand_in("9.9.9", False))
         binary.tidy(self.binary)            # on Windows, the old binary renamed aside
         self.assertEqual(sorted(p.name for p in self.bin.iterdir()), ["cortex"])
-        self.assertIn(f"Installed cortex 9.9.9 as {self.binary}, in place of 9.9.8.", out)
+        self.assertIn(f"Installed cortex 9.9.9 as {display(str(self.binary))}, in place of 9.9.8.", out)
         self.assertIn("No project moved: `cortex upgrade` moves one to this version.", out)
         # The SHA256SUMS the redirect led to is the release's: it is not asked for twice.
         self.assertEqual(self.release.requested, ["/latest/download/SHA256SUMS", "/download/9.9.9/SHA256SUMS",
@@ -190,7 +191,7 @@ class SelfUpdateTests(ReleaseTestCase):
     def test_dry_run_replaces_nothing(self):
         code, out, _ = self.update("9.9.9", dry_run=True)
         self.assertEqual(code, 0)
-        self.assertIn(f"--dry-run: Cortex 9.9.9 downloaded, checked and run — {self.binary} was not replaced", out)
+        self.assertIn(f"--dry-run: Cortex 9.9.9 downloaded, checked and run — {display(str(self.binary))} was not replaced", out)
         self.assertIn("/download/9.9.9/cortex-linux-x86_64.tar.gz", self.release.requested)
         self.assert_untouched()
 
@@ -384,7 +385,7 @@ class ReplaceTests(unittest.TestCase):
         if not program.is_file():
             self.skipTest(f"no {program} to run")
         exe.unlink(missing_ok=True)
-        shutil.copy2(program, exe)
+        shutil.copy(program, exe)       # the bytes and the mode: macOS refuses a system file's flags
         proc = subprocess.Popen([str(exe), *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(proc.wait)
         self.addCleanup(proc.kill)
@@ -451,7 +452,7 @@ class BuiltBinaryTests(ReleaseTestCase):
     def test_the_copy_installs_the_release_and_the_release_answers(self):
         proc = self.run_copy("self-update", TARGET)
         self.assertEqual(proc.returncode, 0, proc.out + proc.err)
-        self.assertIn(f"Installed cortex {TARGET} as {self.binary}", proc.out)
+        self.assertIn(f"Installed cortex {TARGET} as {display(str(self.binary))}", proc.out)
         self.assertEqual(self.run_copy("--version").out, f"cortex {TARGET}\n")
         self.assertEqual(sorted(p.name for p in self.bin.iterdir()), [self.binary.name])
 
