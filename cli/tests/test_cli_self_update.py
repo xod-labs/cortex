@@ -6,7 +6,8 @@ POSIX only, so these tests read what it would answer from its last line, and the
 
 Through a built binary, a copy of it is replaced — never the binary under test. On POSIX the copy
 installs the stand-in, which then answers for itself; on Windows the stand-in answers nothing
-sensible, so the copy refuses it, and the replacement of a running executable is shown in process.
+sensible, so the copy refuses it — and installs instead a program built from pip's own launcher,
+which answers, while the copy runs.
 """
 
 import io
@@ -79,6 +80,23 @@ class Piped:
     def flush(self):
         self.read.append("".join(self.held))
         self.held.clear()
+
+
+def answering_windows_program(version):
+    """A Windows program that answers ``cortex VERSION``: pip's launcher, then the line naming the
+    Python to run, then a zip of the script — how pip writes its commands on Windows. ``None``
+    where pip ships no launcher."""
+    try:
+        import pip._vendor.distlib as distlib
+    except ImportError:
+        return None
+    launcher = Path(distlib.__file__).parent / "t64.exe"
+    if not launcher.is_file():
+        return None
+    script = io.BytesIO()
+    with zipfile.ZipFile(script, "w") as archive:
+        archive.writestr("__main__.py", f"print('cortex {version}')\n")
+    return launcher.read_bytes() + f'#!"{sys.executable}"\n'.encode() + script.getvalue()
 
 
 def answer_of(path):
@@ -306,7 +324,8 @@ class SelfUpdateTests(ReleaseTestCase):
 
     def test_a_source_checkout_is_refused_before_anything_is_downloaded(self):
         with self.assertRaisesRegex(SelfUpdateError, "runs from a source checkout, not from a binary — there is none "
-                                                     "to replace. Install one with:\n    "):
+                                                     "to replace. Install one with:\n    "
+                                                     + re.escape(store.install_command()) + "$"):
             self.update(binary=None)
         self.assertEqual(self.release.requested, [])
 
@@ -315,10 +334,20 @@ class SelfUpdateTests(ReleaseTestCase):
         self.bin.chmod(0o555)
         self.addCleanup(self.bin.chmod, 0o755)
         with self.assertRaisesRegex(SelfUpdateError, "cannot write in .* — an administrator or a package manager "
-                                                     "installed this cortex"):
+                                                     "installed this cortex: update it the way it was installed, or "
+                                                     "install one of your own with:\n    "
+                                                     + re.escape(store.install_command(Version("9.9.9"))) + "$"):
             self.update("9.9.9")
         self.assertEqual(self.release.requested, [])
         self.assertEqual(self.binary.read_bytes(), OLD)
+
+    def test_a_directory_refused_names_the_install_script_of_the_version(self):
+        with mock.patch.object(self_update.tempfile, "mkstemp", side_effect=PermissionError(13, "Permission denied")):
+            with self.assertRaisesRegex(SelfUpdateError, "cannot write in .* \\(Permission denied\\) — .* install one "
+                                                         "of your own with:\n    "
+                                                         + re.escape(store.install_command(Version("9.9.9"))) + "$"):
+                self.update("9.9.9")
+        self.assertEqual(self.release.requested, [])
 
     @POSIX
     def test_the_new_binary_is_run_before_it_is_installed(self):
@@ -395,6 +424,20 @@ class NewerReleaseTests(ReleaseTestCase):
                 self.assertIsNone(self_update.newer_release(Version("1.0.0"), fetch=mock.Mock(side_effect=error)))
         with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": "ftp://example.com"}):
             self.assertIsNone(self_update.newer_release(Version("1.0.0")))
+
+
+class RunningBinaryTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")
+    def test_through_a_link_the_binary_is_the_file_it_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            real, link = Path(tmp).resolve() / "bin" / "cortex", Path(tmp) / "cortex"
+            real.parent.mkdir()
+            real.write_bytes(OLD)
+            link.symlink_to(real)
+            with mock.patch.object(sys, "frozen", True, create=True), mock.patch.object(sys, "executable", str(link)):
+                self.assertEqual(binary.running_binary(), real)
+        with mock.patch.object(sys, "frozen", False, create=True):
+            self.assertIsNone(binary.running_binary())
 
 
 class EnvironmentTests(unittest.TestCase):
@@ -590,6 +633,36 @@ class BuiltBinaryTests(ReleaseTestCase):
         self.assertEqual(proc.returncode, 0, proc.out + proc.err)
         self.assertIn(f"Installed cortex {TARGET} as {display(str(self.binary))}", proc.out)
         self.assertEqual(self.run_copy("--version").out, f"cortex {TARGET}\n")
+        self.assertEqual(sorted(p.name for p in self.bin.iterdir()), [self.binary.name])
+
+    @POSIX
+    def test_through_a_link_the_file_it_names_is_replaced_and_the_link_kept(self):
+        links = self.tmp / "links"
+        links.mkdir()
+        (links / "cortex").symlink_to(self.binary)
+        proc = subprocess.run([str(links / "cortex"), "self-update", TARGET], env=self.env, capture_output=True,
+                              stdin=subprocess.DEVNULL)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn(f"Installed cortex {TARGET} as {display(str(self.binary))}", proc.stdout.decode())
+        self.assertEqual(os.readlink(links / "cortex"), str(self.binary))
+        self.assertEqual(self.run_copy("--version").out, f"cortex {TARGET}\n")
+        self.assertEqual(sorted(p.name for p in self.bin.iterdir()), [self.binary.name])
+
+    @unittest.skipUnless(os.name == "nt", "Windows")
+    def test_on_windows_the_copy_puts_a_release_in_its_place_while_it_runs(self):
+        program = answering_windows_program(TARGET)
+        if program is None:
+            self.skipTest("no launcher of pip's to build a program that answers")
+        directory = self.release.root / "download" / TARGET
+        with zipfile.ZipFile(directory / "cortex-windows-x86_64.zip", "w") as archive:
+            archive.writestr("cortex.exe", program)
+        build.checksums(directory)
+        proc = self.run_copy("self-update", TARGET)
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+        self.assertIn(f"Installed cortex {TARGET} as {display(str(self.binary))}", proc.out)
+        self.assertTrue((self.bin / f"{self.binary.name}.old").is_file())     # renamed aside, as it ran
+        self.assertEqual(self.run_copy("--version").out.replace("\r\n", "\n"), f"cortex {TARGET}\n")
+        binary.tidy(self.binary, aside=True)            # what the release's next start would do
         self.assertEqual(sorted(p.name for p in self.bin.iterdir()), [self.binary.name])
 
     @unittest.skipUnless(os.name == "nt", "Windows")

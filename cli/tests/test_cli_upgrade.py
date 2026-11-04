@@ -16,6 +16,8 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -23,7 +25,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
-from cortex_cli import init, store  # noqa: E402
+from cortex_cli import init, self_update, store, upgrade  # noqa: E402
+from cortex_cli.semver import Version  # noqa: E402
 from cortex_cli.store import digest  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
@@ -690,6 +693,24 @@ class NewerReleaseTests(UpgradeTestCase):
         proc = self.upgrade(project)
         self.assert_ok(proc)
         self.assertNotIn("is out", proc.out)
+
+
+class NoticeTimeoutTests(unittest.TestCase):
+    def test_the_notice_waits_a_few_seconds_at_most(self):
+        answered = threading.Event()
+        self.addCleanup(answered.set)
+
+        def slow(own):
+            answered.wait(30)
+            return Version("99.0.0")
+
+        out = io.StringIO()
+        started = time.monotonic()
+        with mock.patch.object(self_update, "newer_release", side_effect=slow), \
+                mock.patch.object(self_update, "NOTICE_TIMEOUT", 0.2):
+            upgrade._NewerRelease(Version("9.9.9")).say(out)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(out.getvalue(), "")
 
 
 class UpgradeHelpTests(unittest.TestCase):
