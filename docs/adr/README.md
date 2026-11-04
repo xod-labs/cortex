@@ -55,7 +55,7 @@ An ADR delivered in several steps adds:
 | [ADR-008](ADR-008-cortex-binary.md) | The `cortex` binary — one-line install, one store per machine, `cortex.toml` per project | Implemented | 2026-09-30 |
 | [ADR-009](ADR-009-release-cycle.md) | The release cycle — every merge into `main` is a release, drafted by CI, published from GitHub | Implemented | 2026-10-31 |
 | [ADR-010](ADR-010-lock-and-upgrade.md) | `cortex.lock`, `cortex upgrade` and the bootstrap marker | Implemented | 2026-11-04 |
-| [ADR-011](ADR-011-project-registry.md) | The project registry — a machine's Cortex projects, for the CLI and the cockpit | Proposed | 2026-11-04 |
+| [ADR-011](ADR-011-project-registry.md) | The project registry — a machine's Cortex projects, for the CLI and the cockpit | Accepted | 2026-11-04 |
 
 ## Authoring an ADR
 
