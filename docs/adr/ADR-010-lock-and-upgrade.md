@@ -135,7 +135,7 @@ In the project of the current directory — the nearest `cortex.toml`, as `corte
    - the target's template has the same `format`, or an older one → nothing;
    - a newer one, and the file is exactly what the pinned version's template writes for that layout and theme → it is written again from the target's template;
    - a newer one, and the file differs — a team adapted it, or it has no marker → it is kept, and the command says so with `cortex init --force`, which writes it again and keeps it as `FILE.bak`.
-6. **The switch**: `version` is written in `cortex.toml`, keeping its comments, then the project is synced — `cortex.local.toml`, the link or copy, and `cortex.lock`. If the sync fails, `version` is written back.
+6. **The switch**: `version` is written in `cortex.toml`, keeping its comments, then the project is synced — `cortex.local.toml`, the link or copy, and `cortex.lock`. If the sync fails, `cortex.toml` and `cortex.lock`, what the team commits, are put back as they were; what the sync changed on this machine, the next `cortex sync` puts right.
 7. **It ends** with what to commit — `cortex.toml`, `cortex.lock`, and the bootstrap file when it was written — and that teammates run `cortex sync` after they pull.
 
 `--dry-run` runs steps 1 to 5 and changes nothing in the project; the store may gain the target version. The exit code is that of a real run: 1 when step 4 would stop it.
@@ -238,7 +238,7 @@ Acceptance criteria:
 - `--dry-run` leaves every file of the project byte for byte
 - an overlay whose `Base:` the target removed stops the upgrade, exit 1, with the validator's report and the project unchanged; `--force` moves it anyway
 - a bootstrap file exactly as the pinned version wrote it, of an older format than the target's, is written again; one a team changed is kept, and the command names `cortex init --force`
-- a sync that fails after `version` was written leaves `cortex.toml` as it was
+- a sync that fails after `version` was written leaves `cortex.toml` and `cortex.lock` as they were
 
 ### Phase 4 — `cortex prune`
 

@@ -142,6 +142,12 @@ def remove_tree(root: Path) -> None:
     shutil.rmtree(root)
 
 
+def hashes(directory: Path) -> Dict[str, str]:
+    """The SHA-256 of each file of the spec at ``directory``, its three trees, by path with ``/``."""
+    return {path.relative_to(directory).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in _files(directory)}
+
+
 def digest(directory: Path) -> str:
     """The digest of the spec at ``directory`` (ADR-010 §3.2): ``sha256sum``'s line for each file of
     its three trees — the path relative to ``directory``, with ``/`` — in the order of the paths'
@@ -152,8 +158,7 @@ def digest(directory: Path) -> str:
     if missing:
         raise StoreError(f"{directory} holds no {', '.join(missing)} — no whole spec to take the digest of")
     try:
-        return digest_of({path.relative_to(directory).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-                          for path in _files(directory)})
+        return digest_of(hashes(directory))
     except FileNotFoundError as error:
         raise StoreError(f"{directory} lost {error.filename} while its digest was taken — no whole spec to take the "
                          "digest of")
