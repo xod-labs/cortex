@@ -21,7 +21,6 @@ The binary is never upgraded here: the install script does that.
 from __future__ import annotations
 
 import argparse
-import codecs
 import io
 import os
 import subprocess
@@ -172,7 +171,7 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
         return None, None
     if b"\r\n" in kept:
         wanted = wanted.replace(b"\n", b"\r\n")
-    return (codecs.BOM_UTF8 + wanted if kept.startswith(codecs.BOM_UTF8) else wanted), None
+    return (init.BOM + wanted if kept.startswith(init.BOM) else wanted), None
 
 
 def bootstraps(files: List[Path], pinned: Version, current: Optional[Path], target: Path, personality: bool,

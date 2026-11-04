@@ -31,7 +31,6 @@ Everything is checked before anything of the project is written: a refusal leave
 from __future__ import annotations
 
 import argparse
-import codecs
 import hashlib
 import os
 import re
@@ -184,9 +183,7 @@ def normalised(content: bytes) -> bytes:
     """A bootstrap as its digest reads it: without a leading byte order mark, with LF line endings
     and one newline at the end, as ``instructions`` writes it — git may check it out with CRLF, an
     editor may add the mark, or take the last newline away."""
-    if content.startswith(codecs.BOM_UTF8):
-        content = content[len(codecs.BOM_UTF8):]
-    return content.replace(b"\r\n", b"\n").rstrip(b"\n") + b"\n"
+    return without_bom(content).replace(b"\r\n", b"\n").rstrip(b"\n") + b"\n"
 
 
 def _digest(content: bytes) -> bytes:
