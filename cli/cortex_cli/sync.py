@@ -698,24 +698,24 @@ def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err:
         _sync(root, mode, source, out, err, claude_access, notes)
 
 
-def _lock(root: str, project: config.Project, the_store: store.Store, out: TextIO) -> Optional[Tuple[str, str]]:
-    """``cortex.lock`` against the pinned version in the store (ADR-010 §3.3), before anything of the
-    project changes: the digest to write and what to say of it, or ``None`` when it stays as it is.
-    A spec whose files are not those the project locked is put in the store again, once: still
-    different, the release is not the one the team locked, and it is refused."""
+def check_lock(root: str, version: store.Version, the_store: store.Store, out: TextIO) -> Tuple[str, Optional[str]]:
+    """``cortex.lock`` against ``version`` in the store (ADR-010 §3.3), before anything of the
+    project changes: the digest of the spec, and what to say of the lock to write — ``None`` when it
+    stays as it is. A spec whose files are not those the project locked is put in the store again,
+    once: still different, the release is not the one the team locked, and it is refused."""
     lock = config.load_lock(root)
-    digest = the_store.digest(project.version)
-    if lock is not None and lock.version == project.version:
+    digest = the_store.digest(version)
+    if lock is not None and lock.version == version:
         if lock.digest == digest:
-            return None
-        the_store.replace(project.version)
-        digest = the_store.digest(project.version)
+            return digest, None
+        the_store.replace(version)
+        digest = the_store.digest(version)
         if digest != lock.digest:
-            raise SyncError(f"Cortex {project.version}: its spec is {digest}, and {config.LOCK_FILE} names {lock.digest} — "
+            raise SyncError(f"Cortex {version}: its spec is {digest}, and {config.LOCK_FILE} names {lock.digest} — "
                             "this is not the release the project locked. Nothing of the project was changed")
-        out.write(f"Cortex {project.version}: put in the store again — its files were not those {config.LOCK_FILE} names\n")
-        return None
-    return digest, ("written" if lock is None else f"Cortex {project.version}, where it named {lock.version}")
+        out.write(f"Cortex {version}: put in the store again — its files were not those {config.LOCK_FILE} names\n")
+        return digest, None
+    return digest, ("written" if lock is None else f"Cortex {version}, where it named {lock.version}")
 
 
 def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
@@ -747,7 +747,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
                 "put back": "put back in the store as it was — a sync cut short had set it aside, and it could "
                             "not be downloaded again"}[how]
         out.write(f"Cortex {project.version}: {said} — {display(str(spec_source))}\n")
-    lock = None if source is not None else _lock(root, project, the_store, out)
+    digest, lock = (None, None) if source is not None else check_lock(root, project.version, the_store, out)
 
     # Everything is prepared and checked before anything of the project moves: the new
     # cortex.local.toml, the new link or copy beside cortex/. Then one rename puts it in place.
@@ -763,7 +763,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         marker = read_marker(target) if existing == "copy" else None
         keep = bool(marker) and source is None and marker.get("version") == str(project.version) \
             and marker.get("from") is None \
-            and store.digest_of(marker.get("files") or {}) == the_store.digest(project.version)   # the store's, as locked
+            and store.digest_of(marker.get("files") or {}) == digest   # the store's, as locked
         missing = missing_files(target, marker) if keep else []
         if missing:
             keep = False
@@ -776,7 +776,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if lock is not None:
         # Before the swap: a lock that cannot be written stops the sync with nothing moved. It names
         # what cortex.toml pins, whatever comes next.
-        config.write_lock(root, project.version, lock[0])
+        config.write_lock(root, project.version, digest)
     try:
         aside = None if keep else swap(target, new, existing)
     except BaseException:
@@ -802,7 +802,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if source is not None:
         out.write(f"{config.LOCK_FILE}: neither read nor written — a checkout has no version (--from)\n")
     elif lock is not None:
-        out.write(f"{config.LOCK_FILE}: {lock[1]} — commit it\n")
+        out.write(f"{config.LOCK_FILE}: {lock} — commit it\n")
     if notes:
         _notes(Path(root), mode, err)
     _claude(Path(root), project, None if mode == "copy" else spec_source, out, err)

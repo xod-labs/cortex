@@ -953,6 +953,16 @@ class CortexLockTests(SyncTestCase):
                 self.assertIn("Warnings: 1", proc.out)
                 self.assertEqual(self.validate(project, "--strict").returncode, 1)
 
+    def test_a_copy_reads_the_store_once(self):
+        # Its digest is the lock's check and the copy's: one reading of every file, not two.
+        sync, version = in_process()
+        project = self.project(version=version, extra='sync = "copy"\n')
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}):
+            sync.sync(str(project), None, None, io.StringIO(), io.StringIO())
+            with mock.patch.object(sync.store, "digest", wraps=sync.store.digest) as taken:
+                sync.sync(str(project), None, None, io.StringIO(), io.StringIO())
+        self.assertEqual(taken.call_count, 1)
+
     @DOWNLOADS
     def test_a_version_a_sync_cut_short_set_aside_is_put_back_offline(self):
         project = self.project(version="9.9.8")
