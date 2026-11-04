@@ -254,7 +254,7 @@ def load_lock(root: str) -> Optional[Lock]:
     except ConfigError as error:
         raise ConfigError(f"{error} — {again}")
     except project.LaterFormatError as error:
-        raise ConfigError(f"{error}: upgrade this cortex — the install script installs the latest")
+        raise ConfigError(f"{error}: update this cortex — `cortex self-update` installs the latest release")
     except project.ProjectFileError as error:
         raise ConfigError(f"{error} — {again}")
     return Lock(version=Version(data["version"]), digest=data["digest"])

@@ -78,11 +78,18 @@ def known_specs() -> Dict[str, str]:
     return dict(KNOWN)
 
 
-def upgrade_command(version: Version) -> str:
+def install_command(version: Optional[Version] = None) -> str:
+    """The install script's command — of ``version``, or of the latest release."""
     if os.name == "nt":
         return ("& ([scriptblock]::Create((irm https://raw.githubusercontent.com/xod-labs/cortex/main/install.ps1)))"
-                f" -Version {version}")
-    return f"curl -fsSL https://raw.githubusercontent.com/xod-labs/cortex/main/install.sh | sh -s -- {version}"
+                + (f" -Version {version}" if version else ""))
+    return ("curl -fsSL https://raw.githubusercontent.com/xod-labs/cortex/main/install.sh | sh"
+            + (f" -s -- {version}" if version else ""))
+
+
+def update_command(version: Version) -> str:
+    """The command that moves this binary to ``version`` (ADR-010 §3.7)."""
+    return f"cortex self-update {version}"
 
 
 # --------------------------------------------------------------------------- #
@@ -318,8 +325,8 @@ class Store:
         """Refuse a version this binary does not serve: newer than itself — the tool is newer than
         the data it reads, never older — or older than the first spec archive."""
         if version > self.own:
-            raise StoreError(f"this project uses Cortex {version}, newer than this cortex, {self.own} — upgrade it:\n"
-                             f"    {upgrade_command(version)}")
+            raise StoreError(f"this project uses Cortex {version}, newer than this cortex, {self.own} — update it:\n"
+                             f"    {update_command(version)}")
         if version != self.own and version < FIRST_SPEC_ARCHIVE:
             raise StoreError(f"Cortex {version} has no spec archive: the first one is {FIRST_SPEC_ARCHIVE}, "
                              "the release that ships the cortex command — pin that version or a later one")

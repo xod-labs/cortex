@@ -123,12 +123,12 @@ class UpgradeTests(UpgradeTestCase):
         self.assertIn(f"Cortex {OWN}: already on it — nothing to move", proc.out)
         self.assertEqual(snapshot(project), before)
 
-    def test_a_version_newer_than_this_cortex_is_refused_with_the_upgrade_command(self):
+    def test_a_version_newer_than_this_cortex_is_refused_with_the_self_update_command(self):
         project = self.project("9.9.8")
         proc = self.upgrade(project, "9.10.0")
         self.assertEqual(proc.returncode, 1, proc.err)
-        self.assertIn(f"Cortex 9.10.0 is newer than this cortex, {OWN} — upgrade this cortex first:", proc.err)
-        self.assertIn("install", proc.err)
+        self.assertIn(f"Cortex 9.10.0 is newer than this cortex, {OWN} — update this cortex first, then run "
+                      "`cortex upgrade 9.10.0` again:\n    cortex self-update 9.10.0", proc.err)
         self.assertIn('version = "9.9.8"', self.pinned(project))
 
     def test_a_malformed_version_exits_2(self):
@@ -636,6 +636,47 @@ class PinAfterThisCortexTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertIn(f"note: what changes is not said — this cortex, {OWN}, does not serve Cortex 9.10.0\n", proc.err)
         self.assertNotIn("newer than this cortex", proc.err)        # the opposite move, advised
+
+
+class NewerReleaseTests(UpgradeTestCase):
+    """With no VERSION, `cortex upgrade` says when a release newer than the binary is out (§3.5)."""
+
+    def setUp(self):
+        super().setUp()
+        FakeRelease.publish(self.release.root / "download" / "99.0.0", "99.0.0")
+
+    def latest_is(self, version):
+        self.release.redirect("/latest/download/SHA256SUMS", f"{self.release.url}/download/{version}/SHA256SUMS")
+
+    NOTICE = f"Cortex 99.0.0 is out, and this cortex is {OWN}: `cortex self-update`, then `cortex upgrade`, moves " \
+             "the project to it."
+
+    def test_a_newer_release_is_said_last(self):
+        self.latest_is("99.0.0")
+        proc = self.upgrade(self.project(OWN))
+        self.assert_ok(proc)
+        self.assertIn(f"Cortex {OWN}: already on it — nothing to move\n", proc.out)
+        self.assertTrue(proc.out.endswith(f"\n\n{self.NOTICE}\n"), proc.out)
+
+    def test_a_version_named_asks_for_no_release(self):
+        self.latest_is("99.0.0")
+        proc = self.upgrade(self.project(OWN), OWN)
+        self.assert_ok(proc)
+        self.assertNotIn("is out", proc.out)
+        self.assertFalse([path for path in self.release.requested if path.startswith("/latest/")])
+
+    def test_the_latest_not_newer_is_not_said(self):
+        self.latest_is("9.9.8")
+        proc = self.upgrade(self.project(OWN))
+        self.assert_ok(proc)
+        self.assertNotIn("is out", proc.out)
+
+    def test_offline_nothing_is_said(self):
+        project = self.project(OWN)
+        self.env["CORTEX_RELEASES_URL"] = "http://127.0.0.1:9"
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertNotIn("is out", proc.out)
 
 
 class UpgradeHelpTests(unittest.TestCase):
