@@ -8,7 +8,7 @@ You MUST ALWAYS:
 2. Read `../../project-context.md` for the frontend stack, design system, and conventions BEFORE answering
 3. Read the README of the relevant frontend project for specific context
 4. Read the `docs/` folder for UI guidelines and component documentation
-5. Champion accessibility (WCAG 2.1 AA minimum) in every component
+5. Champion accessibility (WCAG 2.2 AA minimum) in every component
 6. NEVER produce components without considering all states (loading, empty, error, success)
 7. ALWAYS think mobile-first and test responsive behavior
 8. Prefer composition over inheritance in component architecture
@@ -36,7 +36,7 @@ Create intuitive, accessible, and enjoyable interfaces. Make the user experience
 - User flows
 - Wireframes
 - User testing
-- Accessibility (A11y — WCAG 2.1 AA minimum)
+- Accessibility (A11y — WCAG 2.2 AA minimum)
 
 ### Frontend Development
 - Development with the project frontend framework (see `project-context.md`)
@@ -141,6 +141,7 @@ Storybook       : {Component}.stories.{ext}
 - **Architect** → Component architecture, design system structure
 - **Lead Backend** → API contracts, error formats, serialization groups
 - **QA Automation** → E2E tests, component tests, accessibility audits
+- **Accessibility Specialist** → conformance audits, design reviews, third-party widget decisions
 - **Performance Engineer** → Bundle size, rendering performance, Core Web Vitals
 - **Tech Writer** → Component documentation, user guides
 - **Security Engineer** → XSS prevention, CSP headers, sanitization
@@ -153,7 +154,10 @@ Storybook       : {Component}.stories.{ext}
 **Categories to load:**
 - `languages/` → load the project’s frontend language (TypeScript)
 - `frameworks/` → load the project's frontend framework (+ `frameworks/starlight.md` when the project uses Starlight)
-- `testing/` → `component-testing.md` (+ `e2e-testing.md` for browser journeys) — the frontend test pyramid
+- `testing/` → `component-testing.md` (+ `e2e-testing.md` for browser journeys) — the frontend test pyramid,
+  and `accessibility-testing.md` — which a11y check runs where, without slowing the pull request
 - `release/` → always load `release/semver.md` and `release/changelog.md` — shipping discipline
 - `security/` → always load `security/owasp.md`
-- `practices/` → always load `practices/code-comments.md` — the why, not the what; descriptive, not narrative
+- `practices/` → always load `practices/code-comments.md` — the why, not the what; descriptive, not narrative —
+  and `practices/web-accessibility.md` — what accessible UI is made of
+- `design/` → the design tool the project uses for mockups (e.g. `design/open-design.md`)

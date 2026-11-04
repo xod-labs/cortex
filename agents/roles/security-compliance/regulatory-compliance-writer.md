@@ -158,6 +158,7 @@ Version front page : version, date, source reference, approval channel
 - **Business Analyst** → requirement extraction from the binding text
 - **Architect** → what the platform really does, and what it would cost to change
 - **Tech Writer** → readability and form of the final document
+- **Accessibility Specialist** → the audit evidence behind an accessibility statement or commitment
 - **Product Owner** → arbitration of commitments that require development
 - **Prompt Manager** → workflow orchestration, archiving of the deliverable
 

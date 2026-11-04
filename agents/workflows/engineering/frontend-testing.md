@@ -21,7 +21,7 @@ This workflow activates when the prompt contains formulations such as:
 | 4 | `roles/engineering/platform-engineer.md` + `qa-automation` | CI wiring (dedicated jobs) |
 | 5 | `roles/engineering/qa-automation.md` | Verify the tests can fail for the right reason |
 
-**Capabilities:** `testing/component-testing.md`, `testing/e2e-testing.md`, `frameworks/{project vue/react/…}.md`, `languages/typescript.md`.
+**Capabilities:** `testing/component-testing.md`, `testing/e2e-testing.md`, `testing/accessibility-testing.md`, `frameworks/{project vue/react/…}.md`, `languages/typescript.md`.
 
 ## 📋 Steps
 
@@ -68,6 +68,7 @@ This workflow activates when the prompt contains formulations such as:
 **Checklist:**
 - [ ] Unit + component tests gate every PR (fast, deterministic)
 - [ ] Browser E2E in its **own** job (slower/flakier) — nightly or gating once stable, never silently disabled
+- [ ] Browser accessibility scans on a schedule, not on the required path of pull requests (see `accessibility-testing.md` §CI budget)
 - [ ] Coverage reported; `--passWithNoTests`-style green-on-empty removed
 - [ ] The runner env is real (jsdom/happy-dom for components; built app for E2E)
 
