@@ -970,6 +970,23 @@ class CortexLockTests(SyncTestCase):
                 self.assertEqual(self.validate(project, "--strict").returncode, 1)
                 store.remove_tree(self.stored())        # the next sync writes it whole
 
+    @DOWNLOADS
+    def test_offline_a_stored_spec_the_lock_refuses_is_said_so(self):
+        # It could not be had again: the error says why the sync wanted it, not only that it failed.
+        project = self.project(version="9.9.8")
+        self.assert_ok(self.sync(project))
+        before = self.lock(project)
+        changed = next(p for p in sorted((self.stored("9.9.8") / "agents").rglob("*")) if p.is_file())
+        os.chmod(changed, 0o644)
+        changed.write_bytes(b"# altered\n")
+        self.release.close()
+        proc = self.sync(project)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("Cortex 9.9.8 in the store is not what cortex.lock names — its spec is sha256:", proc.err)
+        self.assertIn("and it could not be put in the store again: could not download", proc.err)
+        self.assertIn("Nothing of the project was changed", proc.err)
+        self.assertEqual(self.lock(project), before)
+
     def test_validate_reads_a_copys_digest_from_its_manifest(self):
         project = self.project(extra='sync = "copy"\n')
         self.assert_ok(self.sync(project))

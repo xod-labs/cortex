@@ -712,7 +712,12 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
     if lock is not None and lock.version == version:
         if lock.digest == digest:
             return digest, None
-        the_store.replace(version)
+        try:
+            the_store.replace(version)
+        except store.StoreError as error:
+            raise SyncError(f"Cortex {version} in the store is not what {config.LOCK_FILE} names — its spec is {digest}, "
+                            f"and the lock's {lock.digest} — and it could not be put in the store again: {error}. "
+                            "Nothing of the project was changed")
         digest = the_store.digest(version)
         if digest != lock.digest:
             raise SyncError(f"Cortex {version}: its spec is {digest}, and {config.LOCK_FILE} names {lock.digest} — "
