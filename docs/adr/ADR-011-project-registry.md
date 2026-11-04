@@ -122,11 +122,14 @@ cortex upgrade --all [VERSION] [--dry-run] [--force] [--branch NAME] [--commit -
 - **Each registered project, in name order**, gets the upgrade of ADR-010 §3.5 to the same target: `VERSION`, or the binary's own version. The projects are not moved down unless `VERSION` names the version.
   - A project that is not `ok` is skipped, and said.
   - The release check of ADR-010 §3.5 asks once, not once per project.
-- **A project that refuses does not stop the others** — overlays that fail, a sync that refuses, a pin newer than the binary. The command ends with one line per project — *moved 1.4.0 → 1.5.0*, *already on 1.5.0*, *refused: …*, *skipped: missing* — and exits 1 if any project refused.
+  - A `VERSION` this cortex does not serve — newer than it, or before 1.0.0 — is refused once, before any project.
+  - An empty registry moves nothing: the command says so, and exits 0.
+- **A project that refuses does not stop the others** — overlays that fail, a sync that refuses, a pin newer than the binary. The command ends with one line per project — *moved 1.4.0 → 1.5.0*, *already on 1.5.0*, *refused: …*, *skipped: missing* — and exits 1 if any project refused; one skipped does not.
 - **It ends with what each project must commit**, by path: `cortex.toml`, `cortex.lock`, the bootstrap files written. **Nothing is committed** unless `--commit` is given, and the command says so.
-- **`--branch NAME`** creates and switches to the branch `NAME` in each project that is a git work tree, before writing anything. A project where `NAME` already exists is refused, and the others go on. Nothing is stashed: changes the team has not committed stay where they are.
-- **`--commit`** commits, in each project that moved, the files the upgrade wrote and nothing else, with `--message`, which is required: a team's commit convention is its own. Nothing is pushed. A project that is not a git work tree, or whose files git ignores — a workspace whose `cortex.toml` is not committed — is said, and nothing is committed there.
-- **`--dry-run`** is the dry run of each project, and creates no branch. `--force` is passed to each project.
+- **`--branch NAME`** creates and switches to the branch `NAME` in each project that is a git work tree, once the project's checks pass and before its first write — a project with nothing to write gets none. A project where `NAME` already exists is refused, and the others go on; a branch the run made serves the repository's other projects; a project refused after it keeps the branch, and says so. A project outside git is upgraded without one, and said. Nothing is stashed: changes the team has not committed stay where they are.
+- **`--commit`** commits, in each project the upgrade wrote files in — moved, or finished on its pinned version — those files and nothing else, with `--message`, which is required: a team's commit convention is its own. Nothing is pushed. A project outside git, one whose `cortex.toml` git does not track — the pin is the developer's own (ADR-010 §3.8) — and one where git ignores a file the upgrade wrote are said, and nothing is committed there; a commit git refuses, a hook say, is that project's refusal, its upgrade done.
+- **`--dry-run`** is the dry run of each project, and creates no branch; it refuses a branch that exists, as the run would. `--force` is passed to each project.
+- **Refused before anything happens**, exit 2: `--instructions-file` with `--all`, since it names one project's file; `--commit` without `--message`, or `--message` without `--commit`; a `--branch` name git refuses. Without git on `PATH`, `--branch` and `--commit` are refused, exit 1, nothing changed.
 - **Without `--all`**, `--branch` and `--commit` work the same for the one project.
 - **The assistant never runs it of its own accord**, as it never runs `cortex upgrade` (ADR-010 §3.8). It runs it when the user asks, the dry run first.
 
@@ -284,3 +287,10 @@ After the counter-review of 2026-11-05:
 - **The instructions file has a rule for a spec that is gone** (§5): *the directory `spec` names does not exist* → `cortex sync`. A project the assistant never synced — already on its version — was not registered, and the first `prune` with no `DIR` left its spec naming a directory that no rule caught. A `cortex/` that links to a checkout moved or deleted is removed first: the sync refuses it, as a link Cortex did not make — a message that names the wrong cause, #303. `cortex upgrade` to 1.5.0 writes the rule in, where no one edited the file.
 - **`CORTEX_NO_REGISTER` does not change `prune`** (§3.4): said, as phase 2 says what it changes.
 - **The tests compare a version list sorted**, since a binary's own version sorts anywhere among them; and that `prune DIR` writes no registry is checked by its time too, not only its bytes.
+
+### While phase 4 was implemented (2026-11-04)
+
+- **What `upgrade --all` refuses once, up front** (§3.5): a `VERSION` this cortex does not serve; and the argument errors, exit 2 — `--instructions-file` with `--all`, `--commit` and `--message` apart, a branch name git refuses. Without git, `--branch` and `--commit` are refused before anything changes.
+- **An empty registry moves nothing**, exit 0, and a skipped project does not make the exit 1 (§3.5).
+- **When the branch is made** (§3.5): once the project's checks pass, before its first write; none for a project with nothing to write; one made by the run serves the repository's other projects; a project refused afterwards keeps it.
+- **Where `--commit` commits** (§3.5): in each project the upgrade wrote files in, finishing an upgrade cut short included; not where git does not track `cortex.toml`, nor where it ignores a written file; a commit git refuses is that project's refusal.
