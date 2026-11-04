@@ -13,7 +13,7 @@ In these instructions, `cortex/` is the directory that `spec` names in `cortex.l
 
 **`cortex sync` says this cortex is older than the workspace's version** → run the command it names to update it — `cortex self-update X.Y.Z`, `cortex-ai self-update X.Y.Z` where the command was installed under that name, or the install script's command from a cortex before 1.4.0 — then `cortex sync` again. **There is no `cortex` command, nor `cortex-ai`** → tell the user to install it, as the Installation section of https://github.com/xod-labs/cortex says, and go no further.
 
-Before each of these commands, say what you run and why: your tool asks the user first when it is set to. Where you cannot run commands, ask the user to run them. Never run `cortex upgrade`, nor change `version` in `cortex.toml`: moving the workspace to another version is the team's decision, made in a commit.
+Before each of these commands, say what you run and why: your tool asks the user first when it is set to. Where you cannot run commands, ask the user to run them. Never run `cortex upgrade`, nor change `version` in `cortex.toml`, of your own accord: moving the workspace to another version is the team's decision, made in a commit. When the user asks for it, do it — `cortex upgrade --dry-run` first, to show what changes.
 
 ## Bootstrap (MANDATORY at the start of every new conversation)
 
