@@ -172,8 +172,17 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
     asset = asset_of(built_for) if built_for else asset_name(system or platform.system(),
                                                               machine or platform.machine())
     base = store.releases_url()
+
+    def from_where() -> None:
+        # Integrity against the host the releases come from, not authenticity (ADR-010 §3.7):
+        # another host than GitHub's says so, before it is downloaded from.
+        if base != store.DEFAULT_RELEASES_URL:
+            err.write(f"note: downloading from {base}, set by CORTEX_RELEASES_URL — the binary is checked against "
+                      "that host's SHA256SUMS, not against GitHub's releases\n")
+
     sums: Optional[bytes] = None
     if wanted is None:
+        from_where()
         try:
             target, sums = latest(fetch)
         except net.DownloadError as error:     # offline, or a mirror that serves no latest/
@@ -191,6 +200,8 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
     if target == own:
         out.write(f"cortex {own}: already on it — nothing to install\n")
         return 0
+    if wanted is not None:
+        from_where()
 
     # Beside the old binary, on its file system: the last step is a rename. A directory this user
     # cannot write in fails here, before anything is downloaded.

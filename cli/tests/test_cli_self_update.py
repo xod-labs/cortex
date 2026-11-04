@@ -27,7 +27,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
-from cortex_cli import binary, self_update, store  # noqa: E402
+from cortex_cli import binary, net, self_update, store  # noqa: E402
 from cortex_cli.paths import display  # noqa: E402
 from cortex_cli.self_update import SelfUpdateError  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
@@ -116,6 +116,33 @@ class ReleaseTestCase(unittest.TestCase):
 
 
 class SelfUpdateTests(ReleaseTestCase):
+    @property
+    def ELSEWHERE(self):
+        return (f"note: downloading from {self.release.url}, set by CORTEX_RELEASES_URL — the binary is checked "
+                "against that host's SHA256SUMS, not against GitHub's releases\n")
+
+    def test_releases_from_another_host_say_so_before_anything_is_downloaded(self):
+        for wanted in ("9.9.9", None):
+            with self.subTest(wanted=wanted):
+                self.latest_is("9.9.9")
+                piped = Piped()
+                self_update.self_update(wanted, True, piped.out, piped.err, binary=self.binary, own=Version("9.9.8"),
+                                        run=answer_of, system="Linux", machine="x86_64")
+                piped.flush()
+                self.assertEqual(piped.read[0], self.ELSEWHERE)
+        self.assertEqual(self.update("9.9.8")[2], "")       # nothing downloaded: nothing to say
+
+    def test_githubs_releases_say_nothing_of_where_they_come_from(self):
+        os.environ.pop("CORTEX_RELEASES_URL")
+        for wanted in ("9.9.9", None):
+            with self.subTest(wanted=wanted):
+                err = io.StringIO()
+                with self.assertRaises(SelfUpdateError):
+                    self_update.self_update(wanted, False, io.StringIO(), err, binary=self.binary, own=Version("9.9.8"),
+                                            fetch=mock.Mock(side_effect=net.DownloadError("offline")), run=answer_of,
+                                            system="Linux", machine="x86_64")
+                self.assertEqual(err.getvalue(), "")
+
     def test_the_latest_release_takes_the_binarys_place(self):
         self.latest_is("9.9.9")
         code, out, _ = self.update()
@@ -136,7 +163,7 @@ class SelfUpdateTests(ReleaseTestCase):
         self.assertEqual(self.binary.read_bytes(), stand_in("9.9.9", False))
         self.assertEqual(self.release.requested, ["/download/9.9.9/SHA256SUMS",
                                                   "/download/9.9.9/cortex-linux-x86_64.tar.gz"])
-        self.assertEqual(err, "")
+        self.assertEqual(err, self.ELSEWHERE)
 
     def test_the_windows_asset_gives_its_cortex_exe(self):
         code, _, _ = self.update("9.9.9", system=WINDOWS)
