@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -37,6 +38,7 @@ def remove(path):
 EXPECTED = json.loads(matrix.EXPECTED.read_text(encoding="utf-8"))
 OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
 HAS_GIT = shutil.which("git") is not None
+LISTS = "`cortex project list` lists this machine's projects"
 
 
 class InitTestCase(unittest.TestCase):
@@ -1213,6 +1215,65 @@ class OptionTests(InitTestCase):
         (self.project / "agents").mkdir()
         self.init("--workspace", "--service", "api")
         self.assertFalse((self.project / "agents" / "project-overview.md").exists())
+
+
+class RegisterTests(InitTestCase):
+    """Once all of it succeeded, init registers the project in the machine's registry, and says so
+    once — not its sync, which may succeed where the rest fails (ADR-011 §3.3)."""
+
+    def setUp(self):
+        super().setUp()
+        self.registry = self.home / "projects.toml"
+
+    def entries(self):
+        data = tomllib.loads(self.registry.read_text(encoding="utf-8"))
+        return [(entry["name"], entry["path"]) for entry in data.get("project", [])]
+
+    def test_init_registers_the_project_and_says_it_once_and_init_again_nothing(self):
+        self.project.mkdir(parents=True)
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn(f"\nregistered as project — {LISTS}\n\nCortex {OWN} is ready", proc.out)   # its last write
+        self.assertEqual(proc.out.count("registered"), 1)
+        self.assertEqual(self.entries(), [("project", display(self.project))])
+        before = self.registry.read_bytes()
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("registered", proc.out + proc.err)
+        self.assertEqual(self.registry.read_bytes(), before)
+
+    def test_the_root_registered_is_the_directory_it_initialises(self):
+        for args, name in ((("init/acme",), "acme"), (("init/checkout", "--from", str(harness.REPO)), "checkout")):
+            with self.subTest(args=args):
+                proc = self.init(*args, cwd=self.tmp)
+                self.assertEqual(proc.returncode, 0, proc.err)
+                self.assertIn(f"registered as {name} — {LISTS}\n", proc.out)
+        self.assertEqual(self.entries(), [("acme", display(self.tmp / "init" / "acme")),
+                                          ("checkout", display(self.tmp / "init" / "checkout"))])
+
+    def test_an_init_that_fails_after_its_sync_registers_nothing(self):
+        self.project.mkdir(parents=True)
+        try:
+            # A file init writes after the sync, which leads nowhere it can write.
+            os.symlink(self.tmp / "nowhere" / "overview.md", self.project / "project-overview.md")
+        except OSError:
+            self.skipTest("no symbolic link here")
+        proc = self.init()
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertTrue((self.project / "cortex.local.toml").is_file())          # its sync ran
+        self.assertNotIn("registered", proc.out + proc.err)
+        self.assertFalse(self.registry.exists())
+
+    def test_a_registry_that_cannot_be_written_is_a_warning_and_init_succeeds(self):
+        self.project.mkdir(parents=True)
+        (self.home / "projects.toml.lock").mkdir()                  # no file to lock, as root too
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn(f"warning: {display(self.project)} is not registered — {display(self.registry)} cannot be "
+                      "written — ", proc.err)
+        self.assertNotIn("registered as", proc.out)
+        self.assertIn(f"Cortex {OWN} is ready", proc.out)
+        self.assertFalse(self.registry.exists())
 
 
 class BootstrapMarkerTests(unittest.TestCase):

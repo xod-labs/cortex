@@ -26,6 +26,9 @@ file is kept unless ``--force``, instead of a ``y/N`` prompt that blocks every u
 is there: none is overwritten.
 
 Everything is checked before anything of the project is written: a refusal leaves it as it was.
+Once all of it is written, the project is registered in the machine's ``projects.toml`` when it is
+not listed there, and said once — not by the sync it runs, which may succeed where the rest fails
+(ADR-011 §3.3).
 """
 
 from __future__ import annotations
@@ -416,7 +419,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
 
     # The spec, where the project finds it — then what git must ignore, asked of git once
     # cortex/ has its final form: a copy turned into a link is a file to git.
-    sync.sync(str(root), mode, options.source, out, err, notes=False)
+    sync.sync(str(root), mode, options.source, out, err, notes=False, registers=False)
     spec_mode = spec_mode or "store"
     entries = {config.LOCAL_FILE: config.LOCAL_FILE}
     if spec_mode in ("link", "copy"):
@@ -508,6 +511,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                 if not (agents / file).exists():
                     (agents / file).write_bytes(content)
                     out.write(f"✓ agents/{file} — the team's, agents/ is its own git repository (ADR-006)\n")
+    sync.register(str(root), out, err)
     if options.tool == "claude" and claude_access is None and spec_mode != "copy" \
             and not config.load(str(root)).active_claude_access:
         out.write("\ntip: Claude Code asks before it reads the spec in the store. `claude_access = true` in "

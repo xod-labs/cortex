@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -30,6 +31,8 @@ OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
 DOWNLOADS = unittest.skipIf(harness.BINARY, "a build of no release downloads no version")
 AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
 TREES = ["agents", "docs", "templates"]
+REGISTRY_HEADER = "# The Cortex projects of this machine (ADR-011). Written by cortex — `cortex project` edits it.\n"
+LISTS = "`cortex project list` lists this machine's projects"
 
 
 def display(path):
@@ -571,8 +574,9 @@ class LockTests(SyncTestCase):
                     raise OSError(code, os.strerror(code))
 
                 err = io.StringIO()
+                # The registry's lock is tried with the same function, and its tests are cortex project's.
                 with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}), \
-                        mock.patch.object(sync, "_try_lock", no_lock):
+                        mock.patch.object(sync, "_try_lock", no_lock), mock.patch.object(sync, "register"):
                     sync.sync(str(project), None, None, io.StringIO(), err)
                 self.assertEqual(len(tries), 1)
                 self.assertIn(f"cannot be locked here ({os.strerror(code)})", err.getvalue())
@@ -700,7 +704,7 @@ class FromTests(SyncTestCase):
             self.assert_ok(proc)
             self.assertIn("no version is checked (--from)", proc.err)
         self.assertEqual(self.spec(project), display(harness.REPO))
-        self.assertFalse(self.home.exists())
+        self.assertFalse((self.home / "versions").exists())          # the store is not touched
 
     def test_validate_reads_the_checkouts_base(self):
         project = self.project()
@@ -1073,6 +1077,169 @@ class CortexLockTests(SyncTestCase):
         self.assert_ok(self.sync(project))
         (project / "cortex.lock").unlink()
         self.assertEqual(self.validate(project).returncode, 0)
+
+
+class RegisterTests(SyncTestCase):
+    """A sync that succeeded registers the project in the machine's registry, and says so once
+    (ADR-011 §3.3)."""
+
+    def setUp(self):
+        super().setUp()
+        self.registry = self.home / "projects.toml"
+
+    def entries(self):
+        data = tomllib.loads(self.registry.read_text(encoding="utf-8"))
+        return [(entry["name"], entry["path"]) for entry in data.get("project", [])]
+
+    def written(self):
+        """The registry and its lock, as a write would change them: bytes, time and file."""
+        return {path.name: (path.read_bytes(), path.stat().st_mtime_ns, path.stat().st_ino)
+                for path in self.home.glob("projects.toml*")}
+
+    def test_the_first_sync_registers_the_projects_root_and_says_it_once(self):
+        project = self.project("acme")
+        (project / "src").mkdir()
+        proc = self.sync(project, cwd=project / "src")
+        self.assert_ok(proc)
+        self.assertTrue(proc.out.endswith(f"\nregistered as acme — {LISTS}\n"), proc.out)
+        self.assertEqual(proc.out.count("registered"), 1)
+        self.assertEqual(self.registry.read_text(encoding="utf-8"),
+                         REGISTRY_HEADER + f'format = 1\n\n[[project]]\nname = "acme"\npath = "{display(project)}"\n')
+
+    def test_a_path_through_a_link_is_registered_as_the_shell_names_it(self):
+        project = self.project("real/acme")
+        link = self.tmp / "link"
+        try:
+            os.symlink(project, link, target_is_directory=True)
+        except OSError:
+            self.skipTest("no symbolic link here")
+        proc = self.sync(link)                    # PWD names the link, as a shell that changed into it
+        self.assert_ok(proc)
+        self.assertIn(f"registered as link — {LISTS}\n", proc.out)
+        self.assertEqual(self.entries(), [("link", display(link))])
+
+    def test_synced_again_nothing_is_said_or_written(self):
+        project = self.project("acme")
+        self.assert_ok(self.sync(project))
+        before = self.written()
+        self.assertEqual(sorted(before), ["projects.toml", "projects.toml.lock"])
+        for args in ((), ("--link",)):
+            with self.subTest(args=args):
+                proc = self.sync(project, *args)
+                self.assert_ok(proc)
+                self.assertNotIn("registered", proc.out + proc.err)
+                self.assertEqual(self.written(), before)
+
+    def test_a_listed_project_waits_for_no_other_write_of_the_registry(self):
+        sync, version = in_process()
+        from cortex_cli import registry
+
+        project, other = self.project("acme", version=version), self.project("other", version=version)
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}), mock.patch.object(registry, "LOCK_WAIT", 0.3):
+            sync.sync(str(project), None, None, io.StringIO(), io.StringIO())
+            with registry._locked(self.registry):                   # another command writes it meanwhile
+                err = io.StringIO()
+                sync.sync(str(project), None, None, io.StringIO(), err)
+                self.assertEqual(err.getvalue(), "")
+                sync.sync(str(other), None, None, io.StringIO(), err)       # one to add waits for it
+        self.assertEqual(err.getvalue(), f"warning: {display(other)} is not registered — another cortex command has "
+                                         f"held {display(self.home / 'projects.toml.lock')} for 0.3 seconds — wait for "
+                                         "it, then run the command again\n")
+        self.assertEqual(self.entries(), [("acme", display(project))])
+
+    def test_a_project_another_sync_registered_meanwhile_is_not_said_again(self):
+        sync, version = in_process()
+        from cortex_cli import registry
+
+        project = self.project("acme", version=version)
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}):
+            sync.sync(str(project), None, None, io.StringIO(), io.StringIO())
+            before = self.written()
+            out = io.StringIO()
+            with mock.patch.object(registry, "load", lambda: []):     # read before the other one wrote it
+                sync.sync(str(project), None, None, out, io.StringIO())
+        self.assertNotIn("registered", out.getvalue())
+        self.assertEqual(self.written(), before)
+
+    def test_a_sync_that_fails_registers_nothing(self):
+        project = self.project("acme")
+        proc = self.sync(project, "--locked")              # no cortex.lock: refused, the version stored
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertTrue(self.stored().is_dir())
+        self.assertNotIn("registered", proc.out + proc.err)
+        self.assertFalse(self.registry.exists())
+
+    def test_locked_and_from_register_too(self):
+        locked, checkout = self.project("locked"), self.project("checkout")
+        self.assert_ok(self.sync(locked))                                        # its cortex.lock
+        self.registry.unlink()
+        for project, args in ((locked, ("--locked",)), (checkout, ("--from", str(harness.REPO)))):
+            with self.subTest(args=args):
+                proc = self.sync(project, *args)
+                self.assert_ok(proc)
+                self.assertIn(f"registered as {project.name} — {LISTS}\n", proc.out)
+        self.assertEqual(self.entries(), [("checkout", display(checkout)), ("locked", display(locked))])
+
+    def test_a_project_moved_on_disk_is_registered_again_under_a_free_name(self):
+        old = self.project("old/acme")
+        self.assert_ok(self.sync(old))
+        new = self.tmp / "new" / "acme"
+        new.parent.mkdir()
+        os.rename(old, new)
+        proc = self.sync(new)
+        self.assert_ok(proc)
+        self.assertIn(f"registered as acme-2 — {LISTS}\n", proc.out)
+        self.assertEqual(self.entries(), [("acme", display(old)), ("acme-2", display(new))])
+        listed = json.loads(harness.run("project", "list", "--json", cwd=self.tmp, env=self.env).stdout)
+        self.assertEqual([(entry["name"], entry["state"]) for entry in listed], [("acme", "missing"), ("acme-2", "ok")])
+
+    def test_a_registry_that_cannot_be_written_or_read_is_a_warning_and_the_sync_succeeds(self):
+        later = "format = 2\n"
+        self.home.mkdir()
+        (self.home / "projects.toml.lock").mkdir()                  # no file to lock, as root too
+        for case in ("its lock is a directory", "a later format"):
+            with self.subTest(case=case):
+                if case == "a later format":
+                    (self.home / "projects.toml.lock").rmdir()
+                    self.registry.write_text(later, encoding="utf-8")
+                project = self.project(case.replace(" ", "-"))
+                proc = self.sync(project)
+                self.assert_ok(proc)
+                self.assertTrue((project / "cortex.local.toml").is_file())
+                self.assertNotIn("registered as", proc.out)
+                warning = f"warning: {display(project)} is not registered — "
+                self.assertIn(warning + (f"{display(self.registry)} cannot be written — " if case != "a later format"
+                                         else f"{display(self.registry)}: format 2"), proc.err)
+                if case == "a later format":
+                    self.assertIn("cortex self-update", proc.err)
+                    self.assertEqual(self.registry.read_text(encoding="utf-8"), later)
+                else:
+                    self.assertFalse(self.registry.exists())
+
+    @unittest.skipIf(AS_ROOT or os.name == "nt", "root writes any directory, and Windows has no read-only directory")
+    def test_a_home_that_cannot_be_written_is_a_warning_and_the_sync_succeeds(self):
+        stored = self.project("stored")
+        self.assert_ok(self.sync(stored))                        # the version in the store, and the registry
+        before = self.registry.read_bytes()
+        project = self.project("acme")
+        os.chmod(self.home, 0o555)
+        proc = self.sync(project)
+        os.chmod(self.home, 0o755)
+        self.assert_ok(proc)
+        self.assertIn(f"warning: {display(project)} is not registered — {display(self.registry)} cannot be written — "
+                      "Permission denied", proc.err)
+        self.assertTrue((project / "cortex.lock").is_file())
+        self.assertEqual(self.registry.read_bytes(), before)
+
+    def test_an_upgrades_sync_registers_and_says_it_once(self):
+        project = self.project("acme")             # pinned to this cortex, never synced: the upgrade syncs it
+        proc = harness.run("upgrade", cwd=project, env=dict(self.env, CORTEX_NO_UPDATE_CHECK="1"))
+        out = proc.stdout.decode()
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode())
+        self.assertIn("syncing", out)
+        self.assertIn(f"registered as acme — {LISTS}\n", out)
+        self.assertEqual(out.count("registered"), 1)
+        self.assertEqual(self.entries(), [("acme", display(project))])
 
 
 if __name__ == "__main__":
