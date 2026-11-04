@@ -104,8 +104,9 @@ cortex prune [DIR...] [--keep VERSION]... [--dry-run]
 
 - **With no `DIR`**, the projects are the registry's. The versions kept are the same as with directories (ADR-010 §3.6): what each project pins and reads now, the binary's own version, and each `--keep`.
 - **An entry whose project is gone** — `missing`, or `no project` — is dropped from the registry, and said: *acme: /home/dev/code/acme is gone — dropped from the registry*. Its version is no longer kept for it. A project on a drive that is not mounted is gone too: its next sync registers it again, and gets its version back, checked against its lock.
-- **An `unreadable` entry is kept**, and named. Its versions are kept when they can be read, as under a `DIR`, and not known otherwise (ADR-010 §3.6).
-- **An empty registry, and no `DIR`,** exits 2, as before: there is nothing to keep, and pruning would remove every version.
+- **An `unreadable` entry is kept**, and named. The versions that can be read of it are kept, as for a project under a `DIR` whose files hold a key this binary does not know (ADR-010 §3.6) — none when not even its pin can be read.
+- **An empty registry, and no `DIR`,** exits 2, as before: there is nothing to keep, and pruning would remove every version. A registry whose every project is gone is not empty: its entries are dropped, and every version but the binary's own and each `--keep` is removed.
+- **The entries gone are dropped first**, in one write: a registry that cannot be written stops the command, and no version is removed. A removal that fails afterwards leaves the entries dropped, and the version in the store for the next `prune`.
 - **With `DIR...`**, nothing changes from 1.4.0: the projects are those under the directories, and the registry is neither read nor written.
 - **`--dry-run`** lists, removes nothing, and drops no entry.
 
@@ -264,3 +265,9 @@ After the counter-review of 2026-11-05:
 - **`cortex sync --locked` registers**, as any sync does (§3.3): the option is about the lock, not the machine, and a CI runner sets `CORTEX_NO_REGISTER` — the guide says so.
 - **A project already listed resolves no path** (§3.3): the registering sync finds it as written, phase 1's comparison, before it looks at any directory.
 - **The suite's Cortex home** is the test process's too, not only the commands': a test that calls the modules never reads the machine's registry.
+
+### While phase 3 was implemented (2026-11-04)
+
+- **The order of `prune`** (§3.4): the entries gone are dropped first, in one write, so that a registry that cannot be written removes no version.
+- **"Empty" means no entry** (§3.4): a registry whose every project is gone has its entries dropped, and prunes on.
+- **An `unreadable` entry keeps the versions that can be read** (§3.4), as phase 1 widened `unreadable`.
