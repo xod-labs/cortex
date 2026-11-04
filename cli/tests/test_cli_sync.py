@@ -179,11 +179,10 @@ class StoreModeTests(SyncTestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertIn("lists no cortex-spec.tar.gz", proc.err)
 
-    def test_a_version_newer_than_the_binary_is_refused_with_the_upgrade_command(self):
+    def test_a_version_newer_than_the_binary_is_refused_with_the_self_update_command(self):
         proc = self.sync(self.project(version="99.0.0"))
         self.assertEqual(proc.returncode, 1)
-        self.assertIn(f"newer than this cortex, {OWN}", proc.err)
-        self.assertIn("install.ps1" if os.name == "nt" else "install.sh | sh -s -- 99.0.0", proc.err)
+        self.assertIn(f"newer than this cortex, {OWN} — update it:\n    cortex self-update 99.0.0", proc.err)
         self.assertFalse(self.home.exists() and any((self.home / "versions").iterdir()))
 
     @DOWNLOADS
@@ -903,7 +902,8 @@ class CortexLockTests(SyncTestCase):
         for text, fragment in (("format = 1\nversion = \"1.0.0\"\ndigest = \"x\"\n", 'digest "x" is no digest'),
                                (f'format = 1\nversion = "1.0.0"\ndigest = "{self.OTHER}"\nnote = "x"\n', 'unknown key "note"'),
                                (f'format = 2\nversion = "1.0.0"\ndigest = "{self.OTHER}"\n',
-                                "format 2 is written by a later Cortex — this one reads format 1: upgrade this cortex")):
+                                "format 2 is written by a later Cortex — this one reads format 1: this cortex is older "
+                                "than the project's — update it:\n    cortex self-update")):
             with self.subTest(fragment=fragment):
                 (project / "cortex.lock").write_text(text, encoding="utf-8")
                 proc = self.sync(project)

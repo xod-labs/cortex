@@ -16,6 +16,8 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -23,7 +25,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
-from cortex_cli import init, store  # noqa: E402
+from cortex_cli import init, self_update, store, upgrade  # noqa: E402
+from cortex_cli.semver import Version  # noqa: E402
 from cortex_cli.store import digest  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
@@ -123,12 +126,12 @@ class UpgradeTests(UpgradeTestCase):
         self.assertIn(f"Cortex {OWN}: already on it — nothing to move", proc.out)
         self.assertEqual(snapshot(project), before)
 
-    def test_a_version_newer_than_this_cortex_is_refused_with_the_upgrade_command(self):
+    def test_a_version_newer_than_this_cortex_is_refused_with_the_self_update_command(self):
         project = self.project("9.9.8")
         proc = self.upgrade(project, "9.10.0")
         self.assertEqual(proc.returncode, 1, proc.err)
-        self.assertIn(f"Cortex 9.10.0 is newer than this cortex, {OWN} — upgrade this cortex first:", proc.err)
-        self.assertIn("install", proc.err)
+        self.assertIn(f"Cortex 9.10.0 is newer than this cortex, {OWN} — update this cortex first, then run "
+                      "`cortex upgrade 9.10.0` again:\n    cortex self-update 9.10.0", proc.err)
         self.assertIn('version = "9.9.8"', self.pinned(project))
 
     def test_a_malformed_version_exits_2(self):
@@ -618,8 +621,8 @@ class PinAfterThisCortexTests(UpgradeTestCase):
         before = snapshot(project)
         proc = self.upgrade(project)
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-        self.assertIn(f"this project uses Cortex 9.10.0, newer than this cortex, {OWN} — nothing was changed. Upgrade "
-                      "this cortex to serve it:", proc.err)
+        self.assertIn(f"this project uses Cortex 9.10.0, newer than this cortex, {OWN} — nothing was changed. Update "
+                      "this cortex to serve it:\n    cortex self-update 9.10.0\n", proc.err)
         self.assertIn(f"cortex upgrade {OWN}", proc.err)
         self.assertEqual(snapshot(project), before)
 
@@ -636,6 +639,101 @@ class PinAfterThisCortexTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertIn(f"note: what changes is not said — this cortex, {OWN}, does not serve Cortex 9.10.0\n", proc.err)
         self.assertNotIn("newer than this cortex", proc.err)        # the opposite move, advised
+
+
+class NewerReleaseTests(UpgradeTestCase):
+    """With no VERSION, `cortex upgrade` says when a release newer than the binary is out (§3.5)."""
+
+    def setUp(self):
+        super().setUp()
+        FakeRelease.publish(self.release.root / "download" / "99.0.0", "99.0.0")
+
+    def latest_is(self, version):
+        self.release.redirect("/latest/download/SHA256SUMS", f"{self.release.url}/download/{version}/SHA256SUMS")
+
+    NOTICE = f"Cortex 99.0.0 is out, and this cortex is {OWN}: `cortex self-update`, then `cortex upgrade`, moves " \
+             "the project to it."
+
+    def test_a_newer_release_is_said_last(self):
+        self.latest_is("99.0.0")
+        proc = self.upgrade(self.project(OWN))
+        self.assert_ok(proc)
+        self.assertIn(f"Cortex {OWN}: already on it — nothing to move\n", proc.out)
+        self.assertTrue(proc.out.endswith(f"\n\n{self.NOTICE}\n"), proc.out)
+
+    def test_a_version_named_asks_for_no_release(self):
+        self.latest_is("99.0.0")
+        proc = self.upgrade(self.project(OWN), OWN)
+        self.assert_ok(proc)
+        self.assertNotIn("is out", proc.out)
+        self.assertFalse([path for path in self.release.requested if path.startswith("/latest/")])
+
+    def test_the_latest_not_newer_is_not_said(self):
+        if not (self.release.root / "download" / OWN).exists():         # a build of no release
+            FakeRelease.publish(self.release.root / "download" / OWN, OWN)
+        self.latest_is(OWN)
+        proc = self.upgrade(self.project(OWN))
+        self.assert_ok(proc)
+        self.assertNotIn("is out", proc.out)
+
+    def test_cortex_no_update_check_asks_for_no_release(self):
+        self.latest_is("99.0.0")
+        project = self.project(OWN)
+        self.env["CORTEX_NO_UPDATE_CHECK"] = "1"
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertNotIn("is out", proc.out)
+        self.assertFalse([path for path in self.release.requested if path.startswith("/latest/")])
+        self.env["CORTEX_NO_UPDATE_CHECK"] = ""         # empty is unset
+        self.assertIn(self.NOTICE, self.upgrade(project).out)
+
+    def test_offline_nothing_is_said(self):
+        project = self.project(OWN)
+        self.env["CORTEX_RELEASES_URL"] = "http://127.0.0.1:9"
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertNotIn("is out", proc.out)
+
+
+class NoticeTimeoutTests(unittest.TestCase):
+    def test_the_notice_waits_a_few_seconds_at_most(self):
+        answered = threading.Event()
+        self.addCleanup(answered.set)
+
+        def slow(own):
+            answered.wait(30)
+            return Version("99.0.0")
+
+        out = io.StringIO()
+        started = time.monotonic()
+        with mock.patch.object(self_update, "newer_release", side_effect=slow), \
+                mock.patch.object(self_update, "NOTICE_TIMEOUT", 0.2):
+            upgrade._NewerRelease(Version("9.9.9")).say(out)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertEqual(out.getvalue(), "")
+
+    def test_a_refused_upgrade_waits_for_the_question_before_it_ends(self):
+        # A daemon thread still in its request as Python exits crashed it, -11, on a refusal.
+        asked, answered = threading.Event(), threading.Event()
+        self.addCleanup(answered.set)
+
+        def slow(own):
+            asked.set()
+            answered.wait(30)
+            return None
+
+        def refused(*args, **kwargs):
+            asked.wait(5)
+            threading.Timer(0.3, answered.set).start()
+            raise upgrade.UpgradeError("refused")
+
+        with mock.patch.object(self_update, "newer_release", side_effect=slow), \
+                mock.patch.object(upgrade, "_upgrade", side_effect=refused), \
+                mock.patch.dict(os.environ, {"CORTEX_NO_UPDATE_CHECK": ""}):
+            with self.assertRaises(upgrade.UpgradeError):
+                upgrade.upgrade("/nowhere", None, False, False, None, io.StringIO(), io.StringIO())
+        self.assertTrue(answered.is_set())
+        self.assertFalse([t for t in threading.enumerate() if isinstance(t, upgrade._NewerRelease)])
 
 
 class UpgradeHelpTests(unittest.TestCase):

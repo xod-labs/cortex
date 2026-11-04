@@ -254,7 +254,8 @@ def load_lock(root: str) -> Optional[Lock]:
     except ConfigError as error:
         raise ConfigError(f"{error} — {again}")
     except project.LaterFormatError as error:
-        raise ConfigError(f"{error}: upgrade this cortex — the install script installs the latest")
+        # Said as `cortex sync` says a version too new: the bootstrap has the assistant act on it.
+        raise ConfigError(f"{error}: this cortex is older than the project's — update it:\n    cortex self-update")
     except project.ProjectFileError as error:
         raise ConfigError(f"{error} — {again}")
     return Lock(version=Version(data["version"]), digest=data["digest"])

@@ -16,7 +16,9 @@ The bootstrap files are written first, each whole or not at all.
 With no ``VERSION``, a project pinned after this cortex is refused: a downgrade is named.
 
 ``--dry-run`` says all of it and changes nothing in the project; the store may gain the target.
-The binary is never upgraded here: the install script does that.
+The binary is never upgraded here: ``cortex self-update`` does that, and with no ``VERSION`` this
+command says when a release newer than the binary is out — learnt while it works, a few seconds at
+most, and said by nothing offline. ``CORTEX_NO_UPDATE_CHECK``, set, keeps it from asking.
 """
 
 from __future__ import annotations
@@ -27,15 +29,17 @@ import os
 import stat
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, TextIO, Tuple
 
 from cortex_core import validate as overlay_validator
 from cortex_core.project import shown
 
-from . import config, init, store, sync
+from . import config, init, self_update, store, sync
 from .paths import display, working_directory
 from .semver import Version
+from .version import VERSION
 
 LAYERS = ("roles", "capabilities", "personalities", "workflows")
 TEMPLATES = {"single": "bootstrap-instructions.md", "workspace": "bootstrap-instructions-workspace.md"}
@@ -273,8 +277,44 @@ def _shown_path(path: Path, root: str) -> str:
         return display(str(path))
 
 
+class _NewerRelease(threading.Thread):
+    """The latest release, when it is newer than this binary — asked for while the command works."""
+
+    def __init__(self, own: Version):
+        super().__init__(daemon=True)
+        self.own, self.found = own, None
+        self.start()
+
+    def run(self) -> None:
+        try:
+            self.found = self_update.newer_release(self.own)
+        except Exception:       # a notice: never a traceback in the middle of the upgrade
+            self.found = None
+
+    def say(self, out: TextIO) -> None:
+        self.join(self_update.NOTICE_TIMEOUT)
+        if self.found is not None:
+            out.write(f"\nCortex {self.found} is out, and this cortex is {self.own}: `cortex self-update`, then "
+                      "`cortex upgrade`, moves the project to it.\n")
+
+
 def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: Optional[str],
             out: TextIO, err: TextIO) -> int:
+    asks = wanted is None and not os.environ.get("CORTEX_NO_UPDATE_CHECK")
+    newer = _NewerRelease(Version(VERSION)) if asks else None
+    try:
+        code = _upgrade(cwd, wanted, dry_run, force, named, out, err)
+    except BaseException:
+        if newer is not None:       # a thread left in a request as Python exits can crash it
+            newer.join(self_update.NOTICE_TIMEOUT)
+        raise
+    if newer is not None:
+        newer.say(out)
+    return code
+
+
+def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: Optional[str],
+             out: TextIO, err: TextIO) -> int:
     root = config.find_project(cwd)
     if root is None:
         raise UpgradeError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
@@ -286,11 +326,11 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
         # The default moves a project to this cortex's version, never down: a teammate's older binary
         # would otherwise undo the team's pin.
         raise UpgradeError(f"this project uses Cortex {current}, newer than this cortex, {the_store.own} — nothing was "
-                           f"changed. Upgrade this cortex to serve it:\n    {store.upgrade_command(current)}\nor move the "
+                           f"changed. Update this cortex to serve it:\n    {store.update_command(current)}\nor move the "
                            f"project down to this cortex's version by naming it: cortex upgrade {the_store.own}")
     if target > the_store.own:
-        raise UpgradeError(f"Cortex {target} is newer than this cortex, {the_store.own} — upgrade this cortex first:\n"
-                           f"    {store.upgrade_command(target)}")
+        raise UpgradeError(f"Cortex {target} is newer than this cortex, {the_store.own} — update this cortex first, "
+                           f"then run `cortex upgrade {target}` again:\n    {store.update_command(target)}")
     the_store.check_served(target)
     out.write(f"Project: {display(root)}\n")
     files = _instructions_files(Path(root), named)

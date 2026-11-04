@@ -35,7 +35,7 @@ irm https://raw.githubusercontent.com/xod-labs/cortex/main/install.ps1 | iex
 
 - The binary goes into `~/.cortex/bin` (`%USERPROFILE%\.cortex\bin` on Windows). `install.ps1` adds that directory to your user `PATH`; `install.sh` prints the line to add to your shell profile.
 - When another `cortex` command comes first on `PATH`, the scripts install it as `cortex-ai` instead: use that name in the commands below, or force `cortex` with `--name cortex` (`-Name cortex` for `install.ps1`).
-- Running a script again upgrades the binary. `cortex --version` prints the installed version.
+- `cortex self-update` replaces the binary with the latest release's, checked against its `SHA256SUMS` — `cortex self-update X.Y.Z` with that version's. Running a script again works too, and is the only way for a binary before 1.4.0. It replaces the file it runs from, where it is: a binary kept in a directory named after its version — `/opt/cortex-1.4.0/cortex-ai`, say — gets another version under that name. `cortex --version` prints the installed version.
 
 The spec itself lives in the **store**, `~/.cortex/versions/X.Y.Z`: one read-only directory per version, filled on demand — the binary's own version from itself, any other downloaded once and checked against its release's `SHA256SUMS`. `$CORTEX_HOME` moves `~/.cortex` elsewhere.
 
@@ -83,7 +83,7 @@ Commit `cortex.toml`, `cortex.lock`, the instructions file and the two context f
 cortex sync
 ```
 
-— as they would `npm install`. It puts the pinned version in the store if it is not there yet, checks it against `cortex.lock`, and writes `spec` in their `cortex.local.toml`. Until a developer has run it, the instructions tell the AI tool to ask them to run it, and to go no further.
+— as they would `npm install`. It puts the pinned version in the store if it is not there yet, checks it against `cortex.lock`, and writes `spec` in their `cortex.local.toml`. Until a developer has run it, the instructions have the AI tool run it — saying so, and asking first where the tool is set to ask — and go no further until it succeeded.
 
 `cortex.lock` holds the version and the digest of its spec, one SHA-256 over its files: a spec whose files differ from the ones the team locked is put in the store again, and refused if it still differs. In CI, run `cortex sync --locked`: it never writes the lock, and fails when `cortex.lock` is missing or names another version than `cortex.toml` — a lock nobody committed fails the job instead of being written on the runner.
 
@@ -373,9 +373,9 @@ The PM dispatches directly to the right expert without a template. If the case r
 Yes. `@Hactar` invokes the Lead Backend directly. But going through the PM guarantees prompt optimisation and capability loading.
 
 **Q: Is Cortex updated automatically?**
-No. A project stays on the `version` its `cortex.toml` pins:
-- **The project:** run `cortex upgrade` — `--dry-run` first says what changes and checks your overlays. It writes `version` in `cortex.toml` and syncs. Each teammate runs `cortex sync` once they pull the change — `cortex validate` refuses a spec synced for another version.
-- **The binary:** run the install script again. A binary serves every version from 1.0.0 up to its own; a project pinned to a newer one is refused, with the command that upgrades the binary.
+The machine follows the project; the project moves only when the team moves it. A project stays on the `version` its `cortex.toml` pins:
+- **The project:** run `cortex upgrade` — `--dry-run` first says what changes and checks your overlays. It writes `version` in `cortex.toml` and syncs. Each teammate syncs once they pull the change — their assistant runs `cortex sync` itself when it finds the spec of another version than `cortex.toml`'s, saying so, and `cortex validate` refuses a spec synced for another version.
+- **The binary:** `cortex self-update`. A binary serves every version from 1.0.0 up to its own; a project pinned to a newer one is refused, with the `cortex self-update` command that installs it — which the assistant runs too, before it syncs. With no version given, `cortex upgrade` says when a release newer than the binary is out.
 
 Check the [changelog](../changelog/) before updating in production.
 

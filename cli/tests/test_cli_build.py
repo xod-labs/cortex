@@ -188,6 +188,13 @@ class FetchKnownSpecsTests(unittest.TestCase):
         self.assertEqual(namespace["KNOWN"], {"1.0.0": self.A, "1.1.0": self.B})
 
 
+class StampTests(unittest.TestCase):
+    def test_the_stamp_names_the_version_and_the_target(self):
+        namespace = {}
+        exec(build.stamp_module("1.4.0", "windows-x86_64"), namespace)
+        self.assertEqual((namespace["VERSION"], namespace["TARGET"]), ("1.4.0", "windows-x86_64"))
+
+
 class VersionReportTests(unittest.TestCase):
     """``cortex --version --verbose`` says which spec archives the binary knows — what CI checks
     of each binary it builds."""
