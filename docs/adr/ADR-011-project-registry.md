@@ -56,7 +56,7 @@ path = "/home/dev/Documents/Work/Personal/xod-labs"
 - **`format`** is the file's own format, 1 here. A later format is refused as a later `cortex.lock` is: this cortex is older, and `cortex self-update` updates it.
 - **Each `[[project]]`** has exactly two keys:
   - `name` matches `[a-z0-9][a-z0-9._-]{0,63}`, and is unique;
-  - `path` is absolute, the project's root, written as the shell names it — a link is not resolved — and unique once resolved: two entries never name the same directory.
+  - `path` is absolute, the project's root, written as the shell names it — a link is not resolved — and unique: the grammar refuses two entries that write the same directory once normalised (`.`, `..`, a final separator, case where the system ignores it), and `cortex project add` compares paths resolved, so that it never lists a directory twice through a link.
 - **The grammar is the core's** (`cortex_core.project`), as for the three files of a project: every key is required, and an unknown key is an error. The cockpit and the runtime read the file through it.
 - **Nothing is cached.** A project's version, layout and theme are read from the project when needed. A second copy would disagree with it after the first `git pull`.
 - **Writes are whole or not at all**: a temporary file beside it, then a rename. They are taken one at a time, under a lock on a file beside it, so two syncs that register at once both land.
@@ -72,18 +72,19 @@ cortex project check
 
 - **`add`** registers the project at `PATH`, by default the one of the current directory — the nearest `cortex.toml`, as `cortex sync` finds it.
   - A directory with no `cortex.toml` is refused: `cortex init` makes one.
-  - The name is `--name`, or the root's directory name, lowered, with any other character turned to `-`, and `-2`, `-3`… added when the name is taken.
+  - The name is `--name`, or the root's directory name as the shell names it, lowered, with any other character turned to `-`, the `.`, `_` and `-` it starts with dropped, cut to 64 characters, `project` when nothing is left — and `-2`, `-3`… added when the name is taken.
   - A path already listed is said, with its name, and nothing changes. `--name` with a name another path holds is refused.
 - **`list`** gives, for each entry, in name order: its name, its path, the version it pins, the version this machine reads now (the `spec` of its `cortex.local.toml`), and its state:
   - `ok`;
   - `missing` — no directory there;
   - `no project` — a directory without `cortex.toml`;
-  - `unreadable` — its files cannot be read, with why.
+  - `unreadable` — its directory or its files cannot be read, or this cortex refuses them, with why; its versions are given when they can still be read, as `cortex prune` reads them.
 
-  **`--json`** prints the same as one JSON array of objects — `name`, `path`, `state`, `pinned`, `reads`, `layout` — with `null` for what is not known. It is the cockpit's entry point (#46). Its keys only grow within `format = 1`.
+  **`--json`** prints the same as one JSON array of objects — `name`, `path`, `state`, `pinned`, `reads`, `layout` and `why`, what cannot be read of an `unreadable` one — with `null` for what is not known. `layout` is read from the marker of the project's instructions file (ADR-010 §3.1), `null` without one or when two disagree. It is the cockpit's entry point (#46). Its keys only grow within `format = 1`.
 - **`remove`** drops an entry, by name or by path. It never touches the project's files.
 - **`check`** says each entry that is not `ok`, and exits 1 if there is one. It removes nothing, and names `cortex project remove` and `cortex prune`, which do.
 - **No registry** is an empty list: `list` says so, and `check` exits 0.
+- **Exit codes**: 2 for a malformed `--name`, or a `PATH` that is no directory; 1 for the other refusals — no `cortex.toml`, a name taken, nothing registered under that key, a registry refused or that cannot be written.
 
 ### 3.3 `cortex init` and `cortex sync` register the project
 
@@ -101,7 +102,7 @@ cortex prune [DIR...] [--keep VERSION]... [--dry-run]
 
 - **With no `DIR`**, the projects are the registry's. The versions kept are the same as with directories (ADR-010 §3.6): what each project pins and reads now, the binary's own version, and each `--keep`.
 - **An entry whose project is gone** — `missing`, or `no project` — is dropped from the registry, and said: *acme: /home/dev/code/acme is gone — dropped from the registry*. Its version is no longer kept for it. A project on a drive that is not mounted is gone too: its next sync registers it again, and gets its version back, checked against its lock.
-- **An `unreadable` entry is kept**, and named. Its versions are not known, as a `cortex.toml` that cannot be read under a `DIR` (ADR-010 §3.6).
+- **An `unreadable` entry is kept**, and named. Its versions are kept when they can be read, as under a `DIR`, and not known otherwise (ADR-010 §3.6).
 - **An empty registry, and no `DIR`,** exits 2, as before: there is nothing to keep, and pruning would remove every version.
 - **With `DIR...`**, nothing changes from 1.4.0: the projects are those under the directories, and the registry is neither read nor written.
 - **`--dry-run`** lists, removes nothing, and drops no entry.
@@ -229,4 +230,12 @@ Acceptance criteria:
 
 ## 9. Amendments
 
-None yet.
+The record was *Accepted*, not yet implemented, when these were made: the body above already says each.
+
+### While phase 1 was implemented (2026-11-04)
+
+- **Two spellings of one directory** (§3.1): the grammar, which every reader shares, compares paths as text, normalised; `cortex project add` compares them resolved. A link appearing never makes the file unreadable, nor locks out `cortex project remove`.
+- **The default name** (§3.2) follows the shell's spelling of the root — a link's name, not its target's — and is cut and cleaned to a valid name.
+- **`unreadable` is wider** (§3.2, §3.4): a directory that cannot be searched is `unreadable`, never `missing`, so `prune` does not drop it; files this cortex refuses are `unreadable` too. Their versions are given, and kept, when they can be read loosely.
+- **`--json` has a `why`**, and **`layout`** comes from the bootstrap marker, since `cortex.toml` does not record it (§3.2).
+- **The exit codes** of `cortex project` are written down (§3.2).
