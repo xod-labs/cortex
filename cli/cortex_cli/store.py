@@ -15,6 +15,11 @@ A download is checked against ``SHA256SUMS``, which comes from where the archive
 proves it whole, not who published it. A built binary also carries the checksum of every spec
 archive released before it, taken when it was built: a spec archive of those versions replaced
 since — a release overwritten — is refused, whatever its ``SHA256SUMS`` says.
+
+A project's ``cortex.lock`` names the digest of the spec it resolved (ADR-010 §3.2): one SHA-256
+over the files of a version's three trees, the same however the version reached the store. A
+version is removed — put in again, or pruned — by a rename out of its name first, so that a sync
+running meanwhile finds it whole or not at all.
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Iterator, Optional
 
 from . import net
 from .semver import FIRST_SPEC_ARCHIVE, Version
@@ -137,6 +142,52 @@ def remove_tree(root: Path) -> None:
     shutil.rmtree(root)
 
 
+def digest(directory: Path) -> str:
+    """The digest of the spec at ``directory`` (ADR-010 §3.2): ``sha256sum``'s line for each file of
+    its three trees — the path relative to ``directory``, with ``/`` — in the order of the paths'
+    UTF-8 bytes, then the SHA-256 of those lines. The files' bytes only: the same version gives
+    the same digest, downloaded or written from this binary, on any system. A tree missing — a
+    version removed meanwhile — has no digest: the empty set's would be locked."""
+    missing = [f"{tree}/" for tree in SPEC_TREES if not (directory / tree).is_dir()]
+    if missing:
+        raise StoreError(f"{directory} holds no {', '.join(missing)} — no whole spec to take the digest of")
+    try:
+        return digest_of({path.relative_to(directory).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                          for path in _files(directory)})
+    except FileNotFoundError as error:
+        raise StoreError(f"{directory} lost {error.filename} while its digest was taken — no whole spec to take the "
+                         "digest of")
+
+
+def _files(directory: Path) -> Iterator[Path]:
+    """The regular files of the spec's three trees at ``directory``. A file or a tree that goes while
+    they are walked — a version removed meanwhile — is an error, which ``Path.rglob`` kept silent."""
+    def gone(error: OSError) -> None:
+        raise error
+
+    for tree in SPEC_TREES:
+        for parent, _, names in os.walk(directory / tree, onerror=gone):
+            for name in names:
+                path = Path(parent) / name
+                try:
+                    regular = stat.S_ISREG(os.stat(path).st_mode)
+                except FileNotFoundError:
+                    if os.path.lexists(path):       # a link to nothing: no file of the spec
+                        continue
+                    raise
+                if regular:
+                    yield path
+
+
+def digest_of(files: Dict[str, str]) -> str:
+    """The digest of a spec from the SHA-256 of each of its files, by path — as a copy's manifest
+    holds them. A path outside the three trees is not the spec's."""
+    total = hashlib.sha256()
+    for rel, sha in sorted((rel.encode("utf-8"), sha) for rel, sha in files.items() if rel.split("/")[0] in SPEC_TREES):
+        total.update(sha.encode("ascii") + b"  " + rel + b"\n")
+    return f"sha256:{total.hexdigest()}"
+
+
 # --------------------------------------------------------------------------- #
 # The store
 # --------------------------------------------------------------------------- #
@@ -155,6 +206,73 @@ class Store:
 
     def path(self, version: Version) -> Path:
         return self.versions / str(version)
+
+    def digest(self, version: Version) -> str:
+        return digest(self.path(version))
+
+    def _aside(self, version: Version, why: str = "removed") -> Path:
+        """Rename ``version`` out of its name — in the same directory, so that a read-only one moves
+        too: a sync meanwhile finds it whole or absent. Dated now, so that no other sync takes it
+        for a staging a day old. ``why``: ``removed``, on its way out; ``kept``, whole, while
+        ``replace`` has the version again."""
+        aside = self.versions / f".{version}-{why}-{os.getpid()}-{time.time_ns()}"
+        os.rename(self.path(version), aside)
+        try:
+            os.utime(aside)
+        except OSError:
+            pass
+        return aside
+
+    @staticmethod
+    def _discard(aside: Path) -> None:
+        try:
+            remove_tree(aside)
+        except FileNotFoundError:   # another sync's tidying took it first
+            pass
+
+    def remove(self, version: Version) -> None:
+        """Take ``version`` out of the store. A removal cut short leaves a staging, which the store
+        removes a day later."""
+        self._discard(self._aside(version))
+
+    def replace(self, version: Version) -> str:
+        """Put ``version`` in the store again, as ``ensure`` would — its files are not those a
+        project locked. Until the new one is in place the old one is kept aside, and put back if
+        the new one cannot be had: offline, a download refused."""
+        if not self.path(version).exists():
+            return self.ensure(version)
+        aside = self._aside(version, "kept")
+        try:
+            how = self.ensure(version, put_back=False)
+        except BaseException:
+            if not self.path(version).exists() and aside.exists():
+                os.rename(aside, self.path(version))
+            raise
+        # Renamed before it is removed: what is named "kept" is always whole.
+        removed = aside.with_name(aside.name.replace("-kept-", "-removed-", 1))
+        try:
+            os.rename(aside, removed)
+        except FileNotFoundError:   # another sync put it back meanwhile, and found this one in place
+            return how
+        self._discard(removed)
+        return how
+
+    def _put_back(self, version: Version) -> bool:
+        """Put back what a ``replace`` cut short left aside, whole — the latest it left: the store
+        as it was before that replace. ``False`` when there is none."""
+        def when(aside: Path) -> int:
+            stamp = aside.name.rsplit("-", 1)[-1]
+            return int(stamp) if stamp.isdigit() else 0
+
+        for aside in sorted(self.versions.glob(f".{version}-kept-*"), key=when, reverse=True):
+            try:
+                os.rename(aside, self.path(version))
+            except OSError:
+                if self.has(version):   # another sync put it back first
+                    return True
+                continue
+            return True
+        return False
 
     def has(self, version: Version) -> bool:
         """A version is there when its three trees are — an empty directory is none."""
@@ -186,9 +304,10 @@ class Store:
             raise StoreError(f"Cortex {version} has no spec archive: the first one is {FIRST_SPEC_ARCHIVE}, "
                              "the release that ships the cortex command — pin that version or a later one")
 
-    def ensure(self, version: Version) -> str:
+    def ensure(self, version: Version, put_back: bool = True) -> str:
         """Make sure ``version`` is in the store; say how it got there — ``"stored"``,
-        ``"written"`` from this binary, or ``"downloaded"``."""
+        ``"written"`` from this binary, ``"downloaded"``, or ``"put back"``: it could not be
+        downloaded, and a ``replace`` cut short had left it aside."""
         self.check_served(version)
         if self.has(version):
             self._tidy(version)
@@ -205,7 +324,13 @@ class Store:
             else:
                 raise StoreError(f"this cortex carries no spec of its own version, {version}")
             return "written"
-        self._download(version)
+        try:
+            self._download(version)
+        except StoreError:
+            if put_back and self._put_back(version):
+                self._tidy(version)
+                return "put back"
+            raise
         return "downloaded"
 
     def _download(self, version: Version) -> None:
@@ -265,7 +390,8 @@ class Store:
 
 def _copy_trees(source: Path, staging: Path) -> None:
     for tree in SPEC_TREES:
-        shutil.copytree(source / tree, staging / tree)
+        # A checkout's theme marker is its developer's choice, never the spec's: a copy leaves it out too.
+        shutil.copytree(source / tree, staging / tree, ignore=shutil.ignore_patterns(".active-*"))
 
 
 def _extract(archive: Path, staging: Path) -> None:

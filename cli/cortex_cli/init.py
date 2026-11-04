@@ -358,6 +358,10 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                      if claude_access is not None and claude_access != project.claude_access else {})}
     project_text = config.render_project(str(root), values) if values else None
     personality = (theme if theme is not None else project.theme) != "none"
+    if not options.source:
+        # cortex.lock, read as sync reads it: a spec it does not name, or a file that is no lock,
+        # stops init here, before its first write — as sync stops before its own.
+        sync.check_lock(str(root), version, the_store, out)
 
     # Now the writes.
     root.mkdir(parents=True, exist_ok=True)

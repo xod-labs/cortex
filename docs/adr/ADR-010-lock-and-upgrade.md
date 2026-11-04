@@ -100,6 +100,8 @@ After it has the pinned version in the store, `cortex sync`:
 
 - **`--from PATH`** syncs a checkout, which has no version: the lock is neither read nor written, and sync says so.
 - **The digest is computed from the store**, once per sync: a version is under a megabyte, and the cost is that of reading it.
+- **A copy follows the store**: in `copy` mode, a `cortex/` whose files are not the store's — made from a store the lock has since refused — is copied again.
+- **A version put in the store again** is renamed aside first, and put back if the new one cannot be had — offline, a download refused.
 - **`cortex init` writes the lock** through the sync it runs.
 
 ### 3.4 `cortex validate` and the lock
@@ -109,6 +111,8 @@ After it has the pinned version in the store, `cortex sync`:
 - no `cortex.lock` — *run `cortex sync`, then commit it*;
 - a `cortex.lock` of another version than `cortex.toml`'s;
 - a spec whose digest is not the lock's.
+
+Only a spec of a known version is checked — the store's, a link to it, or a copy whose `.synced` names its version: a checkout synced with `--from` has no version, and no lock.
 
 They are warnings because a later binary warns where an earlier one passed, within a major version (ADR-008 §9): a project of 1.3 has no lock, and must still validate. `--strict` fails on them, so a CI that runs it — and installs the binary of the version `cortex.toml` pins — checks the lock.
 

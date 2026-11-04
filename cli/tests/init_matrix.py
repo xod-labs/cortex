@@ -28,7 +28,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 EXPECTED = HERE / "fixtures" / "init" / "expected.json"
 SPEC_TREES = ("agents", "templates", "docs")
-OWN_FILES = ("cortex.toml", "cortex.local.toml", ".gitignore")
+OWN_FILES = ("cortex.toml", "cortex.local.toml", "cortex.lock", ".gitignore")   # the lock's digest is the spec's
 CAPTURE_VERSION = "9.9.9"
 
 # name -> options, services, what the project holds before

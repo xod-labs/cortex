@@ -1,5 +1,5 @@
 """The grammar of cortex.toml and cortex.local.toml — ADR-008 §3.4, one definition for the
-command and the runtime."""
+command and the runtime — and of cortex.lock, ADR-010 §3.2."""
 
 import sys
 import unittest
@@ -65,6 +65,35 @@ class FileTests(unittest.TestCase):
             project.check_project({"version": "1.0.0", "theme": "h2g2", "claude_entry": "/x"})
         with self.assertRaisesRegex(project.ProjectFileError, 'unknown key "version"'):
             project.check_local({"version": "1.0.0"})
+
+
+class LockTests(unittest.TestCase):
+    DIGEST = "sha256:" + "0123456789abcdef" * 4
+
+    def test_a_lock(self):
+        project.check_lock({"format": 1, "version": "1.4.0", "digest": self.DIGEST})
+
+    def test_what_a_lock_refuses(self):
+        good = {"format": 1, "version": "1.4.0", "digest": self.DIGEST}
+        for change, fragment in (({"extra": "x"}, 'unknown key "extra" — cortex.lock takes format, version and digest only'),
+                                 ({"format": "1"}, '"format" must be a positive integer'),
+                                 ({"format": True}, '"format" must be a positive integer'),
+                                 ({"format": 0}, '"format" must be a positive integer'),
+                                 ({"version": "1.4"}, 'version "1.4" is no version'),
+                                 ({"digest": self.DIGEST.upper()}, "is no digest"),
+                                 ({"digest": "sha1:" + "0" * 40}, "is no digest"),
+                                 ({"digest": self.DIGEST + "\n"}, "is no digest")):
+            with self.subTest(change=change):
+                with self.assertRaisesRegex(project.ProjectFileError, fragment):
+                    project.check_lock({**good, **change})
+        for key in project.LOCK_KEYS:
+            with self.subTest(missing=key):
+                with self.assertRaisesRegex(project.ProjectFileError, f'"{key}" is required'):
+                    project.check_lock({k: v for k, v in good.items() if k != key})
+
+    def test_a_later_format_is_its_own_error(self):
+        with self.assertRaisesRegex(project.LaterFormatError, "format 2 is written by a later Cortex"):
+            project.check_lock({"format": 2, "version": "1.4.0", "digest": self.DIGEST})
 
 
 if __name__ == "__main__":
