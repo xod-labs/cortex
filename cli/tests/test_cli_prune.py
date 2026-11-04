@@ -319,8 +319,8 @@ class InProcessTests(unittest.TestCase):
         project = self.tmp / "app"
         project.mkdir()
         (project / "cortex.toml").write_text(f'version = "{VERSION}"\ntheme = "h2g2"\n', encoding="utf-8")
-        real = store.hashes
-        for when in ("before", "after"):
+        real, read = store.hashes, store.digest
+        for when in ("first", "before", "after"):
             with self.subTest(removed=when):
                 def pruned(directory, when=when):
                     if when == "after":
@@ -328,7 +328,12 @@ class InProcessTests(unittest.TestCase):
                     store.Store(self.home).remove(Version(VERSION))
                     return found if when == "after" else real(directory)
 
-                with mock.patch.object(store, "hashes", pruned):
+                def gone_first(directory):
+                    store.Store(self.home).remove(Version(VERSION))
+                    return read(directory)
+
+                patched = ("digest", gone_first) if when == "first" else ("hashes", pruned)
+                with mock.patch.object(store, *patched):
                     with self.assertRaisesRegex(store.StoreError, f"Cortex {VERSION} left the store while this command "
                                                                   "read it .* Nothing of the project was changed"):
                         sync.sync(str(project), None, None, io.StringIO(), io.StringIO())

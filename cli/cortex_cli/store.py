@@ -222,6 +222,10 @@ class Store:
             found = digest(self.path(version))
         except FileNotFoundError:
             raise removed
+        except StoreError:
+            if not self.has(version):       # gone before it was read: no tree to read
+                raise removed
+            raise
         if not self.has(version):
             raise removed
         return found
