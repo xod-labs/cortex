@@ -90,9 +90,11 @@ cortex project check
 
 - **After it succeeded**, `cortex init` or `cortex sync` adds the project's root when the registry does not list it, named as `add` names it, and says so once: *registered as acme — `cortex project list` lists this machine's projects*.
 - **It never renames or moves an entry.** A project moved on disk is registered again at its new path, under a free name. Its old entry is then `missing`, and the next `cortex prune` or `cortex project remove` drops it.
-- **A registry that cannot be written is a warning**, never a failed sync: the project is synced, and it is not listed.
-- **`CORTEX_NO_REGISTER`**, set to anything but an empty value, keeps both commands from writing the registry. It is for a CI runner, or a throwaway project, though an ephemeral runner's registry goes with it.
-- **`cortex sync --from PATH` registers too.** The project is a project: the source of its spec does not matter here.
+- **A registry that cannot be read or written is a warning**, never a failed sync: the project is synced, and it is not listed.
+- **`CORTEX_NO_REGISTER`**, set to anything but an empty value, keeps both commands from reading or writing the registry. It is for a CI runner, or a throwaway project, though an ephemeral runner's registry goes with it.
+- **`cortex sync --from PATH` registers too.** The project is a project: the source of its spec does not matter here. So does `cortex upgrade`, which syncs.
+- **`cortex init` registers after all of its work**, not inside the sync it runs: an init that fails after its sync registers nothing.
+- **A project already listed costs one read**, without the registry's lock: nothing is written, and nothing waits.
 
 ### 3.4 `cortex prune` with no `DIR`
 
@@ -249,3 +251,9 @@ After the counter-review of 2026-11-05:
 - **Paths are compared as written first** (§3.1): a project listed already is found without resolving the other entries' paths, so a share that does not answer no longer holds a sync of a listed project. A project not listed yet still has every path resolved, to find it under another spelling: registering it waits for that share.
 - **A `$PWD` that is not written plainly** — a `..`, a `.`, a final `/` — is ignored, as `pwd -L` ignores it, so a path is never written so.
 - **A write killed before its rename** left its temporary file: the next write sweeps it, under the lock. On Windows, a rename refused while a reader has the file open is tried again, two seconds at most.
+
+### While phase 2 was implemented (2026-11-04)
+
+- **`cortex upgrade` registers too** (§3.3), since it syncs; and `cortex init` registers after all of its work, not inside its sync.
+- **A registry that cannot be read**, not only one that cannot be written, is a warning (§3.3): a later format, or a file the grammar refuses, never fails a sync.
+- **`CORTEX_NO_REGISTER` stops reads too** (§3.3), so that a broken registry draws no warning where registration is off.
