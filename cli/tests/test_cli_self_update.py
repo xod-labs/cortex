@@ -538,6 +538,23 @@ class ReplaceTests(unittest.TestCase):
         binary.tidy(self.binary, aside=False)
         self.assertEqual(self.names(), ["cortex"])     # and the setup's .cortex.new-1 too
 
+    def test_a_new_binary_is_left_for_an_hour(self):
+        young, old = self.bin / ".cortex.new-young", self.bin / ".cortex.new-old"
+        for path, minutes in ((young, 59), (old, 61), (self.new, 59)):
+            path.write_bytes(b"x")
+            then = time.time() - minutes * 60
+            os.utime(path, (then, then))
+        binary.tidy(self.binary, aside=False)
+        self.assertEqual(self.names(), [".cortex.new-1", ".cortex.new-young", "cortex"])
+
+    def test_tidy_removes_only_the_names_replace_gives(self):
+        for name in ("cortex.old", "cortex.old-12-345", "CORTEX.OLD", "cortex.old-config.toml", "cortex.older",
+                     "cortex.old.bak"):
+            (self.bin / name).write_bytes(b"x")
+        aged(self.new)
+        binary.tidy(self.binary, aside=True)
+        self.assertEqual(self.names(), ["cortex", "cortex.old-config.toml", "cortex.old.bak", "cortex.older"])
+
     def test_tidy_leaves_the_new_binary_of_a_self_update_at_work(self):
         binary.tidy(self.binary, aside=True)
         self.assertEqual(self.names(), [".cortex.new-1", "cortex"])

@@ -11,12 +11,15 @@ next start removes it — with the new binary a self-update could not remove aft
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from pathlib import Path
 from typing import Dict, Optional
 
-# A new binary younger than this may be another self-update's, still downloading or running it.
+# Windows renames the binary it replaces aside, as it cannot overwrite one that runs.
+ASIDE = os.name == "nt"
+# A new binary younger than this may be another self-update's, still writing or running it.
 STALE = 3600
 
 
@@ -42,7 +45,7 @@ def environment() -> Dict[str, str]:
     return env
 
 
-def replace(new: Path, binary: Path, aside: bool = os.name == "nt") -> None:
+def replace(new: Path, binary: Path, aside: bool = ASIDE) -> None:
     """Put ``new`` in the place of ``binary``. With ``aside`` — on Windows, where a running
     executable can be renamed but not overwritten — the old one is renamed ``NAME.old`` first, and
     put back if the new one cannot take its name.
@@ -67,19 +70,22 @@ def replace(new: Path, binary: Path, aside: bool = os.name == "nt") -> None:
         raise
 
 
-def tidy(binary: Optional[Path] = None, aside: bool = os.name == "nt") -> None:
+def tidy(binary: Optional[Path] = None, aside: bool = ASIDE) -> None:
     """Remove what a self-update left beside the binary: with ``aside``, the old one renamed aside,
     once it no longer runs; and a new one it could not remove, or was killed before it installed —
     once it is an hour old, as a younger one may be another self-update's, at work. A file still in
     use stays, until a later start. Without ``aside`` — on Linux and macOS — a ``NAME.old`` is
-    nobody's leftover, and may be someone's copy: it stays."""
+    nobody's leftover, and may be someone's copy: it stays. Only the names ``replace`` gives are
+    removed — ``NAME.old`` and ``NAME.old-PID-NS``, in any case, as Windows reads them — never
+    ``NAME.old.bak`` or ``NAME.older``."""
     binary = binary or running_binary()
     if binary is None:
         return
     try:
         found = [(entry, True) for entry in binary.parent.glob(f".{binary.name}.new-*")]
         if aside:
-            found += [(entry, False) for entry in binary.parent.glob(binary.name + ".old*")]
+            renamed = re.compile(re.escape(binary.name) + r"\.old(?:-\d+-\d+)?", re.IGNORECASE)
+            found += [(entry, False) for entry in binary.parent.iterdir() if renamed.fullmatch(entry.name)]
         for entry, new in found:
             try:
                 if new and time.time() - entry.stat().st_mtime < STALE:
