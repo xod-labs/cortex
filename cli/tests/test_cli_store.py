@@ -446,6 +446,50 @@ class DigestTests(unittest.TestCase):
                 for name, text in (("a.md", b"A\n"), ("b.md", b"B\n")):
                     (roles / name).write_bytes(text)
 
+    def downloading(self, state):
+        """A store that downloads Cortex 2.0.0 from a release in this process — none while
+        ``state["online"]`` is false."""
+        archive = spec_archive(self.tmp, "2.0.0").read_bytes()
+        sums = f"{hashlib.sha256(archive).hexdigest()}  cortex-spec.tar.gz\n".encode()
+
+        def fetch(url, limit):
+            if not state["online"]:
+                raise net.DownloadError(f"{url}: no network")
+            return sums if url.endswith("SHA256SUMS") else archive
+
+        return store.Store(home=self.tmp / "f", own_version="3.0.0", embedded=self.tmp / "unused.tar.gz",
+                           fetch=fetch, known={})
+
+    def test_what_a_replace_set_aside_is_renamed_removed_before_it_is_deleted(self):
+        # Named "kept", an aside is whole: one half deleted must never be taken for it, and put back.
+        the_store, version = self.downloading({"online": True}), Version("2.0.0")
+        the_store.ensure(version)
+        seen, discard = [], the_store._discard
+
+        def deleting(aside):
+            seen.append((aside.name, [p.name for p in the_store.versions.glob(".2.0.0-kept-*")]))
+            return discard(aside)
+
+        with mock.patch.object(the_store, "_discard", deleting):
+            the_store.replace(version)
+        self.assertEqual(len(seen), 1)
+        self.assertIn("-removed-", seen[0][0])
+        self.assertEqual(seen[0][1], [])
+
+    def test_of_two_asides_the_latest_is_put_back(self):
+        # Two replaces cut short: the later one set aside the store as it last was.
+        state = {"online": True}
+        the_store, version = self.downloading(state), Version("2.0.0")
+        the_store.ensure(version)
+        the_store._aside(version, "kept")
+        the_store.ensure(version)
+        latest = the_store._aside(version, "kept")
+        store.make_writable(latest)
+        (latest / "agents" / "latest.md").write_bytes(b"the latest\n")
+        state["online"] = False
+        self.assertEqual(the_store.ensure(version), "put back")
+        self.assertTrue((the_store.path(version) / "agents" / "latest.md").is_file())
+
     def test_a_version_a_replace_cut_short_left_aside_is_put_back_offline(self):
         # Killed while it had the version again, a sync left it aside: offline, the next finds it.
         archive = spec_archive(self.tmp, "2.0.0").read_bytes()
