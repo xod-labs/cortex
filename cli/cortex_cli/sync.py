@@ -687,22 +687,26 @@ def unswap(target: Path, aside: Optional[Path]) -> None:
 # --------------------------------------------------------------------------- #
 
 def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
-         claude_access: Optional[bool] = None, notes: bool = True) -> None:
+         claude_access: Optional[bool] = None, notes: bool = True, locked: bool = False) -> None:
     """Sync the project at or above ``cwd``. ``notes`` off, what git ignores is left to the
-    caller — ``cortex init`` writes .gitignore once ``cortex/`` has its final form."""
+    caller — ``cortex init`` writes .gitignore once ``cortex/`` has its final form. ``locked``,
+    ``cortex.lock`` is never written: a sync that would write it stops."""
     root = config.find_project(cwd)
     if root is None:
         raise SyncError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
                         "a Cortex project")
     with project_lock(Path(root), err):
-        _sync(root, mode, source, out, err, claude_access, notes)
+        _sync(root, mode, source, out, err, claude_access, notes, locked)
 
 
-def check_lock(root: str, version: store.Version, the_store: store.Store, out: TextIO) -> Tuple[str, Optional[str]]:
+def check_lock(root: str, version: store.Version, the_store: store.Store, out: TextIO,
+               locked: bool = False) -> Tuple[str, Optional[str]]:
     """``cortex.lock`` against ``version`` in the store (ADR-010 §3.3), before anything of the
     project changes: the digest of the spec, and what to say of the lock to write — ``None`` when it
     stays as it is. A spec whose files are not those the project locked is put in the store again,
-    once: still different, the release is not the one the team locked, and it is refused."""
+    once: still different, the release is not the one the team locked, and it is refused.
+    ``locked`` — ``cortex sync --locked``, in a project's CI — a lock to write is refused instead:
+    the one committed must already be the pin's."""
     lock = config.load_lock(root)
     digest = the_store.digest(version)
     if lock is not None and lock.version == version:
@@ -715,11 +719,15 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
                             "this is not the release the project locked. Nothing of the project was changed")
         out.write(f"Cortex {version}: put in the store again — its files were not those {config.LOCK_FILE} names\n")
         return digest, None
+    if locked:
+        why = (f"no {config.LOCK_FILE}" if lock is None else
+               f"{config.LOCK_FILE} names Cortex {lock.version}, and {config.PROJECT_FILE} pins {version}")
+        raise SyncError(f"--locked: {why} — `cortex sync` writes it, then commit it. Nothing of the project was changed")
     return digest, ("written" if lock is None else f"Cortex {version}, where it named {lock.version}")
 
 
 def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
-          claude_access: Optional[bool], notes: bool) -> None:
+          claude_access: Optional[bool], notes: bool, locked: bool = False) -> None:
     project = config.load(root)
     out.write(f"Project: {display(root)}\n")
     if claude_access is not None:
@@ -747,7 +755,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
                 "put back": "put back in the store as it was — a sync cut short had set it aside, and it could "
                             "not be downloaded again"}[how]
         out.write(f"Cortex {project.version}: {said} — {display(str(spec_source))}\n")
-    digest, lock = (None, None) if source is not None else check_lock(root, project.version, the_store, out)
+    digest, lock = (None, None) if source is not None else check_lock(root, project.version, the_store, out, locked)
 
     # Everything is prepared and checked before anything of the project moves: the new
     # cortex.local.toml, the new link or copy beside cortex/. Then one rename puts it in place.
@@ -918,6 +926,9 @@ def run(args: List[str]) -> int:
                        help="copy it into cortex/, read-only")
     parser.add_argument("--from", dest="source", metavar="PATH",
                         help="use a checkout of Cortex instead of the store: no version is checked")
+    parser.add_argument("--locked", action="store_true",
+                        help="never write cortex.lock: stop when it is missing, or names another version than "
+                             "cortex.toml — for a project's CI, before `cortex validate --strict`")
     access = parser.add_mutually_exclusive_group()
     access.add_argument("--claude-access", dest="claude_access", action="store_const", const=True,
                         help="let Claude Code read the spec without asking, from now on, for you: "
@@ -925,8 +936,11 @@ def run(args: List[str]) -> int:
     access.add_argument("--no-claude-access", dest="claude_access", action="store_const", const=False,
                         help="stop it: claude_access = false in cortex.local.toml")
     options = parser.parse_args(args)
+    if options.locked and options.source:
+        parser.error("--locked checks cortex.lock, and --from reads none: a checkout has no version")
     try:
-        sync(working_directory(), options.mode, options.source, sys.stdout, sys.stderr, options.claude_access)
+        sync(working_directory(), options.mode, options.source, sys.stdout, sys.stderr, options.claude_access,
+             locked=options.locked)
     except (config.ConfigError, store.StoreError, SyncError) as error:
         return failed("cortex sync", str(error))
     except OSError as error:

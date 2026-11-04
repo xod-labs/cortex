@@ -999,6 +999,40 @@ class CortexLockTests(SyncTestCase):
                       "could not be downloaded again", proc.out)
         self.assertEqual(sorted(p.name for p in (self.home / "versions").iterdir()), ["9.9.8"])
 
+    def test_locked_never_writes_the_lock(self):
+        # A project's CI: `cortex sync --locked && cortex validate --strict`.
+        project = self.project()
+        proc = self.sync(project, "--locked")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn("--locked: no cortex.lock — `cortex sync` writes it, then commit it. Nothing of the project "
+                      "was changed", proc.err)
+        self.assertFalse((project / "cortex.lock").exists())
+        self.assertFalse((project / "cortex.local.toml").exists())
+        self.write_lock(project, version="9.9.8", digest_=digest(self.stored()))
+        before = self.lock(project)
+        proc = self.sync(project, "--locked")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn(f"--locked: cortex.lock names Cortex 9.9.8, and cortex.toml pins {OWN} — `cortex sync` writes "
+                      "it, then commit it", proc.err)
+        self.assertEqual(self.lock(project), before)
+        self.assertFalse((project / "cortex.local.toml").exists())
+        self.write_lock(project)                    # the pin's version, not its files: as without --locked
+        proc = self.sync(project, "--locked")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn("this is not the release the project locked", proc.err)
+        (project / "cortex.lock").unlink()
+        self.assert_ok(self.sync(project))
+        before = (project / "cortex.lock").read_bytes()
+        proc = self.sync(project, "--locked")
+        self.assert_ok(proc)
+        self.assertNotIn("cortex.lock", proc.out)
+        self.assertEqual((project / "cortex.lock").read_bytes(), before)
+
+    def test_locked_and_a_checkout_are_a_bad_argument(self):
+        proc = self.sync(self.project(), "--locked", "--from", str(harness.REPO))
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("--locked checks cortex.lock, and --from reads none", proc.err)
+
     def test_validate_of_a_project_without_a_lock_passes_without_strict(self):
         # A project of 1.3: synced by a cortex that wrote no lock.
         project = self.project()
