@@ -35,6 +35,7 @@ from release_fixture import TARGETS, FakeRelease, build, stand_in  # noqa: E402
 LINUX = ("Linux", "x86_64")
 WINDOWS = ("Windows", "AMD64")
 OLD = b"the binary before\n"
+TARGET = "77.7.7"
 POSIX = unittest.skipIf(os.name == "nt", "a release's stand-in runs on POSIX only")
 SOURCE = unittest.skipIf(harness.BINARY, "from source")
 BUILT = unittest.skipUnless(harness.BINARY, "through a built binary")
@@ -292,6 +293,13 @@ class EnvironmentTests(unittest.TestCase):
             os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
             self.assertNotIn("LD_LIBRARY_PATH", binary.environment())
 
+    def test_the_new_binary_is_run_in_that_environment(self):
+        done = subprocess.CompletedProcess([], 0, b"cortex 1.2.3\n", b"")
+        with mock.patch.object(self_update, "environment", return_value={"FRESH": "1"}), \
+                mock.patch.object(self_update.subprocess, "run", return_value=done) as run:
+            self.assertEqual(self_update.answers(Path("cortex")), "cortex 1.2.3")
+        self.assertEqual(run.call_args.kwargs["env"], {"FRESH": "1"})
+
     def test_from_source_the_environment_is_left_as_it_is(self):
         with mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/opt/lib"}):
             env = binary.environment()
@@ -423,7 +431,8 @@ class CommandTests(unittest.TestCase):
 
 @BUILT
 class BuiltBinaryTests(ReleaseTestCase):
-    """A copy of the binary under test, replaced — the binary under test never is."""
+    """A copy of the binary under test, replaced — the binary under test never is — by release
+    TARGET, a version no build of this checkout stands for."""
 
     def setUp(self):
         super().setUp()
@@ -431,6 +440,7 @@ class BuiltBinaryTests(ReleaseTestCase):
         self.binary = self.bin / Path(harness.BINARY).name
         shutil.copy2(harness.BINARY, self.binary)
         self.env = harness.environment(CORTEX_RELEASES_URL=self.release.url, CORTEX_HOME=str(self.tmp / "home"))
+        FakeRelease.publish(self.release.root / "download" / TARGET, TARGET)
 
     def run_copy(self, *args):
         proc = subprocess.run([str(self.binary), *args], env=self.env, capture_output=True, stdin=subprocess.DEVNULL)
@@ -439,16 +449,16 @@ class BuiltBinaryTests(ReleaseTestCase):
 
     @POSIX
     def test_the_copy_installs_the_release_and_the_release_answers(self):
-        proc = self.run_copy("self-update", "9.9.9")
+        proc = self.run_copy("self-update", TARGET)
         self.assertEqual(proc.returncode, 0, proc.out + proc.err)
-        self.assertIn(f"Installed cortex 9.9.9 as {self.binary}", proc.out)
-        self.assertEqual(self.run_copy("--version").out, "cortex 9.9.9\n")
+        self.assertIn(f"Installed cortex {TARGET} as {self.binary}", proc.out)
+        self.assertEqual(self.run_copy("--version").out, f"cortex {TARGET}\n")
         self.assertEqual(sorted(p.name for p in self.bin.iterdir()), [self.binary.name])
 
     @unittest.skipUnless(os.name == "nt", "Windows")
     def test_on_windows_a_stand_in_that_answers_otherwise_is_refused(self):
         before = self.binary.read_bytes()
-        proc = self.run_copy("self-update", "9.9.9")
+        proc = self.run_copy("self-update", TARGET)
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertIn("nothing was replaced", proc.err)
         self.assertEqual(self.binary.read_bytes(), before)
@@ -456,10 +466,10 @@ class BuiltBinaryTests(ReleaseTestCase):
 
     @unittest.skipUnless(harness.EXPECTED_VERSION, "the version the binary stands for")
     def test_a_built_binary_runs_the_one_it_downloads(self):
-        """The binary under test served as release 9.9.9: the copy runs it — one PyInstaller binary
-        started by another — and refuses it for answering its own version, not 9.9.9."""
+        """The binary under test served as release TARGET: the copy runs it — one PyInstaller binary
+        started by another — and refuses it for answering its own version, not TARGET."""
         asset = self_update.asset_name(platform.system(), platform.machine())
-        directory = self.release.root / "download" / "9.9.9"
+        directory = self.release.root / "download" / TARGET
         if asset.endswith(".zip"):
             with zipfile.ZipFile(directory / asset, "w", zipfile.ZIP_DEFLATED) as archive:
                 archive.write(harness.BINARY, "cortex.exe")
@@ -468,10 +478,10 @@ class BuiltBinaryTests(ReleaseTestCase):
                 archive.add(harness.BINARY, arcname="cortex")
         build.checksums(directory)
         before = self.binary.read_bytes()
-        proc = self.run_copy("self-update", "9.9.9")
+        proc = self.run_copy("self-update", TARGET)
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-        self.assertIn(f"the binary of Cortex 9.9.9 answers 'cortex {harness.EXPECTED_VERSION}' to --version, "
-                      "not 'cortex 9.9.9' — nothing was replaced", proc.err)
+        self.assertIn(f"the binary of Cortex {TARGET} answers 'cortex {harness.EXPECTED_VERSION}' to --version, "
+                      f"not 'cortex {TARGET}' — nothing was replaced", proc.err)
         self.assertEqual(self.binary.read_bytes(), before)
 
     @unittest.skipUnless(os.name == "nt", "Windows")
