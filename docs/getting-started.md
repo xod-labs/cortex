@@ -85,7 +85,7 @@ cortex sync
 
 — as they would `npm install`. It puts the pinned version in the store if it is not there yet, checks it against `cortex.lock`, and writes `spec` in their `cortex.local.toml`. Until a developer has run it, the instructions tell the AI tool to ask them to run it, and to go no further.
 
-`cortex.lock` holds the version and the digest of its spec, one SHA-256 over its files: a spec whose files differ from the ones the team locked is put in the store again, and refused if it still differs.
+`cortex.lock` holds the version and the digest of its spec, one SHA-256 over its files: a spec whose files differ from the ones the team locked is put in the store again, and refused if it still differs. In CI, run `cortex sync --locked`: it never writes the lock, and fails when `cortex.lock` is missing or names another version than `cortex.toml` — a lock nobody committed fails the job instead of being written on the runner.
 
 **Where the spec is.** In the instructions, in these docs and in every overlay's `Base:` header, `cortex/` is the directory that `spec` names — a name, not necessarily a directory of the project. `cortex sync` has three modes, chosen by `--store`, `--link` or `--copy`:
 
@@ -288,7 +288,7 @@ cortex validate
 
 The Prompt Manager loads `cortex/agents/roles/engineering/lead-backend.md` first — from the directory `spec` names, whatever the sync mode — then layers your overlay on top.
 
-`cortex validate` checks every overlay against the spec the project is synced to; `--service PATH` checks one service only. It exits `0` when clean, `1` on errors, `2` when it cannot run or the arguments are wrong. With `--strict`, warnings fail too — what CI should run, after installing the binary and running `cortex sync`.
+`cortex validate` checks every overlay against the spec the project is synced to; `--service PATH` checks one service only. It exits `0` when clean, `1` on errors, `2` when it cannot run or the arguments are wrong. With `--strict`, warnings fail too — what CI should run, after installing the binary and running `cortex sync --locked`.
 
 📖 **Full guide:** [extending-layers.md](extending-layers.md) — covers all four layers, examples, edge cases, and validation.
 

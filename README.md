@@ -236,7 +236,7 @@ cortex validate              # overlay checks: 0 clean, 1 errors, 2 cannot run
 cortex validate --strict     # warnings fail too — what CI runs
 ```
 
-In CI: install the binary of the version `cortex.toml` pins, then `cortex sync` and `cortex validate --strict` — [the migration guide](docs/migrating-to-the-binary.md#5-ci) has the lines.
+In CI: install the binary of the version `cortex.toml` pins, then `cortex sync --locked` and `cortex validate --strict` — [the migration guide](docs/migrating-to-the-binary.md#5-ci) has the lines. `--locked`, from Cortex 1.4.0, never writes `cortex.lock`: a lock missing, or naming another version than `cortex.toml`, fails the job instead of being written where nobody commits it.
 
 To move a project to another Cortex version, change `version` in `cortex.toml`, then run `cortex sync`. To upgrade the binary, run the install script again. A binary serves every version from 1.0.0 up to its own, and refuses a project pinned to a newer one with the command that upgrades it.
 
