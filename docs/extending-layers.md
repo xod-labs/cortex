@@ -248,14 +248,15 @@ The validator catches the common mistakes:
 - Trying to override a non-overridable file (`characters.md`)
 - `replacement` semantic used outside `workflows/`
 
-CI integration is recommended — fail the pipeline if `cortex validate --strict` returns non-zero. The CI job installs the binary of the version `cortex.toml` pins — its checks are that version's — then runs `cortex sync --locked`, which never writes `cortex.lock`: a lock missing, or naming another version than `cortex.toml`, fails the job instead of being written where nobody commits it. `--locked` is from Cortex 1.4.0; a project pinned before it runs `cortex sync`:
+CI integration is recommended — fail the pipeline if `cortex validate --strict` returns non-zero. The CI job installs the binary of the version `cortex.toml` pins — its checks are that version's — then runs `cortex sync --locked`, which never writes `cortex.lock`: a lock missing, or naming another version than `cortex.toml`, fails the job instead of being written where nobody commits it. `--locked` is from Cortex 1.4.0, and the lines leave it out for a project pinned before it:
 
 ```bash
 version="$(LC_ALL=C tr -d '\357\273\277' < cortex.toml | sed -n "s/^[[:space:]]*version[[:space:]]*=[[:space:]]*[\"']\([^\"']*\)[\"'].*/\\1/p" | head -n 1)"
 [ -n "$version" ] || { echo "cortex.toml pins no version" >&2; exit 1; }
 curl -fsSL https://raw.githubusercontent.com/xod-labs/cortex/main/install.sh | sh -s -- "$version"
 export PATH="$HOME/.cortex/bin:$PATH"
-cortex sync --locked
+case "$version" in 0.* | 1.[0-3].*) locked= ;; *) locked=--locked ;; esac    # --locked from 1.4.0
+cortex sync $locked
 cortex validate --strict
 ```
 
@@ -267,7 +268,8 @@ if (-not $pinned) { throw "cortex.toml pins no version" }
 $version = $pinned.Matches[0].Groups[1].Value
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/xod-labs/cortex/main/install.ps1))) -Version $version
 $env:Path = "$env:USERPROFILE\.cortex\bin;$env:Path"
-cortex sync --locked; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+$locked = @(if ([version]($version -replace '[-+].*$', '') -ge [version]'1.4.0') { '--locked' })   # --locked from 1.4.0
+cortex sync @locked; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 cortex validate --strict; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 ```
 
