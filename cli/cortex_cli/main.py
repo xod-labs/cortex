@@ -61,7 +61,7 @@ COMMANDS: Dict[str, Tuple[str, Callable[[List[str]], int]]] = {
     "sync": ("Put the pinned Cortex version in the store, and tell the project where it is", _sync),
     "upgrade": ("Move the project to another Cortex version, saying first what changes", _upgrade),
     "self-update": ("Replace this cortex with a release's binary — the latest, by default", _self_update),
-    "prune": ("Remove from the store the versions no project under the directories given pins", _prune),
+    "prune": ("Remove from the store the versions no project of this machine pins", _prune),
     "project": ("List this machine's Cortex projects, and add, remove or check them", _project),
     "validate": ("Check the project's overlays against the spec (ADR-001)", _validate),
 }

@@ -1,8 +1,9 @@
-"""``cortex prune`` — the versions no project uses, out of the store (ADR-010 §3.6).
+"""``cortex prune`` — the versions no project uses, out of the store (ADR-010 §3.6, ADR-011 §3.4).
 
 From source the command stands for Cortex 9.9.9; 9.9.6, 9.9.7 and 9.9.8 are served from this machine
 (``release_fixture``) and reach the store through ``cortex sync``. A built binary downloads nothing:
-the tests that need other versions skip there.
+the tests that need other versions skip there. The tests of the registry — ``cortex prune`` with no
+``DIR`` — put their versions in the store by hand, and run through the binary too.
 """
 
 import errno
@@ -18,7 +19,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
-from cortex_cli import prune, store, sync  # noqa: E402
+from cortex_cli import prune, registry, store, sync  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
 from cortex_cli.version import VERSION  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
@@ -26,6 +27,11 @@ from release_fixture import FakeRelease  # noqa: E402
 OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
 DOWNLOADS = unittest.skipIf(harness.BINARY, "a build of no release downloads no version")
 AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
+PERMISSIONS = unittest.skipIf(AS_ROOT or os.name == "nt", "root reads every directory, and Windows has no chmod 000")
+
+
+def display(path):
+    return str(path).replace(os.sep, "/")
 
 
 class PruneTestCase(unittest.TestCase):
@@ -359,11 +365,206 @@ class InProcessTests(unittest.TestCase):
                     (project / name).unlink()
 
 
+class RegistryTestCase(unittest.TestCase):
+    """``cortex prune`` with no ``DIR``: the projects are the registry's (ADR-011 §3.4). The versions
+    are directories with the three trees, which is all the store asks of one, and the registry is
+    written as ``cortex project`` writes it."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="cortex-prune-")).resolve()
+        self.addCleanup(self.cleanup)
+        self.home, self.code = self.tmp / "cortex-home", self.tmp / "code"
+        self.registry = self.home / "projects.toml"
+        self.own = [OWN] if OWN else []
+        # Nothing is downloaded: a version the store has not is no version of these tests.
+        self.env = harness.environment(CORTEX_HOME=str(self.home), CORTEX_SOURCE_VERSION=OWN or "9.9.9",
+                                       CORTEX_RELEASES_URL="http://127.0.0.1:9")
+        self.code.mkdir(parents=True)
+
+    cleanup = PruneTestCase.cleanup
+    run_cortex = PruneTestCase.run_cortex
+    assert_ok = PruneTestCase.assert_ok
+    in_store = PruneTestCase.in_store
+
+    def put(self, *versions):
+        for version in versions:
+            for tree in store.SPEC_TREES:
+                (self.home / "versions" / version / tree).mkdir(parents=True, exist_ok=True)
+
+    def project(self, path, version, reads=None):
+        """A project at ``path`` — under ``code``, unless absolute — pinning ``version``, and reading
+        ``reads`` from the store, as a sync before a teammate's bump left it."""
+        root = self.code / path
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "cortex.toml").write_text(f'version = "{version}"\ntheme = "h2g2"\n', encoding="utf-8")
+        if reads:
+            (root / "cortex.local.toml").write_text(f'spec = "{display(self.home / "versions" / reads)}"\n',
+                                                    encoding="utf-8")
+        return root
+
+    def register(self, **entries):
+        self.home.mkdir(exist_ok=True)
+        self.registry.write_text("format = 1\n" + "".join(f'\n[[project]]\nname = "{name}"\npath = "{display(path)}"\n'
+                                                          for name, path in sorted(entries.items())), encoding="utf-8")
+
+    def entries(self):
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}):
+            return [(entry.name, entry.path) for entry in registry.load()]
+
+    def in_home(self):
+        return sorted(entry.name for entry in self.home.iterdir())
+
+
+class RegistryTests(RegistryTestCase):
+    def test_with_no_dir_it_keeps_the_versions_of_the_registered_projects(self):
+        # Pinned to A and B, and a store of A, B, C and the binary's own: C goes, only.
+        self.put("9.9.5", "9.9.6", "9.9.7", *self.own)
+        a = self.project("a", "9.9.6")
+        b = self.project(self.tmp / "elsewhere" / "b", "9.9.7")          # under no DIR in common with a
+        self.register(a=a, b=b)
+        before = self.registry.read_bytes()
+        proc = self.run_cortex(self.tmp, "prune")
+        self.assert_ok(proc)
+        self.assertEqual(self.in_store(), ["9.9.6", "9.9.7", *self.own])
+        self.assertTrue(proc.out.startswith(f"2 project(s) registered in {display(self.registry)}\n"), proc.out)
+        self.assertIn("  kept     9.9.6 — used by a\n  kept     9.9.7 — used by b\n", proc.out)
+        if OWN:
+            self.assertIn(f"  kept     {OWN} — this cortex's own\n", proc.out)
+        self.assertIn("  removed  9.9.5\n", proc.out)
+        self.assertTrue(proc.out.endswith("A project not registered gets its version back at its next `cortex sync`.\n"),
+                        proc.out)
+        self.assertEqual(proc.err, "")
+        self.assertEqual(self.registry.read_bytes(), before)
+        self.assertEqual(self.in_home(), ["projects.toml", "versions"])        # no entry gone: not even locked
+
+    def test_the_version_a_project_reads_now_and_each_keep_are_kept(self):
+        # A teammate's bump, pulled and not synced: cortex.toml pins 9.9.5, and spec still reads 9.9.6.
+        self.put("9.9.5", "9.9.6", "9.9.7", "9.9.8")
+        self.register(a=self.project("a", "9.9.5", reads="9.9.6"))
+        proc = self.run_cortex(self.tmp, "prune", "--keep", "9.9.7")
+        self.assert_ok(proc)
+        self.assertEqual(self.in_store(), ["9.9.5", "9.9.6", "9.9.7"])
+        self.assertIn("  kept     9.9.5 — used by a\n"
+                      "  kept     9.9.6 — used by a\n"
+                      "  kept     9.9.7 — --keep\n", proc.out)
+        self.assertIn("  removed  9.9.8\n", proc.out)
+
+    def test_an_unreadable_entry_is_named_and_kept_with_the_versions_read_of_it(self):
+        self.put("9.9.5", "9.9.6", "9.9.7")
+        later = self.project("later", "9.9.6", reads="9.9.7")
+        with open(later / "cortex.toml", "a", encoding="utf-8") as toml:
+            toml.write('later = "x"\n')                                     # a key of a later cortex
+        broken = self.project("broken", "9.9.5")
+        (broken / "cortex.toml").write_text("version = \n", encoding="utf-8")
+        self.register(later=later, broken=broken)
+        before = self.registry.read_bytes()
+        proc = self.run_cortex(self.tmp, "prune")
+        self.assert_ok(proc)
+        self.assertIn(f'note: later: {display(later)}: cortex.toml: unknown key "later"', proc.err)
+        self.assertIn("— it stays in the registry, and only its versions are read: 9.9.6, 9.9.7\n", proc.err)
+        self.assertIn(f"note: broken: {display(broken)}: cortex.toml: ", proc.err)
+        self.assertIn("— it stays in the registry, and its version is not known, so none is kept for it\n", proc.err)
+        self.assertEqual(self.registry.read_bytes(), before)
+        self.assertEqual(self.in_store(), ["9.9.6", "9.9.7"])
+        self.assertIn("  kept     9.9.6 — used by later\n", proc.out)
+
+    @PERMISSIONS
+    def test_a_project_that_cannot_be_reached_is_unreadable_never_gone(self):
+        # A directory that cannot be searched is no proof that the project is gone.
+        self.put("9.9.6")
+        inside = self.project("closed/acme", "9.9.6")
+        self.register(acme=inside)
+        before = self.registry.read_bytes()
+        os.chmod(self.code / "closed", 0)
+        proc = self.run_cortex(self.tmp, "prune")
+        self.assert_ok(proc)
+        self.assertIn(f"note: acme: {display(inside)}: Permission denied", proc.err)
+        self.assertIn("it stays in the registry, and its version is not known", proc.err)
+        self.assertEqual(self.registry.read_bytes(), before)
+
+    def test_an_empty_registry_and_no_dir_exits_2(self):
+        self.put("9.9.6", *self.own)
+        for case in ("none", "empty"):
+            with self.subTest(registry=case):
+                if case == "empty":
+                    self.register()
+                proc = self.run_cortex(self.tmp, "prune")
+                self.assertEqual(proc.returncode, 2, proc.out + proc.err)
+                self.assertEqual(proc.err, "cortex prune: no DIR, and no project registered on this machine: pruning "
+                                           "would remove every version. Give the directories of the projects — cortex "
+                                           "prune DIR... — or register each one: `cortex project add` in it\n")
+                self.assertEqual(self.in_store(), ["9.9.6", *self.own])
+                self.assertEqual(self.in_home(), ["versions"] if case == "none" else ["projects.toml", "versions"])
+
+    def test_with_dir_the_registry_is_neither_read_nor_written(self):
+        self.put("9.9.6", "9.9.7", *self.own)
+        self.project("a", "9.9.6")
+        gone = f'format = 1\n\n[[project]]\nname = "gone"\npath = "{display(self.tmp / "gone")}"\n'
+        for case, text in (("refused if read", "format = 2\n"), ("an entry gone", gone)):
+            with self.subTest(registry=case):
+                self.put("9.9.7")
+                self.registry.write_text(text, encoding="utf-8")
+                proc = self.run_cortex(self.tmp, "prune", "code")
+                self.assert_ok(proc)
+                self.assertIn("1 project(s) found under", proc.out)
+                self.assertEqual(self.in_store(), ["9.9.6", *self.own])
+                self.assertEqual(self.registry.read_text(encoding="utf-8"), text)
+                self.assertEqual(self.in_home(), ["projects.toml", "versions"])
+
+    def test_a_registry_it_refuses_removes_nothing(self):
+        self.put("9.9.6", *self.own)
+        self.home.mkdir(exist_ok=True)
+        self.registry.write_text("format = 2\n", encoding="utf-8")
+        proc = self.run_cortex(self.tmp, "prune")
+        self.assertEqual(proc.returncode, 1)
+        self.assertTrue(proc.err.startswith(f"cortex prune: {display(self.registry)}: format 2 is written by a later "
+                                            "Cortex"), proc.err)
+        self.assertIn("cortex self-update", proc.err)
+        self.assertEqual(self.in_store(), ["9.9.6", *self.own])
+
+
+class RegistryInProcessTests(RegistryTestCase):
+    """What a command line cannot reach: a sync meanwhile."""
+
+    def setUp(self):
+        super().setUp()
+        self.put("9.9.5", "9.9.6", "9.9.7")
+        self.a, self.gone = self.project("a", "9.9.7"), self.code / "gone"
+        self.register(a=self.a, gone=self.gone)
+        environment = mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def prune(self, dry_run=False):
+        out, err = io.StringIO(), io.StringIO()
+        code = prune.prune([], [], dry_run, out, err)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_the_store_is_listed_before_the_projects_are_read(self):
+        # A version a sync puts in the store while prune reads the projects is in no list, and stays.
+        real = registry.state
+
+        def a_sync_meanwhile(entry):
+            self.put("9.9.4")
+            return real(entry)
+
+        with mock.patch.object(registry, "state", a_sync_meanwhile):
+            code, out, _ = self.prune()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.in_store(), ["9.9.4", "9.9.7"])
+
+
 class PruneArgumentTests(PruneTestCase):
-    def test_no_directory_exits_2(self):
+    def test_no_directory_and_no_registry_exits_2(self):
         proc = self.run_cortex(self.tmp, "prune")
         self.assertEqual(proc.returncode, 2)
-        self.assertIn("DIR", proc.err)
+        self.assertIn("no DIR, and no project registered on this machine", proc.err)
+        self.assertIn("`cortex project add`", proc.err)
+
+    def test_a_directory_is_optional(self):
+        proc = self.run_cortex(self.tmp, "prune", "--help")
+        self.assert_ok(proc)
+        self.assertIn("[DIR ...]", proc.out)
 
     def test_a_directory_that_is_not_there_exits_2(self):
         proc = self.run_cortex(self.tmp, "prune", "nowhere")

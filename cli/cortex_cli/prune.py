@@ -1,14 +1,20 @@
-"""``cortex prune`` — remove from the store the versions no project uses (ADR-010 §3.6).
+"""``cortex prune`` — remove from the store the versions no project uses (ADR-010 §3.6, ADR-011 §3.4).
 
-``cortex prune DIR... [--keep VERSION]... [--dry-run]`` finds the projects under each ``DIR`` —
-every ``cortex.toml`` up to six directories down, past ``.git``, ``node_modules``, ``vendor``,
-``.venv`` and the ``cortex/`` a link or copy sync made — keeps the versions they pin and the ones
-they read now, this binary's own and each ``--keep``, and removes every other version from the store.
+``cortex prune [DIR...] [--keep VERSION]... [--dry-run]`` keeps the versions the projects pin and
+the ones they read now, this binary's own and each ``--keep``, and removes every other version from
+the store. The projects are:
 
-Nothing lists the projects of a machine (ADR-008 §3.3): the user says where they are, and a
-project elsewhere loses its version. It gets it back at its next ``cortex sync``, checked against
-its ``cortex.lock``. A version is removed by a rename first, so that a sync running meanwhile finds
-it whole or absent. The runtime reads the store too: a version only it uses is kept with ``--keep``.
+- with no ``DIR``, the registry's (ADR-011), each read where it is. An entry whose project is gone —
+  ``missing``, ``no project`` — has no version to keep. An ``unreadable`` one is named, and keeps
+  what can be read of its versions;
+- with ``DIR...``, as in 1.4.0, those under each ``DIR`` — every ``cortex.toml`` up to six
+  directories down, past ``.git``, ``node_modules``, ``vendor``, ``.venv`` and the ``cortex/`` a link
+  or copy sync made. The registry is neither read nor written.
+
+A project elsewhere loses its version, and gets it back at its next ``cortex sync``, checked
+against its ``cortex.lock``. A version is removed by a rename first, so that a sync running
+meanwhile finds it whole or absent. The runtime reads the store too: a version only it uses is kept
+with ``--keep``.
 """
 
 from __future__ import annotations
@@ -23,7 +29,7 @@ from typing import Dict, Iterator, List, Optional, TextIO
 
 from cortex_core.project import is_version, shown
 
-from . import config, store, sync, validate
+from . import config, registry, store, sync, validate
 from .paths import display, working_directory
 from .semver import Version
 
@@ -126,15 +132,9 @@ def stored(the_store: store.Store) -> List[Version]:
     return sorted(version for version in found if the_store.has(version))
 
 
-def prune(directories: List[str], keep: List[str], dry_run: bool, out: TextIO, err: TextIO) -> int:
-    directories = [os.path.join(working_directory(), directory) for directory in directories]   # an absolute one stays
-    for directory in directories:
-        if not os.path.isdir(directory):
-            raise PruneError(f"{display(directory)}: no such directory")
-    the_store = store.Store()
-    # Listed before the projects are read: a version a project syncs meanwhile is in no list, and stays.
-    versions = stored(the_store)
-    used: Dict[Version, List[str]] = {}
+def _under(directories: List[str], used: Dict[Version, List[str]], err: TextIO) -> int:
+    """Add to ``used`` the versions of the projects under ``directories``, each project once — though
+    under two of them — and return how many there are."""
     found = set()
     for directory in directories:
         for root in projects(Path(os.path.abspath(directory)), err):
@@ -143,11 +143,55 @@ def prune(directories: List[str], keep: List[str], dry_run: bool, out: TextIO, e
             found.add(os.path.realpath(root))
             for version in versions_of(root, err):
                 used.setdefault(Version(version), []).append(display(str(root)))
+    return len(found)
+
+
+def _registered(entries: List[registry.Entry], used: Dict[Version, List[str]], err: TextIO) -> List[registry.Entry]:
+    """Add to ``used`` the versions of the registered projects, each read where it is (``registry.state``),
+    and return the entries whose project is gone, which have none. An ``unreadable`` one is named, and
+    keeps the versions that can be read of it, as a project under a ``DIR`` would."""
+    gone = []
+    for entry in entries:
+        found = registry.state(entry)
+        if found.state in (registry.MISSING, registry.NO_PROJECT):
+            gone.append(entry)
+            continue
+        versions = list(dict.fromkeys(version for version in (found.pinned, found.reads) if version))
+        if found.state == registry.UNREADABLE:
+            what = (f"only its versions are read: {', '.join(versions)}" if versions
+                    else "its version is not known, so none is kept for it")
+            err.write(f"note: {entry.name}: {entry.path}: {found.why} — it stays in the registry, and {what}\n")
+        for version in versions:
+            used.setdefault(Version(version), []).append(entry.name)
+    return gone
+
+
+def prune(directories: List[str], keep: List[str], dry_run: bool, out: TextIO, err: TextIO) -> int:
+    """Prune the store, keeping the versions of the projects under ``directories`` — of the projects
+    registered when there is none — this cortex's own and each of ``keep``."""
+    directories = [os.path.join(working_directory(), directory) for directory in directories]   # an absolute one stays
+    for directory in directories:
+        if not os.path.isdir(directory):
+            raise PruneError(f"{display(directory)}: no such directory")
+    the_store = store.Store()
+    # Listed before the projects are read: a version a project syncs meanwhile is in no list, and stays.
+    versions = stored(the_store)
+    used: Dict[Version, List[str]] = {}
+    if directories:
+        found = _under(directories, used, err)
+        out.write(f"{found} project(s) found under {', '.join(display(d) for d in directories)}\n")
+    else:
+        entries = registry.load()
+        if not entries:
+            raise PruneError("no DIR, and no project registered on this machine: pruning would remove every version. "
+                             "Give the directories of the projects — cortex prune DIR... — or register each one: "
+                             "`cortex project add` in it")
+        out.write(f"{len(entries)} project(s) registered in {display(str(registry.registry_path()))}\n")
+        _registered(entries, used, err)
     kept = {version: f"used by {', '.join(roots)}" for version, roots in used.items()}
     kept.setdefault(the_store.own, "this cortex's own")
     for version in keep:
         kept.setdefault(Version(version), "--keep")
-    out.write(f"{len(found)} project(s) found under {', '.join(display(d) for d in directories)}\n")
     for version in versions:
         if version in kept:
             out.write(f"  kept     {version} — {kept[version]}\n")
@@ -173,16 +217,20 @@ def prune(directories: List[str], keep: List[str], dry_run: bool, out: TextIO, e
     elif dry_run:
         out.write("--dry-run: nothing was removed\n")
     else:
-        out.write("A project elsewhere gets its version back at its next `cortex sync`.\n")
+        elsewhere = "elsewhere" if directories else "not registered"
+        out.write(f"A project {elsewhere} gets its version back at its next `cortex sync`.\n")
     return 1 if failed else 0
 
 
 def run(args: List[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="cortex prune",
-        description="Remove from the store every version that no project under DIR pins — this cortex's own, and "
-                    "each --keep, kept. ADR-010 §3.6.")
-    parser.add_argument("directories", nargs="+", metavar="DIR", help="where the projects of this machine are")
+        description="Remove from the store every version that no project pins or reads — the projects registered "
+                    "on this machine, or those under each DIR — this cortex's own, and each --keep, kept. "
+                    "ADR-010 §3.6, ADR-011 §3.4.")
+    parser.add_argument("directories", nargs="*", metavar="DIR",
+                        help="where the projects of this machine are, instead of the registry — "
+                             "`cortex project list` lists the projects registered")
     parser.add_argument("--keep", action="append", default=[], metavar="VERSION",
                         help="a version to keep, which no project pins — one the runtime uses, say")
     parser.add_argument("--dry-run", action="store_true", help="say what would be removed, and remove nothing")
@@ -194,7 +242,7 @@ def run(args: List[str]) -> int:
         return prune(options.directories, options.keep, options.dry_run, sys.stdout, sys.stderr)
     except PruneError as error:
         return sync.failed("cortex prune", str(error), 2)
-    except (config.ConfigError, store.StoreError) as error:
+    except (config.ConfigError, store.StoreError, registry.RegistryError) as error:
         return sync.failed("cortex prune", str(error))
     except OSError as error:
         return sync.failed("cortex prune", sync.os_error(error))
