@@ -186,11 +186,12 @@ class Store:
     def digest(self, version: Version) -> str:
         return digest(self.path(version))
 
-    def _aside(self, version: Version) -> Path:
+    def _aside(self, version: Version, why: str = "removed") -> Path:
         """Rename ``version`` out of its name — in the same directory, so that a read-only one moves
         too: a sync meanwhile finds it whole or absent. Dated now, so that no other sync takes it
-        for a staging a day old."""
-        aside = self.versions / f".{version}-removed-{os.getpid()}-{time.time_ns()}"
+        for a staging a day old. ``why``: ``removed``, on its way out; ``kept``, whole, while
+        ``replace`` has the version again."""
+        aside = self.versions / f".{version}-{why}-{os.getpid()}-{time.time_ns()}"
         os.rename(self.path(version), aside)
         try:
             os.utime(aside)
@@ -216,15 +217,38 @@ class Store:
         the new one cannot be had: offline, a download refused."""
         if not self.path(version).exists():
             return self.ensure(version)
-        aside = self._aside(version)
+        aside = self._aside(version, "kept")
         try:
-            how = self.ensure(version)
+            how = self.ensure(version, put_back=False)
         except BaseException:
             if not self.path(version).exists() and aside.exists():
                 os.rename(aside, self.path(version))
             raise
-        self._discard(aside)
+        # Renamed before it is removed: what is named "kept" is always whole.
+        removed = aside.with_name(aside.name.replace("-kept-", "-removed-", 1))
+        try:
+            os.rename(aside, removed)
+        except FileNotFoundError:   # another sync put it back meanwhile, and found this one in place
+            return how
+        self._discard(removed)
         return how
+
+    def _put_back(self, version: Version) -> bool:
+        """Put back what a ``replace`` cut short left aside, whole — the latest it left: the store
+        as it was before that replace. ``False`` when there is none."""
+        def when(aside: Path) -> int:
+            stamp = aside.name.rsplit("-", 1)[-1]
+            return int(stamp) if stamp.isdigit() else 0
+
+        for aside in sorted(self.versions.glob(f".{version}-kept-*"), key=when, reverse=True):
+            try:
+                os.rename(aside, self.path(version))
+            except OSError:
+                if self.has(version):   # another sync put it back first
+                    return True
+                continue
+            return True
+        return False
 
     def has(self, version: Version) -> bool:
         """A version is there when its three trees are — an empty directory is none."""
@@ -256,9 +280,10 @@ class Store:
             raise StoreError(f"Cortex {version} has no spec archive: the first one is {FIRST_SPEC_ARCHIVE}, "
                              "the release that ships the cortex command — pin that version or a later one")
 
-    def ensure(self, version: Version) -> str:
+    def ensure(self, version: Version, put_back: bool = True) -> str:
         """Make sure ``version`` is in the store; say how it got there — ``"stored"``,
-        ``"written"`` from this binary, or ``"downloaded"``."""
+        ``"written"`` from this binary, ``"downloaded"``, or ``"put back"``: it could not be
+        downloaded, and a ``replace`` cut short had left it aside."""
         self.check_served(version)
         if self.has(version):
             self._tidy(version)
@@ -275,7 +300,13 @@ class Store:
             else:
                 raise StoreError(f"this cortex carries no spec of its own version, {version}")
             return "written"
-        self._download(version)
+        try:
+            self._download(version)
+        except StoreError:
+            if put_back and self._put_back(version):
+                self._tidy(version)
+                return "put back"
+            raise
         return "downloaded"
 
     def _download(self, version: Version) -> None:

@@ -14,6 +14,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core"),
                 str(Path(__file__).resolve().parent)]
@@ -385,6 +386,49 @@ class DigestTests(unittest.TestCase):
             store.digest(self.tree)
         with self.assertRaisesRegex(store.StoreError, "holds no agents/, templates/, docs/"):
             store.digest(self.tmp / "no-such-version")
+
+    def test_a_version_a_replace_cut_short_left_aside_is_put_back_offline(self):
+        # Killed while it had the version again, a sync left it aside: offline, the next finds it.
+        archive = spec_archive(self.tmp, "2.0.0").read_bytes()
+        sums = f"{hashlib.sha256(archive).hexdigest()}  cortex-spec.tar.gz\n".encode()
+        online = True
+
+        def fetch(url, limit):
+            if not online:
+                raise net.DownloadError(f"{url}: no network")
+            return sums if url.endswith("SHA256SUMS") else archive
+
+        the_store = store.Store(home=self.tmp / "f", own_version="3.0.0", embedded=self.tmp / "unused.tar.gz",
+                                fetch=fetch, known={})
+        version = Version("2.0.0")
+        the_store.ensure(version)
+        before = store.digest(the_store.path(version))
+        kept, ensure = [], the_store.ensure
+
+        def while_it_downloads(*args, **kwargs):
+            kept.extend(p.name for p in the_store.versions.glob(".2.0.0-kept-*"))
+            return ensure(*args, **kwargs)
+
+        with mock.patch.object(the_store, "ensure", while_it_downloads):
+            the_store.replace(version)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual([p.name for p in the_store.versions.iterdir()], ["2.0.0"])
+        the_store._aside(version, "kept")       # a replace killed there
+        online = False
+        self.assertEqual(the_store.ensure(version), "put back")
+        self.assertEqual(store.digest(the_store.path(version)), before)
+        self.assertEqual([p.name for p in the_store.versions.iterdir()], ["2.0.0"])
+        # What prune set aside on its way out is never put back; nor anything, by replace itself.
+        the_store._aside(version)
+        with self.assertRaisesRegex(store.StoreError, "could not download"):
+            the_store.ensure(version)
+        store.remove_tree(next(the_store.versions.glob(".2.0.0-removed-*")))
+        online = True
+        the_store.ensure(version)
+        online = False
+        with self.assertRaisesRegex(store.StoreError, "could not download"):
+            the_store.replace(version)
+        self.assertEqual([p.name for p in the_store.versions.iterdir()], ["2.0.0"])
 
     def test_a_version_put_in_again_is_whole(self):
         the_store = store.Store(home=self.tmp / "c", own_version="9.9.9", embedded=None, checkout=self.tree,

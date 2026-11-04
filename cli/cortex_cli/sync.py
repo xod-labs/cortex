@@ -743,7 +743,9 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         how = the_store.ensure(project.version)
         spec_source = the_store.path(project.version)
         said = {"stored": "in the store", "written": "written to the store, from this cortex",
-                "downloaded": "downloaded to the store, checked against its SHA256SUMS"}[how]
+                "downloaded": "downloaded to the store, checked against its SHA256SUMS",
+                "put back": "put back in the store as it was — a sync cut short had set it aside, and it could "
+                            "not be downloaded again"}[how]
         out.write(f"Cortex {project.version}: {said} — {display(str(spec_source))}\n")
     lock = None if source is not None else _lock(root, project, the_store, out)
 

@@ -953,6 +953,18 @@ class CortexLockTests(SyncTestCase):
                 self.assertIn("Warnings: 1", proc.out)
                 self.assertEqual(self.validate(project, "--strict").returncode, 1)
 
+    @DOWNLOADS
+    def test_a_version_a_sync_cut_short_set_aside_is_put_back_offline(self):
+        project = self.project(version="9.9.8")
+        self.assert_ok(self.sync(project))
+        os.rename(self.stored("9.9.8"), self.home / "versions" / ".9.9.8-kept-4242-1")     # killed there
+        self.release.close()
+        proc = self.sync(project)
+        self.assert_ok(proc)
+        self.assertIn("Cortex 9.9.8: put back in the store as it was — a sync cut short had set it aside, and it "
+                      "could not be downloaded again", proc.out)
+        self.assertEqual(sorted(p.name for p in (self.home / "versions").iterdir()), ["9.9.8"])
+
     def test_validate_of_a_project_without_a_lock_passes_without_strict(self):
         # A project of 1.3: synced by a cortex that wrote no lock.
         project = self.project()
