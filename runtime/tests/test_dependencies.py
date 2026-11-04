@@ -1,9 +1,9 @@
 """The runtime never imports the ``cortex`` command — ADR-008 §3.6.
 
 The runtime reads a project's ``cortex.toml`` with the core's grammar (``cortex_core.project``),
-the one the command reads it with. It does not import the command's package: ADR-016 will have the
-command drive the runtime over HTTP, and the two ship apart. The core's own direction tests, in
-``core/tests/test_boundaries.py``, keep the core free of both.
+the one the command reads it with. It does not import the command's package: the unified client
+protocol (#45) will have the command drive the runtime over HTTP, and the two ship apart. The
+core's own direction tests, in ``core/tests/test_boundaries.py``, keep the core free of both.
 """
 
 import ast

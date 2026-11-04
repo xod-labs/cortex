@@ -1,6 +1,6 @@
 name: ADR epic
 description: Put one ADR on the roadmap, from proposal to implementation (maintainer workflow)
-title: "ADR-NNN · "
+title: "ADR · "
 labels: ["adr-epic"]
 body:
   - type: markdown
@@ -21,9 +21,9 @@ body:
     attributes:
       label: ADR number
       description: >
-        Provisional until the ADR is written. Numbering is strictly sequential and never
-        reused, so writing ADRs out of order shifts every number above.
-      placeholder: ADR-007
+        None until the ADR is written: a planned record holds no number. It takes the next
+        free one the day its text is written, and the epic's title then becomes `ADR-NNN · …`.
+      placeholder: None yet
     validations:
       required: true
 

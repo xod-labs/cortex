@@ -142,7 +142,7 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_the_command_never_imports_the_runtime(self):
-        # Driving the runtime is ADR-016's, over HTTP: never by importing it.
+        # Driving the runtime is the unified client protocol's (#45), over HTTP: never by importing it.
         offenders = [py.name for py in sorted(PACKAGE.rglob("*.py"))
                      if "cortex_runtime" in absolute_imports(py.read_text(encoding="utf-8"))]
         self.assertEqual(offenders, [])

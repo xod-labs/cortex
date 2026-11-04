@@ -515,3 +515,7 @@ ADR-010 became `cortex.lock`, `cortex upgrade` and the bootstrap marker on 2026-
 - **The binary moves itself**: `cortex self-update` replaces it with a release's, checked against that release's `SHA256SUMS` (§3.2). The install scripts stay the way to install the first one. Every refusal of a version newer than the binary names `cortex self-update` instead of the install script's command.
 - **`cortex init` reads a kept bootstrap through its marker** (§3.7), `<!-- cortex:bootstrap layout=… format=N -->`, not through its first line, and writes the marker with the digest of what it wrote.
 - **The bootstrap has the assistant run `cortex sync` itself**, and `cortex self-update` when the pin asks for it, where it asked the user to (§3.7).
+
+### 2026-11 — the planned records hold no number
+
+ADR-011 became the project registry on 2026-11-04 ([#266](https://github.com/xod-labs/cortex/issues/266)): the list of a machine's projects that §3.3 left out of the store, kept beside it. Rather than move every planned record up by one a third time, the maintainer decided that a planned record holds no number: it takes the next free one once its text is written. In this record, ADR-013 is the multi-provider LLM abstraction, [#40](https://github.com/xod-labs/cortex/issues/40), and ADR-018 the unified client protocol, [#45](https://github.com/xod-labs/cortex/issues/45), neither numbered yet.
