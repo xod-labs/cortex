@@ -8,9 +8,10 @@ the overlay validator with the target as the base, and stops if the project woul
 ``cortex.local.toml``, the link or copy, ``cortex.lock``. A bootstrap file nobody changed — the
 digest in its marker says so, or, without one, its being the pinned version's file — is written
 again from the target's template whenever that differs; one a team changed is kept, and the command
-says how ``cortex init --force`` writes it again. On the pinned version, nothing moves, and a file
-nobody changed that another version wrote — an upgrade cut short, a pin moved by hand — is written
-again.
+says how ``cortex init --force`` writes it again. On the pinned version, nothing moves, and what an
+upgrade cut short or a pin moved by hand left is finished: a file nobody changed whose text is not
+the pinned version's is written again, and a machine or a ``cortex.lock`` not on the pin is synced.
+The bootstrap files are written first, each whole or not at all.
 
 With no ``VERSION``, a project pinned after this cortex is refused: a downgrade is named.
 
@@ -23,6 +24,7 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -191,6 +193,67 @@ def _and(names: List[str]) -> str:
     return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
 
 
+def _put(path: Path, content: bytes) -> None:
+    """Write ``content`` to ``path`` whole or not at all, as the pin and the lock are written: a
+    temporary file beside the file — beside where a link points, so that the link stays one — then
+    a rename, with the file's mode. A run killed meanwhile leaves the old file whole."""
+    real = Path(os.path.realpath(path))
+    temporary = real.with_name(f"{real.name}.{os.getpid()}.tmp")
+    try:
+        mode = stat.S_IMODE(real.stat().st_mode) if real.exists() else None
+        with open(temporary, "wb") as fh:
+            fh.write(content)
+        if mode is not None:
+            os.chmod(temporary, mode)
+        os.replace(temporary, real)
+    except BaseException:
+        if os.path.lexists(temporary):
+            os.unlink(temporary)
+        raise
+
+
+# --------------------------------------------------------------------------- #
+# The machine and the lock, against the pin
+# --------------------------------------------------------------------------- #
+
+def _reads(root: Path, project: config.Project, the_store: store.Store) -> Optional[str]:
+    """The version whose spec this machine reads: ``""`` for a checkout synced with ``--from``;
+    ``None`` for none — not synced here, or a ``cortex/`` sync did not make."""
+    if project.spec is None:
+        return None
+    entry = root / sync.LINK
+    if project.spec != sync.LINK:
+        source = project.spec_directory()
+    elif sync.is_link(entry):
+        source = sync.link_target(entry)
+    else:
+        marker = sync.read_marker(entry)
+        if marker is None:
+            return None
+        return "" if marker.get("from") is not None else marker.get("version")
+    if os.path.normcase(os.path.realpath(os.path.dirname(os.path.normpath(source)))) != \
+            os.path.normcase(os.path.realpath(the_store.versions)):
+        return ""
+    return os.path.basename(os.path.normpath(source))
+
+
+def out_of_step(root: Path, project: config.Project, the_store: store.Store) -> Optional[str]:
+    """What, of this machine and ``cortex.lock``, is not on the pinned version — left by an upgrade
+    cut short between the pin and the end of its sync, or by a pin moved by hand; ``None`` when both
+    are on it. A spec synced from a checkout is the developer's choice, and has no lock: left alone."""
+    reads = _reads(root, project, the_store)
+    if reads == "":
+        return None
+    if reads != str(project.version):
+        return "this machine has not synced it" if reads is None else f"this machine reads Cortex {reads}"
+    lock = config.load_lock(str(root))
+    if lock is None:
+        return f"there is no {config.LOCK_FILE}"
+    if lock.version != project.version:
+        return f"{config.LOCK_FILE} names Cortex {lock.version}"
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # The command
 # --------------------------------------------------------------------------- #
@@ -235,28 +298,7 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
 
     if target == current:
         out.write(f"Cortex {current}: already on it — nothing to move\n")
-        if not files:
-            return 0
-        try:
-            the_store.ensure(current)
-        except store.StoreError as error:
-            err.write(f"note: the bootstrap files were not checked — Cortex {current} is not in the store: {error}\n")
-            return 0
-        # What an upgrade cut short, or a pin moved by hand, left: a file nobody changed, of another version.
-        rewrites = bootstraps(files, current, the_store.path(current), the_store.path(current), personality, err)
-        if dry_run:
-            for path, _ in rewrites:
-                out.write(f"{_shown_path(path, root)}: would be written again from Cortex {target}'s template — no one "
-                          "changed it\n")
-            if rewrites:
-                out.write("--dry-run: nothing of the project was changed\n")
-            return 0
-        if rewrites:
-            _write(rewrites, {}, root, err, lambda: None)
-            for path, _ in rewrites:
-                out.write(f"{_shown_path(path, root)}: written again from Cortex {target}'s template — no one changed it\n")
-            out.write(f"\nCommit {_and([_shown_path(path, root) for path, _ in rewrites])}.\n")
-        return 0
+        return _resume(root, project, the_store, files, personality, dry_run, out, err)
 
     the_store.ensure(target)
     target_path = the_store.path(target)
@@ -326,22 +368,64 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
     return 0
 
 
+def _resume(root: str, project: config.Project, the_store: store.Store, files: List[Path], personality: bool,
+            dry_run: bool, out: TextIO, err: TextIO) -> int:
+    """On the pinned version, finish what an upgrade cut short, or a pin moved by hand, left: a
+    bootstrap file nobody changed, of another version, written again; this machine and the lock,
+    when they are not on the pin, synced (ADR-010 §3.5, step 1)."""
+    current = project.version
+    behind = out_of_step(Path(root), project, the_store)
+    rewrites: List[Tuple[Path, bytes]] = []
+    if files:
+        try:
+            the_store.ensure(current)
+        except store.StoreError as error:
+            err.write(f"note: the bootstrap files were not checked — Cortex {current} is not in the store: {error}\n")
+        else:
+            rewrites = bootstraps(files, current, the_store.path(current), the_store.path(current), personality, err)
+    if behind is not None:
+        out.write(f"{behind}, and {config.PROJECT_FILE} pins Cortex {current} — an upgrade cut short, or a pin moved by "
+                  f"hand: {'the sync would put them on it' if dry_run else 'syncing'}\n")
+    if dry_run:
+        for path, _ in rewrites:
+            out.write(f"{_shown_path(path, root)}: would be written again from Cortex {current}'s template — no one "
+                      "changed it\n")
+        if rewrites or behind is not None:
+            out.write("--dry-run: nothing of the project was changed\n")
+        return 0
+    if not rewrites and behind is None:
+        return 0
+    lock = Path(root) / config.LOCK_FILE
+    locked = lock.read_bytes() if lock.is_file() else None
+    _write(rewrites, {lock: locked} if behind is not None else {}, root, err,
+           (lambda: sync.sync(root, None, None, out, err, announce=False)) if behind is not None else (lambda: None))
+    for path, _ in rewrites:
+        out.write(f"{_shown_path(path, root)}: written again from Cortex {current}'s template — no one changed it\n")
+    commit = [_shown_path(path, root) for path, _ in rewrites]
+    if lock.is_file() and lock.read_bytes() != locked:
+        commit.insert(0, config.LOCK_FILE)
+    if commit:
+        out.write(f"\nCommit {_and(commit)}.\n")
+    return 0
+
+
 def _write(rewrites: List[Tuple[Path, bytes]], committed: Dict[Path, Optional[bytes]], root: str, err: TextIO,
            then: Callable[[], None]) -> None:
     """Write the bootstrap files again, then run ``then`` — the switch: anything that fails puts back
     the files, and ``committed``, as they were. The bootstrap files go first: a run cut short after
-    them leaves files whose digest the next `cortex upgrade` reads as nobody's change."""
+    them leaves files whose digest the next `cortex upgrade` reads as nobody's change — and the
+    pinned version it finds then, it finishes."""
     before = {**committed, **{path: path.read_bytes() for path, _ in rewrites}}
     try:
         for path, content in rewrites:
-            path.write_bytes(content)
+            _put(path, content)
         then()
     except BaseException:
         for path, content in before.items():
             if content is None:
                 path.unlink(missing_ok=True)
             else:
-                path.write_bytes(content)
+                _put(path, content)
         names = _and([_shown_path(path, root) for path in before])
         err.write(f"note: {names} {'are as they were' if len(before) > 1 else 'is as it was'}"
                   f"{' — `cortex sync` puts this machine back on them' if committed else ''}\n")

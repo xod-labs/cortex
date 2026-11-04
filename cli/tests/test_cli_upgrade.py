@@ -11,8 +11,11 @@ import hashlib
 import io
 import os
 import shutil
+import signal
+import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -327,6 +330,16 @@ class DigestTests(UpgradeTestCase):
                       "tell whether a team changed it, is not in the store. It is kept: cortex init --force", proc.err)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), init.instructions(OLD_BOOTSTRAP, True))
 
+    @unittest.skipIf(os.name == "nt", "a link to a file needs a privilege on Windows")
+    def test_a_bootstrap_reached_through_a_link_is_written_where_it_points_and_the_link_stays(self):
+        written = self.marked()
+        project = self.project("9.9.8")
+        (project / "AGENTS.md").write_bytes(written)
+        (project / "CLAUDE.md").symlink_to("AGENTS.md")       # one file for two tools, as teams do
+        self.assert_ok(self.upgrade(project))
+        self.assertTrue((project / "CLAUDE.md").is_symlink())
+        self.assertEqual((project / "AGENTS.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)))
+
     def test_on_the_pinned_version_not_in_the_store_the_bootstrap_is_not_checked_and_said_so(self):
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))
@@ -474,16 +487,126 @@ class RollbackTests(UpgradeTestCase):
         old = init.instructions(OLD_BOOTSTRAP, True)
         (project / "CLAUDE.md").write_bytes(old)
         committed = {name: (project / name).read_bytes() for name in ("cortex.toml", "cortex.lock", "CLAUDE.md")}
-        write_bytes = Path.write_bytes
+        from cortex_cli import upgrade
+        put = upgrade._put
 
         def a_disk_that_refuses_the_new_bootstrap(path, data):
             if path.name == "CLAUDE.md" and data != old:
                 raise OSError("no space left on device")
-            return write_bytes(path, data)
+            return put(path, data)
 
-        with mock.patch.object(Path, "write_bytes", a_disk_that_refuses_the_new_bootstrap):
+        with mock.patch.object(upgrade, "_put", a_disk_that_refuses_the_new_bootstrap):
             self.in_process(project, lambda *args, **kwargs: None)
         self.assertEqual({name: (project / name).read_bytes() for name in committed}, committed)
+
+
+@DOWNLOADS
+@unittest.skipIf(os.name == "nt", "a process killed, as a machine dies: SIGKILL")
+class KilledTests(UpgradeTestCase):
+    """An upgrade killed — no rollback runs — leaves what the next `cortex upgrade` finishes
+    (ADR-010 §3.5, step 6): the bootstrap files first, each whole or not at all."""
+
+    def killed(self, project, patch):
+        child = textwrap.dedent(f"""\
+            import os, signal, sys
+            sys.path[:0] = [{str(harness.CLI)!r}, {str(harness.CORE)!r}]
+            from cortex_cli import config, sync, upgrade
+
+            def die(*args, **kwargs):
+                os.kill(os.getpid(), signal.SIGKILL)
+        """) + textwrap.dedent(patch) + "\nsys.exit(upgrade.run([]))\n"
+        proc = subprocess.run([sys.executable, "-I", "-c", child], cwd=project, env=self.env, capture_output=True)
+        self.assertEqual(proc.returncode, -signal.SIGKILL, proc.stdout.decode() + proc.stderr.decode())
+
+    def test_killed_inside_its_sync_it_has_written_the_bootstrap_and_the_next_run_finishes(self):
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))
+        self.killed(project, """
+            config.write_local_text = die       # the lock written, cortex/ swapped: then the machine dies
+        """)
+        self.assertIn(f'version = "{OWN}"', self.pinned(project))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)))
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn(f"this machine reads Cortex 9.9.8, and cortex.toml pins Cortex {OWN} — an upgrade cut short, or a "
+                      "pin moved by hand: syncing", proc.out)
+        self.assertIn(f"versions/{OWN}", (project / "cortex.local.toml").read_text(encoding="utf-8"))
+        self.assert_ok(self.run_cortex(project, "sync", "--locked"))
+        again = self.upgrade(project)
+        self.assert_ok(again)
+        self.assertNotIn("syncing", again.out)
+        self.assertNotIn("Commit", again.out)
+
+    def test_killed_while_it_writes_a_bootstrap_it_leaves_the_old_one_whole(self):
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))
+        committed = {name: (project / name).read_bytes() for name in ("cortex.toml", "cortex.lock", "CLAUDE.md")}
+        self.killed(project, """
+            import builtins, io
+            real = io.open
+
+            class Dying:
+                def __init__(self, fh):
+                    self.fh = fh
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    self.fh.close()
+
+                def write(self, data):
+                    self.fh.write(data[:len(data) // 2])
+                    self.fh.flush()
+                    die()
+
+            def half_then_dies(file, mode="r", *args, **kwargs):
+                fh = real(file, mode, *args, **kwargs)
+                return Dying(fh) if "w" in mode and os.path.basename(os.fspath(file)).startswith("CLAUDE.md") else fh
+
+            builtins.open = io.open = half_then_dies
+        """)
+        self.assertEqual({name: (project / name).read_bytes() for name in committed}, committed)
+
+
+@DOWNLOADS
+class ResumeTests(UpgradeTestCase):
+    """On the pinned version, a machine or a lock not on the pin — an upgrade cut short, a pin moved
+    by hand — is synced (ADR-010 §3.5, step 1)."""
+
+    def test_a_pin_moved_by_hand_is_synced_and_the_lock_to_commit_said(self):
+        project = self.project("9.9.8")
+        (project / "cortex.toml").write_text(self.pinned(project).replace('"9.9.8"', f'"{OWN}"'), encoding="utf-8")
+        before = snapshot(project)
+        proc = self.upgrade(project, "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn(f"this machine reads Cortex 9.9.8, and cortex.toml pins Cortex {OWN} — an upgrade cut short, or a "
+                      "pin moved by hand: the sync would put them on it", proc.out)
+        self.assertEqual(snapshot(project), before)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn(f"Cortex {OWN}: already on it — nothing to move", proc.out)
+        self.assertIn(f'version = "{OWN}"', (project / "cortex.lock").read_text(encoding="utf-8"))
+        self.assertIn("\nCommit cortex.lock.\n", proc.out)
+        self.assert_ok(self.run_cortex(project, "sync", "--locked"))
+
+    def test_a_lock_of_another_version_alone_is_synced(self):
+        from cortex_cli import config
+        project = self.project(OWN)
+        config.write_lock(str(project), store.Version("9.9.8"), "sha256:" + "1" * 64)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn(f"cortex.lock names Cortex 9.9.8, and cortex.toml pins Cortex {OWN}", proc.out)
+        self.assertIn(f'version = "{OWN}"', (project / "cortex.lock").read_text(encoding="utf-8"))
+
+    def test_a_spec_synced_from_a_checkout_is_left_alone(self):
+        project = self.project(OWN, synced=False)
+        self.assert_ok(self.run_cortex(project, "sync", "--from", str(harness.REPO)))
+        before = snapshot(project)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertNotIn("syncing", proc.out)
+        self.assertEqual(snapshot(project), before)
 
 
 class PinAfterThisCortexTests(UpgradeTestCase):
