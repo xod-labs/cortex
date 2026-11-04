@@ -1,6 +1,6 @@
 """The running binary: where it is, how another takes its place, what that leaves (ADR-010 §3.7).
 
-Light on purpose: on Windows every start of a built binary calls ``tidy``, before anything else.
+Light on purpose: every start of a built binary calls ``tidy``, before anything else.
 
 The replacement is a rename, on the same file system. On Linux and macOS the new binary is renamed
 over the old one, and the running process keeps the file it started from. Windows refuses to
@@ -15,6 +15,9 @@ import sys
 import time
 from pathlib import Path
 from typing import Dict, Optional
+
+# A new binary younger than this may be another self-update's, still downloading or running it.
+STALE = 3600
 
 
 def running_binary() -> Optional[Path]:
@@ -60,18 +63,25 @@ def replace(new: Path, binary: Path, aside: bool = os.name == "nt") -> None:
         raise
 
 
-def tidy(binary: Optional[Path] = None) -> None:
-    """Remove what a self-update left beside the binary: the old one renamed aside, once it no
-    longer runs, and a new one it could not remove. A file still in use stays, until a later start."""
+def tidy(binary: Optional[Path] = None, aside: bool = os.name == "nt") -> None:
+    """Remove what a self-update left beside the binary: with ``aside``, the old one renamed aside,
+    once it no longer runs; and a new one it could not remove, or was killed before it installed —
+    once it is an hour old, as a younger one may be another self-update's, at work. A file still in
+    use stays, until a later start. Without ``aside`` — on Linux and macOS — a ``NAME.old`` is
+    nobody's leftover, and may be someone's copy: it stays."""
     binary = binary or running_binary()
     if binary is None:
         return
     try:
-        for pattern in (binary.name + ".old*", f".{binary.name}.new-*"):
-            for entry in binary.parent.glob(pattern):
-                try:
-                    entry.unlink()
-                except OSError:
-                    pass
+        found = [(entry, True) for entry in binary.parent.glob(f".{binary.name}.new-*")]
+        if aside:
+            found += [(entry, False) for entry in binary.parent.glob(binary.name + ".old*")]
+        for entry, new in found:
+            try:
+                if new and time.time() - entry.stat().st_mtime < STALE:
+                    continue
+                entry.unlink()
+            except OSError:
+                pass
     except OSError:
         pass

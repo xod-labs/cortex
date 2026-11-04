@@ -42,6 +42,13 @@ SOURCE = unittest.skipIf(harness.BINARY, "from source")
 BUILT = unittest.skipUnless(harness.BINARY, "through a built binary")
 
 
+def aged(*paths):
+    """Make ``paths`` older than a self-update at work: two hours old."""
+    for path in paths:
+        then = time.time() - 2 * binary.STALE
+        os.utime(path, (then, then))
+
+
 def answer_of(path):
     """What a release's stand-in answers to ``--version``: the version it was written with."""
     return "cortex " + re.findall(rb"cortex (\d+\.\d+\.\d+)", path.read_bytes())[-1].decode()
@@ -216,6 +223,7 @@ class SelfUpdateTests(ReleaseTestCase):
         self.assertEqual(code, 0)
         self.assertIn("--dry-run: Cortex 9.9.9 downloaded, checked and run", out)
         self.assertEqual(len(list(self.bin.glob(".cortex.new-*"))), 1)
+        aged(*self.bin.glob(".cortex.new-*"))
         binary.tidy(self.binary)
         self.assert_untouched()
 
@@ -356,7 +364,7 @@ class ReplaceTests(unittest.TestCase):
         binary.replace(self.new, self.binary, aside=True)
         self.assertEqual(self.binary.read_bytes(), b"new\n")
         self.assertEqual((self.bin / "cortex.old").read_bytes(), b"old\n")
-        binary.tidy(self.binary)
+        binary.tidy(self.binary, aside=True)
         self.assertEqual(self.names(), ["cortex"])
 
     def test_an_old_one_that_cannot_be_removed_yet_is_renamed_another_way(self):
@@ -365,7 +373,7 @@ class ReplaceTests(unittest.TestCase):
             binary.replace(self.new, self.binary, aside=True)
         self.assertEqual(self.binary.read_bytes(), b"new\n")
         self.assertEqual(len([n for n in self.names() if n.startswith("cortex.old-")]), 1)
-        binary.tidy(self.binary)
+        binary.tidy(self.binary, aside=True)
         self.assertEqual(self.names(), ["cortex"])
 
     def test_a_failure_between_the_two_renames_puts_the_old_one_back(self):
@@ -385,13 +393,24 @@ class ReplaceTests(unittest.TestCase):
 
     def test_tidy_removes_a_new_binary_left_behind(self):
         (self.bin / ".cortex.new-abc.exe").write_bytes(b"x")
-        binary.tidy(self.binary)
+        aged(self.bin / ".cortex.new-abc.exe", self.new)
+        binary.tidy(self.binary, aside=False)
         self.assertEqual(self.names(), ["cortex"])     # and the setup's .cortex.new-1 too
+
+    def test_tidy_leaves_the_new_binary_of_a_self_update_at_work(self):
+        binary.tidy(self.binary, aside=True)
+        self.assertEqual(self.names(), [".cortex.new-1", "cortex"])
+
+    def test_without_the_rename_aside_an_old_binary_is_nobodys_leftover(self):
+        (self.bin / "cortex.old").write_bytes(b"a copy someone keeps\n")
+        binary.tidy(self.binary, aside=False)
+        self.assertEqual(self.names(), [".cortex.new-1", "cortex", "cortex.old"])
 
     def test_tidy_leaves_other_files(self):
         for name in ("cortex-ai", "cortex-ai.old", "notes.old"):
             (self.bin / name).write_bytes(b"x")
-        binary.tidy(self.binary)
+        aged(self.new)
+        binary.tidy(self.binary, aside=True)
         self.assertEqual(self.names(), ["cortex", "cortex-ai", "cortex-ai.old", "notes.old"])
 
     def test_a_running_executable_is_replaced(self):
@@ -509,6 +528,14 @@ class BuiltBinaryTests(ReleaseTestCase):
         (self.bin / (self.binary.name + ".old")).write_bytes(b"the binary a self-update renamed aside")
         self.assertEqual(self.run_copy("--version").returncode, 0)
         self.assertEqual(sorted(p.name for p in self.bin.iterdir()), [self.binary.name])
+
+    def test_a_start_removes_a_new_binary_a_killed_self_update_left(self):
+        left, at_work = self.bin / f".{self.binary.name}.new-left", self.bin / f".{self.binary.name}.new-at-work"
+        left.write_bytes(b"a self-update killed half-way")
+        at_work.write_bytes(b"another self-update, downloading")
+        aged(left)
+        self.assertEqual(self.run_copy("--version").returncode, 0)
+        self.assertEqual(sorted(p.name for p in self.bin.iterdir()), sorted([self.binary.name, at_work.name]))
 
     @unittest.skipUnless(harness.EXPECTED_VERSION, "the version the binary stands for")
     def test_on_its_own_version_it_downloads_nothing(self):

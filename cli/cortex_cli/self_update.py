@@ -223,7 +223,7 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
     finally:
         try:
             new.unlink(missing_ok=True)
-        except OSError:     # still held, on Windows: the next start removes it
+        except OSError:     # still held, on Windows: a start an hour later removes it
             pass
 
     out.write(f"Installed cortex {target} as {display(str(binary))}, in place of {own}.\n")
