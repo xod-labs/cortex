@@ -123,6 +123,7 @@ class PruneTests(PruneTestCase):
         proc = self.run_cortex(self.tmp, "prune", "code", "code/a", "code")
         self.assert_ok(proc)
         self.assertIn("3 project(s) found", proc.out)
+        self.assertIn(f"  kept     9.9.7 — used by {str(self.a).replace(os.sep, '/')}\n", proc.out)    # once
         self.assertIn("9.9.6", self.in_store())
 
     def test_a_copy_sync_made_is_not_searched(self):
@@ -198,6 +199,18 @@ class PruneTests(PruneTestCase):
         self.assert_ok(proc)
         self.assertIn("broken: cortex.toml", proc.err)
         self.assertIn("its version is not known", proc.err)
+
+    @unittest.skipIf(os.name == "nt" or AS_ROOT, "a directory its owner cannot read: POSIX, and not as root")
+    def test_a_directory_that_cannot_be_read_is_named(self):
+        locked = self.code / "locked"
+        (locked / "inner").mkdir(parents=True)
+        (locked / "inner" / "cortex.toml").write_text('version = "9.9.6"\ntheme = "h2g2"\n', encoding="utf-8")
+        os.chmod(locked, 0)
+        proc = self.run_cortex(self.tmp, "prune", "code", "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn(f"note: {str(locked).replace(os.sep, '/')} cannot be read — a project under it is not counted",
+                      proc.err)
+        self.assertIn("  would remove  9.9.6", proc.out)
 
     @unittest.skipIf(os.name == "nt" or AS_ROOT, "a file its owner cannot read: POSIX, and not as root")
     def test_a_project_file_that_cannot_be_opened_is_named(self):
