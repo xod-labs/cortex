@@ -30,7 +30,7 @@ The store grows by one directory per version a machine ever synced. A version is
 - **`cortex prune DIR...`** finds the projects under the directories it is given, keeps the versions they pin and the binary's own, and removes every other version from the store. It keeps no list: the user says where the projects are.
 - **Each bootstrap template carries a marker**, `<!-- cortex:bootstrap layout=single format=1 -->`, on its own line under the title. `layout` says which layout the file was written for, and `format` which contract version. `cortex init` and `cortex upgrade` read the marker, never the text around it.
 - **`cortex self-update [VERSION]`** replaces the binary with a release's — the latest by default — downloaded and checked as the install script does it. Every refusal of a version newer than the binary names it, and `cortex upgrade` says when a release newer than the binary is out.
-- **The bootstrap asks the assistant to keep the machine in step**: a spec missing, or of another version than `cortex.toml`'s, and it runs `cortex sync`; a binary too old for the pin, and it runs `cortex self-update`, then `cortex sync`. It says what it runs, its tool asks the user first when set to, and it never moves the project's pin.
+- **The bootstrap asks the assistant to keep the machine in step**: a spec missing, or of another version than `cortex.toml`'s, and it runs `cortex sync`; a binary too old for the pin, and it runs `cortex self-update`, then `cortex sync`. It says what it runs, its tool asks the user first when set to, and it never moves the project's pin of its own accord.
 
 Out of scope: the digests of images a project depends on, which #99 listed, wait for a project to declare images (§7); the configuration cascade and the IDE modes (#98); a registry of a machine's projects, which a record of its own adds (§7); the multi-project runtime (ADR-021, #48); the first install of the binary, which stays the install script's.
 
@@ -140,7 +140,7 @@ In the project of the current directory — the nearest `cortex.toml`, as `corte
 
 `--dry-run` runs steps 1 to 5 and changes nothing in the project; the store may gain the target version. The exit code is that of a real run: 1 when step 4 would stop it.
 
-**A release newer than the binary.** With no `VERSION`, `cortex upgrade` asks where the releases are which version is the latest — a few seconds at most — and, when it is newer than the binary, says so: *Cortex 1.5.0 is out — `cortex self-update`, then `cortex upgrade`, moves the project to it*. Offline, or with a `VERSION`, it says nothing of it. It never moves the binary itself.
+**A release newer than the binary.** With no `VERSION`, `cortex upgrade` asks where the releases are which version is the latest — a few seconds at most — and, when it is newer than the binary, says so: *Cortex 1.5.0 is out — `cortex self-update`, then `cortex upgrade`, moves the project to it*. Offline, or with a `VERSION`, it says nothing of it. `CORTEX_NO_UPDATE_CHECK`, set to anything but an empty value, turns the question off — a CI, or a network that drops what it does not allow rather than refusing it. It never moves the binary itself.
 
 ### 3.6 `cortex prune`
 
@@ -185,7 +185,7 @@ The first rules of both bootstrap templates — what the assistant does before a
 | no `cortex` command — nor `cortex-ai` | tells the user how to install it, and goes no further |
 
 - **It says what it runs, and why, before it runs it.** Whether the user approves each command is the setting of the assistant's tool, not the bootstrap's: a tool set to ask, asks. An assistant that cannot run commands asks the user to run them.
-- **It never moves the project's pin**: `cortex upgrade`, or an edit of `version`, is the team's decision, made in a commit.
+- **It never moves the project's pin of its own accord**: `cortex upgrade`, or an edit of `version`, is the team's decision, made in a commit. Asked by the user, it does — `cortex upgrade --dry-run` first, to show what changes. In a workspace whose `cortex.toml` is not committed, the pin is the developer's own, and so is the decision.
 - **It goes no further until the sync succeeded**: it does not work from a spec of another version than the one the project pins.
 
 These rules are part of format 1 (§3.1): no released template carried a marker before them.
@@ -263,8 +263,8 @@ Acceptance criteria:
 - a running executable is replaced on every target — on Windows renamed aside, and the `.old` it leaves removed by the next run
 - a source checkout, and a directory the user cannot write in, are refused with the install script's command; `--dry-run` replaces nothing; a malformed version exits 2
 - `cortex sync` on a project pinned to a version newer than the binary names `cortex self-update`, and so does `cortex upgrade` given such a version
-- with no `VERSION`, `cortex upgrade` says when a release newer than the binary is out, and says nothing of it offline
-- both bootstrap templates have the assistant run `cortex sync`, and `cortex self-update` when sync asks for it, never `cortex upgrade`; the init parity matrix, re-captured, differs by those lines only
+- with no `VERSION`, `cortex upgrade` says when a release newer than the binary is out, says nothing of it offline, and asks nothing with `CORTEX_NO_UPDATE_CHECK` set
+- both bootstrap templates have the assistant run `cortex sync`, and `cortex self-update` when sync asks for it, and `cortex upgrade` only when the user asks for it; the init parity matrix, re-captured, differs by those lines only
 
 ## 5. Consequences
 
