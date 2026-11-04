@@ -1,7 +1,7 @@
 # ADR-010 — `cortex.lock`, `cortex upgrade` and the bootstrap marker
 
-- **Status:** Proposed
-- **Date:** 2026-11-03 (proposed)
+- **Status:** Implemented
+- **Date:** 2026-11-03 (proposed) · 2026-11-04 (accepted) · 2026-11-04 (implemented, 1.4.0)
 - **Authors:** Cortex maintainers (initiated by the maintainer, drafted by @Oolon)
 - **Affects:** `cli/cortex_cli/` (`sync`, `init`, `validate`, the store, three new commands `upgrade`, `prune` and `self-update`), `core/cortex_core/project.py` (the grammar of `cortex.lock`), `templates/` (the two bootstrap templates), the init parity matrix, `README.md`, `docs/getting-started.md`, `docs/extending-layers.md`, `docs/migrating-to-the-binary.md`
 - **Relates to:** [ADR-008](ADR-008-cortex-binary.md) — §3.3 (the store), §3.4 (`cortex.toml`), §3.5 (`cortex sync`), §3.7 (`cortex init` and the bootstrap file) and §7, which left the lock, the upgrade and the pruning to this record; ADR-008 records it in its own amendments when this ADR is implemented · roadmap epic [#99](https://github.com/xod-labs/cortex/issues/99) · [#141](https://github.com/xod-labs/cortex/issues/141), folded in on 2026-11-03

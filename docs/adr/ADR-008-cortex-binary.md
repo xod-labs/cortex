@@ -505,3 +505,13 @@ ADR-009 became the release cycle on 2026-10-30, and every record planned after i
 ### 2026-11 — the planned records are numbered one higher again
 
 ADR-010 became `cortex.lock`, `cortex upgrade` and the bootstrap marker on 2026-11-03 ([#99](https://github.com/xod-labs/cortex/issues/99)): the follow-up of §7 that this record calls #99. Every record planned after it moved up by one. In this record, ADR-012 is now ADR-013 ([#40](https://github.com/xod-labs/cortex/issues/40)), and ADR-017 is now ADR-018 ([#45](https://github.com/xod-labs/cortex/issues/45)).
+
+### After 1.3.2 — ADR-010 takes up the follow-up of §7
+
+[ADR-010](ADR-010-lock-and-upgrade.md), implemented in 1.4.0, is the follow-up §7 calls #99: *`cortex.lock` and upgrade tooling*. What it changes here:
+
+- **A project commits a third file, `cortex.lock`** (§3.4): the version it resolved and the digest of that version's spec. `cortex sync` writes it, and refuses a spec whose files differ from it (§3.5); `cortex sync --locked`, in CI, never writes it.
+- **The store still keeps no list of projects** (§3.3). `cortex prune DIR...` removes the versions no project under the directories it is given pins, by a rename first; a version put in the store again is set aside first, and put back if the new one cannot be had.
+- **The binary moves itself**: `cortex self-update` replaces it with a release's, checked against that release's `SHA256SUMS` (§3.2). The install scripts stay the way to install the first one. Every refusal of a version newer than the binary names `cortex self-update` instead of the install script's command.
+- **`cortex init` reads a kept bootstrap through its marker** (§3.7), `<!-- cortex:bootstrap layout=… format=N -->`, not through its first line, and writes the marker with the digest of what it wrote.
+- **The bootstrap has the assistant run `cortex sync` itself**, and `cortex self-update` when the pin asks for it, where it asked the user to (§3.7).
