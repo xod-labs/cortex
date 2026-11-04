@@ -666,7 +666,9 @@ class NewerReleaseTests(UpgradeTestCase):
         self.assertFalse([path for path in self.release.requested if path.startswith("/latest/")])
 
     def test_the_latest_not_newer_is_not_said(self):
-        self.latest_is("9.9.8")
+        if not (self.release.root / "download" / OWN).exists():         # a build of no release
+            FakeRelease.publish(self.release.root / "download" / OWN, OWN)
+        self.latest_is(OWN)
         proc = self.upgrade(self.project(OWN))
         self.assert_ok(proc)
         self.assertNotIn("is out", proc.out)

@@ -197,6 +197,9 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
                                       "Nothing was replaced.")
             fh.write(unpack(data, asset))
         os.chmod(new, 0o755)
+        # A first start can take a while: macOS checks a new executable before it runs it.
+        out.write(f"Running it once, to check it answers Cortex {target}\n")
+        out.flush()
         answer = run(new)
         if answer != f"cortex {target}":
             raise SelfUpdateError(f"the binary of Cortex {target} answers {answer or 'nothing'!r} to --version, "
