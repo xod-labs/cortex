@@ -44,10 +44,17 @@ def _upgrade(args: List[str]) -> int:
     return upgrade.run(args)
 
 
+def _self_update(args: List[str]) -> int:
+    from . import self_update
+
+    return self_update.run(args)
+
+
 COMMANDS: Dict[str, Tuple[str, Callable[[List[str]], int]]] = {
     "init": ("Make a directory a Cortex project: cortex.toml, the AI tool's instructions", _init),
     "sync": ("Put the pinned Cortex version in the store, and tell the project where it is", _sync),
     "upgrade": ("Move the project to another Cortex version, saying first what changes", _upgrade),
+    "self-update": ("Replace this cortex with a release's binary — the latest, by default", _self_update),
     "prune": ("Remove from the store the versions no project under the directories given pins", _prune),
     "validate": ("Check the project's overlays against the spec (ADR-001)", _validate),
 }
@@ -66,7 +73,7 @@ def known_specs_report() -> str:
 
 
 def usage() -> str:
-    commands = "".join(f"  {name:<10} {summary}\n" for name, (summary, _) in COMMANDS.items())
+    commands = "".join(f"  {name:<12} {summary}\n" for name, (summary, _) in COMMANDS.items())
     return ("Usage: cortex <command> [options]\n\n"
             + (f"Commands:\n{commands}\n" if commands else "")
             + "Options:\n"

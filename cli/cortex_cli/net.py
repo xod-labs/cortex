@@ -19,7 +19,7 @@ import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Optional
+from typing import List, Optional
 
 from .version import VERSION
 
@@ -79,19 +79,26 @@ def check_url(url: str) -> None:
 
 
 class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
+    def __init__(self, seen: Optional[List[str]] = None):
+        super().__init__()
+        self.seen = seen
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         check_url(newurl)
+        if self.seen is not None:
+            self.seen.append(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def get(url: str, max_bytes: int) -> bytes:
+def get(url: str, max_bytes: int, timeout: float = TIMEOUT, redirects: Optional[List[str]] = None) -> bytes:
     """The body of ``url``, at most ``max_bytes`` of it — HTTPS verified, redirects followed as
-    long as they stay on https."""
+    long as they stay on https, each one appended to ``redirects`` when it is given."""
     check_url(url)
-    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_context()), _CheckedRedirects())
+    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_context()),
+                                         _CheckedRedirects(redirects))
     try:
         request = urllib.request.Request(url, headers={"User-Agent": f"cortex/{VERSION}"})
-        with opener.open(request, timeout=TIMEOUT) as response:
+        with opener.open(request, timeout=timeout) as response:
             data = response.read(max_bytes + 1)
     except urllib.error.HTTPError as error:
         raise DownloadError(f"{url}: HTTP {error.code} {error.reason}")
