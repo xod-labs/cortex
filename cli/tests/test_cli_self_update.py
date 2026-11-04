@@ -151,6 +151,13 @@ class SelfUpdateTests(ReleaseTestCase):
             self.update()
         self.assert_untouched()
 
+    def test_releases_without_a_latest_ask_for_a_version(self):
+        shutil.rmtree(self.release.root / "latest")         # a mirror of download/ alone
+        with self.assertRaisesRegex(SelfUpdateError, "could not learn the latest release: .*HTTP 404.* — name the one "
+                                                     "to install: cortex self-update X.Y.Z"):
+            self.update()
+        self.assert_untouched()
+
     def test_a_version_that_is_not_released_replaces_nothing(self):
         with self.assertRaisesRegex(SelfUpdateError, "could not download Cortex 9.9.7: .*HTTP 404"):
             self.update("9.9.7", own="9.9.9")

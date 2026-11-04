@@ -166,8 +166,9 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
     if wanted is None:
         try:
             target, sums = latest(fetch)
-        except net.DownloadError as error:
-            raise SelfUpdateError(f"could not learn the latest release: {error}")
+        except net.DownloadError as error:     # offline, or a mirror that serves no latest/
+            raise SelfUpdateError(f"could not learn the latest release: {error} — name the one to install: "
+                                  "cortex self-update X.Y.Z")
         if target is None:
             raise SelfUpdateError(f"{base} does not say which release is the latest — name the one to install: "
                                   "cortex self-update X.Y.Z")
