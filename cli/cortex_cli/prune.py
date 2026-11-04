@@ -19,7 +19,7 @@ import sys
 import tomllib
 from collections import deque
 from pathlib import Path
-from typing import Dict, Iterator, List, TextIO
+from typing import Dict, Iterator, List, Optional, TextIO
 
 from cortex_core.project import is_version, shown
 
@@ -74,22 +74,35 @@ def _searched(here: Path, name: str) -> bool:
     return name not in SKIPPED and not (name == sync.LINK and (sync.is_link(here / name) or (here / name / sync.MARKER).is_file()))
 
 
+def _loosely(root: Path) -> Optional[config.Project]:
+    """The project at ``root`` read for its versions only — ``version`` in ``cortex.toml``, ``spec``
+    in ``cortex.local.toml`` — when the files hold what this cortex refuses: a key it does not know,
+    a value it does not take. ``None`` when its version is not known."""
+    def read(name: str) -> dict:
+        try:
+            return tomllib.loads((root / name).read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+            return {}
+
+    pinned, spec = read(config.PROJECT_FILE).get("version"), read(config.LOCAL_FILE).get("spec")
+    if not is_version(pinned):
+        return None
+    return config.Project(root=str(root), version=Version(pinned), theme="none", sync=None, local_theme=None,
+                          spec=spec if isinstance(spec, str) else None)
+
+
 def versions_of(root: Path, err: TextIO) -> List[str]:
     """The versions a project uses: the one its ``cortex.toml`` pins, and the one it reads now —
     ``spec`` in ``cortex.local.toml``, or ``cortex/`` — which differ until it syncs a teammate's bump.
-    Only ``version`` is needed: a key this cortex does not know elsewhere loses no version."""
+    Only those are needed: a key this cortex does not know, in either file, loses no version."""
+    refused = None
     try:
         project = config.load(str(root))
     except config.ConfigError as error:
-        try:
-            pinned = tomllib.loads((root / config.PROJECT_FILE).read_text(encoding="utf-8-sig")).get("version")
-        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
-            pinned = None
-        if is_version(pinned):
-            err.write(f"note: {display(str(root))}: {error} — only its version, {pinned}, is read\n")
-            return [pinned]
-        err.write(f"note: {display(str(root))}: {error} — its version is not known, so none is kept for it\n")
-        return []
+        refused, project = error, _loosely(root)
+        if project is None:
+            err.write(f"note: {display(str(root))}: {error} — its version is not known, so none is kept for it\n")
+            return []
     except OSError as error:
         err.write(f"note: {display(str(root))}: {sync.os_error(error)} — its version is not known, so none is kept for it\n")
         return []
@@ -99,6 +112,8 @@ def versions_of(root: Path, err: TextIO) -> List[str]:
         synced = validate._synced_version(project, spec)
         if synced and synced not in used:
             used.append(synced)
+    if refused is not None:
+        err.write(f"note: {display(str(root))}: {refused} — only its versions are read: {', '.join(used)}\n")
     return used
 
 

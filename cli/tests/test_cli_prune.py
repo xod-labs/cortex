@@ -96,11 +96,20 @@ class PruneTests(PruneTestCase):
         self.assertEqual(self.in_store(), ["9.9.6", "9.9.7", "9.9.8", OWN])
 
     def test_a_key_this_cortex_does_not_know_loses_no_version(self):
-        (self.a / "cortex.toml").write_text('version = "9.9.6"\ntheme = "h2g2"\nlater = "x"\n', encoding="utf-8")
-        proc = self.run_cortex(self.tmp, "prune", "code")
-        self.assert_ok(proc)
-        self.assertIn("only its version, 9.9.6, is read", proc.err)
-        self.assertIn("9.9.6", self.in_store())
+        # A bump not synced, beside a key of a later cortex — in either file: both versions are kept.
+        local = (self.a / "cortex.local.toml").read_text(encoding="utf-8")
+        for name in ("cortex.toml", "cortex.local.toml"):
+            with self.subTest(file=name):
+                (self.a / "cortex.toml").write_text('version = "9.9.6"\ntheme = "h2g2"\n'
+                                                    + ('later = "x"\n' if name == "cortex.toml" else ""), encoding="utf-8")
+                (self.a / "cortex.local.toml").write_text(local + ('later = "x"\n' if name == "cortex.local.toml" else ""),
+                                                          encoding="utf-8")
+                proc = self.run_cortex(self.tmp, "prune", "code", "--dry-run")
+                self.assert_ok(proc)
+                self.assertIn(f'{name}: unknown key "later"', proc.err)
+                self.assertIn("only its versions are read: 9.9.6, 9.9.7", proc.err)
+                self.assertIn("  kept     9.9.6 — used by ", proc.out)
+                self.assertIn("  kept     9.9.7 — used by ", proc.out)
 
     def test_a_project_is_counted_once_and_through_a_link(self):
         elsewhere = self.tmp / "elsewhere" / "c"
