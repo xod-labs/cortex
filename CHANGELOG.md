@@ -7,6 +7,9 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+### Changed
+- **`cortex init` reads a kept bootstrap through its marker** ([#141](https://github.com/xod-labs/cortex/issues/141), ADR-010). Each bootstrap template carries `<!-- cortex:bootstrap layout=… format=1 -->` under its title, with a comment that asks to keep it. A team may retitle or extend the file: `cortex init` reads its layout and format from that line, and no longer takes a retitled workspace bootstrap for a single project's.
+
 ## [1.3.2] - 2026-11-03 — Somebody Else's Problem _(Released)_
 [Full notes](changelog/1.3.2.md)
 

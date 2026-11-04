@@ -14,6 +14,10 @@ git repository no ``.gitignore`` is created, and a note says so. In a project th
 ``cortex.toml`` keeps its version, and changes only for the options given: ``--theme`` or
 ``--no-personality``, ``--link`` or ``--copy``.
 
+A kept instructions file is read through the marker the templates carry under their title
+(ADR-010 §3.1): the layout it was written for, and the format of its contract. A version whose
+templates carry no marker yet keeps the checks it had.
+
 Two deliberate differences: services are named by a repeatable ``--service``, the interactive
 prompt remaining only when stdin is a terminal and none was given; and an existing instructions
 file is kept unless ``--force``, instead of a ``y/N`` prompt that blocks every unattended run —
@@ -27,10 +31,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
-from typing import List, Optional, TextIO
+from typing import List, NamedTuple, Optional, TextIO, Tuple
 
 from cortex_core.project import is_theme
 
@@ -46,6 +51,10 @@ TOOLS = {
 ALIAS_PLACEHOLDER = b"<!-- @alias: my-project -->"
 PERSONALITY_BEGIN = b"<!-- PERSONALITY:BEGIN -->"
 PERSONALITY_END = b"<!-- PERSONALITY:END -->"
+# What some editors put before the first line of a UTF-8 file: no part of what it says.
+BOM = b"\xef\xbb\xbf"
+# The marker a bootstrap template carries under its title (ADR-010 §3.1): a whole line, read anywhere.
+BOOTSTRAP_MARKER = re.compile(rb"(?m)^<!-- cortex:bootstrap layout=(single|workspace) format=([1-9][0-9]*) -->\r?$")
 
 
 class InitError(Exception):
@@ -144,15 +153,73 @@ def _refuse_instructions_file(root: Path, path: Path) -> None:
                         "instructions file")
 
 
+def without_bom(content: bytes) -> bytes:
+    """A kept file as it reads: without the byte order mark an editor may have put before its first line."""
+    return content[len(BOM):] if content.startswith(BOM) else content
+
+
 def bootstrap_of_cortex(content: bytes) -> bool:
     """A file the templates wrote: their heading, or their personality block."""
-    return content.startswith(b"# Cortex AI Team") or PERSONALITY_BEGIN in content
+    return without_bom(content).startswith(b"# Cortex AI Team") or PERSONALITY_BEGIN in content
 
 
 def reads_the_local_file(content: bytes) -> bool:
     """A bootstrap of this cortex's templates, which read ``spec`` in ``cortex.local.toml``. An
     older one reads ``cortex/`` as the submodule it was, and finds no spec once it is gone."""
     return config.LOCAL_FILE.encode() in content
+
+
+def markers(content: bytes) -> List[Tuple[str, int]]:
+    """The bootstrap markers of a file, ``(layout, format)`` each: one in a bootstrap."""
+    return [(m.group(1).decode(), int(m.group(2))) for m in BOOTSTRAP_MARKER.finditer(without_bom(content))]
+
+
+class Kept(NamedTuple):
+    """What a kept instructions file is: a sentence about the file, the same after "kept:", and
+    whether ``--force`` is the way out — not for a file a later Cortex wrote, which it would downgrade."""
+    sentence: str
+    phrase: str
+    force: bool = True
+
+
+def kept_bootstrap(kept: bytes, template: bytes) -> Optional[Kept]:
+    """What a kept instructions file is, against the template the pinned version writes for this
+    layout: ``None`` for a bootstrap of that layout and format. The first rule that applies, in the
+    order of ADR-010 §3.1. A version whose templates carry no marker keeps the checks it had."""
+    kept = without_bom(kept)
+    wanted, found = markers(template), markers(kept)
+    if not bootstrap_of_cortex(kept) and not found:
+        return NO_BOOTSTRAP
+    if not wanted:
+        if not reads_the_local_file(kept):
+            return Kept(f"is an older Cortex bootstrap: it does not read {config.LOCAL_FILE}, which names the spec now",
+                        f"an older Cortex bootstrap, which does not read {config.LOCAL_FILE}")
+        if kept.split(b"\n", 1)[0] != template.split(b"\n", 1)[0]:
+            return _other_layout("workspace" if b"Workspace Mode" in template.split(b"\n", 1)[0] else "single")
+        return None
+    if len(found) > 1:
+        return Kept("holds several bootstrap markers, so none is read", "it holds several bootstrap markers, so none is read")
+    if not found:
+        return Kept("is an older Cortex bootstrap, written before the bootstrap marker",
+                    "an older Cortex bootstrap, written before the bootstrap marker")
+    (layout, has), (writes_layout, writes) = found[0], wanted[0]
+    if layout != writes_layout:
+        return _other_layout(writes_layout)
+    if has < writes:
+        return Kept(f"is an older Cortex bootstrap: format {has}, where this version writes format {writes}",
+                    f"an older Cortex bootstrap, of format {has} where this version writes format {writes}")
+    if has > writes:
+        return Kept(f"was written by a later Cortex: format {has}, where this version writes format {writes}",
+                    f"a bootstrap of a later Cortex, of format {has} where this version writes format {writes}", force=False)
+    return None
+
+
+NO_BOOTSTRAP = Kept("holds no Cortex bootstrap: the tool will not find Cortex", "it holds no Cortex bootstrap")
+
+
+def _other_layout(wanted: str) -> Kept:
+    other = "a workspace" if wanted == "single" else "a single project"
+    return Kept(f"was written for {other}", f"a bootstrap written for {other}")
 
 
 def _refuse_a_file_on_the_way(path: Path, what: str) -> None:
@@ -329,26 +396,22 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     templates = spec / "templates"
     workspace = options.workspace
     bootstrap = templates / ("bootstrap-instructions-workspace.md" if workspace else "bootstrap-instructions.md")
+    template = bootstrap.read_bytes()
     if instructions_file is None:
         out.write("✓ the instructions files are kept — several are there; --tool names the one to write\n")
     elif instructions_file.exists() and not options.force:
         out.write(f"✓ {display(str(instructions_file))} kept — --force replaces it\n")
         kept = instructions_file.read_bytes()
         again = "cortex init --force writes it again, and keeps it as .bak"
-        if not bootstrap_of_cortex(kept):
-            err.write(f"note: {display(str(instructions_file))} holds no Cortex bootstrap: the tool will not find "
-                      f"Cortex — {again}\n")
-        elif not reads_the_local_file(kept):
-            err.write(f"note: {display(str(instructions_file))} is an older Cortex bootstrap: it does not read "
-                      f"{config.LOCAL_FILE}, which names the spec now — {again}\n")
-        elif kept.split(b"\n", 1)[0] != bootstrap.read_bytes().split(b"\n", 1)[0]:
-            err.write(f"note: {display(str(instructions_file))} was written for "
-                      f"{'a single project' if workspace else 'a workspace'} — {again}\n")
+        found = kept_bootstrap(kept, template)
+        if found is not None:
+            err.write(f"note: {display(str(instructions_file))} {found.sentence} — "
+                      f"{again if found.force else 'it is kept as it is'}\n")
         elif (PERSONALITY_BEGIN in kept) != personality:
             err.write(f"note: {display(str(instructions_file))} was written {'without' if personality else 'with'} "
                       f"the personality block this theme needs removed or added — {again}\n")
     else:
-        wanted = instructions(bootstrap.read_bytes(), personality)
+        wanted = instructions(template, personality)
         replaced = instructions_file.exists()
         current = instructions_file.read_bytes() if replaced else None
         if current == wanted:
@@ -371,15 +434,11 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             other = root / rel
             if other == instructions_file or not other.is_file():
                 continue
-            content = other.read_bytes()
-            if not bootstrap_of_cortex(content):
-                found = "it holds no Cortex bootstrap"
-            elif not reads_the_local_file(content):
-                found = f"an older Cortex bootstrap, which does not read {config.LOCAL_FILE}"
-            else:
+            found = kept_bootstrap(other.read_bytes(), template)
+            if found is None:
                 continue
-            err.write(f"note: {rel} is there and was kept: {found} — "
-                      f"cortex init --tool {name} --force replaces it, and keeps it as .bak\n")
+            err.write(f"note: {rel} is there and was kept: {found.phrase} — " + (
+                f"cortex init --tool {name} --force replaces it, and keeps it as .bak\n" if found.force else "kept as it is\n"))
         if project is not None and not known_before and instructions_file is not None:
             err.write(f"note: no instructions file of a known tool was here, and {TOOLS['copilot']} is written: "
                       "a project of --tool custom names it again, with --instructions-file\n")
