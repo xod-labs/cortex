@@ -10,6 +10,7 @@ sensible, so the copy refuses it — and installs instead a program built from p
 which answers, while the copy runs.
 """
 
+import importlib
 import io
 import os
 import platform
@@ -20,6 +21,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import types
 import unittest
 import zipfile
 from pathlib import Path
@@ -28,7 +30,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
-from cortex_cli import binary, net, self_update, store  # noqa: E402
+from cortex_cli import binary, net, self_update, store, version  # noqa: E402
 from cortex_cli.paths import display  # noqa: E402
 from cortex_cli.self_update import SelfUpdateError  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
@@ -150,6 +152,21 @@ class SelfUpdateTests(ReleaseTestCase):
                 self.assertEqual(piped.read[0], self.ELSEWHERE)
         self.assertEqual(self.update("9.9.8")[2], "")       # nothing downloaded: nothing to say
 
+    def test_the_host_is_said_before_the_first_request_to_it(self):
+        for wanted in ("9.9.9", None):
+            with self.subTest(wanted=wanted):
+                self.latest_is("9.9.9")
+                events = []
+
+                def fetch(url, *args, **kwargs):
+                    events.append("fetched")
+                    return net.get(url, *args, **kwargs)
+
+                err = mock.Mock(write=lambda text: events.append(text))
+                self_update.self_update(wanted, True, io.StringIO(), err, binary=self.binary, own=Version("9.9.8"),
+                                        fetch=fetch, run=answer_of, system="Linux", machine="x86_64")
+                self.assertEqual(events[:2], [self.ELSEWHERE, "fetched"])
+
     def test_githubs_releases_say_nothing_of_where_they_come_from(self):
         os.environ.pop("CORTEX_RELEASES_URL")
         for wanted in ("9.9.9", None):
@@ -173,6 +190,11 @@ class SelfUpdateTests(ReleaseTestCase):
         # The SHA256SUMS the redirect led to is the release's: it is not asked for twice.
         self.assertEqual(self.release.requested, ["/latest/download/SHA256SUMS", "/download/9.9.9/SHA256SUMS",
                                                   "/download/9.9.9/cortex-linux-x86_64.tar.gz"])
+
+    @unittest.skipIf(os.name == "nt", "a mode Windows does not keep")
+    def test_the_binary_installed_is_run_by_all_and_written_by_its_owner(self):
+        self.assertEqual(self.update("9.9.9")[0], 0)
+        self.assertEqual(self.binary.stat().st_mode & 0o777, 0o755)
 
     def test_a_version_named_is_the_one_installed(self):
         self.latest_is("9.9.9")
@@ -431,6 +453,38 @@ class AssetTests(unittest.TestCase):
             with self.subTest(system=system, machine=machine):
                 with self.assertRaisesRegex(SelfUpdateError, f"no build for {system.lower()} on {machine.lower()}"):
                     self_update.asset_name(system, machine)
+
+
+class StampTests(ReleaseTestCase):
+    """The asset is the one of the target stamped in the build (cli/build.py), not the machine's."""
+
+    def test_the_command_downloads_the_asset_of_the_target_stamped_in_it(self):
+        """Windows on Arm runs the x86_64 build, and tells the process it emulates ARM64."""
+        def answered(args, **kwargs):
+            kwargs["stdout"].write(b"cortex 9.9.9\n")
+            return subprocess.CompletedProcess(args, 0)
+
+        with mock.patch.object(self_update, "running_binary", return_value=self.binary), \
+                mock.patch.object(self_update, "TARGET", "windows-x86_64"), \
+                mock.patch.object(self_update, "VERSION", "9.9.8"), \
+                mock.patch.object(self_update.platform, "system", return_value="Windows"), \
+                mock.patch.object(self_update.platform, "machine", return_value="ARM64"), \
+                mock.patch.object(self_update.subprocess, "run", side_effect=answered), \
+                mock.patch.object(sys, "stdout", io.StringIO()), mock.patch.object(sys, "stderr", io.StringIO()) as err:
+            code = self_update.run(["9.9.9", "--dry-run"])
+        self.assertEqual(code, 0, err.getvalue())
+        self.assertIn("/download/9.9.9/cortex-windows-x86_64.zip", self.release.requested)
+        self.assert_untouched()
+
+    def test_a_build_reads_its_target_from_its_stamp(self):
+        stamp = types.ModuleType("cortex_cli._stamp")
+        exec(build.stamp_module("1.2.3", "windows-x86_64"), stamp.__dict__)
+        self.addCleanup(importlib.reload, version)
+        with mock.patch.dict(sys.modules, {"cortex_cli._stamp": stamp}):
+            importlib.reload(version)
+            self.assertEqual((version.VERSION, version.TARGET), ("1.2.3", "windows-x86_64"))
+        importlib.reload(version)       # a source checkout: no stamp, no target
+        self.assertIsNone(version.TARGET)
 
 
 class NewerReleaseTests(ReleaseTestCase):
