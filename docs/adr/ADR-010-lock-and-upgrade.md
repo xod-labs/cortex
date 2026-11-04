@@ -401,3 +401,4 @@ Bluspark's last notes on the text, read after the release; none changes what was
 - **§4, phase 3**: a version newer than the binary is refused naming `cortex self-update`, not "the upgrade command".
 - **§5**: the asset self-update downloads is that of the binary's own build target (§3.7, step 3).
 - **The header**: `cli/build.py` is affected, since it stamps the build target in the binary.
+- **The planned records this one names by number** — the multi-project runtime, ADR-021 (§2), and the cockpit, ADR-019 (§7) — have no number since 2026-11-04: a planned record takes one only once its text is written. They are #48 and #46. The project registry this record leaves to a record of its own (§7.4) is ADR-011.
