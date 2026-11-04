@@ -310,6 +310,10 @@ In `link` or `copy` mode the template is at `cortex/templates/workflow.md.templa
 
 A machine keeps the list of its Cortex projects in `projects.toml`, beside the store: `~/.cortex/projects.toml`, or `$CORTEX_HOME/projects.toml` ([ADR-011](adr/ADR-011-project-registry.md)). An entry is a project root — the directory of `cortex.toml`, the workspace root in workspace mode — with a name and a path, nothing else: what a project pins and reads is read from the project each time.
 
+`cortex init` and `cortex sync` fill it — and `cortex upgrade`, which syncs. Once one of them has succeeded, a project the registry does not list is added, named after its directory, and said once: *registered as acme — `cortex project list` lists this machine's projects*. An entry is never renamed or moved: a project moved on disk is registered again at its new path, under a free name, and its old entry is `missing` until `cortex project remove` drops it. A registry that cannot be written is a warning, never a failed sync. On a CI runner, or for a throwaway project, set `CORTEX_NO_REGISTER` to any value but an empty one: the commands then neither read nor write the registry.
+
+`cortex project` manages it by hand:
+
 ```bash
 cortex project add                          # the project of the current directory, named after its directory
 cortex project add ~/code/acme --name acme  # another one, under a name of your choice
