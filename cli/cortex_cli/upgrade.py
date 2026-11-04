@@ -23,6 +23,9 @@ most, and said by nothing offline. ``CORTEX_NO_UPDATE_CHECK``, set, keeps it fro
 ``cortex upgrade --all`` moves every project of the registry (ADR-011 §3.5), in name order, to the
 same target: one that is not ``ok`` is skipped, one that refuses stops none of the others, and the
 command ends with a line per project and what each must commit. The release is asked for once.
+``--branch NAME`` makes the branch ``NAME`` in each project that is a git work tree, before anything
+of it is written — refused where it exists; ``--commit --message M`` commits there the files the
+upgrade wrote, and nothing else. Neither is the default, and nothing is ever pushed.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -56,13 +60,16 @@ class UpgradeError(Exception):
 
 @dataclass
 class Outcome:
-    """What the upgrade of one project did — or, dry, would do: what ``--all`` says of it."""
+    """What the upgrade of one project did — or, dry, would do: what ``--all`` says of it, and what
+    ``--commit`` commits."""
     root: str
     pinned: Optional[Version]       # the version it was on — None when it was refused before it was read
     target: Optional[Version]
     code: int = 0                   # 1 when it stopped, or would
     why: Optional[str] = None       # why it stopped, or would
     files: List[Path] = field(default_factory=list)     # what the team commits, written — or that would be
+    committed: Optional[str] = None                     # --commit: where — the branch, and the commit
+    uncommitted: Optional[str] = None                   # --commit: why nothing was
 
     def names(self) -> List[str]:
         return [_shown_path(path, self.root) for path in self.files]
@@ -331,14 +338,18 @@ class _Options:
     wanted: Optional[str]                   # VERSION
     dry_run: bool
     force: bool
+    named: Optional[str] = None             # --instructions-file
+    branch: Optional[str] = None            # --branch
+    message: Optional[str] = None           # --commit, with its --message
 
 
 def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: Optional[str],
-            out: TextIO, err: TextIO) -> int:
-    """``cortex upgrade``: the project of ``cwd``."""
+            out: TextIO, err: TextIO, branch: Optional[str] = None, message: Optional[str] = None) -> int:
+    """``cortex upgrade``: the project of ``cwd``. ``branch`` is ``--branch``'s, ``message`` that of
+    ``--commit``, which commits only when it is given."""
     newer = _asking(wanted)
     try:
-        outcome = _upgrade(cwd, wanted, dry_run, force, named, out, err)
+        outcome = _move(cwd, _Options(wanted, dry_run, force, named, branch, message), out, err)
     except BaseException:
         if newer is not None:       # a thread left in a request as Python exits can crash it
             newer.join(self_update.NOTICE_TIMEOUT)
@@ -351,13 +362,15 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
 
 
 def _ending(outcome: Outcome, out: TextIO) -> None:
-    """What the project must commit."""
+    """What the project must commit — or what ``--commit`` committed, and where."""
     names = outcome.names()
     if outcome.target != outcome.pinned:
-        out.write(f"\nCortex {outcome.target} is ready. Commit {', '.join(names)}; teammates run `cortex sync` after "
-                  "they pull.\n")
+        done = f"Committed {', '.join(names)} on {outcome.committed} — nothing was pushed" if outcome.committed else \
+            f"Commit {', '.join(names)}"
+        out.write(f"\nCortex {outcome.target} is ready. {done}; teammates run `cortex sync` after they pull.\n")
     elif names:
-        out.write(f"\nCommit {_and(names)}.\n")
+        out.write(f"\nCommitted {_and(names)} on {outcome.committed} — nothing was pushed.\n" if outcome.committed else
+                  f"\nCommit {_and(names)}.\n")
 
 
 def _served(the_store: store.Store, target: Version, again: str) -> None:
@@ -370,9 +383,11 @@ def _served(the_store: store.Store, target: Version, again: str) -> None:
 
 
 def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: Optional[str],
-             out: TextIO, err: TextIO, announce: bool = True) -> Outcome:
+             out: TextIO, err: TextIO, announce: bool = True,
+             prepare: Optional[Callable[[], None]] = None) -> Outcome:
     """The upgrade of the project at or above ``cwd`` (ADR-010 §3.5): what it did, or would do.
-    ``announce`` off, the project is not named — ``--all`` has named it."""
+    ``announce`` off, the project is not named — ``--all`` has named it. ``prepare`` runs once all is
+    checked, before anything of the project is written — so never on a dry run: ``--branch``'s branch."""
     root = config.find_project(cwd)
     if root is None:
         raise UpgradeError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
@@ -394,7 +409,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
 
     if target == current:
         out.write(f"Cortex {current}: already on it — nothing to move\n")
-        return _resume(root, project, the_store, files, personality, dry_run, out, err)
+        return _resume(root, project, the_store, files, personality, dry_run, out, err, prepare)
 
     the_store.ensure(target)
     target_path = the_store.path(target)
@@ -449,6 +464,8 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
             f"the sync would refuse it — {refused}" if refused is not None else None
         return Outcome(root, current, target, 0 if why is None else 1, why, team)
 
+    if prepare is not None:
+        prepare()
     # The pin, the lock and the bootstrap files are what the team commits: a run that fails leaves
     # them as they were. What the sync changed on this machine — cortex.local.toml, cortex/ — the next
     # `cortex sync` puts right.
@@ -466,7 +483,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
 
 
 def _resume(root: str, project: config.Project, the_store: store.Store, files: List[Path], personality: bool,
-            dry_run: bool, out: TextIO, err: TextIO) -> Outcome:
+            dry_run: bool, out: TextIO, err: TextIO, prepare: Optional[Callable[[], None]] = None) -> Outcome:
     """On the pinned version, finish what an upgrade cut short, or a pin moved by hand, left: a
     bootstrap file nobody changed, of another version, written again; this machine and the lock,
     when they are not on the pin, synced (ADR-010 §3.5, step 1)."""
@@ -494,6 +511,8 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
         return Outcome(root, current, current, files=([lock] if relock else []) + [path for path, _ in rewrites])
     if not rewrites and behind is None:
         return Outcome(root, current, current)
+    if prepare is not None:
+        prepare()
     locked = lock.read_bytes() if lock.is_file() else None
     _write(rewrites, {lock: locked} if behind is not None else {}, root, err,
            (lambda: sync.sync(root, None, None, out, err, announce=False)) if behind is not None else (lambda: None))
@@ -524,6 +543,136 @@ def _write(rewrites: List[Tuple[Path, bytes]], committed: Dict[Path, Optional[by
         err.write(f"note: {names} {'are as they were' if len(before) > 1 else 'is as it was'}"
                   f"{' — `cortex sync` puts this machine back on them' if committed else ''}\n")
         raise
+
+
+# --------------------------------------------------------------------------- #
+# git: --branch and --commit (ADR-011 §3.5)
+# --------------------------------------------------------------------------- #
+
+def _git(root: str, *args: str, timeout: Optional[float] = 30) -> subprocess.CompletedProcess:
+    """``git -C root ARGS``, its answer whatever its exit code. ``UpgradeError`` when git cannot be run."""
+    git = shutil.which("git")
+    if git is None:
+        raise UpgradeError("git is not on PATH")
+    try:
+        return subprocess.run([git, "-C", root, *args], capture_output=True, encoding="utf-8", errors="replace",
+                              stdin=subprocess.DEVNULL, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise UpgradeError(f"git {args[0]} could not run — {error}")
+
+
+def _literal(paths: List[str]) -> List[str]:
+    """``paths`` as pathspecs git takes as they are written, never as patterns."""
+    return [f":(literal){path}" for path in paths]
+
+
+def _failed(proc: subprocess.CompletedProcess) -> UpgradeError:
+    """A git that failed, with what it said."""
+    return UpgradeError(f"git {proc.args[3]} failed — {(proc.stderr or proc.stdout).strip() or proc.returncode}")
+
+
+def _git_ok(root: str, *args: str, timeout: Optional[float] = 30) -> subprocess.CompletedProcess:
+    """``_git``, refused when git fails."""
+    proc = _git(root, *args, timeout=timeout)
+    if proc.returncode != 0:
+        raise _failed(proc)
+    return proc
+
+
+def _work_tree(root: str) -> Optional[str]:
+    """The top of the git work tree ``root`` is in — ``None`` when there is none: no ``.git`` at or
+    above it. One that git refuses — a repository of another owner, say — is refused."""
+    proc = _git(root, "rev-parse", "--show-toplevel")
+    if proc.returncode == 0 and proc.stdout.strip():
+        return proc.stdout.strip()
+    if any(os.path.lexists(os.path.join(directory, ".git")) for directory in (root, *map(str, Path(root).parents))):
+        raise _failed(proc)
+    return None
+
+
+def _branch_exists(root: str, name: str) -> bool:
+    return _git(root, "show-ref", "--verify", "--quiet", f"refs/heads/{name}").returncode == 0
+
+
+def _branch_name(name: str) -> bool:
+    """Whether git takes ``name`` for a branch."""
+    return _git(working_directory(), "check-ref-format", "--branch", name).returncode == 0
+
+
+def _commit(root: str, files: List[Path], message: str) -> Tuple[Optional[str], Optional[str]]:
+    """Commit ``files`` in the work tree of ``root``, with ``message``, and nothing else: a change of
+    another file, staged or not, stays as it is. Where it was committed — the branch, and the commit
+    — or why nothing was: git ignores one of the files, or tracks no ``cortex.toml`` there — the pin
+    is this developer's own (ADR-010 §3.8). ``UpgradeError`` when git fails."""
+    real = os.path.realpath(root)
+    paths = [display(os.path.relpath(os.path.realpath(path), real)) for path in files]     # a link: where it points
+    if _git(root, "ls-files", "--error-unmatch", "--", *_literal([config.PROJECT_FILE])).returncode != 0:
+        return None, f"git does not track its {config.PROJECT_FILE} — the pin is this developer's own"
+    ignored = [path for path in paths if _git(root, "check-ignore", "-q", "--", path).returncode == 0]
+    if ignored:
+        return None, f"git ignores {_and(ignored)}"
+    _git_ok(root, "add", "--", *_literal(paths), timeout=None)
+    if _git(root, "diff", "--cached", "--quiet", "--", *_literal(paths)).returncode == 0:
+        return None, f"{_and(paths)} {'are' if len(paths) > 1 else 'is'} as committed already"
+    _git_ok(root, "commit", "-q", "-m", message, "--", *_literal(paths), timeout=None)       # its hooks run
+    commit = _git_ok(root, "rev-parse", "--short", "HEAD").stdout.strip()
+    branch = _git(root, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
+    return f"{branch or 'a detached HEAD'}, {commit}", None
+
+
+def _move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: bool = True,
+          made: Optional[Dict[str, str]] = None) -> Outcome:
+    """The upgrade of the project of ``cwd``, and what ``--branch`` and ``--commit`` ask of git around
+    it: the branch made once all is checked, before anything is written — refused where it exists;
+    the files the upgrade wrote committed. ``made``: the work trees this run made the branch in, by
+    their top — a second project of one of them finds it made, and does not refuse it."""
+    root = config.find_project(cwd)
+    top = None
+    if root is not None and (options.branch is not None or options.message is not None):
+        top = _work_tree(root)
+        if top is None:
+            what = (["no branch is made"] if options.branch is not None else []) + \
+                (["nothing is committed"] if options.message is not None else [])
+            err.write(f"note: {display(root)} is in no git work tree — {' and '.join(what)} there\n")
+    made = {} if made is None else made
+    key = os.path.normcase(os.path.realpath(top)) if top is not None else ""
+    branching = options.branch is not None and top is not None and made.get(key) != options.branch
+    if branching and _branch_exists(root, options.branch):
+        raise UpgradeError(f"the branch {options.branch} exists already in {display(top)} — nothing was changed. "
+                           "Name another one with --branch")
+    branched = []
+
+    def branch() -> None:
+        _git_ok(root, "checkout", "-q", "-b", options.branch)
+        made[key] = options.branch
+        branched.append(key)
+        out.write(f"git: on a new branch, {options.branch}\n")
+
+    try:
+        outcome = _upgrade(cwd, options.wanted, options.dry_run, options.force, options.named, out, err, announce,
+                           branch if branching else None)
+    except REFUSALS as error:
+        if not branched:
+            raise
+        raise UpgradeError(f"{_refusal(error)} — the branch {options.branch} was made for it, and is checked out") \
+            from error
+    if branching and not branched and not options.dry_run and outcome.why is None:
+        out.write(f"git: no branch {options.branch} is made — nothing was written\n")
+    if options.message is None or options.dry_run or outcome.why is not None or not outcome.files:
+        return outcome
+    if top is None:
+        outcome.uncommitted = "in no git work tree"
+        return outcome
+    try:
+        outcome.committed, outcome.uncommitted = _commit(root, outcome.files, options.message)
+    except UpgradeError as error:
+        outcome.code, outcome.uncommitted = 1, str(error)
+        out.flush()
+        err.write(f"cortex upgrade: {error} — the upgrade is done, and nothing was committed\n")
+    else:
+        if outcome.uncommitted is not None:
+            err.write(f"note: nothing is committed in {display(root)} — {outcome.uncommitted}\n")
+    return outcome
 
 
 # --------------------------------------------------------------------------- #
@@ -564,6 +713,7 @@ def _each(entries: List[registry.Entry], options: _Options, out: TextIO,
           err: TextIO) -> List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]:
     """Each project's upgrade, in turn: what it did — or the state it was skipped for."""
     done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]] = []
+    made: Dict[str, str] = {}
     for entry in entries:
         out.write(("\n" if done else "") + f"{entry.name}: {entry.path}\n")
         try:
@@ -574,8 +724,7 @@ def _each(entries: List[registry.Entry], options: _Options, out: TextIO,
                 out.write(f"skipped: {found.state} — {why}\n")
                 done.append((entry, None, found.state))
                 continue
-            outcome = _upgrade(entry.path, options.wanted, options.dry_run, options.force, None, out, err,
-                               announce=False)
+            outcome = _move(entry.path, options, out, err, announce=False, made=made)
         except REFUSALS as error:
             outcome = Outcome(entry.path, None, None, 1, _refusal(error))
             out.flush()
@@ -588,7 +737,7 @@ def _each(entries: List[registry.Entry], options: _Options, out: TextIO,
 def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]], target: Version,
              options: _Options, out: TextIO) -> None:
     """A line per project — moved, already on the target, refused, skipped — then what each must
-    commit, by path."""
+    commit, by path, or what --commit did."""
     width = max(len(entry.name) for entry, _, _ in done)
     out.write(f"\nCortex {target}, in each registered project{' — a dry run' if options.dry_run else ''}:\n")
     for entry, outcome, skipped in done:
@@ -606,13 +755,17 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
     if not commits:
         out.write("\nNothing to commit, in any project.\n")
         return
+    committing = options.message is not None and not options.dry_run
     out.write(f"\nWhat each project {'would have to' if options.dry_run else 'must'} commit:\n")
     for entry, outcome in commits:
-        out.write(f"  {entry.name:<{width}}  {entry.path}: {_and(outcome.names())}\n")
+        said = "" if not committing else f" — committed on {outcome.committed}" if outcome.committed else \
+            f" — not committed: {_first(outcome.uncommitted)}"
+        out.write(f"  {entry.name:<{width}}  {entry.path}: {_and(outcome.names())}{said}\n")
     if options.dry_run:
-        out.write("--dry-run: nothing of any project was changed.\n")
+        out.write("--dry-run: nothing of any project was changed — no branch was made, nothing was committed.\n")
         return
-    out.write("Nothing was committed. Teammates run `cortex sync` after they pull.\n")
+    done = "Nothing was pushed" if committing else "Nothing was committed: --commit --message MESSAGE commits these files"
+    out.write(f"{done}. Teammates run `cortex sync` after they pull.\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -637,7 +790,7 @@ def run(args: List[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="cortex upgrade",
         description="Move the project to another Cortex version — this cortex's own, by default — saying first "
-                    "what changes. ADR-010 §3.5; --all, ADR-011 §3.5.")
+                    "what changes. ADR-010 §3.5; --all, --branch and --commit, ADR-011 §3.5.")
     parser.add_argument("version", nargs="?", metavar="VERSION", help="the version to move to: X.Y.Z")
     parser.add_argument("--all", action="store_true",
                         help="move every project of this machine's registry, in name order — `cortex project list` "
@@ -647,16 +800,37 @@ def run(args: List[str]) -> int:
                         help="move the project even if its overlays fail against the target")
     parser.add_argument("--instructions-file", metavar="PATH",
                         help="the bootstrap file to write again, when it is no known tool's")
+    parser.add_argument("--branch", metavar="NAME",
+                        help="make the git branch NAME, and switch to it, before anything is written — refused where "
+                             "it exists")
+    parser.add_argument("--commit", action="store_true",
+                        help="commit the files the upgrade wrote, and nothing else, with --message — nothing is pushed")
+    parser.add_argument("--message", metavar="MESSAGE", help="the message of --commit's commit")
     options = parser.parse_args(args)
     if options.version is not None and not Version.valid(options.version):
         return sync.failed("cortex upgrade", f"{shown(options.version)} is no version — X.Y.Z, for instance 1.4.0", 2)
     if options.all and options.instructions_file is not None:
         parser.error("--instructions-file names a file of one project, and --all moves every registered one: run "
                      "`cortex upgrade --instructions-file PATH` in that project")
+    if options.commit and options.message is None:
+        parser.error("--commit needs --message: a team's commit convention is its own, so there is no default one")
+    if options.message is not None and not options.commit:
+        parser.error("--message is the message of --commit's commit: give --commit too")
+    if options.commit and not options.message.strip():
+        parser.error("--message is empty, and git commits no empty message")
+    if (options.branch is not None or options.commit) and shutil.which("git") is None:
+        flags = " and ".join(flag for flag, given in (("--branch", options.branch is not None),
+                                                      ("--commit", options.commit)) if given)
+        return sync.failed("cortex upgrade", f"{flags} {'run' if ' and ' in flags else 'runs'} git, which is not on "
+                                             "PATH — nothing was changed")
+    if options.branch is not None and not _branch_name(options.branch):
+        parser.error(f"--branch {shown(options.branch)} is no branch name git takes")
+    message = options.message if options.commit else None
     try:
         if options.all:
-            return upgrade_all(_Options(options.version, options.dry_run, options.force), sys.stdout, sys.stderr)
+            return upgrade_all(_Options(options.version, options.dry_run, options.force, None, options.branch, message),
+                               sys.stdout, sys.stderr)
         return upgrade(working_directory(), options.version, options.dry_run, options.force,
-                       options.instructions_file, sys.stdout, sys.stderr)
+                       options.instructions_file, sys.stdout, sys.stderr, options.branch, message)
     except REFUSALS as error:
         return sync.failed("cortex upgrade", _refusal(error))
