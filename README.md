@@ -190,9 +190,9 @@ curl -fsSL https://raw.githubusercontent.com/xod-labs/cortex/main/install.sh | s
 irm https://raw.githubusercontent.com/xod-labs/cortex/main/install.ps1 | iex                    # Windows PowerShell
 ```
 
-The binary goes into `~/.cortex/bin` (`%USERPROFILE%\.cortex\bin` on Windows): `install.ps1` adds that directory to your user `PATH`, `install.sh` prints the line to add to your shell profile. When another `cortex` command comes first on `PATH`, the scripts install it as `cortex-ai` instead; `--name cortex` (`-Name cortex` for `install.ps1`) forces the name. Running a script again upgrades the binary. Built for Linux x86_64 and aarch64 (glibc 2.28 or later), macOS on Apple silicon and Windows x86_64.
+The binary goes into `~/.cortex/bin` (`%USERPROFILE%\.cortex\bin` on Windows): `install.ps1` adds that directory to your user `PATH`, `install.sh` prints the line to add to your shell profile. When another `cortex` command comes first on `PATH`, the scripts install it as `cortex-ai` instead; `--name cortex` (`-Name cortex` for `install.ps1`) forces the name. From then on, `cortex self-update` replaces the binary with the latest release's — or `cortex self-update X.Y.Z` with that version's — checked against its `SHA256SUMS`, as the scripts do; running a script again still works, and is the only way for a binary before 1.4.0. It replaces the file it runs from, where it is: a binary kept in a directory named after its version — `/opt/cortex-1.4.0/cortex-ai`, say — gets another version under that name. Built for Linux x86_64 and aarch64 (glibc 2.28 or later), macOS on Apple silicon and Windows x86_64.
 
-The spec lives in the store, `~/.cortex/versions/X.Y.Z`: one read-only directory per version, filled on demand — the binary's own version from itself, any other downloaded and checked against its release's `SHA256SUMS`. `$CORTEX_HOME` moves `~/.cortex` elsewhere.
+The spec lives in the store, `~/.cortex/versions/X.Y.Z`: one read-only directory per version, filled on demand — the binary's own version from itself, any other downloaded and checked against its release's `SHA256SUMS`. `$CORTEX_HOME` moves `~/.cortex` elsewhere. `cortex prune ~/code` removes the versions that no project under `~/code` uses — the binary's own, and each `--keep`, are kept; `--dry-run` only lists them. A project elsewhere gets its version back at its next `cortex sync`, checked against its `cortex.lock`.
 
 ### 2. Make a project a Cortex project
 
@@ -203,7 +203,7 @@ cortex init --tool claude           # CLAUDE.md — or cursor, agents, custom --
 cortex init --no-personality        # neutral professional agents (no theme)
 ```
 
-`cortex init` writes `cortex.toml` — committed: the Cortex `version` the project uses and the team's `theme` — adds `cortex.local.toml` to `.gitignore` and runs `cortex sync`. It then writes the AI tool's instructions file, `project-overview.md` and `project-context.md` when they are missing; an existing instructions file is kept unless `--force`, which keeps the old one as `FILE.bak`. [Getting Started](docs/getting-started.md) goes through every option.
+`cortex init` writes `cortex.toml` — committed: the Cortex `version` the project uses and the team's `theme` — adds `cortex.local.toml` to `.gitignore` and runs `cortex sync`, which writes `cortex.lock`, committed too: the version and the digest of the spec the project resolved. It then writes the AI tool's instructions file, `project-overview.md` and `project-context.md` when they are missing; an existing instructions file is kept unless `--force`, which keeps the old one as `FILE.bak`. [Getting Started](docs/getting-started.md) goes through every option.
 
 ### 3. After a clone: `cortex sync`
 
@@ -236,9 +236,11 @@ cortex validate              # overlay checks: 0 clean, 1 errors, 2 cannot run
 cortex validate --strict     # warnings fail too — what CI runs
 ```
 
-In CI: install the binary of the version `cortex.toml` pins, then `cortex sync` and `cortex validate --strict` — [the migration guide](docs/migrating-to-the-binary.md#5-ci) has the lines.
+In CI: install the binary of the version `cortex.toml` pins, then `cortex sync --locked` and `cortex validate --strict` — [the migration guide](docs/migrating-to-the-binary.md#5-ci) has the lines. `--locked`, from Cortex 1.4.0, never writes `cortex.lock`: a lock missing, or naming another version than `cortex.toml`, fails the job instead of being written where nobody commits it. A project pinned before 1.4.0 runs plain `cortex sync`, as its binary has no `--locked`.
 
-To move a project to another Cortex version, change `version` in `cortex.toml`, then run `cortex sync`. To upgrade the binary, run the install script again. A binary serves every version from 1.0.0 up to its own, and refuses a project pinned to a newer one with the command that upgrades it.
+To move a project to another Cortex version, run `cortex upgrade` — to the binary's own version, or `cortex upgrade X.Y.Z`. It first says what changes, layer by layer, and checks the project's overlays against the new version; `--dry-run` stops there. Then it writes `version` in `cortex.toml`, syncs, and rewrites `cortex.lock`. Commit both; teammates run `cortex sync` after they pull. With no version given, it also says when a release newer than the binary is out — `CORTEX_NO_UPDATE_CHECK=1` keeps it from asking, in a CI for instance. A binary serves every version from 1.0.0 up to its own, and refuses a project pinned to a newer one with the `cortex self-update` command that installs it. `cortex upgrade` moves a project, never the binary; `cortex self-update` moves the binary, never a project.
+
+The instructions file asks the assistant to keep the machine in step with the project: when the spec is missing, or of another version than `cortex.toml`'s — a teammate moved it — the assistant runs `cortex sync` itself, and `cortex self-update` first when the binary is too old for the pin — through `cortex-ai` when there is one, and through `cortex` only once `cortex --version` shows it is Cortex — looking in `~/.cortex/bin` too when its `PATH` has neither. It says what it runs; your tool asks you first if it is set to. It never runs `cortex upgrade` of its own accord: moving the project is the team's decision, made in a commit. Ask it to, and it does — the dry run first.
 
 ### Coming from a git submodule or clone
 

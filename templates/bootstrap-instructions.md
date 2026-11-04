@@ -1,12 +1,21 @@
 # Cortex AI Team
 
+<!-- cortex:bootstrap layout=single format=1 -->
+<!-- Keep the line above as it is: `cortex init` and `cortex upgrade` read it. -->
+
 ## Where the spec is — read this first
 
 In these instructions, `cortex/` is the directory that `spec` names in `cortex.local.toml`, at the project root: an absolute path — where the spec is kept on this machine — or `cortex`, a directory of the project. Read `cortex.local.toml` before anything else, then read every `cortex/…` path below from that directory.
 
-**No `cortex.local.toml`, or no `spec` in it** → Cortex is not synced on this machine. Tell the user to run `cortex sync` at the project root — `cortex-ai sync` where the command was installed under that name — and go no further without these instructions.
+**No `cortex.local.toml`, or no `spec` in it** → Cortex is not synced on this machine. Run `cortex sync` at the project root, and go no further until it succeeded.
 
-**The spec is of a version other than `cortex.toml`'s** — `spec` ends in `…/versions/1.1.0`, or `cortex/` is a copy whose `cortex/.synced` says `"version": "1.1.0"`, where `version = "1.2.0"` → a teammate moved the project to another version, and this machine has not synced it yet. Tell the user to run `cortex sync` first. There is nothing to compare when `cortex/` is a link, which names no version, nor when `.synced` says `"version": null`: that copy is of a checkout, on purpose.
+**The spec is of a version other than `cortex.toml`'s** — `spec` ends in `…/versions/1.1.0`, or `cortex/` is a copy whose `cortex/.synced` says `"version": "1.1.0"`, where `version = "1.2.0"` → a teammate moved the project to another version, and this machine has not synced it yet. Run `cortex sync`, and go no further until it succeeded. There is nothing to compare when `cortex/` is a link, which names no version, nor when `.synced` says `"version": null`: that copy is of a checkout, on purpose.
+
+**`cortex sync` says this cortex is too old for the project** — the project uses a newer version, or its `cortex.lock` a later format → run the command it names to update it — `cortex self-update`, or the install script's command from a cortex before 1.4.0 — then `cortex sync` again.
+
+**Which command** — only once a rule above has you run one: `cortex-ai` when there is one, otherwise `cortex` if `cortex --version` prints `cortex` followed by a version; anything else is another program. The rules above say `cortex` for whichever it is. The install scripts name it `cortex-ai` when another `cortex` comes first on `PATH`, and put it in `~/.cortex/bin` (`%USERPROFILE%\.cortex\bin` on Windows): look there too when your `PATH` has neither — a tool started before the install changed it. **Neither, anywhere** → tell the user to install it, as the Installation section of https://github.com/xod-labs/cortex says, and go no further.
+
+Before each of these commands, say what you run and why: your tool asks the user first when it is set to. Where you cannot run commands, ask the user to run them. Never run `cortex upgrade`, nor change `version` in `cortex.toml`, of your own accord: moving the project to another version is the team's decision, made in a commit. When the user asks for it, do it — `cortex upgrade --dry-run` first, to show what changes.
 
 ## Bootstrap (MANDATORY at the start of every new conversation)
 

@@ -35,7 +35,7 @@ irm https://raw.githubusercontent.com/xod-labs/cortex/main/install.ps1 | iex
 
 - The binary goes into `~/.cortex/bin` (`%USERPROFILE%\.cortex\bin` on Windows). `install.ps1` adds that directory to your user `PATH`; `install.sh` prints the line to add to your shell profile.
 - When another `cortex` command comes first on `PATH`, the scripts install it as `cortex-ai` instead: use that name in the commands below, or force `cortex` with `--name cortex` (`-Name cortex` for `install.ps1`).
-- Running a script again upgrades the binary. `cortex --version` prints the installed version.
+- `cortex self-update` replaces the binary with the latest release's, checked against its `SHA256SUMS` — `cortex self-update X.Y.Z` with that version's. Running a script again works too, and is the only way for a binary before 1.4.0. It replaces the file it runs from, where it is: a binary kept in a directory named after its version — `/opt/cortex-1.4.0/cortex-ai`, say — gets another version under that name. `cortex --version` prints the installed version.
 
 The spec itself lives in the **store**, `~/.cortex/versions/X.Y.Z`: one read-only directory per version, filled on demand — the binary's own version from itself, any other downloaded once and checked against its release's `SHA256SUMS`. `$CORTEX_HOME` moves `~/.cortex` elsewhere.
 
@@ -73,15 +73,19 @@ The command creates:
 
 The two context files are written only when missing. Running `cortex init` again keeps the instructions file, and `cortex.toml` with its version: it changes only the keys an option names — `--theme` or `--no-personality`, `--link` or `--copy`, `--claude-access`. `--force` replaces the instructions file, and only it.
 
+The instructions file is yours to adapt — retitle it, add sections — but **keep its marker line as it is**, `<!-- cortex:bootstrap layout=single format=1 digest=… -->` under the title: `cortex init` reads from that line the layout and the format the file was written for, and `cortex upgrade`, from its digest, whether anyone changed the file since — one nobody changed is written again when the version moves.
+
 ### Step 2 — Commit, then `cortex sync` after every clone
 
-Commit `cortex.toml`, the instructions file and the two context files. Each developer who clones the project then runs, once, at its root:
+Commit `cortex.toml`, `cortex.lock`, the instructions file and the two context files. Each developer who clones the project then runs, once, at its root:
 
 ```bash
 cortex sync
 ```
 
-— as they would `npm install`. It puts the pinned version in the store if it is not there yet, and writes `spec` in their `cortex.local.toml`. Until they do, the instructions tell the AI tool to ask them to run it, and to go no further.
+— as they would `npm install`. It puts the pinned version in the store if it is not there yet, checks it against `cortex.lock`, and writes `spec` in their `cortex.local.toml`. Until a developer has run it, the instructions have the AI tool run it — saying so, and asking first where the tool is set to ask — and go no further until it succeeded.
+
+`cortex.lock` holds the version and the digest of its spec, one SHA-256 over its files: a spec whose files differ from the ones the team locked is put in the store again, and refused if it still differs. In CI, run `cortex sync --locked`: it never writes the lock, and fails when `cortex.lock` is missing or names another version than `cortex.toml` — a lock nobody committed fails the job instead of being written on the runner.
 
 **Where the spec is.** In the instructions, in these docs and in every overlay's `Base:` header, `cortex/` is the directory that `spec` names — a name, not necessarily a directory of the project. `cortex sync` has three modes, chosen by `--store`, `--link` or `--copy`:
 
@@ -209,7 +213,7 @@ For each service:
 - `{service}/project-overview.md` — with its `@alias` pre-filled
 - `{service}/project-context.md` — with its `@alias` pre-filled
 
-At the workspace root, as in single project mode: `cortex.toml`, `cortex.local.toml` (git-ignored) and the instructions file of your `--tool` — written from the workspace bootstrap, `cortex/templates/bootstrap-instructions-workspace.md`.
+At the workspace root, as in single project mode: `cortex.toml`, `cortex.local.toml` (git-ignored) and the instructions file of your `--tool` — written from the workspace bootstrap, `cortex/templates/bootstrap-instructions-workspace.md`. Its marker line is `<!-- cortex:bootstrap layout=workspace format=1 digest=… -->`: keep it as it is when you adapt the file, as in single project mode.
 
 And at the workspace root (optional) — this is your **developer** tier, not shared by default:
 - `project-overview.md` — your own notes on the global vision (shared stakeholders, common constraints)
@@ -219,7 +223,7 @@ If your team wants to formalize and version this instead of leaving it per-devel
 
 ### Step 3 — Commit, then `cortex sync` after every clone
 
-As in [single project mode](#step-2--commit-then-cortex-sync-after-every-clone): commit `cortex.toml` and the instructions file with the workspace root, and each developer runs `cortex sync` at the workspace root after a clone. When the root is no git repository at all (flavor 2.B without a repository of its own), there is nothing to clone: each developer runs `cortex init --workspace` there instead.
+As in [single project mode](#step-2--commit-then-cortex-sync-after-every-clone): commit `cortex.toml`, `cortex.lock` and the instructions file with the workspace root, and each developer runs `cortex sync` at the workspace root after a clone. When the root is no git repository at all (flavor 2.B without a repository of its own), there is nothing to clone: each developer runs `cortex init --workspace` there instead.
 
 ### Step 4 — Fill in the context per service
 
@@ -284,7 +288,7 @@ cortex validate
 
 The Prompt Manager loads `cortex/agents/roles/engineering/lead-backend.md` first — from the directory `spec` names, whatever the sync mode — then layers your overlay on top.
 
-`cortex validate` checks every overlay against the spec the project is synced to; `--service PATH` checks one service only. It exits `0` when clean, `1` on errors, `2` when it cannot run or the arguments are wrong. With `--strict`, warnings fail too — what CI should run, after installing the binary and running `cortex sync`.
+`cortex validate` checks every overlay against the spec the project is synced to; `--service PATH` checks one service only. It exits `0` when clean, `1` on errors, `2` when it cannot run or the arguments are wrong. With `--strict`, warnings fail too — what CI should run, after installing the binary and running `cortex sync --locked`.
 
 📖 **Full guide:** [extending-layers.md](extending-layers.md) — covers all four layers, examples, edge cases, and validation.
 
@@ -369,9 +373,9 @@ The PM dispatches directly to the right expert without a template. If the case r
 Yes. `@Hactar` invokes the Lead Backend directly. But going through the PM guarantees prompt optimisation and capability loading.
 
 **Q: Is Cortex updated automatically?**
-No. A project stays on the `version` its `cortex.toml` pins:
-- **The project:** change `version` in `cortex.toml`, then run `cortex sync`. Each teammate runs `cortex sync` too once they pull the change — `cortex validate` refuses a spec synced for another version.
-- **The binary:** run the install script again. A binary serves every version from 1.0.0 up to its own; a project pinned to a newer one is refused, with the command that upgrades the binary.
+The machine follows the project; the project moves only when the team moves it. A project stays on the `version` its `cortex.toml` pins:
+- **The project:** run `cortex upgrade` — `--dry-run` first says what changes and checks your overlays. It writes `version` in `cortex.toml` and syncs. Each teammate syncs once they pull the change — their assistant runs `cortex sync` itself when it finds the spec of another version than `cortex.toml`'s, saying so, and `cortex validate` refuses a spec synced for another version.
+- **The binary:** `cortex self-update`. A binary serves every version from 1.0.0 up to its own; a project pinned to a newer one is refused, with the `cortex self-update` command that installs it — which the assistant runs too, before it syncs. With no version given, `cortex upgrade` says when a release newer than the binary is out.
 
 Check the [changelog](../changelog/) before updating in production.
 

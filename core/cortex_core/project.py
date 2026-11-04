@@ -1,4 +1,5 @@
-"""The grammar of ``cortex.toml`` and ``cortex.local.toml`` — ADR-008 §3.4.
+"""The grammar of ``cortex.toml`` and ``cortex.local.toml`` — ADR-008 §3.4 — and of
+``cortex.lock`` — ADR-010 §3.2.
 
 One definition for the two readers, the ``cortex`` command and the runtime, so that neither
 accepts a file the other refuses. It checks what a TOML parser returned: each reader parses the file
@@ -21,6 +22,11 @@ PROJECT_KEYS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access")
 PROJECT_REQUIRED: Tuple[str, ...] = ("version", "theme")
 LOCAL_KEYS: Tuple[str, ...] = ("theme", "spec", "claude_access", "claude_entry")
 BOOLEAN_KEYS: Tuple[str, ...] = ("claude_access",)
+LOCK_FILE = "cortex.lock"
+LOCK_KEYS: Tuple[str, ...] = ("format", "version", "digest")
+LOCK_FORMAT = 1
+# The digest of a spec: SHA-256, lowercase hex.
+DIGEST = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
 
 _IDENTIFIER = r"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
 # X.Y.Z, or a pre-release, as Semantic Versioning writes them; no build metadata.
@@ -32,6 +38,10 @@ THEME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*", re.ASCII)
 
 class ProjectFileError(ValueError):
     """A file refused — the message names the file and the key."""
+
+
+class LaterFormatError(ProjectFileError):
+    """A ``cortex.lock`` of a format a later Cortex writes."""
 
 
 def is_version(value: object) -> bool:
@@ -91,3 +101,24 @@ def check_local(data: Mapping) -> None:
     _check_keys(LOCAL_FILE, data, LOCAL_KEYS, ())
     if "theme" in data:
         _check_theme(LOCAL_FILE, data["theme"])
+
+
+def check_lock(data: Mapping) -> None:
+    """Refuse a ``cortex.lock`` that is not one: every key required, none other, ``format`` an
+    integer this Cortex reads — ``LaterFormatError`` for a later one."""
+    for key in data:
+        if key not in LOCK_KEYS:
+            raise ProjectFileError(f"{LOCK_FILE}: unknown key {shown(key)} — {LOCK_FILE} takes {listed(LOCK_KEYS)} only")
+    for key in LOCK_KEYS:
+        if key not in data:
+            raise ProjectFileError(f'{LOCK_FILE}: "{key}" is required')
+    form = data["format"]
+    if isinstance(form, bool) or not isinstance(form, int) or form < 1:
+        raise ProjectFileError(f'{LOCK_FILE}: "format" must be a positive integer, without quotes')
+    if form > LOCK_FORMAT:
+        raise LaterFormatError(f"{LOCK_FILE}: format {form} is written by a later Cortex — this one reads format {LOCK_FORMAT}")
+    if not is_version(data["version"]):
+        raise ProjectFileError(f'{LOCK_FILE}: version {shown(data["version"])} is no version — X.Y.Z, for instance 1.0.0')
+    if not isinstance(data["digest"], str) or DIGEST.fullmatch(data["digest"]) is None:
+        raise ProjectFileError(f'{LOCK_FILE}: digest {shown(data["digest"])} is no digest — "sha256:" and 64 lowercase '
+                               "hexadecimal digits")

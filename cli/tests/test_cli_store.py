@@ -14,12 +14,13 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core"),
                 str(Path(__file__).resolve().parent)]
 from cortex_cli import net, store  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
-from release_fixture import spec_archive  # noqa: E402
+from release_fixture import FakeRelease, spec_archive  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
@@ -317,6 +318,246 @@ class NetTests(unittest.TestCase):
         # A release page that does not exist: a 404 proves the TLS handshake was verified.
         with self.assertRaisesRegex(net.DownloadError, "HTTP 404"):
             net.get("https://github.com/xod-labs/cortex/releases/download/0.0.0-no-such-release/SHA256SUMS", 1024)
+
+
+class DigestTests(unittest.TestCase):
+    """The digest of a spec (ADR-010 §3.2): its files' bytes, however they reached the store."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="cortex-digest-"))
+        self.addCleanup(lambda: (store.make_writable(self.tmp), shutil.rmtree(self.tmp, ignore_errors=True)))
+        self.tree = self.tmp / "checkout"
+        for rel, text in (("agents/roles/a.md", "A\n"), ("agents/roles/b.md", "B\n"), ("templates/t.md", "T\n"),
+                          ("docs/\u00e9.md", "D\n")):
+            (self.tree / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.tree / rel).write_bytes(text.encode("utf-8"))
+
+    def test_the_digest_is_sha256sum_of_the_files_in_the_order_of_their_paths(self):
+        lines = sorted((rel.encode("utf-8"), hashlib.sha256(text.encode()).hexdigest().encode())
+                       for rel, text in (("agents/roles/a.md", "A\n"), ("agents/roles/b.md", "B\n"),
+                                         ("templates/t.md", "T\n"), ("docs/\u00e9.md", "D\n")))
+        expected = hashlib.sha256(b"".join(sha + b"  " + rel + b"\n" for rel, sha in lines)).hexdigest()
+        self.assertEqual(store.digest(self.tree), f"sha256:{expected}")
+
+    def test_written_from_an_archive_or_from_a_checkout_the_digest_is_the_same(self):
+        archive = self.tmp / "spec.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            for tree in store.SPEC_TREES:
+                tar.add(self.tree / tree, arcname=tree)
+        from_archive = store.Store(home=self.tmp / "a", own_version="9.9.9", embedded=archive, fetch=None, known={})
+        from_checkout = store.Store(home=self.tmp / "b", own_version="9.9.9", embedded=None, checkout=self.tree,
+                                    fetch=None, known={})
+        self.assertEqual(from_archive.ensure(Version("9.9.9")), "written")
+        self.assertEqual(from_checkout.ensure(Version("9.9.9")), "written")
+        self.assertEqual(from_archive.digest(Version("9.9.9")), from_checkout.digest(Version("9.9.9")))
+        self.assertEqual(from_archive.digest(Version("9.9.9")), store.digest(self.tree))
+
+    def test_one_byte_changes_it_and_a_file_outside_the_trees_does_not(self):
+        before = store.digest(self.tree)
+        (self.tree / ".synced").write_text("{}", encoding="utf-8")
+        self.assertEqual(store.digest(self.tree), before)
+        (self.tree / "docs" / "\u00e9.md").write_bytes(b"d\n")
+        self.assertNotEqual(store.digest(self.tree), before)
+
+    def test_a_checkouts_theme_marker_is_not_the_spec(self):
+        (self.tree / "agents" / "personalities").mkdir(parents=True)
+        before = store.digest(self.tree)
+        (self.tree / "agents" / "personalities" / ".active-h2g2").write_text("", encoding="utf-8")
+        the_store = store.Store(home=self.tmp / "d", own_version="9.9.9", embedded=None, checkout=self.tree,
+                                fetch=None, known={})
+        the_store.ensure(Version("9.9.9"))
+        self.assertEqual(the_store.digest(Version("9.9.9")), before)
+
+    def test_a_version_that_cannot_be_had_again_is_put_back(self):
+        # Offline, or a download refused: the version is not lost for it.
+        the_store = store.Store(home=self.tmp / "e", own_version="9.9.9", embedded=None, checkout=self.tree,
+                                fetch=None, known={})
+        the_store.ensure(Version("9.9.9"))
+        the_store.checkout = None
+        with self.assertRaises(store.StoreError):
+            the_store.replace(Version("9.9.9"))
+        self.assertTrue(the_store.has(Version("9.9.9")))
+        self.assertEqual([p.name for p in the_store.versions.iterdir()], ["9.9.9"])
+
+    def test_the_same_version_embedded_or_downloaded_has_the_same_digest(self):
+        # A binary writes its own version from the archive it embeds, packed on its runner: not the
+        # release's bytes — other dates, another order, directories listed — and the same files.
+        release = FakeRelease(("2.0.0",))
+        self.addCleanup(release.close)
+        published = release.root / "download" / "2.0.0" / "cortex-spec.tar.gz"
+        with tarfile.open(published) as source:
+            files = {m.name: source.extractfile(m).read() for m in source.getmembers() if m.isfile()}
+        embedded = self.tmp / "runner" / "cortex-spec.tar.gz"
+        embedded.parent.mkdir()
+        with tarfile.open(embedded, "w:gz") as archive:
+            for tree in reversed(store.SPEC_TREES):
+                folder = tarfile.TarInfo(tree)
+                folder.type, folder.mode, folder.mtime = tarfile.DIRTYPE, 0o755, 1700000000
+                archive.addfile(folder)
+            for name in sorted(files, reverse=True):
+                info = tarfile.TarInfo(name)
+                info.size, info.mode, info.mtime = len(files[name]), 0o600, 1700000000
+                archive.addfile(info, io.BytesIO(files[name]))
+        self.assertNotEqual(embedded.read_bytes(), published.read_bytes())
+        written = store.Store(home=self.tmp / "own", own_version="2.0.0", embedded=embedded, fetch=None, known={})
+        downloaded = store.Store(home=self.tmp / "later", own_version="3.0.0", embedded=self.tmp / "unused.tar.gz",
+                                 known={})
+        with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": release.url}):
+            self.assertEqual(written.ensure(Version("2.0.0")), "written")
+            self.assertEqual(downloaded.ensure(Version("2.0.0")), "downloaded")
+        self.assertEqual(written.digest(Version("2.0.0")), downloaded.digest(Version("2.0.0")))
+
+    def test_every_path_of_this_spec_is_one_sha256sum_writes_as_it_is(self):
+        # The digest is sha256sum's lines (ADR-010 §3.2): sha256sum escapes a path holding "\" or
+        # a line break, and marks its line — the digest would no longer be its output.
+        for tree in store.SPEC_TREES:
+            for path in (REPO / tree).rglob("*"):
+                rel = path.relative_to(REPO).as_posix()
+                with self.subTest(path=rel):
+                    self.assertFalse(set(rel) & {"\\", "\n", "\r"}, f"{rel!r}: rename it")
+
+    def test_a_missing_tree_has_no_digest(self):
+        # A version removed while a sync read it: the empty set's digest would be locked.
+        shutil.rmtree(self.tree / "docs")
+        with self.assertRaisesRegex(store.StoreError, r"holds no docs/ — no whole spec to take the digest of"):
+            store.digest(self.tree)
+        with self.assertRaisesRegex(store.StoreError, "holds no agents/, templates/, docs/"):
+            store.digest(self.tmp / "no-such-version")
+
+    def test_a_file_or_a_tree_that_goes_while_it_is_read_leaves_no_digest(self):
+        # Renamed aside while it was walked: what was not read yet gave nothing, and no error.
+        read, roles = Path.read_bytes, self.tree / "agents" / "roles"
+        for gone in ("the docs/ tree", "a file listed, not read yet"):
+            with self.subTest(gone=gone):
+                def then_gone(path, gone=gone, done=[]):
+                    data = read(path)
+                    if not done:            # the first file read is one of agents/roles: the other goes
+                        done.append(path)
+                        victim = self.tree / "docs" if gone.startswith("the docs") else \
+                            next(p for p in roles.iterdir() if p.name != path.name)
+                        shutil.rmtree(victim) if victim.is_dir() else victim.unlink()
+                    return data
+
+                with mock.patch.object(Path, "read_bytes", then_gone):
+                    with self.assertRaisesRegex(store.StoreError, "while its digest was taken"):
+                        store.digest(self.tree)
+                (self.tree / "docs").mkdir(exist_ok=True)
+                (self.tree / "docs" / "\u00e9.md").write_bytes(b"D\n")
+                for name, text in (("a.md", b"A\n"), ("b.md", b"B\n")):
+                    (roles / name).write_bytes(text)
+
+    def downloading(self, state):
+        """A store that downloads Cortex 2.0.0 from a release in this process — none while
+        ``state["online"]`` is false."""
+        archive = spec_archive(self.tmp, "2.0.0").read_bytes()
+        sums = f"{hashlib.sha256(archive).hexdigest()}  cortex-spec.tar.gz\n".encode()
+
+        def fetch(url, limit):
+            if not state["online"]:
+                raise net.DownloadError(f"{url}: no network")
+            return sums if url.endswith("SHA256SUMS") else archive
+
+        return store.Store(home=self.tmp / "f", own_version="3.0.0", embedded=self.tmp / "unused.tar.gz",
+                           fetch=fetch, known={})
+
+    def test_what_a_replace_set_aside_is_renamed_removed_before_it_is_deleted(self):
+        # Named "kept", an aside is whole: one half deleted must never be taken for it, and put back.
+        the_store, version = self.downloading({"online": True}), Version("2.0.0")
+        the_store.ensure(version)
+        seen, discard = [], the_store._discard
+
+        def deleting(aside):
+            seen.append((aside.name, [p.name for p in the_store.versions.glob(".2.0.0-kept-*")]))
+            return discard(aside)
+
+        with mock.patch.object(the_store, "_discard", deleting):
+            the_store.replace(version)
+        self.assertEqual(len(seen), 1)
+        self.assertIn("-removed-", seen[0][0])
+        self.assertEqual(seen[0][1], [])
+
+    def test_of_two_asides_the_latest_is_put_back(self):
+        # Two replaces cut short: the later one set aside the store as it last was.
+        state = {"online": True}
+        the_store, version = self.downloading(state), Version("2.0.0")
+        the_store.ensure(version)
+        the_store._aside(version, "kept")
+        the_store.ensure(version)
+        latest = the_store._aside(version, "kept")
+        store.make_writable(latest)
+        (latest / "agents" / "latest.md").write_bytes(b"the latest\n")
+        state["online"] = False
+        self.assertEqual(the_store.ensure(version), "put back")
+        self.assertTrue((the_store.path(version) / "agents" / "latest.md").is_file())
+
+    def test_a_version_a_replace_cut_short_left_aside_is_put_back_offline(self):
+        # Killed while it had the version again, a sync left it aside: offline, the next finds it.
+        archive = spec_archive(self.tmp, "2.0.0").read_bytes()
+        sums = f"{hashlib.sha256(archive).hexdigest()}  cortex-spec.tar.gz\n".encode()
+        online = True
+
+        def fetch(url, limit):
+            if not online:
+                raise net.DownloadError(f"{url}: no network")
+            return sums if url.endswith("SHA256SUMS") else archive
+
+        the_store = store.Store(home=self.tmp / "f", own_version="3.0.0", embedded=self.tmp / "unused.tar.gz",
+                                fetch=fetch, known={})
+        version = Version("2.0.0")
+        the_store.ensure(version)
+        before = store.digest(the_store.path(version))
+        kept, ensure = [], the_store.ensure
+
+        def while_it_downloads(*args, **kwargs):
+            kept.extend(p.name for p in the_store.versions.glob(".2.0.0-kept-*"))
+            return ensure(*args, **kwargs)
+
+        with mock.patch.object(the_store, "ensure", while_it_downloads):
+            the_store.replace(version)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual([p.name for p in the_store.versions.iterdir()], ["2.0.0"])
+        the_store._aside(version, "kept")       # a replace killed there
+        online = False
+        self.assertEqual(the_store.ensure(version), "put back")
+        self.assertEqual(store.digest(the_store.path(version)), before)
+        self.assertEqual([p.name for p in the_store.versions.iterdir()], ["2.0.0"])
+        # What prune set aside on its way out is never put back; nor anything, by replace itself.
+        the_store._aside(version)
+        with self.assertRaisesRegex(store.StoreError, "could not download"):
+            the_store.ensure(version)
+        store.remove_tree(next(the_store.versions.glob(".2.0.0-removed-*")))
+        online = True
+        the_store.ensure(version)
+        online = False
+        with self.assertRaisesRegex(store.StoreError, "could not download"):
+            the_store.replace(version)
+        self.assertEqual([p.name for p in the_store.versions.iterdir()], ["2.0.0"])
+
+    def test_a_version_removed_between_two_looks_is_written_again(self):
+        # cortex prune renamed it away after has() said it was there, before the tidying.
+        the_store = store.Store(home=self.tmp / "f", own_version="9.9.9", embedded=None, checkout=self.tree,
+                                fetch=None, known={})
+        the_store.ensure(Version("9.9.9"))
+        tidy = the_store._tidy
+
+        def pruned_meanwhile(version):
+            the_store.remove(version)
+            tidy(version)
+
+        the_store._tidy = pruned_meanwhile
+        self.assertEqual(the_store.ensure(Version("9.9.9")), "written")
+        self.assertTrue(the_store.has(Version("9.9.9")))
+
+    def test_a_version_put_in_again_is_whole(self):
+        the_store = store.Store(home=self.tmp / "c", own_version="9.9.9", embedded=None, checkout=self.tree,
+                                fetch=None, known={})
+        the_store.ensure(Version("9.9.9"))
+        path = the_store.path(Version("9.9.9")) / "agents" / "roles" / "a.md"
+        os.chmod(path, 0o644)
+        path.write_text("changed\n", encoding="utf-8")
+        self.assertEqual(the_store.replace(Version("9.9.9")), "written")
+        self.assertEqual(path.read_text(encoding="utf-8"), "A\n")
+        self.assertEqual([p.name for p in the_store.versions.iterdir()], ["9.9.9"])
 
 
 if __name__ == "__main__":

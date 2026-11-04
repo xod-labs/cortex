@@ -54,6 +54,7 @@ An ADR delivered in several steps adds:
 | [ADR-007](ADR-007-cortex-core.md) | Cortex Core — unified cascade resolution | Implemented | 2026-09-27 |
 | [ADR-008](ADR-008-cortex-binary.md) | The `cortex` binary — one-line install, one store per machine, `cortex.toml` per project | Implemented | 2026-09-30 |
 | [ADR-009](ADR-009-release-cycle.md) | The release cycle — every merge into `main` is a release, drafted by CI, published from GitHub | Implemented | 2026-10-31 |
+| [ADR-010](ADR-010-lock-and-upgrade.md) | `cortex.lock`, `cortex upgrade` and the bootstrap marker | Implemented | 2026-11-04 |
 
 ## Authoring an ADR
 

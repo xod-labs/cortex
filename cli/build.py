@@ -26,7 +26,9 @@ spec archive of those versions that changed since (§3.3).
 
 The version is stamped into the binary for the duration of the build, in ``cortex_cli/_stamp.py``:
 the release's, as the release workflow names it (ADR-009 §3.3), or a pre-release — ``0.0.0-dev.N`` —
-for a build of no release.
+for a build of no release. So is the target: ``cortex self-update`` downloads the asset of the build
+it replaces, whatever the machine says it is — Windows on ARM runs the x86_64 build, and tells a
+process it emulates that it is ARM64.
 """
 
 from __future__ import annotations
@@ -135,11 +137,15 @@ def known_specs_module(known: Dict[str, str]) -> str:
             f"KNOWN = {json.dumps(dict(sorted(known.items())), indent=4)}\n")
 
 
-def build(version: str, known: Optional[Dict[str, str]] = None) -> Path:
+def stamp_module(version: str, target: str) -> str:
+    """``cortex_cli/_stamp.py``, as a build writes it."""
+    return f'"""Written by cli/build.py for one build — never committed."""\n\nVERSION = "{version}"\nTARGET = "{target}"\n'
+
+
+def build(version: str, target: str, known: Optional[Dict[str, str]] = None) -> Path:
     """Run PyInstaller and return the binary it wrote."""
     embedded = spec_archive(BUILD)
-    STAMP.write_text(f'"""Written by cli/build.py for one build — never committed."""\n\nVERSION = "{version}"\n',
-                     encoding="utf-8")
+    STAMP.write_text(stamp_module(version, target), encoding="utf-8")
     if not known:
         print("warning: no spec archive known (--known-specs): this binary checks a download against its "
               "release's SHA256SUMS alone", file=sys.stderr)
@@ -231,7 +237,7 @@ def main() -> int:
         parser.error(f"not a version: {args.version!r}")
     target = machine_target()
     known = json.loads(args.known_specs.read_text(encoding="utf-8")) if args.known_specs else {}
-    binary = build(args.version, known)
+    binary = build(args.version, target, known)
     asset = package(binary, target)
     print(f"built {binary}\npackaged {asset}")
     return 0
