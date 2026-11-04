@@ -19,7 +19,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
-from cortex_cli import prune, registry, store, sync  # noqa: E402
+from cortex_cli import config, prune, registry, store, sync  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
 from cortex_cli.version import VERSION  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
@@ -449,6 +449,48 @@ class RegistryTests(RegistryTestCase):
                       "  kept     9.9.7 — --keep\n", proc.out)
         self.assertIn("  removed  9.9.8\n", proc.out)
 
+    def test_an_entry_whose_project_is_gone_is_dropped_and_its_version_no_longer_kept(self):
+        self.put("9.9.6", "9.9.7", *self.own)
+        a = self.project("a", "9.9.6")
+        bare = self.project("bare", "9.9.7", reads="9.9.7")               # cortex.toml gone, cortex.local.toml left
+        (bare / "cortex.toml").unlink()
+        gone = self.code / "gone"                                          # a drive not mounted, or a project deleted
+        self.register(a=a, bare=bare, gone=gone)
+        proc = self.run_cortex(self.tmp, "prune")
+        self.assert_ok(proc)
+        self.assertIn(f"bare: {display(bare)} is gone — dropped from the registry\n"
+                      f"gone: {display(gone)} is gone — dropped from the registry\n", proc.out)
+        self.assertEqual(self.entries(), [("a", display(a))])
+        self.assertEqual(self.in_store(), ["9.9.6", *self.own])
+        self.assertIn("  removed  9.9.7\n", proc.out)
+        self.assertTrue((bare / "cortex.local.toml").is_file())            # the project's files are not touched
+
+    def test_a_registry_whose_projects_are_all_gone_is_not_empty(self):
+        # It lists projects, which are gone: they are dropped, and their versions with them.
+        self.put("9.9.6", *self.own)
+        self.register(gone=self.code / "gone")
+        proc = self.run_cortex(self.tmp, "prune")
+        self.assert_ok(proc)
+        self.assertEqual(self.entries(), [])
+        self.assertEqual(self.in_store(), self.own)
+
+    def test_dry_run_drops_nothing_and_says_what_it_would_drop(self):
+        self.put("9.9.6", "9.9.7", *self.own)
+        a, gone = self.project("a", "9.9.6"), self.code / "gone"
+        self.register(a=a, gone=gone)
+        before = self.registry.read_bytes()
+        proc = self.run_cortex(self.tmp, "prune", "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn(f"gone: {display(gone)} is gone — it would be dropped from the registry\n", proc.out)
+        self.assertIn("  would remove  9.9.7\n", proc.out)
+        self.assertTrue(proc.out.endswith("--dry-run: nothing was removed, and no entry was dropped\n"), proc.out)
+        self.assertEqual(self.registry.read_bytes(), before)
+        self.assertEqual(self.in_home(), ["projects.toml", "versions"])
+        self.assertEqual(self.in_store(), ["9.9.6", "9.9.7", *self.own])
+        self.put("9.9.7")
+        proc = self.run_cortex(self.tmp, "prune", "--dry-run", "--keep", "9.9.7")       # nothing to remove
+        self.assertTrue(proc.out.endswith("Nothing to remove.\n--dry-run: no entry was dropped\n"), proc.out)
+
     def test_an_unreadable_entry_is_named_and_kept_with_the_versions_read_of_it(self):
         self.put("9.9.5", "9.9.6", "9.9.7")
         later = self.project("later", "9.9.6", reads="9.9.7")
@@ -524,7 +566,8 @@ class RegistryTests(RegistryTestCase):
 
 
 class RegistryInProcessTests(RegistryTestCase):
-    """What a command line cannot reach: a sync meanwhile."""
+    """What a command line cannot reach: a registry that cannot be written, a removal that fails,
+    another command meanwhile."""
 
     def setUp(self):
         super().setUp()
@@ -539,6 +582,53 @@ class RegistryInProcessTests(RegistryTestCase):
         out, err = io.StringIO(), io.StringIO()
         code = prune.prune([], [], dry_run, out, err)
         return code, out.getvalue(), err.getvalue()
+
+    def test_a_registry_that_cannot_be_written_removes_no_version(self):
+        # Removed first, the versions of the projects gone would be out of the store while the
+        # registry still lists them: the entries are dropped first, and a failure stops it all.
+        before = self.registry.read_bytes()
+        denied = PermissionError(errno.EACCES, "Permission denied", str(self.registry))
+        with mock.patch.object(config, "write_text", side_effect=denied):
+            code, out, err = self.prune()
+        self.assertEqual(code, 1)
+        self.assertTrue(err.startswith(f"cortex prune: gone: gone, and not dropped from the registry — "
+                                       f"{display(self.registry)} cannot be written — Permission denied"), err)
+        self.assertIn("\nNothing was removed: no version is removed while the registry lists a project gone. Run the "
+                      "command again, or give the directories of the projects: cortex prune DIR...\n", err)
+        self.assertNotIn("removed", out)
+        self.assertEqual(self.in_store(), ["9.9.5", "9.9.6", "9.9.7"])
+        self.assertEqual(self.registry.read_bytes(), before)
+
+    def test_a_removal_that_fails_leaves_the_entries_gone_dropped(self):
+        real = os.rename
+
+        def refused(src, dst):
+            if Path(src).name == "9.9.5":
+                raise PermissionError(errno.EACCES, "Permission denied", str(src))
+            return real(src, dst)
+
+        with mock.patch.object(store.os, "rename", refused):
+            code, out, err = self.prune()
+        self.assertEqual(code, 1)
+        self.assertIn("cortex prune: 9.9.5 is still in the store — Permission denied: ", err)
+        self.assertEqual(self.entries(), [("a", display(self.a))])
+        self.assertEqual(self.in_store(), ["9.9.5", "9.9.7"])
+
+    def test_an_entry_changed_meanwhile_is_left_as_it_is(self):
+        # `cortex project remove gone` between the read of the registry and the drop.
+        real = registry.state
+
+        def removed_meanwhile(entry):
+            if entry.name == "gone":
+                registry.remove("gone")
+            return real(entry)
+
+        with mock.patch.object(registry, "state", removed_meanwhile):
+            code, out, _ = self.prune()
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"gone: {display(self.gone)} is gone — the registry changed meanwhile, and is left as it is\n", out)
+        self.assertNotIn("dropped from the registry", out)
+        self.assertEqual(self.entries(), [("a", display(self.a))])
 
     def test_the_store_is_listed_before_the_projects_are_read(self):
         # A version a sync puts in the store while prune reads the projects is in no list, and stays.
