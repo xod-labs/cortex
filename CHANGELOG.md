@@ -7,6 +7,15 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+### Added
+- **The accessibility specialist** (`engineering/accessibility-specialist`), cast as Prak in h2g2 and Flynn in breaking-bad. The role audits against WCAG 2.2 or the national standard the project declares, reviews designs before they are built, and never states a conformance level from a tool's results.
+- **Two capabilities for accessible interfaces.** `practices/web-accessibility` is what accessible UI is made of, WCAG 2.2 AA included. `testing/accessibility-testing` is which check runs where: lint, HTML validation and component axe on the pull request, browser scans on a schedule, behind a baseline that only shrinks.
+- **`design/open-design`**, the first `design/` capability: mockups rendered from a versioned `DESIGN.md`, held to accessibility acceptance criteria, and handed off as a component map rather than as markup.
+- **Two workflows.** `engineering/accessibility-audit` runs an audit from its frame to the statement, the regression harness and the recurring cadence. `product/target-mockup` takes a redesign from the brief to a hand-off the team can build.
+
+### Changed
+- **The Lead Frontend aims at WCAG 2.2 AA**, WCAG 2.1 AA before. The lead frontend and QA automation cards load the new capabilities, and `frontend-testing` keeps browser accessibility scans off the required path of pull requests.
+
 ## [1.3.2] - 2026-11-03 — Somebody Else's Problem _(Released)_
 [Full notes](changelog/1.3.2.md)
 
