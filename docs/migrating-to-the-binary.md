@@ -15,7 +15,7 @@ irm https://raw.githubusercontent.com/xod-labs/cortex/main/install.ps1 | iex    
 - **Where it goes.** The command lands in `~/.cortex/bin` (`%USERPROFILE%\.cortex\bin`). `install.ps1` adds that directory to your user `PATH`; `install.sh` prints the line to add to your shell profile.
 - **Name.** It installs as `cortex-ai` when another `cortex` command comes first on your `PATH`.
 - **Requirements.** It needs no Python, no Bash on Windows, and no git submodule.
-- **Upgrade.** Running the script again upgrades the binary.
+- **Upgrade.** `cortex self-update`, from 1.4.0 on, replaces the binary with the latest release's; running the script again does it too.
 
 ## 2. A single project, from a submodule
 

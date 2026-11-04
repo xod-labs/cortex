@@ -275,10 +275,10 @@ cortex validate --strict; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
 To move a project to another Cortex version:
 
-1. Run `cortex upgrade --dry-run` — or `cortex upgrade X.Y.Z --dry-run` for another version than the binary's own. It puts that version in the store, says which roles, capabilities, personalities and workflows it adds, removes and changes, and checks your overlays against it. A version newer than the installed binary is refused, with the command that upgrades the binary
+1. Run `cortex upgrade --dry-run` — or `cortex upgrade X.Y.Z --dry-run` for another version than the binary's own. It puts that version in the store, says which roles, capabilities, personalities and workflows it adds, removes and changes, and checks your overlays against it. A version newer than the installed binary is refused, with the `cortex self-update` command that installs it — and with no version given, it says when a release newer than the binary is out
 2. If an overlay fails — most often a base file moved or renamed upstream, breaking a `Base:` header — update the header to the new path, OR delete the overlay if it's no longer needed. Read the entry for the new version in Cortex's [`changelog/`](../changelog/): it lists breaking renames
 3. Run `cortex upgrade` — it writes `version` in `cortex.toml`, syncs, rewrites `cortex.lock`, and rewrites the instructions file if nobody changed it — the digest in its marker line tells — and the new version writes another. One your team adapted is kept: `cortex init --force` writes it again, and keeps yours as `.bak`
-4. Commit `cortex.toml`, `cortex.lock` and the instructions file if it was written again. Teammates run `cortex sync` after they pull the change
+4. Commit `cortex.toml`, `cortex.lock` and the instructions file if it was written again. Teammates sync after they pull the change — their assistant runs `cortex sync` itself, and `cortex self-update` first when their binary is older than the new version
 
 Still on a git submodule or a standalone clone of Cortex? See [Moving to the `cortex` binary](migrating-to-the-binary.md).
 
