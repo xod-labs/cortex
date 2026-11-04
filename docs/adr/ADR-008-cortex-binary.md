@@ -501,3 +501,7 @@ ADR-009 became the release cycle on 2026-10-30, and every record planned after i
 - **A pre-release is a version, not a throwaway test of the pipeline** (§9, *Phase 1 — the build, the assets, the scripts*). It is cut by hand from an integration branch — `X.Y.Z-alpha.N`, `-beta.N`, `-rc.N` — and, immutable once published, it stays. A release that changes the pipeline publishes a release candidate first.
 - **A binary knows the spec archives of immutable pre-releases** (§3.3), from 1.0.0 on: nothing can build them again under their tag. A mutable pre-release is still left out (§9, *After 1.0.0 — found in use*).
 - **The commit convention is checked**, on every pull request, and asks for a subject in the present tense that says what the commit does (ADR-009 §3.8).
+
+### 2026-11 — the planned records are numbered one higher again
+
+ADR-010 became `cortex.lock`, `cortex upgrade` and the bootstrap marker on 2026-11-03 ([#99](https://github.com/xod-labs/cortex/issues/99)): the follow-up of §7 that this record calls #99. Every record planned after it moved up by one. In this record, ADR-012 is now ADR-013 ([#40](https://github.com/xod-labs/cortex/issues/40)), and ADR-017 is now ADR-018 ([#45](https://github.com/xod-labs/cortex/issues/45)).
