@@ -1245,6 +1245,18 @@ class BootstrapMarkerTests(unittest.TestCase):
                 self.assertEqual(init_command.markers(b"# Cortex AI Team\n\n" + line + b"\n"), [])
         self.assertEqual(init_command.markers(b"# T\r\n<!-- cortex:bootstrap layout=single format=12 -->\r\n"), [("single", 12)])
 
+    def test_a_byte_order_mark_hides_nothing(self):
+        bom = b"\xef\xbb\xbf"
+        self.assertEqual(init_command.markers(bom + b"<!-- cortex:bootstrap layout=single format=1 -->\n"),
+                         [("single", 1)])
+        self.assertIsNone(init_command.kept_bootstrap(bom + self.template(), self.template()))
+        before = b"# Cortex AI Team\n\nRead cortex.local.toml first.\n"
+        self.assertTrue(init_command.bootstrap_of_cortex(bom + before))
+        self.assertEqual(init_command.kept_bootstrap(bom + before, self.template("single")).sentence,
+                         "is an older Cortex bootstrap, written before the bootstrap marker")
+        # A version whose templates carry no marker reads the layout from the title.
+        self.assertIsNone(init_command.kept_bootstrap(bom + before, before))
+
     def test_a_file_without_the_marker(self):
         before = b"# Cortex AI Team\n\nRead cortex.local.toml first.\n"
         self.assertEqual(init_command.kept_bootstrap(before, self.template()).sentence,

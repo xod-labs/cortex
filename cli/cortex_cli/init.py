@@ -51,6 +51,8 @@ TOOLS = {
 ALIAS_PLACEHOLDER = b"<!-- @alias: my-project -->"
 PERSONALITY_BEGIN = b"<!-- PERSONALITY:BEGIN -->"
 PERSONALITY_END = b"<!-- PERSONALITY:END -->"
+# What some editors put before the first line of a UTF-8 file: no part of what it says.
+BOM = b"\xef\xbb\xbf"
 # The marker a bootstrap template carries under its title (ADR-010 §3.1): a whole line, read anywhere.
 BOOTSTRAP_MARKER = re.compile(rb"(?m)^<!-- cortex:bootstrap layout=(single|workspace) format=([1-9][0-9]*) -->\r?$")
 
@@ -151,9 +153,14 @@ def _refuse_instructions_file(root: Path, path: Path) -> None:
                         "instructions file")
 
 
+def without_bom(content: bytes) -> bytes:
+    """A kept file as it reads: without the byte order mark an editor may have put before its first line."""
+    return content[len(BOM):] if content.startswith(BOM) else content
+
+
 def bootstrap_of_cortex(content: bytes) -> bool:
     """A file the templates wrote: their heading, or their personality block."""
-    return content.startswith(b"# Cortex AI Team") or PERSONALITY_BEGIN in content
+    return without_bom(content).startswith(b"# Cortex AI Team") or PERSONALITY_BEGIN in content
 
 
 def reads_the_local_file(content: bytes) -> bool:
@@ -164,7 +171,7 @@ def reads_the_local_file(content: bytes) -> bool:
 
 def markers(content: bytes) -> List[Tuple[str, int]]:
     """The bootstrap markers of a file, ``(layout, format)`` each: one in a bootstrap."""
-    return [(m.group(1).decode(), int(m.group(2))) for m in BOOTSTRAP_MARKER.finditer(content)]
+    return [(m.group(1).decode(), int(m.group(2))) for m in BOOTSTRAP_MARKER.finditer(without_bom(content))]
 
 
 class Kept(NamedTuple):
@@ -179,6 +186,7 @@ def kept_bootstrap(kept: bytes, template: bytes) -> Optional[Kept]:
     """What a kept instructions file is, against the template the pinned version writes for this
     layout: ``None`` for a bootstrap of that layout and format. The first rule that applies, in the
     order of ADR-010 §3.1. A version whose templates carry no marker keeps the checks it had."""
+    kept = without_bom(kept)
     wanted, found = markers(template), markers(kept)
     if not bootstrap_of_cortex(kept) and not found:
         return NO_BOOTSTRAP
