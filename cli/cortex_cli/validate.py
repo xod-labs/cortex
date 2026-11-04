@@ -63,7 +63,10 @@ def lock_warnings(project: config.Project, base: str, files: Optional[Dict[str, 
     if lock.version != project.version:
         return [(config.LOCK_FILE, "LOCK_STALE", f"cortex.lock names Cortex {lock.version}, and cortex.toml pins "
                  f"{project.version} — run `cortex sync`, then commit it")]
-    actual = store.digest_of(files) if files is not None else store.digest(Path(base))
+    try:
+        actual = store.digest_of(files) if files is not None else store.digest(Path(base))
+    except store.StoreError as error:      # a version removed from the store meanwhile
+        return [(config.LOCK_FILE, "LOCK_DIGEST", f"{error} — run `cortex sync`")]
     if actual != lock.digest:
         return [(config.LOCK_FILE, "LOCK_DIGEST", f"the spec synced is {actual}, and cortex.lock names {lock.digest} — "
                  "run `cortex sync`, which puts it in the store again")]

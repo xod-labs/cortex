@@ -146,7 +146,11 @@ def digest(directory: Path) -> str:
     """The digest of the spec at ``directory`` (ADR-010 §3.2): ``sha256sum``'s line for each file of
     its three trees — the path relative to ``directory``, with ``/`` — in the order of the paths'
     UTF-8 bytes, then the SHA-256 of those lines. The files' bytes only: the same version gives
-    the same digest, downloaded or written from this binary, on any system."""
+    the same digest, downloaded or written from this binary, on any system. A tree missing — a
+    version removed meanwhile — has no digest: the empty set's would be locked."""
+    missing = [f"{tree}/" for tree in SPEC_TREES if not (directory / tree).is_dir()]
+    if missing:
+        raise StoreError(f"{directory} holds no {', '.join(missing)} — no whole spec to take the digest of")
     return digest_of({path.relative_to(directory).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
                       for tree in SPEC_TREES for path in (directory / tree).rglob("*") if path.is_file()})
 

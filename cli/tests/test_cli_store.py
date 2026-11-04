@@ -378,6 +378,14 @@ class DigestTests(unittest.TestCase):
         self.assertTrue(the_store.has(Version("9.9.9")))
         self.assertEqual([p.name for p in the_store.versions.iterdir()], ["9.9.9"])
 
+    def test_a_missing_tree_has_no_digest(self):
+        # A version removed while a sync read it: the empty set's digest would be locked.
+        shutil.rmtree(self.tree / "docs")
+        with self.assertRaisesRegex(store.StoreError, r"holds no docs/ — no whole spec to take the digest of"):
+            store.digest(self.tree)
+        with self.assertRaisesRegex(store.StoreError, "holds no agents/, templates/, docs/"):
+            store.digest(self.tmp / "no-such-version")
+
     def test_a_version_put_in_again_is_whole(self):
         the_store = store.Store(home=self.tmp / "c", own_version="9.9.9", embedded=None, checkout=self.tree,
                                 fetch=None, known={})
