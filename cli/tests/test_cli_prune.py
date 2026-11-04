@@ -25,6 +25,7 @@ from release_fixture import FakeRelease  # noqa: E402
 
 OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
 DOWNLOADS = unittest.skipIf(harness.BINARY, "a build of no release downloads no version")
+AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
 
 
 class PruneTestCase(unittest.TestCase):
@@ -158,6 +159,16 @@ class PruneTests(PruneTestCase):
         self.assertIn("  removed  9.9.6", proc.out)
         self.assertIn("2 project(s) found", proc.out)
 
+    def test_six_directories_down_is_the_limit(self):
+        six, seven = self.code.joinpath(*"123456"), self.code.joinpath(*"x234567")
+        for directory, version in ((six, "9.9.6"), (seven, "9.9.6")):
+            directory.mkdir(parents=True)
+            (directory / "cortex.toml").write_text(f'version = "{version}"\ntheme = "h2g2"\n', encoding="utf-8")
+        proc = self.run_cortex(self.tmp, "prune", "code", "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn("3 project(s) found", proc.out)          # a, b, and the one six directories down
+        self.assertIn(f"  kept     9.9.6 — used by {str(six).replace(os.sep, '/')}\n", proc.out)
+
     def test_a_directory_reached_through_a_deeper_link_first_is_still_searched(self):
         # Reached first through the link, six directories down, the target's children were cut, and
         # reached later by its own path, one down, it was skipped as seen: its project lost its version.
@@ -187,6 +198,18 @@ class PruneTests(PruneTestCase):
         self.assert_ok(proc)
         self.assertIn("broken: cortex.toml", proc.err)
         self.assertIn("its version is not known", proc.err)
+
+    @unittest.skipIf(os.name == "nt" or AS_ROOT, "a file its owner cannot read: POSIX, and not as root")
+    def test_a_project_file_that_cannot_be_opened_is_named(self):
+        locked = self.code / "locked"
+        locked.mkdir()
+        (locked / "cortex.toml").write_text('version = "9.9.6"\ntheme = "h2g2"\n', encoding="utf-8")
+        os.chmod(locked / "cortex.toml", 0)
+        proc = self.run_cortex(self.tmp, "prune", "code", "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn(f"note: {str(locked).replace(os.sep, '/')}: Permission denied: ", proc.err)
+        self.assertIn("its version is not known, so none is kept for it", proc.err)
+        self.assertIn("  would remove  9.9.6", proc.out)
 
     def test_a_pruned_version_comes_back_at_the_next_sync_and_still_matches_the_lock(self):
         returning = self.project("returning", "9.9.6")
@@ -231,6 +254,21 @@ class InProcessTests(unittest.TestCase):
         code = prune.prune([str(self.code)], [], False, out, err)
         return code, out.getvalue(), err.getvalue()
 
+    def test_a_removal_that_fails_stops_none_of_the_others(self):
+        real = os.rename
+
+        def refused(src, dst):
+            if Path(src).name == "9.9.5":
+                raise PermissionError(errno.EACCES, "Permission denied", str(src))
+            return real(src, dst)
+
+        with mock.patch.object(store.os, "rename", refused):
+            code, out, err = self.prune()
+        self.assertEqual(code, 1)
+        self.assertIn("cortex prune: 9.9.5 is still in the store — Permission denied: ", err)
+        self.assertIn("  removed  9.9.6", out)
+        self.assertEqual(self.in_store(), ["9.9.5", "9.9.7"])
+
     def test_a_version_renamed_out_and_not_all_deleted_is_said_to_be_out_of_the_store(self):
         real = store.remove_tree
 
@@ -246,6 +284,34 @@ class InProcessTests(unittest.TestCase):
         self.assertIn("A sync deletes what is left, a day from now", err)
         self.assertNotIn("still in the store", err)
         self.assertEqual(self.in_store(), ["9.9.7"])
+
+    def test_a_version_is_renamed_out_of_the_store_before_a_file_of_it_is_deleted(self):
+        # So that a sync meanwhile finds it whole or absent, never half deleted.
+        real, deleted = store.remove_tree, []
+
+        def watched(root):
+            deleted.append((root.name, (self.home / "versions" / "9.9.5").exists()))
+            return real(root)
+
+        with mock.patch.object(store, "remove_tree", watched):
+            self.assertEqual(self.prune()[0], 0)
+        first = next(entry for entry in deleted if "9.9.5" in entry[0])
+        self.assertTrue(first[0].startswith(".9.9.5-removed-"), deleted)
+        self.assertFalse(first[1], "9.9.5 was still in its place when its files were deleted")
+
+    def test_the_store_is_listed_before_the_projects_are_read(self):
+        # A version a sync puts in the store while prune reads the projects is in no list, and stays.
+        real = prune.versions_of
+
+        def a_sync_meanwhile(root, err):
+            if "9.9.4" not in self.in_store():
+                self.put("9.9.4")
+            return real(root, err)
+
+        with mock.patch.object(prune, "versions_of", a_sync_meanwhile):
+            code, out, _ = self.prune()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.in_store(), ["9.9.4", "9.9.7"])
 
     def test_a_sync_whose_version_a_prune_removes_writes_no_lock(self):
         # Removed between the sync's ensure() and its digest, the version gave the digest of no file,
