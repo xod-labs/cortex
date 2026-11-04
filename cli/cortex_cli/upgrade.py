@@ -285,6 +285,14 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
             err.write("warning: the overlays fail against the target, and --force moves the project anyway\n")
     else:
         out.write(f"The project's overlays pass against Cortex {target}.\n")
+    # What sync refuses at cortex/, refused before anything moves — and said by the dry run, as the run fails.
+    try:
+        sync.existing_entry(Path(root) / sync.LINK, the_store, project)
+        refused = None
+    except sync.SyncError as error:
+        if not dry_run:
+            raise
+        refused = str(error)
 
     rewrites = bootstraps(files, current, current_path, target_path, personality, err)
 
@@ -294,8 +302,10 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
         if stops:
             err.write(f"cortex upgrade: the overlays would fail against Cortex {target}, and stop it — fix them, "
                       "or --force moves the project anyway\n")
+        if refused is not None:
+            err.write(f"cortex upgrade: the sync would refuse it — {refused}\n")
         out.write("--dry-run: nothing of the project was changed\n")
-        return 1 if stops else 0
+        return 1 if stops or refused is not None else 0
 
     # The pin, the lock and the bootstrap files are what the team commits: a run that fails leaves
     # them as they were. What the sync changed on this machine — cortex.local.toml, cortex/ — the next

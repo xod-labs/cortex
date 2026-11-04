@@ -203,6 +203,20 @@ class UpgradeTests(UpgradeTestCase):
                       "an older Cortex wrote it — so it is kept, and the target's template is not written: cortex init "
                       "--force writes it again, and keeps yours as .bak", proc.err)
 
+    def test_a_dry_run_says_the_sync_would_refuse_as_the_run_does(self):
+        project = self.project("9.9.8")
+        (project / "cortex").mkdir()
+        (project / "cortex" / "notes.md").write_text("ours\n", encoding="utf-8")    # sync refuses a cortex/ of others
+        before = snapshot(project)
+        proc = self.upgrade(project, "--dry-run")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("cortex upgrade: the sync would refuse it — cortex/ is ", proc.err)
+        self.assertIn("--dry-run: nothing of the project was changed", proc.out)
+        proc = self.upgrade(project)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("cortex upgrade: cortex/ is ", proc.err)
+        self.assertEqual(snapshot(project), before)
+
     def test_a_sync_that_fails_leaves_the_pin_as_it_was(self):
         project = self.project("9.9.8")
         (project / "cortex").mkdir()
