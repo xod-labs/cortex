@@ -45,7 +45,11 @@ def environment() -> Dict[str, str]:
 def replace(new: Path, binary: Path, aside: bool = os.name == "nt") -> None:
     """Put ``new`` in the place of ``binary``. With ``aside`` — on Windows, where a running
     executable can be renamed but not overwritten — the old one is renamed ``NAME.old`` first, and
-    put back if the new one cannot take its name."""
+    put back if the new one cannot take its name.
+
+    When ``binary`` is the one running, nothing may be imported once this returns: PyInstaller's
+    bootloader reads the bundled modules from ``sys.executable``, opened again by its path, and
+    that path now names ``new`` — whose archive is not this one's."""
     if not aside:
         os.replace(new, binary)
         return

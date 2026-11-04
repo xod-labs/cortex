@@ -26,6 +26,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
+import zlib
 from pathlib import Path
 from typing import Callable, List, Optional, TextIO, Tuple
 
@@ -43,6 +44,7 @@ MAX_ASSET = 256 * 1024 * 1024
 MAX_BINARY = 512 * 1024 * 1024
 # How long `cortex upgrade` waits to learn the latest release: a notice, never worth a wait.
 NOTICE_TIMEOUT = 5
+MAX_OUTPUT = 64 * 1024
 RUN_TIMEOUT = 120
 SUMS = "SHA256SUMS"
 _DOWNLOADED_SUMS = re.compile(r"/download/([^/]+)/SHA256SUMS$")
@@ -124,7 +126,10 @@ def unpack(data: bytes, asset: str) -> bytes:
             if info is None or not info.isfile() or info.size > MAX_BINARY:
                 raise nothing
             return archive.extractfile(info).read()
-    except (tarfile.TarError, zipfile.BadZipFile, EOFError, OSError) as error:
+    # zlib.error: data that inflates to nothing; RuntimeError: an encrypted member; NotImplementedError:
+    # a compression zipfile does not know.
+    except (tarfile.TarError, zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError, EOFError,
+            OSError) as error:
         raise SelfUpdateError(f"{asset} cannot be read: {error} — nothing was replaced")
 
 
@@ -133,16 +138,21 @@ def unpack(data: bytes, asset: str) -> bytes:
 # --------------------------------------------------------------------------- #
 
 def answers(binary: Path) -> str:
-    """What ``binary --version`` prints, or why it does not run."""
-    try:
-        proc = subprocess.run([str(binary), "--version"], capture_output=True, timeout=RUN_TIMEOUT,
-                              stdin=subprocess.DEVNULL, env=environment())
-    except (OSError, subprocess.SubprocessError) as error:
-        raise SelfUpdateError(f"the new binary does not run on this machine: {error} — nothing was replaced")
-    output = proc.stdout.decode("utf-8", errors="replace").strip()
-    if proc.returncode != 0:
-        why = proc.stderr.decode("utf-8", errors="replace").strip() or f"exit code {proc.returncode}"
-        raise SelfUpdateError(f"the new binary does not run on this machine: {why} — nothing was replaced")
+    """What ``binary --version`` prints, or why it does not run. Its output goes to files, not
+    pipes: on Windows a built binary runs as a child of its own, which a timeout does not kill —
+    a pipe it holds open would keep the wait for its end from ending."""
+    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        try:
+            code = subprocess.run([str(binary), "--version"], stdout=stdout, stderr=stderr, timeout=RUN_TIMEOUT,
+                                  stdin=subprocess.DEVNULL, env=environment()).returncode
+        except (OSError, subprocess.SubprocessError) as error:
+            raise SelfUpdateError(f"the new binary does not run on this machine: {error} — nothing was replaced")
+        stdout.seek(0)
+        stderr.seek(0)
+        output = stdout.read(MAX_OUTPUT).decode("utf-8", errors="replace").strip()
+        if code != 0:
+            why = stderr.read(MAX_OUTPUT).decode("utf-8", errors="replace").strip() or f"exit code {code}"
+            raise SelfUpdateError(f"the new binary does not run on this machine: {why} — nothing was replaced")
     return output.splitlines()[0] if output else ""
 
 
@@ -219,6 +229,8 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
             out.write(f"--dry-run: Cortex {target} downloaded, checked and run — {display(str(binary))} "
                       "was not replaced\n")
             return 0
+        # From here on, nothing may be imported: a built binary reads its bundled modules from the
+        # file it started from, by its path — which now names the new binary.
         replace(new, binary)
     finally:
         try:
@@ -227,6 +239,7 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
             pass
 
     out.write(f"Installed cortex {target} as {display(str(binary))}, in place of {own}.\n")
+    out.flush()             # before the notes: a pipe would otherwise show them first
     if target < own:
         err.write(f"note: a downgrade — a project pinned to a version after {target} is now refused\n")
         if target < FIRST_SELF_UPDATE:

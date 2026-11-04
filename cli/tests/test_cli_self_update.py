@@ -49,6 +49,38 @@ def aged(*paths):
         os.utime(path, (then, then))
 
 
+def zip_of_cortex_exe(compression=zipfile.ZIP_STORED, flags=None, method=None, data=None):
+    """A Windows asset whose cortex.exe — its first member — is altered after the fact: its
+    general purpose flags, its compression method, or its stored bytes."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(zipfile.ZipInfo("cortex.exe"), bytes(range(256)) * 4, compress_type=compression)
+    raw = bytearray(buffer.getvalue())
+    local, central = raw.index(b"PK\x03\x04"), raw.index(b"PK\x01\x02")
+    if flags is not None:
+        raw[local + 6:local + 8] = raw[central + 8:central + 10] = flags.to_bytes(2, "little")
+    if method is not None:
+        raw[local + 8:local + 10] = raw[central + 10:central + 12] = method.to_bytes(2, "little")
+    if data is not None:
+        start = local + 30 + len("cortex.exe")
+        raw[start:start + len(data)] = data
+    return bytes(raw)
+
+
+class Piped:
+    """stdout as a pipe holds it — what is written reaches the reader once flushed — and stderr,
+    unbuffered, both read in the order they arrive."""
+
+    def __init__(self):
+        self.read, self.held = [], []
+        self.out = mock.Mock(write=self.held.append, flush=self.flush)
+        self.err = mock.Mock(write=self.read.append)
+
+    def flush(self):
+        self.read.append("".join(self.held))
+        self.held.clear()
+
+
 def answer_of(path):
     """What a release's stand-in answers to ``--version``: the version it was written with."""
     return "cortex " + re.findall(rb"cortex (\d+\.\d+\.\d+)", path.read_bytes())[-1].decode()
@@ -204,6 +236,24 @@ class SelfUpdateTests(ReleaseTestCase):
             self.update("9.9.9", system=WINDOWS)
         self.assert_untouched()
 
+    def test_a_zip_that_cannot_be_inflated_replaces_nothing(self):
+        for why, data in (("encrypted", zip_of_cortex_exe(flags=0x1)),
+                          ("an unknown compression", zip_of_cortex_exe(method=99)),
+                          ("deflate data that is none", zip_of_cortex_exe(zipfile.ZIP_DEFLATED, data=b"\xff" * 8))):
+            with self.subTest(why=why):
+                with self.assertRaisesRegex(SelfUpdateError, "cortex-windows-x86_64.zip cannot be read: .* — "
+                                                             "nothing was replaced"):
+                    self_update.unpack(data, "cortex-windows-x86_64.zip")
+
+    def test_the_notes_come_after_what_was_installed(self):
+        piped = Piped()
+        code = self_update.self_update("9.9.8", False, piped.out, piped.err, binary=self.binary, own=Version("9.9.9"),
+                                       run=answer_of, system="Linux", machine="x86_64")
+        piped.flush()
+        self.assertEqual(code, 0)
+        said = "".join(piped.read)
+        self.assertLess(said.index("Installed cortex 9.9.8"), said.index("note: a downgrade"))
+
     def test_a_binary_that_answers_another_version_replaces_nothing(self):
         with self.assertRaisesRegex(SelfUpdateError, "the binary of Cortex 9.9.9 answers 'cortex 9.9.7' to --version, "
                                                      "not 'cortex 9.9.9' — nothing was replaced"):
@@ -248,6 +298,19 @@ class SelfUpdateTests(ReleaseTestCase):
         code, _, _ = self.update("9.9.9", run=self_update.answers)
         self.assertEqual(code, 0)
         self.assertEqual(subprocess.run([str(self.binary), "--version"], capture_output=True).stdout, b"cortex 9.9.9\n")
+
+    @POSIX
+    def test_a_binary_that_hangs_is_given_up_on_though_a_child_keeps_its_output(self):
+        """The timeout ends the wait, a child of the binary still running — as a built binary's
+        does on Windows."""
+        hangs = self.tmp / "hangs"
+        hangs.write_bytes(b"#!/bin/sh\nsleep 30 &\nsleep 30\n")
+        hangs.chmod(0o755)
+        started = time.monotonic()
+        with mock.patch.object(self_update, "RUN_TIMEOUT", 1):
+            with self.assertRaisesRegex(SelfUpdateError, "does not run on this machine: .*timed out"):
+                self_update.answers(hangs)
+        self.assertLess(time.monotonic() - started, 15)
 
     @POSIX
     def test_a_binary_that_does_not_run_replaces_nothing(self):
@@ -322,11 +385,19 @@ class EnvironmentTests(unittest.TestCase):
             self.assertNotIn("LD_LIBRARY_PATH", binary.environment())
 
     def test_the_new_binary_is_run_in_that_environment(self):
-        done = subprocess.CompletedProcess([], 0, b"cortex 1.2.3\n", b"")
+        files = []
+
+        def answered(args, **kwargs):
+            files.extend(kwargs[stream].fileno() for stream in ("stdout", "stderr"))     # files, open
+            kwargs["stdout"].write(b"cortex 1.2.3\n")
+            return subprocess.CompletedProcess(args, 0)
+
         with mock.patch.object(self_update, "environment", return_value={"FRESH": "1"}), \
-                mock.patch.object(self_update.subprocess, "run", return_value=done) as run:
+                mock.patch.object(self_update.subprocess, "run", side_effect=answered) as run:
             self.assertEqual(self_update.answers(Path("cortex")), "cortex 1.2.3")
         self.assertEqual(run.call_args.kwargs["env"], {"FRESH": "1"})
+        # Files, not pipes: on Windows the wait for a pipe's end outlasts the timeout.
+        self.assertEqual(len(files), 2)
 
     def test_from_source_the_environment_is_left_as_it_is(self):
         with mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/opt/lib"}):
