@@ -229,6 +229,22 @@ class SelfUpdateTests(ReleaseTestCase):
         self.assertIn("note: Cortex 1.3.2 has no self-update — the install script moves it again:", err)
         self.assertIn("install.ps1" if os.name == "nt" else "install.sh | sh\n", err)
 
+    def test_a_download_longer_than_an_hour_loses_nothing_to_another_start(self):
+        """The new binary's file is made once the binary is had: another cortex, started while the
+        download runs, finds nothing of this self-update an hour old."""
+        def slow(url, *args, **kwargs):
+            data = net.get(url, *args, **kwargs)
+            if url.endswith(".tar.gz"):
+                aged(*self.bin.glob(".cortex.new-*"))      # more than an hour since the self-update began
+                binary.tidy(self.binary, aside=False)       # another cortex starts
+            return data
+
+        code = self_update.self_update("9.9.9", False, io.StringIO(), io.StringIO(), binary=self.binary,
+                                       own=Version("9.9.8"), fetch=slow, run=answer_of, system="Linux",
+                                       machine="x86_64")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.binary.read_bytes(), stand_in("9.9.9", False))
+
     def test_releases_that_do_not_say_the_latest_ask_for_a_version(self):
         with self.assertRaisesRegex(SelfUpdateError, "does not say which release is the latest — name the one to "
                                                      "install: cortex self-update X.Y.Z"):
@@ -317,7 +333,8 @@ class SelfUpdateTests(ReleaseTestCase):
             code, out, _ = self.update("9.9.9", dry_run=True)
         self.assertEqual(code, 0)
         self.assertIn("--dry-run: Cortex 9.9.9 downloaded, checked and run", out)
-        self.assertEqual(len(list(self.bin.glob(".cortex.new-*"))), 1)
+        # The new binary, and the empty file that found the directory writable: both held, both left.
+        self.assertEqual(len(list(self.bin.glob(".cortex.new-*"))), 2)
         aged(*self.bin.glob(".cortex.new-*"))
         binary.tidy(self.binary)
         self.assert_untouched()

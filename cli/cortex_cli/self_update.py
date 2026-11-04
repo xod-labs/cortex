@@ -33,7 +33,7 @@ from typing import Callable, List, Optional, TextIO, Tuple
 from cortex_core.project import shown
 
 from . import net, store, sync
-from .binary import environment, replace, running_binary
+from .binary import ASIDE, environment, replace, running_binary
 from .paths import display
 from .semver import Version
 from .version import TARGET, VERSION
@@ -160,6 +160,20 @@ def answers(binary: Path) -> str:
 # The command
 # --------------------------------------------------------------------------- #
 
+def beside(binary: Path, target: Version) -> Path:
+    """A new, empty file beside ``binary``, named as ``binary.tidy`` knows a new binary — or the
+    refusal of a directory this user cannot write in."""
+    try:
+        fd, name = tempfile.mkstemp(prefix=f".{binary.name}.new-", suffix=".exe" if os.name == "nt" else "",
+                                    dir=binary.parent)
+    except OSError as error:
+        raise SelfUpdateError(f"cannot write in {display(str(binary.parent))} ({error.strerror or error}) — an "
+                              "administrator or a package manager installed this cortex: update it the way it was "
+                              f"installed, or install one of your own with:\n    {store.install_command(target)}")
+    os.close(fd)
+    return Path(name)
+
+
 def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, *,
                 binary: Optional[Path], own: Version, fetch: Callable[..., bytes] = net.get,
                 run: Callable[[Path], str] = answers, built_for: Optional[str] = None,
@@ -204,30 +218,31 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
         from_where()
 
     # Beside the old binary, on its file system: the last step is a rename. A directory this user
-    # cannot write in fails here, before anything is downloaded.
+    # cannot write in fails here, before the binary is downloaded — a bare self-update has read
+    # the latest release's SHA256SUMS by then. The file is made again once the binary is had: a
+    # start of another cortex leaves a new binary alone for an hour only (binary.STALE), and a
+    # download may take longer.
+    probe = beside(binary, target)
     try:
-        fd, name = tempfile.mkstemp(prefix=f".{binary.name}.new-", suffix=".exe" if os.name == "nt" else "",
-                                    dir=binary.parent)
-    except OSError as error:
-        raise SelfUpdateError(f"cannot write in {display(str(binary.parent))} ({error.strerror or error}) — an "
-                              "administrator or a package manager installed this cortex: update it the way it was "
-                              f"installed, or install one of your own with:\n    {store.install_command(target)}")
-    new = Path(name)
+        probe.unlink()
+    except OSError:     # held, by an antivirus say: empty, and removed by a start an hour later
+        pass
+    out.write(f"Downloading {asset} of Cortex {target} from {base}\n")
     try:
-        with os.fdopen(fd, "wb") as fh:
-            out.write(f"Downloading {asset} of Cortex {target} from {base}\n")
-            try:
-                if sums is None:
-                    sums = fetch(f"{base}/download/{target}/{SUMS}", store.MAX_SUMS)
-                expected = expected_checksum(sums, asset, target)
-                data = fetch(f"{base}/download/{target}/{asset}", MAX_ASSET)
-            except net.DownloadError as error:
-                raise SelfUpdateError(f"could not download Cortex {target}: {error} — nothing was replaced")
-            actual = hashlib.sha256(data).hexdigest()
-            if actual != expected:
-                raise SelfUpdateError(f"{asset} does not match its checksum — expected {expected}, got {actual}. "
-                                      "Nothing was replaced.")
-            fh.write(unpack(data, asset))
+        if sums is None:
+            sums = fetch(f"{base}/download/{target}/{SUMS}", store.MAX_SUMS)
+        expected = expected_checksum(sums, asset, target)
+        data = fetch(f"{base}/download/{target}/{asset}", MAX_ASSET)
+    except net.DownloadError as error:
+        raise SelfUpdateError(f"could not download Cortex {target}: {error} — nothing was replaced")
+    actual = hashlib.sha256(data).hexdigest()
+    if actual != expected:
+        raise SelfUpdateError(f"{asset} does not match its checksum — expected {expected}, got {actual}. "
+                              "Nothing was replaced.")
+    found = unpack(data, asset)
+    new = beside(binary, target)
+    try:
+        new.write_bytes(found)
         os.chmod(new, 0o755)
         # A first start can take a while: macOS checks a new executable before it runs it.
         out.write(f"Running it once, to check it answers Cortex {target}\n")
@@ -242,7 +257,7 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
             return 0
         # From here on, nothing may be imported: a built binary reads its bundled modules from the
         # file it started from, by its path — which now names the new binary.
-        replace(new, binary)
+        replace(new, binary, ASIDE)
     finally:
         try:
             new.unlink(missing_ok=True)
