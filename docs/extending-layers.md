@@ -280,9 +280,24 @@ To move a project to another Cortex version:
 1. Run `cortex upgrade --dry-run` — or `cortex upgrade X.Y.Z --dry-run` for another version than the binary's own. It puts that version in the store, says which roles, capabilities, personalities and workflows it adds, removes and changes, and checks your overlays against it. A version newer than the installed binary is refused, with the `cortex self-update` command that installs it, and so is a project pinned to one when no version is given: it moves down only to a version you name. With no version given, it also says when a release newer than the binary is out
 2. If an overlay fails — most often a base file moved or renamed upstream, breaking a `Base:` header — update the header to the new path, OR delete the overlay if it's no longer needed. Read the entry for the new version in Cortex's [`changelog/`](../changelog/): it lists breaking renames
 3. Run `cortex upgrade` — it writes `version` in `cortex.toml`, syncs, rewrites `cortex.lock`, and rewrites the instructions file if nobody changed it — the digest in its marker line tells — and the new version writes another. One your team adapted is kept: `cortex init --force` writes it again, and keeps yours as `.bak`
-4. Commit `cortex.toml`, `cortex.lock` and the instructions file if it was written again. Teammates sync after they pull the change — their assistant runs `cortex sync` itself, and `cortex self-update` first when their binary is older than the new version
+4. Commit `cortex.toml`, `cortex.lock` and the instructions file if it was written again — or let `--commit --message MESSAGE` commit them, below. Teammates sync after they pull the change — their assistant runs `cortex sync` itself, and `cortex self-update` first when their binary is older than the new version
+
+The assistant runs `cortex upgrade` only when you ask for it, the dry run first, and never of its own accord ([ADR-010 §3.8](adr/ADR-010-lock-and-upgrade.md)): the pin is the team's decision, made in a commit. The same holds for `--all`.
 
 Still on a git submodule or a standalone clone of Cortex? See [Moving to the `cortex` binary](migrating-to-the-binary.md).
+
+### Every project of the machine — `cortex upgrade --all`
+
+`cortex upgrade --all` runs the steps above in each project of this machine's registry ([ADR-011](adr/ADR-011-project-registry.md); `cortex project list` lists them), in name order, to the same version — `X.Y.Z` when you name it, the binary's own otherwise:
+
+1. Run `cortex upgrade --all --dry-run` — each project's dry run, then a line per project: *would move 1.4.0 → 1.5.0*, *already on 1.5.0*, *refused: …* or *skipped: missing*, and the files each one would have to commit. It exits 1 when a project would be refused, as the run would
+2. Fix what refuses, as in step 2 above — or leave it: a project that refuses stops none of the others
+3. Run `cortex upgrade --all` — a project whose overlays fail, whose sync refuses, or whose pin is newer than the binary is refused; one that is not `ok` — `missing`, `no project`, `unreadable` — is skipped. It ends with a line per project, then the files each one must commit, by path, and exits 1 if one was refused. It asks once whether a release newer than the binary is out
+4. Commit in each project — or let the command do it, as an option:
+   - `--branch NAME` makes the branch `NAME` in each project that is a git work tree, and switches to it, before anything of it is written. A project where `NAME` exists already is refused, and the others go on. Nothing is stashed: changes you have not committed stay where they are
+   - `--commit --message MESSAGE` commits, in each project the upgrade wrote files in, those files and nothing else — another change, staged or not, stays as it is. The message is required: your commit convention is your own. A project outside git, one whose `cortex.toml` git does not track — a workspace that does not commit its pin — and one where git ignores a file it wrote are said, and nothing is committed there. Nothing is pushed
+
+`--dry-run` makes no branch and commits nothing. `--branch` and `--commit` work the same without `--all`, for the one project; `--instructions-file` names one project's file, and is refused with `--all`.
 
 ## 🤔 FAQ
 
