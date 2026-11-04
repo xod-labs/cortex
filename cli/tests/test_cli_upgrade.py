@@ -20,7 +20,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
-from cortex_cli import init  # noqa: E402
+from cortex_cli import init, store  # noqa: E402
 from cortex_cli.store import digest  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
@@ -319,7 +319,7 @@ class DigestTests(UpgradeTestCase):
     def test_without_a_digest_and_the_pinned_version_it_is_not_checked_and_said_so(self):
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))
-        shutil.rmtree(self.home / "versions" / "9.9.8")
+        store.remove_tree(self.home / "versions" / "9.9.8")        # read-only, as the store writes it
         self.env["CORTEX_RELEASES_URL"] = "http://127.0.0.1:9"        # pruned, and offline
         proc = self.upgrade(project)
         self.assert_ok(proc)
