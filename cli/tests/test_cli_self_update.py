@@ -64,10 +64,11 @@ class ReleaseTestCase(unittest.TestCase):
     def latest_is(self, version):
         self.release.redirect("/latest/download/SHA256SUMS", f"{self.release.url}/download/{version}/SHA256SUMS")
 
-    def update(self, wanted=None, dry_run=False, own="9.9.8", system=LINUX, run=answer_of, binary=...):
+    def update(self, wanted=None, dry_run=False, own="9.9.8", system=LINUX, run=answer_of, binary=..., built_for=None):
         out, err = io.StringIO(), io.StringIO()
         code = self_update.self_update(wanted, dry_run, out, err, binary=self.binary if binary is ... else binary,
-                                       own=Version(own), run=run, system=system[0], machine=system[1])
+                                       own=Version(own), run=run, built_for=built_for, system=system[0],
+                                       machine=system[1])
         return code, out.getvalue(), err.getvalue()
 
     def assert_untouched(self):
@@ -100,6 +101,13 @@ class SelfUpdateTests(ReleaseTestCase):
 
     def test_the_windows_asset_gives_its_cortex_exe(self):
         code, _, _ = self.update("9.9.9", system=WINDOWS)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.binary.read_bytes(), stand_in("9.9.9", True))
+        self.assertIn("/download/9.9.9/cortex-windows-x86_64.zip", self.release.requested)
+
+    def test_a_build_downloads_the_asset_of_its_own_target(self):
+        """Windows on ARM runs the x86_64 build, and says ARM64 to the process it emulates."""
+        code, _, _ = self.update("9.9.9", system=("Windows", "ARM64"), built_for="windows-x86_64")
         self.assertEqual(code, 0)
         self.assertEqual(self.binary.read_bytes(), stand_in("9.9.9", True))
         self.assertIn("/download/9.9.9/cortex-windows-x86_64.zip", self.release.requested)
@@ -247,6 +255,10 @@ class AssetTests(unittest.TestCase):
                 self.assertEqual(self_update.asset_name(system, machine), asset)
         self.assertEqual({self_update.asset_name(*pair) for pair in
                           (("Linux", "x86_64"), ("Linux", "aarch64"), ("Darwin", "arm64"), ("Windows", "AMD64"))},
+                         {f"cortex-{t}.{'zip' if t.startswith('windows') else 'tar.gz'}" for t in TARGETS})
+
+    def test_each_build_target_has_its_asset(self):
+        self.assertEqual({self_update.asset_of(t) for t in TARGETS},
                          {f"cortex-{t}.{'zip' if t.startswith('windows') else 'tar.gz'}" for t in TARGETS})
 
     def test_a_system_without_a_build_is_refused(self):

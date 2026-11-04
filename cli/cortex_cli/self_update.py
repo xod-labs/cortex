@@ -1,10 +1,11 @@
 """``cortex self-update`` — replace this binary with a release's (ADR-010 §3.7).
 
 ``cortex self-update [VERSION]`` installs the binary of ``VERSION``, or of the latest release, in
-place of the one running, under the name it was installed with. It downloads the asset of this
-system from where the store and the install scripts download, checks it against the release's
-``SHA256SUMS``, writes the binary beside the old one and runs it: only a binary that answers
-``--version`` with the target is installed, by a rename (``binary.replace``).
+place of the one running, under the name it was installed with. It downloads the asset of the
+build running — its target, stamped at build time — from where the store and the install scripts
+download, checks it against the release's ``SHA256SUMS``, writes the binary beside the old one
+and runs it: only a binary that answers ``--version`` with the target is installed, by a rename
+(``binary.replace``).
 
 The latest release is the version ``latest/download/SHA256SUMS`` redirects to, as GitHub's releases
 do. A latest release older than this binary — a pre-release running, a patch of an older line
@@ -34,7 +35,7 @@ from . import net, store, sync
 from .binary import environment, replace, running_binary
 from .paths import display
 from .semver import Version
-from .version import VERSION
+from .version import TARGET, VERSION
 
 # The first release with this command: a binary before it is moved by the install script only.
 FIRST_SELF_UPDATE = Version("1.4.0")
@@ -55,8 +56,14 @@ class SelfUpdateError(Exception):
 # The release
 # --------------------------------------------------------------------------- #
 
+def asset_of(target: str) -> str:
+    """The release asset of a build target, ``linux-x86_64`` say, as ``cli/build.py`` packages it."""
+    return f"cortex-{target}.zip" if target.startswith("windows-") else f"cortex-{target}.tar.gz"
+
+
 def asset_name(system: str, machine: str) -> str:
-    """The release asset of this system, as the install scripts name it."""
+    """The release asset of this system, as the install scripts name it — for a binary that names
+    no target of its own."""
     system, machine = system.lower(), machine.lower()
     if system == "linux" and machine in ("x86_64", "amd64"):
         return "cortex-linux-x86_64.tar.gz"
@@ -145,12 +152,15 @@ def answers(binary: Path) -> str:
 
 def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, *,
                 binary: Optional[Path], own: Version, fetch: Callable[..., bytes] = net.get,
-                run: Callable[[Path], str] = answers, system: Optional[str] = None,
-                machine: Optional[str] = None) -> int:
+                run: Callable[[Path], str] = answers, built_for: Optional[str] = None,
+                system: Optional[str] = None, machine: Optional[str] = None) -> int:
     if binary is None:
         raise SelfUpdateError("this cortex runs from a source checkout, not from a binary — there is none to "
                               f"replace. Install one with:\n    {store.install_command()}")
-    asset = asset_name(system or platform.system(), machine or platform.machine())
+    # The build's own target, not the machine's: Windows on ARM runs the x86_64 build, and tells
+    # the process it emulates that the machine is ARM64.
+    asset = asset_of(built_for) if built_for else asset_name(system or platform.system(),
+                                                              machine or platform.machine())
     base = store.releases_url()
     sums: Optional[bytes] = None
     if wanted is None:
@@ -238,7 +248,7 @@ def run(args: List[str]) -> int:
         return sync.failed("cortex self-update", f"{shown(options.version)} is no version — X.Y.Z, for instance 1.4.0", 2)
     try:
         return self_update(options.version, options.dry_run, sys.stdout, sys.stderr,
-                           binary=running_binary(), own=Version(VERSION))
+                           binary=running_binary(), own=Version(VERSION), built_for=TARGET)
     except (SelfUpdateError, store.StoreError) as error:
         return sync.failed("cortex self-update", str(error))
     except OSError as error:
