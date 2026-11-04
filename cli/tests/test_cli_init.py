@@ -212,6 +212,21 @@ class OptionTests(InitTestCase):
                 self.assertEqual(self.read("cortex.toml"), 'version = "99.0.0"\ntheme = "h2g2"\n')
                 self.assertEqual(sorted(p.name for p in self.project.iterdir()), ["cortex.toml"])
 
+    def test_a_lock_sync_refuses_stops_init_before_its_first_write(self):
+        toml = f'version = "{OWN}"\ntheme = "h2g2"\n'
+        other = "sha256:" + "0" * 64
+        for lock, said in ((f'format = 1\nversion = "{OWN}"\ndigest = "{other}"\n', "this is not the release the project locked"),
+                           ("<<<<<<< ours\n", "delete it, and `cortex sync` writes it again")):
+            with self.subTest(said=said):
+                (self.project / "cortex.toml").write_text(toml, encoding="utf-8")
+                (self.project / "cortex.lock").write_text(lock, encoding="utf-8")
+                proc = self.init("--copy")
+                self.assertEqual(proc.returncode, 1)
+                self.assertIn(said, proc.err)
+                self.assertEqual(self.read("cortex.toml"), toml)
+                self.assertEqual(self.read("cortex.lock"), lock)
+                self.assertEqual(sorted(p.name for p in self.project.iterdir()), ["cortex.lock", "cortex.toml"])
+
     def test_an_unreadable_cortex_toml_is_refused_and_kept(self):
         (self.project / "cortex.toml").write_text('version = "1.0.0"\ntheme = "../../templates"\n', encoding="utf-8")
         for args in ([], ["--force"]):
