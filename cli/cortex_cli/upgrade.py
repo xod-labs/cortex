@@ -321,7 +321,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         # The default moves a project to this cortex's version, never down: a teammate's older binary
         # would otherwise undo the team's pin.
         raise UpgradeError(f"this project uses Cortex {current}, newer than this cortex, {the_store.own} — nothing was "
-                           f"changed. Upgrade this cortex to serve it:\n    {store.upgrade_command(current)}\nor move the "
+                           f"changed. Update this cortex to serve it:\n    {store.update_command(current)}\nor move the "
                            f"project down to this cortex's version by naming it: cortex upgrade {the_store.own}")
     if target > the_store.own:
         raise UpgradeError(f"Cortex {target} is newer than this cortex, {the_store.own} — update this cortex first, "
