@@ -306,6 +306,23 @@ chmod u+w agents/workflows/engineering/my-workflow.md   # the spec is read-only,
 
 In `link` or `copy` mode the template is at `cortex/templates/workflow.md.template` in the project.
 
+### List your machine's projects — `cortex project`
+
+A machine keeps the list of its Cortex projects in `projects.toml`, beside the store: `~/.cortex/projects.toml`, or `$CORTEX_HOME/projects.toml` ([ADR-011](adr/ADR-011-project-registry.md)). An entry is a project root — the directory of `cortex.toml`, the workspace root in workspace mode — with a name and a path, nothing else: what a project pins and reads is read from the project each time.
+
+```bash
+cortex project add                          # the project of the current directory, named after its directory
+cortex project add ~/code/acme --name acme  # another one, under a name of your choice
+cortex project list                         # where each one stands
+cortex project list --json                  # the same, as one JSON array
+cortex project remove acme                  # by name or by path — the project's files are not touched
+cortex project check                        # exits 1 when one is not ok
+```
+
+`list` gives, in name order, each project's name, its state, the version its `cortex.toml` pins, the version this machine reads now — the `spec` of its `cortex.local.toml` — its layout, from the marker of its instructions file, and its path. A project is `ok`, `missing` — no directory at its path — `no project` — a directory without `cortex.toml` — or `unreadable`, with why. `--json` gives the same as objects of `name`, `path`, `state`, `pinned`, `reads`, `layout` and `why`, with `null` for what is not known. `check` removes nothing: `cortex project remove` drops an entry.
+
+The commands write the file, whole and one at a time. Edit it by hand with care: `cortex` refuses a file with a key it does not know, a name other than lowercase letters, digits, `.`, `_` and `-`, or two entries naming the same directory.
+
 ### Add a capability (contributing to cortex)
 
 Capabilities live in `cortex/agents/capabilities/`. To add a *new* capability to the framework (PR upstream), work in a clone of the Cortex repository — the spec in the store is read-only — and test it in a host project with `cortex sync --from PATH`:
