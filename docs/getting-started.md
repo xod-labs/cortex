@@ -83,7 +83,9 @@ Commit `cortex.toml`, `cortex.lock`, the instructions file and the two context f
 cortex sync
 ```
 
-— as they would `npm install`. It puts the pinned version in the store if it is not there yet, checks it against `cortex.lock`, and writes `spec` in their `cortex.local.toml`. `cortex.lock` holds the version and the digest of its spec, one SHA-256 over its files: a spec whose files differ from the ones the team locked is put in the store again, and refused if it still differs. Until they do, the instructions tell the AI tool to ask them to run it, and to go no further.
+— as they would `npm install`. It puts the pinned version in the store if it is not there yet, checks it against `cortex.lock`, and writes `spec` in their `cortex.local.toml`. Until a developer has run it, the instructions tell the AI tool to ask them to run it, and to go no further.
+
+`cortex.lock` holds the version and the digest of its spec, one SHA-256 over its files: a spec whose files differ from the ones the team locked is put in the store again, and refused if it still differs.
 
 **Where the spec is.** In the instructions, in these docs and in every overlay's `Base:` header, `cortex/` is the directory that `spec` names — a name, not necessarily a directory of the project. `cortex sync` has three modes, chosen by `--store`, `--link` or `--copy`:
 
