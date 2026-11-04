@@ -424,6 +424,28 @@ class DigestTests(unittest.TestCase):
         with self.assertRaisesRegex(store.StoreError, "holds no agents/, templates/, docs/"):
             store.digest(self.tmp / "no-such-version")
 
+    def test_a_file_or_a_tree_that_goes_while_it_is_read_leaves_no_digest(self):
+        # Renamed aside while it was walked: what was not read yet gave nothing, and no error.
+        read, roles = Path.read_bytes, self.tree / "agents" / "roles"
+        for gone in ("the docs/ tree", "a file listed, not read yet"):
+            with self.subTest(gone=gone):
+                def then_gone(path, gone=gone, done=[]):
+                    data = read(path)
+                    if not done:            # the first file read is one of agents/roles: the other goes
+                        done.append(path)
+                        victim = self.tree / "docs" if gone.startswith("the docs") else \
+                            next(p for p in roles.iterdir() if p.name != path.name)
+                        shutil.rmtree(victim) if victim.is_dir() else victim.unlink()
+                    return data
+
+                with mock.patch.object(Path, "read_bytes", then_gone):
+                    with self.assertRaisesRegex(store.StoreError, "while its digest was taken"):
+                        store.digest(self.tree)
+                (self.tree / "docs").mkdir(exist_ok=True)
+                (self.tree / "docs" / "\u00e9.md").write_bytes(b"D\n")
+                for name, text in (("a.md", b"A\n"), ("b.md", b"B\n")):
+                    (roles / name).write_bytes(text)
+
     def test_a_version_a_replace_cut_short_left_aside_is_put_back_offline(self):
         # Killed while it had the version again, a sync left it aside: offline, the next finds it.
         archive = spec_archive(self.tmp, "2.0.0").read_bytes()

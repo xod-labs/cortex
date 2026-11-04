@@ -33,7 +33,7 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Iterator, Optional
 
 from . import net
 from .semver import FIRST_SPEC_ARCHIVE, Version
@@ -151,8 +151,32 @@ def digest(directory: Path) -> str:
     missing = [f"{tree}/" for tree in SPEC_TREES if not (directory / tree).is_dir()]
     if missing:
         raise StoreError(f"{directory} holds no {', '.join(missing)} — no whole spec to take the digest of")
-    return digest_of({path.relative_to(directory).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-                      for tree in SPEC_TREES for path in (directory / tree).rglob("*") if path.is_file()})
+    try:
+        return digest_of({path.relative_to(directory).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                          for path in _files(directory)})
+    except FileNotFoundError as error:
+        raise StoreError(f"{directory} lost {error.filename} while its digest was taken — no whole spec to take the "
+                         "digest of")
+
+
+def _files(directory: Path) -> Iterator[Path]:
+    """The regular files of the spec's three trees at ``directory``. A file or a tree that goes while
+    they are walked — a version removed meanwhile — is an error, which ``Path.rglob`` kept silent."""
+    def gone(error: OSError) -> None:
+        raise error
+
+    for tree in SPEC_TREES:
+        for parent, _, names in os.walk(directory / tree, onerror=gone):
+            for name in names:
+                path = Path(parent) / name
+                try:
+                    regular = stat.S_ISREG(os.stat(path).st_mode)
+                except FileNotFoundError:
+                    if os.path.lexists(path):       # a link to nothing: no file of the spec
+                        continue
+                    raise
+                if regular:
+                    yield path
 
 
 def digest_of(files: Dict[str, str]) -> str:
