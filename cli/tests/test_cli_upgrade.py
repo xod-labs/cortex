@@ -327,6 +327,42 @@ class DigestTests(UpgradeTestCase):
                       "tell whether a team changed it, is not in the store. It is kept: cortex init --force", proc.err)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), init.instructions(OLD_BOOTSTRAP, True))
 
+    def test_on_the_pinned_version_not_in_the_store_the_bootstrap_is_not_checked_and_said_so(self):
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))
+        store.remove_tree(self.home / "versions" / "9.9.8")
+        self.env["CORTEX_RELEASES_URL"] = "http://127.0.0.1:9"        # pruned, and offline
+        proc = self.upgrade(project, "9.9.8")
+        self.assert_ok(proc)
+        self.assertIn("note: the bootstrap files were not checked — Cortex 9.9.8 is not in the store", proc.err)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.instructions(OLD_BOOTSTRAP, True))
+
+    def adapted_with_the_pinned_version_gone(self, target):
+        # 9.9.8 in the store, the pin moved to 9.9.7, then 9.9.7 pruned and the network gone: an
+        # adapted file is said only when the target writes a later format than its marker's.
+        self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": target})
+        project = self.project("9.9.8")
+        (project / "cortex.toml").write_text(self.pinned(project).replace('"9.9.8"', '"9.9.7"'), encoding="utf-8")
+        self.assert_ok(self.run_cortex(project, "sync"))
+        changed = init.stamped(init.instructions(MARKED, True)) + b"\n## Our own rules\n"
+        (project / "CLAUDE.md").write_bytes(changed)
+        store.remove_tree(self.home / "versions" / "9.9.7")
+        self.env["CORTEX_RELEASES_URL"] = "http://127.0.0.1:9"
+        proc = self.upgrade(project, "9.9.8")
+        self.assert_ok(proc)
+        self.assertIn("note: what changes is not said — Cortex 9.9.7 is not in the store", proc.err)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
+        return proc
+
+    def test_without_the_pinned_version_one_a_team_changed_is_said_for_a_later_format(self):
+        proc = self.adapted_with_the_pinned_version_gone(MARKED.replace(b"format=1", b"format=2"))
+        self.assertIn("CLAUDE.md is not what Cortex wrote, by the digest in its marker — a team changed it — so it is "
+                      "kept", proc.err)
+
+    def test_without_the_pinned_version_one_a_team_changed_is_not_said_for_the_same_format(self):
+        proc = self.adapted_with_the_pinned_version_gone(MARKED + b"\nAnother word.\n")
+        self.assertNotIn("CLAUDE.md", proc.err)
+
     def test_several_markers_are_said(self):
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(init.instructions(MARKED, True) + b"\n" + MARKED)
