@@ -7,13 +7,13 @@
 
 In these instructions, `cortex/` is the directory that `spec` names in `cortex.local.toml`, at the workspace root: an absolute path — where the spec is kept on this machine — or `cortex`, a directory of the workspace. Read `cortex.local.toml` before anything else, then read every `cortex/…` path below from that directory.
 
-**The command** is `cortex-ai` when there is one on `PATH`: the install scripts give it that name when another program called `cortex` comes first. Otherwise it is `cortex`, if `cortex --version` prints `cortex X.Y.Z` — anything else is another program. Below, `cortex` stands for whichever it is. **There is neither** → tell the user to install it, as the Installation section of https://github.com/xod-labs/cortex says, and go no further.
-
 **No `cortex.local.toml`, or no `spec` in it** → Cortex is not synced on this machine. Run `cortex sync` at the workspace root, and go no further until it succeeded.
 
-**The spec is of a version other than `cortex.toml`'s** — `spec` ends in `…/versions/1.1.0`, or `cortex/` is a copy whose `cortex/.synced` says `"version": "1.1.0"`, where `version = "1.2.0"` → a teammate moved the workspace to another version, and this machine has not synced it yet. Run `cortex sync` first. There is nothing to compare when `cortex/` is a link, which names no version, nor when `.synced` says `"version": null`: that copy is of a checkout, on purpose.
+**The spec is of a version other than `cortex.toml`'s** — `spec` ends in `…/versions/1.1.0`, or `cortex/` is a copy whose `cortex/.synced` says `"version": "1.1.0"`, where `version = "1.2.0"` → a teammate moved the workspace to another version, and this machine has not synced it yet. Run `cortex sync`, and go no further until it succeeded. There is nothing to compare when `cortex/` is a link, which names no version, nor when `.synced` says `"version": null`: that copy is of a checkout, on purpose.
 
-**`cortex sync` says this cortex is older than the workspace's version** → run the command it names to update it — `cortex self-update X.Y.Z`, or the install script's command from a cortex before 1.4.0 — then `cortex sync` again.
+**`cortex sync` says this cortex is too old for the workspace** — the workspace uses a newer version, or its `cortex.lock` a later format → run the command it names to update it — `cortex self-update`, or the install script's command from a cortex before 1.4.0 — then `cortex sync` again.
+
+**Which command** — only once a rule above has you run one: `cortex-ai` when there is one, otherwise `cortex` if `cortex --version` prints `cortex` followed by a version; anything else is another program. The rules above say `cortex` for whichever it is. The install scripts name it `cortex-ai` when another `cortex` comes first on `PATH`, and put it in `~/.cortex/bin` (`%USERPROFILE%\.cortex\bin` on Windows): look there too when your `PATH` has neither — a tool started before the install changed it. **Neither, anywhere** → tell the user to install it, as the Installation section of https://github.com/xod-labs/cortex says, and go no further.
 
 Before each of these commands, say what you run and why: your tool asks the user first when it is set to. Where you cannot run commands, ask the user to run them. Never run `cortex upgrade`, nor change `version` in `cortex.toml`, of your own accord: moving the workspace to another version is the team's decision, made in a commit. When the user asks for it, do it — `cortex upgrade --dry-run` first, to show what changes.
 
