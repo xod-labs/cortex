@@ -162,10 +162,10 @@ cortex prune DIR... [--keep VERSION]... [--dry-run]
 cortex self-update [VERSION] [--dry-run]
 ```
 
-1. **The target** is `VERSION`, or the latest release — the version its `latest/download/SHA256SUMS` redirects to; where the releases are served without that redirect, the command asks for a `VERSION`. A malformed one exits 2. The binary's own version → *already on X*, and nothing is downloaded. An older one is *a downgrade*: it is installed, and the command says that a project pinned to a later version is then refused — and, before 1.4.0, that the binary it installs has no `self-update`.
+1. **The target** is `VERSION`, or the latest release — the version its `latest/download/SHA256SUMS` redirects to; where the releases are served without that redirect, the command asks for a `VERSION`. A malformed one exits 2. The binary's own version → *already on X*, and nothing is downloaded. A latest release older than the binary — a pre-release running, a patch of an older line published since — is said, and installed only when named. An older one named is *a downgrade*: it is installed, and the command says that a project pinned to a later version is then refused — and, before 1.4.0, that the binary it installs has no `self-update`.
 2. **The binary replaced is the one running**, under whichever name it was installed — `cortex` or `cortex-ai`. A source checkout runs no binary: it is refused, with the install script's command. So is a directory this user cannot write in — a binary an administrator or a package manager installed.
 3. **The download** is the release asset of this system — `cortex-linux-x86_64.tar.gz`, `cortex-linux-aarch64.tar.gz`, `cortex-macos-arm64.tar.gz` or `cortex-windows-x86_64.zip` — from where the store and the install scripts download, `CORTEX_RELEASES_URL` included, checked against the release's `SHA256SUMS`. A mismatch, or an asset that holds no binary, is refused, and nothing is replaced.
-4. **The new binary runs before it is installed**: written beside the old one, on the same file system, it must answer `--version` with the target. Otherwise it is removed, and the old one stays.
+4. **The new binary runs before it is installed**: written beside the old one, on the same file system, it must answer `--version` with the target. Otherwise it is removed, and the old one stays. It starts as a new process would — without what PyInstaller's bootloader set for the running one, `PYINSTALLER_RESET_ENVIRONMENT` set, as PyInstaller documents for one frozen program starting another.
 5. **The replacement is a rename.** On Linux and macOS the new binary is renamed over the old one; the running process keeps the file it started from. Windows refuses to overwrite a running executable, not to rename it: the old one is renamed `NAME.old`, the new one takes its name, and the next `cortex` that starts removes the old one. A failure between the two renames puts the old one back.
 6. **It ends** with the version installed, and what it did not do: no project moved — `cortex upgrade` moves one.
 
@@ -181,7 +181,7 @@ The first rules of both bootstrap templates — what the assistant does before a
 |---|---|
 | no `cortex.local.toml`, or no `spec` in it | runs `cortex sync` at the project root — the workspace root in workspace mode |
 | a spec of another version than `cortex.toml`'s | runs `cortex sync` |
-| `cortex sync` refusing a version newer than the binary | runs `cortex self-update`, then `cortex sync` again |
+| `cortex sync` refusing a version newer than the binary | runs the command the refusal names — `cortex self-update X`, or, from a binary before 1.4.0, the install script's — then `cortex sync` again |
 | no `cortex` command — nor `cortex-ai` | tells the user how to install it, and goes no further |
 
 - **It says what it runs, and why, before it runs it.** Whether the user approves each command is the setting of the assistant's tool, not the bootstrap's: a tool set to ask, asks. An assistant that cannot run commands asks the user to run them.
