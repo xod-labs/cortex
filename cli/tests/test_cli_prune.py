@@ -5,15 +5,22 @@ From source the command stands for Cortex 9.9.9; 9.9.6, 9.9.7 and 9.9.8 are serv
 the tests that need other versions skip there.
 """
 
+import errno
+import io
 import os
 import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
+sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
+from cortex_cli import prune, store, sync  # noqa: E402
+from cortex_cli.semver import Version  # noqa: E402
+from cortex_cli.version import VERSION  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
 OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
@@ -162,6 +169,64 @@ class PruneTests(PruneTestCase):
         self.assert_ok(proc)
         self.assertIn("downloaded to the store", proc.out)
         self.assertEqual((moved / "cortex.lock").read_text(encoding="utf-8"), lock)
+
+
+class InProcessTests(unittest.TestCase):
+    """What a command line cannot reach: a removal that fails, a sync meanwhile. The versions are
+    directories with the three trees, which is all the store asks of one."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="cortex-prune-")).resolve()
+        self.addCleanup(self.cleanup)
+        self.home, self.code = self.tmp / "home", self.tmp / "code"
+        for version in ("9.9.5", "9.9.6", "9.9.7"):
+            self.put(version)
+        (self.code / "p").mkdir(parents=True)
+        (self.code / "p" / "cortex.toml").write_text('version = "9.9.7"\ntheme = "h2g2"\n', encoding="utf-8")
+        environment = mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    cleanup = PruneTestCase.cleanup       # a version a sync wrote is read-only
+
+    def put(self, version):
+        for tree in store.SPEC_TREES:
+            (self.home / "versions" / version / tree).mkdir(parents=True)
+
+    def in_store(self):
+        return sorted(entry.name for entry in (self.home / "versions").iterdir() if not entry.name.startswith("."))
+
+    def prune(self):
+        out, err = io.StringIO(), io.StringIO()
+        code = prune.prune([str(self.code)], [], False, out, err)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_a_sync_whose_version_a_prune_removes_writes_no_lock(self):
+        # Removed between the sync's ensure() and its digest, the version gave the digest of no file,
+        # which the lock kept: every later sync refused the project. Removed while it was read, some.
+        project = self.tmp / "app"
+        project.mkdir()
+        (project / "cortex.toml").write_text(f'version = "{VERSION}"\ntheme = "h2g2"\n', encoding="utf-8")
+        real = store.hashes
+        for when in ("before", "after"):
+            with self.subTest(removed=when):
+                def pruned(directory, when=when):
+                    if when == "after":
+                        found = real(directory)
+                    store.Store(self.home).remove(Version(VERSION))
+                    return found if when == "after" else real(directory)
+
+                with mock.patch.object(store, "hashes", pruned):
+                    with self.assertRaisesRegex(store.StoreError, f"Cortex {VERSION} left the store while this command "
+                                                                  "read it .* Nothing of the project was changed"):
+                        sync.sync(str(project), None, None, io.StringIO(), io.StringIO())
+                self.assertFalse((project / "cortex.lock").exists())
+                self.assertFalse((project / "cortex.local.toml").exists())
+                sync.sync(str(project), None, None, io.StringIO(), io.StringIO())       # run again: it is ensured
+                self.assertEqual((project / "cortex.lock").read_text(encoding="utf-8").count(store.digest(
+                    store.Store(self.home).path(Version(VERSION)))), 1)
+                for name in ("cortex.lock", "cortex.local.toml"):
+                    (project / name).unlink()
 
 
 class PruneArgumentTests(PruneTestCase):
