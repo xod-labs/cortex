@@ -1245,6 +1245,16 @@ class BootstrapMarkerTests(unittest.TestCase):
                 self.assertEqual(init_command.markers(b"# Cortex AI Team\n\n" + line + b"\n"), [])
         self.assertEqual(init_command.markers(b"# T\r\n<!-- cortex:bootstrap layout=single format=12 -->\r\n"), [("single", 12)])
 
+    def test_the_marker_is_read_anywhere_in_the_file(self):
+        # A Cursor rule opens with its front matter, not with the title.
+        front_matter = b"---\ndescription: Cortex\nalwaysApply: true\n---\n" + self.template()
+        self.assertEqual(init_command.markers(front_matter), [("workspace", 1)])
+        self.assertIsNone(init_command.kept_bootstrap(front_matter, self.template()))
+        notes_first = b"Our notes come first.\n\n" + self.template().split(b"\n", 1)[1]
+        self.assertIsNone(init_command.kept_bootstrap(notes_first, self.template()))
+        last_line = b"Our notes.\n\n<!-- cortex:bootstrap layout=single format=1 -->"
+        self.assertEqual(init_command.markers(last_line), [("single", 1)])
+
     def test_a_byte_order_mark_hides_nothing(self):
         bom = b"\xef\xbb\xbf"
         self.assertEqual(init_command.markers(bom + b"<!-- cortex:bootstrap layout=single format=1 -->\n"),
@@ -1256,6 +1266,16 @@ class BootstrapMarkerTests(unittest.TestCase):
                          "is an older Cortex bootstrap, written before the bootstrap marker")
         # A version whose templates carry no marker reads the layout from the title.
         self.assertIsNone(init_command.kept_bootstrap(bom + before, before))
+
+    def test_each_template_carries_one_marker_on_line_3_and_the_comment_under_it(self):
+        templates = Path(__file__).resolve().parents[2] / "templates"
+        for name, layout in (("bootstrap-instructions.md", "single"), ("bootstrap-instructions-workspace.md", "workspace")):
+            with self.subTest(template=name):
+                content = (templates / name).read_bytes()
+                lines = content.split(b"\n")
+                self.assertEqual([found for found, _ in init_command.markers(content)], [layout])
+                self.assertTrue(init_command.BOOTSTRAP_MARKER.fullmatch(lines[2]), lines[2])
+                self.assertTrue(lines[3].startswith(b"<!-- Keep the line above as it is"), lines[3])
 
     def test_a_file_without_the_marker(self):
         before = b"# Cortex AI Team\n\nRead cortex.local.toml first.\n"
