@@ -248,14 +248,14 @@ The validator catches the common mistakes:
 - Trying to override a non-overridable file (`characters.md`)
 - `replacement` semantic used outside `workflows/`
 
-CI integration is recommended — fail the pipeline if `cortex validate --strict` returns non-zero. The CI job installs the binary of the version `cortex.toml` pins — its checks are that version's — then runs `cortex sync`:
+CI integration is recommended — fail the pipeline if `cortex validate --strict` returns non-zero. The CI job installs the binary of the version `cortex.toml` pins — its checks are that version's — then runs `cortex sync --locked`, which never writes `cortex.lock`: a lock missing, or naming another version than `cortex.toml`, fails the job instead of being written where nobody commits it. `--locked` is from Cortex 1.4.0; a project pinned before it runs `cortex sync`:
 
 ```bash
 version="$(LC_ALL=C tr -d '\357\273\277' < cortex.toml | sed -n "s/^[[:space:]]*version[[:space:]]*=[[:space:]]*[\"']\([^\"']*\)[\"'].*/\\1/p" | head -n 1)"
 [ -n "$version" ] || { echo "cortex.toml pins no version" >&2; exit 1; }
 curl -fsSL https://raw.githubusercontent.com/xod-labs/cortex/main/install.sh | sh -s -- "$version"
 export PATH="$HOME/.cortex/bin:$PATH"
-cortex sync
+cortex sync --locked
 cortex validate --strict
 ```
 
@@ -267,7 +267,7 @@ if (-not $pinned) { throw "cortex.toml pins no version" }
 $version = $pinned.Matches[0].Groups[1].Value
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/xod-labs/cortex/main/install.ps1))) -Version $version
 $env:Path = "$env:USERPROFILE\.cortex\bin;$env:Path"
-cortex sync; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+cortex sync --locked; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 cortex validate --strict; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 ```
 
@@ -275,7 +275,7 @@ cortex validate --strict; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
 To move a project to another Cortex version:
 
-1. Run `cortex upgrade --dry-run` — or `cortex upgrade X.Y.Z --dry-run` for another version than the binary's own. It puts that version in the store, says which roles, capabilities, personalities and workflows it adds, removes and changes, and checks your overlays against it. A version newer than the installed binary is refused, with the `cortex self-update` command that installs it — and with no version given, it says when a release newer than the binary is out
+1. Run `cortex upgrade --dry-run` — or `cortex upgrade X.Y.Z --dry-run` for another version than the binary's own. It puts that version in the store, says which roles, capabilities, personalities and workflows it adds, removes and changes, and checks your overlays against it. A version newer than the installed binary is refused, with the `cortex self-update` command that installs it, and so is a project pinned to one when no version is given: it moves down only to a version you name. With no version given, it also says when a release newer than the binary is out
 2. If an overlay fails — most often a base file moved or renamed upstream, breaking a `Base:` header — update the header to the new path, OR delete the overlay if it's no longer needed. Read the entry for the new version in Cortex's [`changelog/`](../changelog/): it lists breaking renames
 3. Run `cortex upgrade` — it writes `version` in `cortex.toml`, syncs, rewrites `cortex.lock`, and rewrites the instructions file if nobody changed it — the digest in its marker line tells — and the new version writes another. One your team adapted is kept: `cortex init --force` writes it again, and keeps yours as `.bak`
 4. Commit `cortex.toml`, `cortex.lock` and the instructions file if it was written again. Teammates sync after they pull the change — their assistant runs `cortex sync` itself, and `cortex self-update` first when their binary is older than the new version

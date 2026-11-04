@@ -87,14 +87,14 @@ Before the pull, `git submodule deinit -f cortex` and `rm -rf .git/modules/corte
 
 ## 5. CI
 
-Where CI ran `./cortex/bin/validate-overlays.sh --strict`, it installs the binary of the version `cortex.toml` pins, and syncs:
+Where CI ran `./cortex/bin/validate-overlays.sh --strict`, it installs the binary of the version `cortex.toml` pins, and syncs — with `--locked` from Cortex 1.4.0, so that a `cortex.lock` missing or naming another version fails the job rather than being written:
 
 ```bash
 version="$(LC_ALL=C tr -d '\357\273\277' < cortex.toml | sed -n "s/^[[:space:]]*version[[:space:]]*=[[:space:]]*[\"']\([^\"']*\)[\"'].*/\\1/p" | head -n 1)"
 [ -n "$version" ] || { echo "cortex.toml pins no version" >&2; exit 1; }
 curl -fsSL https://raw.githubusercontent.com/xod-labs/cortex/main/install.sh | sh -s -- "$version"
 export PATH="$HOME/.cortex/bin:$PATH"
-cortex sync && cortex validate --strict
+cortex sync --locked && cortex validate --strict
 ```
 
 On a Windows runner, in PowerShell:
@@ -105,7 +105,7 @@ if (-not $pinned) { throw "cortex.toml pins no version" }
 $version = $pinned.Matches[0].Groups[1].Value
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/xod-labs/cortex/main/install.ps1))) -Version $version
 $env:Path = "$env:USERPROFILE\.cortex\bin;$env:Path"
-cortex sync; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+cortex sync --locked; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 cortex validate --strict; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 ```
 
