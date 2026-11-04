@@ -7,6 +7,7 @@ write slowed down to meet another, the module itself.
 
 import errno
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -25,6 +26,10 @@ import cli_harness as harness  # noqa: E402
 from cortex_cli import config, registry, sync  # noqa: E402
 
 HEADER = "# The Cortex projects of this machine (ADR-011). Written by cortex — `cortex project` edits it.\n"
+OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
+AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
+PERMISSIONS = unittest.skipIf(AS_ROOT or os.name == "nt", "root reads every directory, and Windows has no chmod 000")
+NONE = "No project is registered on this machine — `cortex project add` registers the one of the current directory\n"
 
 
 def display(path):
@@ -42,7 +47,7 @@ class ProjectTestCase(unittest.TestCase):
         self.addCleanup(self.cleanup)
         self.home = self.tmp / "cortex-home"
         self.registry = self.home / "projects.toml"
-        self.env = harness.environment(CORTEX_HOME=str(self.home))
+        self.env = harness.environment(CORTEX_HOME=str(self.home), CORTEX_SOURCE_VERSION=OWN)
         self.code = self.tmp / "code"
 
     def cleanup(self):
@@ -403,6 +408,229 @@ class RemoveTests(ProjectTestCase):
             self.assertEqual(registry.drop([acme, moved]), [acme])
             self.assertEqual(registry.load(), [other])
             self.assertEqual(registry.drop([]), [])
+
+
+
+class StateTestCase(ProjectTestCase):
+    def register(self, root):
+        self.assert_ok(self.run_cortex(root, "project", "add"))
+        return root
+
+    def listed(self):
+        proc = self.run_cortex(self.tmp, "project", "list", "--json")
+        self.assert_ok(proc)
+        return json.loads(proc.out)
+
+    def one(self, root):
+        """What list --json says of the project at ``root``."""
+        return next(found for found in self.listed() if found["path"] == display(root))
+
+    def synced_elsewhere(self, root, version):
+        """``cortex.local.toml`` naming a version of the store, as a sync writes it."""
+        (self.home / "versions" / version).mkdir(parents=True, exist_ok=True)
+        (root / "cortex.local.toml").write_text(f'spec = "{display(self.home / "versions" / version)}"\n',
+                                                encoding="utf-8")
+
+
+class ListTests(StateTestCase):
+    def test_no_registry_and_an_empty_one_are_said(self):
+        for case in ("none", "empty"):
+            with self.subTest(registry=case):
+                if case == "empty":
+                    self.write_registry()
+                proc = self.run_cortex(self.tmp, "project", "list")
+                self.assert_ok(proc)
+                self.assertEqual(proc.out, NONE)
+                self.assertEqual(self.listed(), [])
+
+    def test_each_entry_in_name_order_with_its_state_and_versions(self):
+        ok = self.register(self.project("zeta", version=OWN))
+        self.assert_ok(self.run_cortex(ok, "sync"))
+        gone = self.register(self.project("gone"))
+        shutil.rmtree(gone)
+        bare = self.register(self.project("bare"))
+        (bare / "cortex.toml").unlink()
+        odd = self.register(self.project("odd"))
+        (odd / "cortex.toml").write_text('version = "1.4.0"\ntheme = "h2g2"\nlater = "x"\n', encoding="utf-8")
+        why = 'cortex.toml: unknown key "later" — cortex.toml takes version, theme, sync and claude_access'
+        self.assertEqual(self.listed(), [
+            {"name": "bare", "path": display(bare), "state": "no project", "pinned": None, "reads": None,
+             "layout": None, "why": None},
+            {"name": "gone", "path": display(gone), "state": "missing", "pinned": None, "reads": None, "layout": None,
+             "why": None},
+            {"name": "odd", "path": display(odd), "state": "unreadable", "pinned": "1.4.0", "reads": None,
+             "layout": None, "why": why},
+            {"name": "zeta", "path": display(ok), "state": "ok", "pinned": OWN, "reads": OWN, "layout": None,
+             "why": None}])
+        proc = self.run_cortex(self.tmp, "project", "list")
+        self.assert_ok(proc)
+        width = len("no project")
+        self.assertEqual(proc.out.splitlines(), [
+            f"NAME  {'STATE':<{width}}  PINNED  {'READS':<{len(OWN)}}  LAYOUT  PATH",
+            f"bare  no project  -       {'-':<{len(OWN)}}  -       {display(bare)}",
+            f"gone  missing     -       {'-':<{len(OWN)}}  -       {display(gone)}",
+            f"odd   unreadable  1.4.0   {'-':<{len(OWN)}}  -       {display(odd)} — {why}",
+            f"zeta  ok          {OWN:<6}  {OWN}  -       {display(ok)}"])
+
+    def test_a_file_written_by_hand_is_listed_in_name_order(self):
+        self.write_registry(("zeta", self.code / "z"), ("alpha", self.code / "a"))
+        self.assertEqual([found["name"] for found in self.listed()], ["alpha", "zeta"])
+
+    def test_the_version_read_now_is_the_spec_of_cortex_local_toml(self):
+        root = self.register(self.project("acme", version="9.9.8"))
+        self.assertEqual(self.one(root)["reads"], None)                  # not synced here
+        self.synced_elsewhere(root, "9.9.7")                              # a bump pulled, not synced yet
+        self.assertEqual((self.one(root)["pinned"], self.one(root)["reads"]), ("9.9.8", "9.9.7"))
+        os.rmdir(self.home / "versions" / "9.9.7")                       # pruned since
+        self.assertEqual(self.one(root)["reads"], None)
+        checkout = self.tmp / "checkout"
+        checkout.mkdir()
+        (root / "cortex.local.toml").write_text(f'spec = "{display(checkout)}"\n', encoding="utf-8")
+        self.assertEqual(self.one(root)["reads"], None)                  # cortex sync --from: no version
+
+    def test_the_layout_is_the_marker_of_the_bootstrap(self):
+        root = self.register(self.project("acme"))
+        marker = "# Cortex\n<!-- cortex:bootstrap layout={} format=1 digest=0123456789abcdef -->\n"
+        self.assertEqual(self.one(root)["layout"], None)                 # no bootstrap
+        (root / "CLAUDE.md").write_bytes(b"\xef\xbb\xbf" + marker.format("workspace").replace("\n", "\r\n").encode())
+        self.assertEqual(self.one(root)["layout"], "workspace")
+        (root / "AGENTS.md").write_text(marker.format("workspace"), encoding="utf-8")
+        self.assertEqual(self.one(root)["layout"], "workspace")
+        (root / ".github").mkdir()
+        (root / ".github" / "copilot-instructions.md").write_text(marker.format("single"), encoding="utf-8")
+        self.assertEqual(self.one(root)["layout"], None)                 # two layouts: not known
+        (root / "CLAUDE.md").write_text("# Mine, with no marker\n", encoding="utf-8")
+        (root / "AGENTS.md").unlink()
+        self.assertEqual(self.one(root)["layout"], "single")
+
+    @PERMISSIONS
+    def test_a_directory_that_cannot_be_read_is_unreadable_never_gone(self):
+        inside = self.register(self.project("closed/acme"))
+        locked = self.register(self.project("locked"))
+        os.chmod(self.code / "closed", 0)
+        os.chmod(locked, 0)
+        for root in (inside, locked):
+            with self.subTest(root=root.name):
+                found = self.one(root)
+                self.assertEqual(found["state"], "unreadable")
+                self.assertIn("Permission denied", found["why"])
+
+    @PERMISSIONS
+    def test_a_project_file_that_cannot_be_read_is_unreadable(self):
+        root = self.register(self.project("acme"))
+        os.chmod(root / "cortex.toml", 0)
+        found = self.one(root)
+        self.assertEqual((found["state"], found["pinned"]), ("unreadable", None))
+        self.assertIn("Permission denied", found["why"])
+
+    def test_a_registry_it_refuses_names_the_file_and_what_is_wrong(self):
+        acme = self.code / "acme"
+        for text, fragment in (('format = 1\nextra = "x"\n', 'unknown key "extra"'),
+                               (f'format = 1\n\n[[project]]\nname = "Acme"\npath = "{display(acme)}"\n',
+                                'project 1: name "Acme" is no project name'),
+                               (f'format = 1\n\n[[project]]\nname = "a"\npath = "{display(acme)}"\n\n[[project]]\n'
+                                f'name = "b"\npath = "{display(acme)}/"\n', "project 2: path .* names the directory of "
+                                                                            "project 1"),
+                               ("format = 2\n", "format 2 is written by a later Cortex .* cortex self-update")):
+            for action in (("list",), ("list", "--json"), ("check",)):
+                with self.subTest(text=text, action=action):
+                    self.home.mkdir(exist_ok=True)
+                    self.registry.write_text(text, encoding="utf-8")
+                    proc = self.run_cortex(self.tmp, "project", *action)
+                    self.assertEqual(proc.returncode, 1)
+                    self.assertEqual(proc.out, "")
+                    self.assertRegex(proc.err.replace("\n", " "), f"^cortex project {action[0]}: "
+                                     + display(self.registry).replace(".", "\\.") + f": .*{fragment}")
+
+
+class CheckTests(StateTestCase):
+    def setUp(self):
+        super().setUp()
+        self.ok = self.register(self.project("acme"))
+
+    def test_every_project_ok_exits_0(self):
+        proc = self.run_cortex(self.tmp, "project", "check")
+        self.assert_ok(proc)
+        self.assertEqual(proc.out, "1 project(s) registered, every one ok\n")
+
+    def test_no_registry_and_an_empty_one_exit_0(self):
+        self.registry.unlink()
+        for case in ("none", "empty"):
+            with self.subTest(registry=case):
+                if case == "empty":
+                    self.write_registry()
+                proc = self.run_cortex(self.tmp, "project", "check")
+                self.assert_ok(proc)
+                self.assertEqual(proc.out, NONE)
+
+    def test_each_entry_not_ok_exits_1_and_nothing_is_removed(self):
+        def gone(root):
+            shutil.rmtree(root)
+
+        def bare(root):
+            (root / "cortex.toml").unlink()
+
+        def odd(root):
+            (root / "cortex.toml").write_text("version = \n", encoding="utf-8")
+
+        for name, spoil, said in (("gone", gone, "gone: missing — no directory at {}"),
+                                  ("bare", bare, "bare: no project — {} holds no cortex.toml"),
+                                  ("odd", odd, "odd: unreadable — {}: cortex.toml: Invalid value")):
+            with self.subTest(state=name):
+                root = self.register(self.project(name))
+                spoil(root)
+                before, files = self.registry.read_bytes(), snapshot(self.code)
+                proc = self.run_cortex(self.tmp, "project", "check")
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertTrue(proc.out.startswith(said.format(display(root))), proc.out)
+                self.assertNotIn("acme", proc.out)
+                self.assertTrue(proc.out.endswith("1 of 2 registered project(s) not ok. Nothing was removed: `cortex "
+                                                  "project remove NAME` drops an entry, and `cortex prune` drops those "
+                                                  "whose project is gone\n"), proc.out)
+                self.assertEqual(self.registry.read_bytes(), before)
+                self.assertEqual(snapshot(self.code), files)
+                self.assert_ok(self.run_cortex(self.tmp, "project", "remove", name))
+
+
+class StateTests(StateTestCase):
+    """``state``, as the next commands call it: what it says of each entry, and that it reads only."""
+
+    def test_a_path_that_is_a_file_is_missing(self):
+        self.code.mkdir()
+        (self.code / "file").write_text("x\n", encoding="utf-8")
+        entry = registry.Entry("file", display(self.code / "file"))
+        self.assertEqual(registry.state(entry), registry.State(entry, registry.MISSING))
+
+    def test_a_cortex_toml_that_is_a_directory_is_no_project(self):
+        root = self.code / "odd"
+        (root / "cortex.toml").mkdir(parents=True)
+        entry = registry.Entry("odd", display(root))
+        self.assertEqual(registry.state(entry).state, registry.NO_PROJECT)
+
+    def test_it_writes_nothing(self):
+        root = self.register(self.project("acme", version=OWN))
+        self.assert_ok(self.run_cortex(root, "sync"))
+        files, before = snapshot(self.tmp), self.registry.read_bytes()
+        with self.in_process():
+            found = registry.state(registry.load()[0])
+        self.assertEqual((found.state, found.pinned, found.reads), (registry.OK, OWN, OWN))
+        self.assertEqual(snapshot(self.tmp), files)
+        self.assertEqual(self.registry.read_bytes(), before)
+
+
+class HelpTests(ProjectTestCase):
+    def test_the_command_is_listed_and_its_actions_too(self):
+        proc = self.run_cortex(self.tmp, "--help")
+        self.assertIn("\n  project      List this machine's Cortex projects", proc.out)
+        proc = self.run_cortex(self.tmp, "project", "--help")
+        self.assert_ok(proc)
+        for action in ("add", "list", "remove", "check"):
+            self.assertIn(f"    {action} ", proc.out)
+
+    def test_no_action_is_a_bad_argument(self):
+        proc = self.run_cortex(self.tmp, "project")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("ACTION", proc.err)
 
 
 if __name__ == "__main__":

@@ -12,13 +12,19 @@ and refuses two that write the same one.
 The file is written whole or not at all — a temporary file beside it, then a rename — and one write
 at a time, under a lock on ``projects.toml.lock`` beside it: two commands that register at once
 both land. A reader takes no lock: it finds the file as it was before a write, or after it.
+
+Nothing about a project is cached here. Where it stands — ``state`` — is read from it each time:
+the version its ``cortex.toml`` pins, the version this machine reads now, its layout, from the
+marker of its bootstrap. A copy would disagree with the project after the first ``git pull``.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import os
+import stat
 import sys
 import tomllib
 from dataclasses import dataclass
@@ -28,13 +34,16 @@ from typing import Iterable, Iterator, List, Optional, TextIO, Tuple
 from cortex_core import project
 from cortex_core.project import LaterFormatError, ProjectFileError, shown
 
-from . import config, store, sync
+from . import config, init, prune, store, sync, validate
 from .paths import display, working_directory
 
 FILE = project.REGISTRY_FILE
 HEADER = "# The Cortex projects of this machine (ADR-011). Written by cortex — `cortex project` edits it.\n"
 LOCK_WAIT = 30    # seconds a write waits for another: one takes milliseconds
 LISTS = "`cortex project list` lists this machine's projects"
+NONE = "No project is registered on this machine — `cortex project add` registers the one of the current directory"
+# What ``state`` says of a project.
+OK, MISSING, NO_PROJECT, UNREADABLE = "ok", "missing", "no project", "unreadable"
 
 
 class RegistryError(Exception):
@@ -46,6 +55,22 @@ class RegistryError(Exception):
 class Entry:
     name: str
     path: str       # absolute, as the shell named it, with / on every platform (``display``)
+
+
+@dataclass(frozen=True)
+class State:
+    """Where the project of an entry stands, read from it now — ``None`` for what is not known."""
+    entry: Entry
+    state: str                      # OK, MISSING, NO_PROJECT or UNREADABLE
+    why: Optional[str] = None       # what cannot be read, when UNREADABLE
+    pinned: Optional[str] = None    # the version its cortex.toml pins
+    reads: Optional[str] = None     # the version this machine reads now: the spec of its cortex.local.toml
+    layout: Optional[str] = None    # "single" or "workspace", by the marker of its bootstrap
+
+    def as_json(self) -> dict:
+        """The object ``cortex project list --json`` gives for it — its keys only grow within format 1."""
+        return {"name": self.entry.name, "path": self.entry.path, "state": self.state, "pinned": self.pinned,
+                "reads": self.reads, "layout": self.layout, "why": self.why}
 
 
 def registry_path() -> Path:
@@ -243,6 +268,71 @@ def drop(entries: Iterable[Entry]) -> List[Entry]:
     return dropped
 
 
+def _there(path: str) -> Optional[os.stat_result]:
+    """What is at ``path`` — ``None`` when nothing is. Any other ``OSError`` is raised: a directory
+    that cannot be searched is no proof that the project is gone."""
+    try:
+        return os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+
+
+def _layout(root: Path) -> Optional[str]:
+    """The layout the project's bootstrap was written for, by the marker ``cortex init`` writes in
+    it (ADR-010 §3.1) — when the instructions files of the tools it knows agree on one. cortex.toml
+    does not say it."""
+    found = set()
+    for relative in init.TOOLS.values():
+        try:
+            found.update(layout for layout, _ in init.markers((root / relative).read_bytes()))
+        except OSError:
+            continue
+    return found.pop() if len(found) == 1 else None
+
+
+def _reads(read: config.Project) -> Optional[str]:
+    """The version of the spec the project reads now — ``None`` when it is not synced here, when that
+    spec is gone, or when it is a checkout (``cortex sync --from``), which has no version."""
+    spec = read.spec_directory()
+    try:
+        if spec is None or not os.path.isdir(spec):
+            return None
+        return validate._synced_version(read, spec) or None
+    except OSError:
+        return None
+
+
+def state(entry: Entry) -> State:
+    """Where the project of ``entry`` stands (ADR-011 §3.2), read from it now:
+
+    - ``MISSING`` — no directory at its path;
+    - ``NO_PROJECT`` — a directory without ``cortex.toml``;
+    - ``UNREADABLE`` — the directory, or its files, cannot be read, or this cortex refuses them:
+      ``why`` says which. Its versions are read all the same when they can be, as ``cortex prune``
+      reads them;
+    - ``OK``.
+    """
+    try:
+        found = _there(entry.path)
+        if found is None or not stat.S_ISDIR(found.st_mode):
+            return State(entry, MISSING)
+        found = _there(os.path.join(entry.path, config.PROJECT_FILE))
+        if found is None or stat.S_ISDIR(found.st_mode):
+            return State(entry, NO_PROJECT)
+    except OSError as error:
+        return State(entry, UNREADABLE, why=sync.os_error(error))
+    root = Path(entry.path)
+    why = None
+    try:
+        read = config.load(entry.path)
+    except config.ConfigError as error:
+        why, read = str(error), prune._loosely(root)
+    except OSError as error:
+        why, read = sync.os_error(error), prune._loosely(root)
+    return State(entry, OK if why is None else UNREADABLE, why, str(read.version) if read else None,
+                 _reads(read) if read else None, _layout(root))
+
+
 # --------------------------------------------------------------------------- #
 # The command
 # --------------------------------------------------------------------------- #
@@ -271,6 +361,41 @@ def _add(options: argparse.Namespace, out: TextIO) -> int:
     return 0
 
 
+def _list(options: argparse.Namespace, out: TextIO) -> int:
+    states = [state(entry) for entry in load()]
+    if options.json:
+        out.write(json.dumps([found.as_json() for found in states], indent=2) + "\n")
+        return 0
+    if not states:
+        out.write(NONE + "\n")
+        return 0
+    rows = [("NAME", "STATE", "PINNED", "READS", "LAYOUT")] + [
+        (found.entry.name, found.state, found.pinned or "-", found.reads or "-", found.layout or "-") for found in states]
+    widths = [max(len(row[column]) for row in rows) for column in range(len(rows[0]))]
+    paths = ["PATH"] + [found.entry.path + (f" — {found.why}" if found.why else "") for found in states]
+    for row, path in zip(rows, paths):
+        out.write("  ".join(cell.ljust(width) for cell, width in zip(row, widths)) + f"  {path}\n")
+    return 0
+
+
+def _check(out: TextIO) -> int:
+    states = [state(entry) for entry in load()]
+    if not states:
+        out.write(NONE + "\n")
+        return 0
+    wrong = [found for found in states if found.state != OK]
+    for found in wrong:
+        why = {MISSING: f"no directory at {found.entry.path}",
+               NO_PROJECT: f"{found.entry.path} holds no {config.PROJECT_FILE}"}.get(found.state)
+        out.write(f"{found.entry.name}: {found.state} — {why or f'{found.entry.path}: {found.why}'}\n")
+    if not wrong:
+        out.write(f"{len(states)} project(s) registered, every one ok\n")
+        return 0
+    out.write(f"{len(wrong)} of {len(states)} registered project(s) not ok. Nothing was removed: `cortex project remove "
+              "NAME` drops an entry, and `cortex prune` drops those whose project is gone\n")
+    return 1
+
+
 def _remove(options: argparse.Namespace, out: TextIO) -> int:
     entry = remove(options.project)
     out.write(f"dropped {entry.name}, {entry.path}, from the registry — the project's files are as they were\n")
@@ -288,14 +413,28 @@ def run(args: List[str]) -> int:
                                             "directory, the nearest cortex.toml — named after its directory.")
     adding.add_argument("path", nargs="?", metavar="PATH", help="the project's root, the directory of its cortex.toml")
     adding.add_argument("--name", metavar="NAME", help="the name to register it as, instead of its directory's")
+    listing = actions.add_parser("list", help="where each project stands",
+                                 description="Each registered project, in name order: its name, its state — ok, "
+                                             "missing, no project or unreadable — the version it pins, the version "
+                                             "this machine reads now, its layout and its path.")
+    listing.add_argument("--json", action="store_true",
+                         help="the same, as one JSON array of objects: name, path, state, pinned, reads, layout and "
+                              "why — null for what is not known")
     removing = actions.add_parser("remove", help="drop a project from the registry — its files are not touched",
                                   description="Drop a project from the registry, by its name or its path. Its "
                                               "files are not touched.")
     removing.add_argument("project", metavar="NAME|PATH", help="the project's name, or its path")
+    actions.add_parser("check", help="say each project that is not ok, and exit 1 if there is one",
+                       description="Say each registered project that is not ok, and exit 1 if there is one. Nothing "
+                                   "is removed.")
     options = parser.parse_args(args)
     try:
         if options.action == "add":
             return _add(options, sys.stdout)
+        if options.action == "list":
+            return _list(options, sys.stdout)
+        if options.action == "check":
+            return _check(sys.stdout)
         return _remove(options, sys.stdout)
     except RegistryError as error:
         return sync.failed(f"cortex project {options.action}", str(error))

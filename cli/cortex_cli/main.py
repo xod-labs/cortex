@@ -62,7 +62,7 @@ COMMANDS: Dict[str, Tuple[str, Callable[[List[str]], int]]] = {
     "upgrade": ("Move the project to another Cortex version, saying first what changes", _upgrade),
     "self-update": ("Replace this cortex with a release's binary — the latest, by default", _self_update),
     "prune": ("Remove from the store the versions no project under the directories given pins", _prune),
-    "project": ("Add a project to this machine's registry, or remove one", _project),
+    "project": ("List this machine's Cortex projects, and add, remove or check them", _project),
     "validate": ("Check the project's overlays against the spec (ADR-001)", _validate),
 }
 
