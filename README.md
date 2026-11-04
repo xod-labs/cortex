@@ -246,7 +246,7 @@ Puts the version `cortex.toml` pins in the store — from the binary itself when
 
 **`cortex.lock`.** Missing, sync writes it, and says to commit it; naming another version — the pin moved — it rewrites it, and says so. Of the pinned version with another digest, the version is put in the store again, and refused if its files still differ from what the team locked. A lock of a later format is refused, as a newer pin is.
 
-**The registry.** Once it succeeded, `cortex sync` adds the project to the registry when it is not listed, and says so once: *registered as acme — `cortex project list` lists this machine's projects*. `--from` registers too. It never renames or moves an entry. A registry that cannot be written is a warning, never a failed sync. `CORTEX_NO_REGISTER` turns registration off.
+**The registry.** Once it succeeded, `cortex sync` adds the project to the registry when it is not listed, and says so once: *registered as acme — `cortex project list` lists this machine's projects*. `--from` and `--locked` register too, and so does `cortex upgrade`, which syncs. It never renames or moves an entry. A registry that cannot be read or written is a warning, never a failed sync. `CORTEX_NO_REGISTER` turns registration off.
 
 ### `cortex upgrade`
 
@@ -266,10 +266,10 @@ With no `VERSION`, it also says when a release newer than the binary is out — 
 | `--force` | move the project even if its overlays fail against the target |
 | `--instructions-file PATH` | the bootstrap file to write again, when it is no known tool's |
 | `--all` | every project of the registry, in name order, to the same target |
-| `--branch NAME` | create and switch to the branch `NAME` before writing anything, in each project that is a git work tree; a project where `NAME` exists is refused. Nothing is stashed |
-| `--commit --message MESSAGE` | commit, in each project that moved, the files the upgrade wrote and nothing else, with `MESSAGE` — required: your team's commit convention is its own. Nothing is pushed |
+| `--branch NAME` | create and switch to the branch `NAME` in each project that is a git work tree, once its checks pass and before its first write — none for a project with nothing to write; a project where `NAME` exists is refused. Nothing is stashed |
+| `--commit --message MESSAGE` | commit, in each project the upgrade wrote files in — moved, or finished on its pinned version — those files and nothing else, with `MESSAGE` — required: your team's commit convention is its own. Nothing is pushed |
 
-**`--all`** gives each registered project the upgrade above. A project that is not `ok` in `cortex project list` is skipped, and said; the release check asks once. A project that refuses — overlays that fail, a sync that refuses, a pin newer than the binary — does not stop the others. The command ends with one line per project — moved, already on the target, refused and why, skipped and why — and what each must commit, by path, and exits 1 if any project refused. Nothing is committed without `--commit`, and the command says so; with it, a project that is no git work tree, or whose files git ignores — a workspace whose `cortex.toml` is not committed — is said, and nothing is committed there. `--dry-run` creates no branch, and `--force` is passed to each project.
+**`--all`** gives each registered project the upgrade above. A project that is not `ok` in `cortex project list` is skipped, and said; the release check asks once. A project that refuses — overlays that fail, a sync that refuses, a pin newer than the binary — does not stop the others. The command ends with one line per project — moved, already on the target, refused and why, skipped and why — and what each must commit, by path, and exits 1 if any project refused — one skipped does not. An empty registry moves nothing, and exits 0; a `VERSION` this cortex does not serve is refused once, before any project. Nothing is committed without `--commit`, and the command says so; with it, a project outside git, one whose `cortex.toml` git does not track, and one where git ignores a file the upgrade wrote are said, and nothing is committed there, while a commit git refuses — a hook, say — is that project's refusal, its upgrade done. Without git on `PATH`, `--branch` and `--commit` are refused before anything changes. `--dry-run` creates no branch, and `--force` is passed to each project. `--instructions-file` names one project's file, and is refused with `--all`.
 
 ### `cortex self-update`
 
@@ -293,7 +293,7 @@ cortex prune [DIR...] [--keep VERSION]... [--dry-run]
 Removes from the store the versions no project uses. It keeps the version each project pins and the one it reads now — a teammate's bump pulled and not synced yet — the binary's own version, and each `--keep`, and lists the versions kept, each with the projects that pin it, and the versions removed.
 
 - **With `DIR...`**, the projects are those under each directory: every `cortex.toml` up to six levels down, past `.git`, `node_modules`, `vendor`, `.venv` and a synced `cortex/`. The registry is neither read nor written.
-- **With no `DIR`**, the projects are the registry's. An entry whose project is gone — `missing`, or `no project` — is dropped from the registry, and said; an `unreadable` one is kept, and named. An empty registry exits 2: pruning would remove every version.
+- **With no `DIR`**, the projects are the registry's. An entry whose project is gone — `missing`, or `no project` — is dropped from the registry, and said; an `unreadable` one is kept, and named, with the versions that can be read of it. The entries gone are dropped first, in one write: a registry that cannot be written stops the command before any version is removed. An empty registry exits 2: pruning would remove every version.
 
 | Option | What it does |
 |---|---|
@@ -311,12 +311,12 @@ cortex project remove NAME|PATH
 cortex project check
 ```
 
-Manages the registry, `projects.toml` in the Cortex home — `~/.cortex/projects.toml` by default: this machine's Cortex projects, one entry per project root — the directory of `cortex.toml`, the workspace root in workspace mode — with a name and a path, and nothing else. What a project pins, and what it reads now, are read from the project each time. `cortex init` and `cortex sync` fill it on their own; `cortex prune` with no `DIR` and `cortex upgrade --all` read it ([ADR-011](docs/adr/ADR-011-project-registry.md)).
+Manages the registry, `projects.toml` in the Cortex home — `~/.cortex/projects.toml` by default: this machine's Cortex projects, one entry per project root — the directory of `cortex.toml`, the workspace root in workspace mode — with a name and a path, and nothing else. What a project pins, and what it reads now, are read from the project each time. `cortex init` and `cortex sync` fill it on their own — `cortex upgrade` too, which syncs; `cortex prune` with no `DIR` and `cortex upgrade --all` read it ([ADR-011](docs/adr/ADR-011-project-registry.md)).
 
 | Subcommand | What it does |
 |---|---|
 | `add [PATH] [--name NAME]` | registers the project at `PATH` — by default the current one, the nearest `cortex.toml`. Its name is `--name`, or the root's directory name, lowered, any other character turned to `-`, and `-2`, `-3`… added when the name is taken. A directory with no `cortex.toml` is refused; a path already listed is said, with its name, and nothing changes; a `--name` another path holds is refused |
-| `list [--json]` | each entry, in name order: its name, its path, the version it pins, the version this machine reads now, and its state — `ok`; `missing`, no directory there; `no project`, a directory without `cortex.toml`; `unreadable`, with why. `--json` prints the same as one JSON array of objects — `name`, `path`, `state`, `pinned`, `reads`, `layout` — with `null` for what is not known, for scripts and tools |
+| `list [--json]` | each entry, in name order: its name, its path, the version it pins, the version this machine reads now, and its state — `ok`; `missing`, no directory there; `no project`, a directory without `cortex.toml`; `unreadable` — its directory or its files cannot be read, or this cortex refuses them — with why. `--json` prints the same as one JSON array of objects — `name`, `path`, `state`, `pinned`, `reads`, `layout` (from the bootstrap file's marker) and `why` — with `null` for what is not known, for scripts and tools |
 | `remove NAME\|PATH` | drops an entry, by name or by path. It never touches the project's files |
 | `check` | says each entry that is not `ok`, and exits 1 if there is one. It removes nothing, and names `cortex project remove` and `cortex prune`, which do |
 
@@ -344,7 +344,7 @@ It exits `0` when clean, `1` on errors — or on warnings under `--strict` — a
 | `CORTEX_HOME` | the binary, the install scripts | where Cortex lives on this machine — the binary in `bin/`, the store in `versions/`, the registry `projects.toml`: `~/.cortex` by default, `%USERPROFILE%\.cortex` on Windows |
 | `CORTEX_RELEASES_URL` | the binary, the install scripts | where releases are downloaded from — a version's spec, `cortex self-update`'s binary, the install: GitHub's releases of `xod-labs/cortex` by default. A mirror serves the same layout, `latest/download/ASSET` and `download/VERSION/ASSET`, over https — http only to this machine, for tests. `cortex self-update` names it in a note before it downloads |
 | `CORTEX_NO_UPDATE_CHECK` | `cortex upgrade` | set to anything but an empty value, `cortex upgrade` with no `VERSION` does not ask which release is the latest — for a CI, or a network that drops what it does not allow |
-| `CORTEX_NO_REGISTER` | `cortex init`, `cortex sync` | set to anything but an empty value, they do not write the registry — for a CI runner, or a throwaway project |
+| `CORTEX_NO_REGISTER` | `cortex init`, `cortex sync`, `cortex upgrade` | set to anything but an empty value, they neither read nor write the registry — for a CI runner, or a throwaway project |
 | `CORTEX_NO_MODIFY_PATH` | `install.ps1` | `1` leaves your user `PATH` as it is, as `-NoModifyPath` does |
 | `SSL_CERT_FILE`, `SSL_CERT_DIR` | the binary | the certificates a download is checked with, as OpenSSL reads them. Unset, the binary looks where the common systems keep theirs |
 | `CORTEX_SOURCE_VERSION` | a source checkout | the version a checkout's tests stand for — for contributors; a built binary never reads it |

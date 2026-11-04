@@ -36,7 +36,7 @@ cortex/
 ├── assets/               ← Ressources statiques
 ├── docs/                 ← Documentation du framework
 ├── templates/            ← Project templates (entry instructions, project-context…)
-├── cli/                  ← The `cortex` command: init, sync, validate
+├── cli/                  ← The `cortex` command: init, sync, upgrade, self-update, prune, project, validate
 ├── core/                 ← cortex-core, the cascade in code
 ├── runtime/              ← The engine: API, agentic loop
 └── install.sh, install.ps1  ← The one-line install
