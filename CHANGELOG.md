@@ -7,6 +7,9 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-04 — You Are Here _(Released)_
+[Full notes](changelog/1.4.0.md)
+
 ### Added
 - **`cortex.lock`** (ADR-010 §3.2). Committed beside `cortex.toml`, it holds the version a project resolved and the digest of its spec, one SHA-256 over the files of its three trees. `cortex sync` and `cortex init` write it, and check the store against it: a spec whose files differ is put in the store again, then refused if it still differs. `cortex validate` warns on a missing lock, a lock of another version and a digest that differs; `--strict` fails on them. In CI, `cortex sync --locked` never writes the lock: one missing, or naming another version, fails the job.
 - **`cortex upgrade [VERSION]`** (ADR-010 §3.5) moves a project to another version, the binary's own by default. It first says what changes — the agents added, removed and changed, layer by layer — and checks the project's overlays against the target, stopping if they would fail, unless `--force`. It then writes `version`, syncs, rewrites `cortex.lock`, and rewrites the instructions file when nobody changed it — the digest in its marker says so — and the target's template differs; run on the pinned version, it finishes an upgrade cut short — the instructions file, the lock and the machine. With no version, a project pinned after the binary is refused: it moves down only to a version named. `--dry-run` changes nothing, and exits as the run would.
