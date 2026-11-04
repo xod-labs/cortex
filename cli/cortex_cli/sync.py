@@ -514,21 +514,40 @@ def _try_lock(fd: int) -> None:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
-def _take(fd: int, at: int, root: Path) -> None:
-    deadline = time.monotonic() + LOCK_WAIT
+def wait_for_lock(fd: int, at: int, wait: float) -> bool:
+    """Take the lock on ``fd`` — on Windows, its byte at ``at`` — waiting ``wait`` seconds at most
+    while another process holds it: ``False`` when it still does. An ``OSError`` is a file system
+    without the lock."""
+    deadline = time.monotonic() + wait
     while True:
         try:
             if os.name == "nt":
                 os.lseek(fd, at, os.SEEK_SET)
             _try_lock(fd)
-            return
+            return True
         except OSError as error:
             if error.errno not in HELD:
                 raise
         if time.monotonic() > deadline:
-            raise SyncError(f"another cortex sync of {display(str(root))} has run for {LOCK_WAIT} seconds — "
-                            "wait for it, then run the command again")
+            return False
         time.sleep(0.1)
+
+
+def release_lock(fd: int, at: int) -> None:
+    """Free the lock ``wait_for_lock`` took on ``fd``, before the descriptor is closed — which frees
+    it too, on every system: on Windows, now rather than when Windows gets to it."""
+    if os.name == "nt":
+        import msvcrt
+
+        with contextlib.suppress(OSError):
+            os.lseek(fd, at, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+
+def _take(fd: int, at: int, root: Path) -> None:
+    if not wait_for_lock(fd, at, LOCK_WAIT):
+        raise SyncError(f"another cortex sync of {display(str(root))} has run for {LOCK_WAIT} seconds — "
+                        "wait for it, then run the command again")
 
 
 @contextlib.contextmanager
@@ -552,14 +571,9 @@ def project_lock(root: Path, err: TextIO):
         yield
     finally:
         if fd is not None:
-            if locked and os.name == "nt":
-                # The file serves every project: its byte is freed now, not when Windows gets to it.
-                import msvcrt
-
-                with contextlib.suppress(OSError):
-                    os.lseek(fd, at, os.SEEK_SET)
-                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-            os.close(fd)                               # which releases the lock, on every system
+            if locked:
+                release_lock(fd, at)                   # the file serves every project, on Windows
+            os.close(fd)
 
 
 def tidy(root: Path) -> None:
