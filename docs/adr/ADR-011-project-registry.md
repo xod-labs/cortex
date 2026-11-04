@@ -1,7 +1,7 @@
 # ADR-011 — The project registry: a machine's Cortex projects, for the CLI and the cockpit
 
-- **Status:** Accepted
-- **Date:** 2026-11-04 (proposed) · 2026-11-04 (accepted, its ten arbitrations as written)
+- **Status:** Implemented
+- **Date:** 2026-11-04 (proposed) · 2026-11-04 (accepted, its ten arbitrations as written, with the amendments listed in §9) · 2026-11-05 (implemented, 1.5.0)
 - **Authors:** Cortex maintainers (initiated by the maintainer, drafted by @Oolon)
 - **Affects:** `core/cortex_core/project.py` (the grammar of `projects.toml`), `cli/cortex_cli/` (a new `cortex project` command, `init`, `sync`, `prune`, `upgrade`), `templates/bootstrap-instructions*.md` (the rule for a spec that is gone), `README.md`, `docs/getting-started.md`, `docs/extending-layers.md`
 - **Relates to:** [ADR-008](ADR-008-cortex-binary.md) §3.3, whose store "keeps no list of projects", which this record revisits for the machine, not for the store · [ADR-010](ADR-010-lock-and-upgrade.md) §3.6 and §7.4, `cortex prune DIR...`, which takes no `DIR` once this registry exists · roadmap epic [#266](https://github.com/xod-labs/cortex/issues/266), split from [#48](https://github.com/xod-labs/cortex/issues/48) on 2026-11-04 · [#98](https://github.com/xod-labs/cortex/issues/98), the configuration cascade, which keeps `~/.cortex/config.toml`
