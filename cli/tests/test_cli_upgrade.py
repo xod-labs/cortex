@@ -673,6 +673,17 @@ class NewerReleaseTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertNotIn("is out", proc.out)
 
+    def test_cortex_no_update_check_asks_for_no_release(self):
+        self.latest_is("99.0.0")
+        project = self.project(OWN)
+        self.env["CORTEX_NO_UPDATE_CHECK"] = "1"
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertNotIn("is out", proc.out)
+        self.assertFalse([path for path in self.release.requested if path.startswith("/latest/")])
+        self.env["CORTEX_NO_UPDATE_CHECK"] = ""         # empty is unset
+        self.assertIn(self.NOTICE, self.upgrade(project).out)
+
     def test_offline_nothing_is_said(self):
         project = self.project(OWN)
         self.env["CORTEX_RELEASES_URL"] = "http://127.0.0.1:9"

@@ -18,7 +18,7 @@ With no ``VERSION``, a project pinned after this cortex is refused: a downgrade 
 ``--dry-run`` says all of it and changes nothing in the project; the store may gain the target.
 The binary is never upgraded here: ``cortex self-update`` does that, and with no ``VERSION`` this
 command says when a release newer than the binary is out — learnt while it works, a few seconds at
-most, and said by nothing offline.
+most, and said by nothing offline. ``CORTEX_NO_UPDATE_CHECK``, set, keeps it from asking.
 """
 
 from __future__ import annotations
@@ -300,7 +300,8 @@ class _NewerRelease(threading.Thread):
 
 def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: Optional[str],
             out: TextIO, err: TextIO) -> int:
-    newer = _NewerRelease(Version(VERSION)) if wanted is None else None
+    asks = wanted is None and not os.environ.get("CORTEX_NO_UPDATE_CHECK")
+    newer = _NewerRelease(Version(VERSION)) if asks else None
     code = _upgrade(cwd, wanted, dry_run, force, named, out, err)
     if newer is not None:
         newer.say(out)
