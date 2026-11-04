@@ -229,6 +229,20 @@ class SelfUpdateTests(ReleaseTestCase):
         self.assertIn("note: Cortex 1.3.2 has no self-update — the install script moves it again:", err)
         self.assertIn("install.ps1" if os.name == "nt" else "install.sh | sh\n", err)
 
+    def test_on_windows_a_downgrade_to_a_binary_without_self_update_says_the_old_one_stays(self):
+        FakeRelease.publish(self.release.root / "download" / "1.3.2", "1.3.2")
+        old = self.bin / "cortex.old"
+        with mock.patch.object(self_update, "ASIDE", True):
+            code, _, err = self.update("1.3.2", own="9.9.9")
+        self.assertEqual(code, 0)
+        self.assertEqual(old.read_bytes(), OLD)
+        self.assertIn(f"note: {display(str(old))}, the binary this command replaced, stays — Cortex 1.3.2 does not "
+                      "remove it: delete it once this command has ended", err)
+        with mock.patch.object(self_update, "ASIDE", False):    # nothing renamed aside: nothing to say
+            self.assertNotIn("stays", self.update("1.3.2", own="9.9.9")[2])
+        with mock.patch.object(self_update, "ASIDE", True):     # 1.4.0 and later remove it themselves
+            self.assertNotIn("stays", self.update("9.9.8", own="9.9.9")[2])
+
     def test_a_download_longer_than_an_hour_loses_nothing_to_another_start(self):
         """The new binary's file is made once the binary is had: another cortex, started while the
         download runs, finds nothing of this self-update an hour old."""

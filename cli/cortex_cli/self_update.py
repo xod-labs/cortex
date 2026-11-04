@@ -271,6 +271,10 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
         if target < FIRST_SELF_UPDATE:
             err.write(f"note: Cortex {target} has no self-update — the install script moves it again:\n"
                       f"    {store.install_command()}\n")
+            if ASIDE:       # its starts do not tidy: the binary renamed aside stays
+                old = binary.with_name(binary.name + ".old")
+                err.write(f"note: {display(str(old))}, the binary this command replaced, stays — Cortex {target} "
+                          "does not remove it: delete it once this command has ended\n")
     out.write("No project moved: `cortex upgrade` moves one to this version.\n")
     return 0
 
