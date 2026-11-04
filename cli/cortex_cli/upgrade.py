@@ -19,6 +19,10 @@ With no ``VERSION``, a project pinned after this cortex is refused: a downgrade 
 The binary is never upgraded here: ``cortex self-update`` does that, and with no ``VERSION`` this
 command says when a release newer than the binary is out — learnt while it works, a few seconds at
 most, and said by nothing offline. ``CORTEX_NO_UPDATE_CHECK``, set, keeps it from asking.
+
+``cortex upgrade --all`` moves every project of the registry (ADR-011 §3.5), in name order, to the
+same target: one that is not ``ok`` is skipped, one that refuses stops none of the others, and the
+command ends with a line per project and what each must commit. The release is asked for once.
 """
 
 from __future__ import annotations
@@ -30,13 +34,14 @@ import stat
 import subprocess
 import sys
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, TextIO, Tuple
 
 from cortex_core import validate as overlay_validator
 from cortex_core.project import shown
 
-from . import config, init, self_update, store, sync
+from . import config, init, registry, self_update, store, sync
 from .paths import display, working_directory
 from .semver import Version
 from .version import VERSION
@@ -47,6 +52,20 @@ TEMPLATES = {"single": "bootstrap-instructions.md", "workspace": "bootstrap-inst
 
 class UpgradeError(Exception):
     pass
+
+
+@dataclass
+class Outcome:
+    """What the upgrade of one project did — or, dry, would do: what ``--all`` says of it."""
+    root: str
+    pinned: Optional[Version]       # the version it was on — None when it was refused before it was read
+    target: Optional[Version]
+    code: int = 0                   # 1 when it stopped, or would
+    why: Optional[str] = None       # why it stopped, or would
+    files: List[Path] = field(default_factory=list)     # what the team commits, written — or that would be
+
+    def names(self) -> List[str]:
+        return [_shown_path(path, self.root) for path in self.files]
 
 
 # --------------------------------------------------------------------------- #
@@ -291,30 +310,69 @@ class _NewerRelease(threading.Thread):
         except Exception:       # a notice: never a traceback in the middle of the upgrade
             self.found = None
 
-    def say(self, out: TextIO) -> None:
+    def say(self, out: TextIO, every: bool = False) -> None:
         self.join(self_update.NOTICE_TIMEOUT)
         if self.found is not None:
+            moves = "`cortex upgrade --all`, moves the projects" if every else "`cortex upgrade`, moves the project"
             out.write(f"\nCortex {self.found} is out, and this cortex is {self.own}: `cortex self-update`, then "
-                      "`cortex upgrade`, moves the project to it.\n")
+                      f"{moves} to it.\n")
+
+
+def _asking(wanted: Optional[str]) -> Optional[_NewerRelease]:
+    """The question of a release newer than this binary: asked with no ``VERSION``, once per command,
+    unless ``CORTEX_NO_UPDATE_CHECK`` is set."""
+    if wanted is not None or os.environ.get("CORTEX_NO_UPDATE_CHECK"):
+        return None
+    return _NewerRelease(Version(VERSION))
+
+
+@dataclass(frozen=True)
+class _Options:
+    wanted: Optional[str]                   # VERSION
+    dry_run: bool
+    force: bool
 
 
 def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: Optional[str],
             out: TextIO, err: TextIO) -> int:
-    asks = wanted is None and not os.environ.get("CORTEX_NO_UPDATE_CHECK")
-    newer = _NewerRelease(Version(VERSION)) if asks else None
+    """``cortex upgrade``: the project of ``cwd``."""
+    newer = _asking(wanted)
     try:
-        code = _upgrade(cwd, wanted, dry_run, force, named, out, err)
+        outcome = _upgrade(cwd, wanted, dry_run, force, named, out, err)
     except BaseException:
         if newer is not None:       # a thread left in a request as Python exits can crash it
             newer.join(self_update.NOTICE_TIMEOUT)
         raise
+    if not dry_run and outcome.why is None:
+        _ending(outcome, out)
     if newer is not None:
         newer.say(out)
-    return code
+    return outcome.code
+
+
+def _ending(outcome: Outcome, out: TextIO) -> None:
+    """What the project must commit."""
+    names = outcome.names()
+    if outcome.target != outcome.pinned:
+        out.write(f"\nCortex {outcome.target} is ready. Commit {', '.join(names)}; teammates run `cortex sync` after "
+                  "they pull.\n")
+    elif names:
+        out.write(f"\nCommit {_and(names)}.\n")
+
+
+def _served(the_store: store.Store, target: Version, again: str) -> None:
+    """Refuse a target this cortex does not serve: one newer than it, naming ``cortex self-update``,
+    then ``again``; one before the first spec archive."""
+    if target > the_store.own:
+        raise UpgradeError(f"Cortex {target} is newer than this cortex, {the_store.own} — update this cortex first, "
+                           f"then run `{again}` again:\n    {store.update_command(target)}")
+    the_store.check_served(target)
 
 
 def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: Optional[str],
-             out: TextIO, err: TextIO) -> int:
+             out: TextIO, err: TextIO, announce: bool = True) -> Outcome:
+    """The upgrade of the project at or above ``cwd`` (ADR-010 §3.5): what it did, or would do.
+    ``announce`` off, the project is not named — ``--all`` has named it."""
     root = config.find_project(cwd)
     if root is None:
         raise UpgradeError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
@@ -328,11 +386,9 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         raise UpgradeError(f"this project uses Cortex {current}, newer than this cortex, {the_store.own} — nothing was "
                            f"changed. Update this cortex to serve it:\n    {store.update_command(current)}\nor move the "
                            f"project down to this cortex's version by naming it: cortex upgrade {the_store.own}")
-    if target > the_store.own:
-        raise UpgradeError(f"Cortex {target} is newer than this cortex, {the_store.own} — update this cortex first, "
-                           f"then run `cortex upgrade {target}` again:\n    {store.update_command(target)}")
-    the_store.check_served(target)
-    out.write(f"Project: {display(root)}\n")
+    _served(the_store, target, f"cortex upgrade {target}")
+    if announce:
+        out.write(f"Project: {display(root)}\n")
     files = _instructions_files(Path(root), named)
     personality = project.theme != "none"
 
@@ -363,7 +419,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         if stops and not dry_run:
             err.write(f"cortex upgrade: the overlays would fail against Cortex {target} — nothing was changed. "
                       "Fix them, or --force moves the project anyway\n")
-            return 1
+            return Outcome(root, current, target, 1, f"the overlays fail against Cortex {target} — nothing was changed")
         if not stops:
             err.write("warning: the overlays fail against the target, and --force moves the project anyway\n")
     else:
@@ -378,6 +434,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         refused = str(error)
 
     rewrites = bootstraps(files, current, current_path, target_path, personality, err)
+    team = [Path(root) / config.PROJECT_FILE, Path(root) / config.LOCK_FILE, *(path for path, _ in rewrites)]
 
     if dry_run:
         for path, _ in rewrites:
@@ -388,7 +445,9 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         if refused is not None:
             err.write(f"cortex upgrade: the sync would refuse it — {refused}\n")
         out.write("--dry-run: nothing of the project was changed\n")
-        return 1 if stops or refused is not None else 0
+        why = f"the overlays fail against Cortex {target}" if stops else \
+            f"the sync would refuse it — {refused}" if refused is not None else None
+        return Outcome(root, current, target, 0 if why is None else 1, why, team)
 
     # The pin, the lock and the bootstrap files are what the team commits: a run that fails leaves
     # them as they were. What the sync changed on this machine — cortex.local.toml, cortex/ — the next
@@ -403,13 +462,11 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     _write(rewrites, committed, root, err, switch)
     for path, _ in rewrites:
         out.write(f"{_shown_path(path, root)}: written again from Cortex {target}'s template — no one changed it\n")
-    written = ", ".join([config.PROJECT_FILE, config.LOCK_FILE, *(_shown_path(path, root) for path, _ in rewrites)])
-    out.write(f"\nCortex {target} is ready. Commit {written}; teammates run `cortex sync` after they pull.\n")
-    return 0
+    return Outcome(root, current, target, files=team)
 
 
 def _resume(root: str, project: config.Project, the_store: store.Store, files: List[Path], personality: bool,
-            dry_run: bool, out: TextIO, err: TextIO) -> int:
+            dry_run: bool, out: TextIO, err: TextIO) -> Outcome:
     """On the pinned version, finish what an upgrade cut short, or a pin moved by hand, left: a
     bootstrap file nobody changed, of another version, written again; this machine and the lock,
     when they are not on the pin, synced (ADR-010 §3.5, step 1)."""
@@ -426,27 +483,24 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     if behind is not None:
         out.write(f"{behind}, and {config.PROJECT_FILE} pins Cortex {current} — an upgrade cut short, or a pin moved by "
                   f"hand: {'the sync would put them on it' if dry_run else 'syncing'}\n")
+    lock = Path(root) / config.LOCK_FILE
     if dry_run:
         for path, _ in rewrites:
             out.write(f"{_shown_path(path, root)}: would be written again from Cortex {current}'s template — no one "
                       "changed it\n")
         if rewrites or behind is not None:
             out.write("--dry-run: nothing of the project was changed\n")
-        return 0
+        relock = behind is not None and getattr(config.load_lock(root), "version", None) != current
+        return Outcome(root, current, current, files=([lock] if relock else []) + [path for path, _ in rewrites])
     if not rewrites and behind is None:
-        return 0
-    lock = Path(root) / config.LOCK_FILE
+        return Outcome(root, current, current)
     locked = lock.read_bytes() if lock.is_file() else None
     _write(rewrites, {lock: locked} if behind is not None else {}, root, err,
            (lambda: sync.sync(root, None, None, out, err, announce=False)) if behind is not None else (lambda: None))
     for path, _ in rewrites:
         out.write(f"{_shown_path(path, root)}: written again from Cortex {current}'s template — no one changed it\n")
-    commit = [_shown_path(path, root) for path, _ in rewrites]
-    if lock.is_file() and lock.read_bytes() != locked:
-        commit.insert(0, config.LOCK_FILE)
-    if commit:
-        out.write(f"\nCommit {_and(commit)}.\n")
-    return 0
+    relocked = lock.is_file() and lock.read_bytes() != locked
+    return Outcome(root, current, current, files=([lock] if relocked else []) + [path for path, _ in rewrites])
 
 
 def _write(rewrites: List[Tuple[Path, bytes]], committed: Dict[Path, Optional[bytes]], root: str, err: TextIO,
@@ -472,12 +526,122 @@ def _write(rewrites: List[Tuple[Path, bytes]], committed: Dict[Path, Optional[by
         raise
 
 
+# --------------------------------------------------------------------------- #
+# --all: every project of the registry (ADR-011 §3.5)
+# --------------------------------------------------------------------------- #
+
+def _first(why: str) -> str:
+    """The first line of a reason: a refusal may go on with the commands to run."""
+    return why.splitlines()[0].rstrip(":") if why else why
+
+
+def upgrade_all(options: _Options, out: TextIO, err: TextIO) -> int:
+    """``cortex upgrade --all``: each registered project, in name order, to the same target. One that
+    is not ``ok`` is skipped; one that refuses stops none of the others, and the command exits 1. It
+    ends with a line per project, and what each must commit. The release is asked for once."""
+    entries = registry.load()
+    if not entries:
+        out.write(f"Nothing to move. {registry.NONE}\n")
+        return 0
+    the_store = store.Store()
+    target = Version(options.wanted) if options.wanted else the_store.own
+    if options.wanted:
+        _served(the_store, target, f"cortex upgrade --all {target}")       # every project would refuse it
+    newer = _asking(options.wanted)
+    try:
+        done = _each(entries, options, out, err)
+    except BaseException:
+        if newer is not None:       # a thread left in a request as Python exits can crash it
+            newer.join(self_update.NOTICE_TIMEOUT)
+        raise
+    _summary(done, target, options, out)
+    if newer is not None:
+        newer.say(out, every=True)
+    return 1 if any(outcome is not None and outcome.code for _, outcome, _ in done) else 0
+
+
+def _each(entries: List[registry.Entry], options: _Options, out: TextIO,
+          err: TextIO) -> List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]:
+    """Each project's upgrade, in turn: what it did — or the state it was skipped for."""
+    done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]] = []
+    for entry in entries:
+        out.write(("\n" if done else "") + f"{entry.name}: {entry.path}\n")
+        try:
+            found = registry.state(entry)
+            if found.state != registry.OK:
+                why = {registry.MISSING: "no directory there",
+                       registry.NO_PROJECT: f"no {config.PROJECT_FILE} there"}.get(found.state, found.why)
+                out.write(f"skipped: {found.state} — {why}\n")
+                done.append((entry, None, found.state))
+                continue
+            outcome = _upgrade(entry.path, options.wanted, options.dry_run, options.force, None, out, err,
+                               announce=False)
+        except REFUSALS as error:
+            outcome = Outcome(entry.path, None, None, 1, _refusal(error))
+            out.flush()
+            err.write(f"cortex upgrade: {outcome.why}\n")
+        done.append((entry, outcome, None))
+        out.flush()
+    return done
+
+
+def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]], target: Version,
+             options: _Options, out: TextIO) -> None:
+    """A line per project — moved, already on the target, refused, skipped — then what each must
+    commit, by path."""
+    width = max(len(entry.name) for entry, _, _ in done)
+    out.write(f"\nCortex {target}, in each registered project{' — a dry run' if options.dry_run else ''}:\n")
+    for entry, outcome, skipped in done:
+        if outcome is None:
+            status = f"skipped: {skipped}"
+        elif outcome.why is not None:
+            status = f"refused: {_first(outcome.why)}"
+        elif outcome.target != outcome.pinned:
+            status = f"{'would move' if options.dry_run else 'moved'} {outcome.pinned} → {outcome.target}"
+        else:
+            status = f"already on {outcome.target}"
+        out.write(f"  {entry.name:<{width}}  {status}\n")
+    commits = [(entry, outcome) for entry, outcome, _ in done
+               if outcome is not None and outcome.why is None and outcome.files]
+    if not commits:
+        out.write("\nNothing to commit, in any project.\n")
+        return
+    out.write(f"\nWhat each project {'would have to' if options.dry_run else 'must'} commit:\n")
+    for entry, outcome in commits:
+        out.write(f"  {entry.name:<{width}}  {entry.path}: {_and(outcome.names())}\n")
+    if options.dry_run:
+        out.write("--dry-run: nothing of any project was changed.\n")
+        return
+    out.write("Nothing was committed. Teammates run `cortex sync` after they pull.\n")
+
+
+# --------------------------------------------------------------------------- #
+# The command line
+# --------------------------------------------------------------------------- #
+
+REFUSALS = (config.ConfigError, store.StoreError, sync.SyncError, UpgradeError, registry.RegistryError, OSError,
+            subprocess.CalledProcessError)
+
+
+def _refusal(error: BaseException) -> str:
+    """What a refusal says — one of ``REFUSALS``."""
+    if isinstance(error, subprocess.CalledProcessError):
+        return (f"{' '.join(map(str, error.cmd))} failed: "
+                f"{(error.stderr or b'').decode(errors='replace').strip() or error.returncode}")
+    if isinstance(error, OSError):
+        return sync.os_error(error)
+    return str(error)
+
+
 def run(args: List[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="cortex upgrade",
         description="Move the project to another Cortex version — this cortex's own, by default — saying first "
-                    "what changes. ADR-010 §3.5.")
+                    "what changes. ADR-010 §3.5; --all, ADR-011 §3.5.")
     parser.add_argument("version", nargs="?", metavar="VERSION", help="the version to move to: X.Y.Z")
+    parser.add_argument("--all", action="store_true",
+                        help="move every project of this machine's registry, in name order — `cortex project list` "
+                             "lists them")
     parser.add_argument("--dry-run", action="store_true", help="say what would change, and change nothing")
     parser.add_argument("--force", action="store_true",
                         help="move the project even if its overlays fail against the target")
@@ -486,13 +650,13 @@ def run(args: List[str]) -> int:
     options = parser.parse_args(args)
     if options.version is not None and not Version.valid(options.version):
         return sync.failed("cortex upgrade", f"{shown(options.version)} is no version — X.Y.Z, for instance 1.4.0", 2)
+    if options.all and options.instructions_file is not None:
+        parser.error("--instructions-file names a file of one project, and --all moves every registered one: run "
+                     "`cortex upgrade --instructions-file PATH` in that project")
     try:
+        if options.all:
+            return upgrade_all(_Options(options.version, options.dry_run, options.force), sys.stdout, sys.stderr)
         return upgrade(working_directory(), options.version, options.dry_run, options.force,
                        options.instructions_file, sys.stdout, sys.stderr)
-    except (config.ConfigError, store.StoreError, sync.SyncError, UpgradeError) as error:
-        return sync.failed("cortex upgrade", str(error))
-    except OSError as error:
-        return sync.failed("cortex upgrade", sync.os_error(error))
-    except subprocess.CalledProcessError as error:
-        return sync.failed("cortex upgrade", f"{' '.join(map(str, error.cmd))} failed: "
-                                             f"{(error.stderr or b'').decode(errors='replace').strip() or error.returncode}")
+    except REFUSALS as error:
+        return sync.failed("cortex upgrade", _refusal(error))
