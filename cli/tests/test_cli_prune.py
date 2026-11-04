@@ -149,6 +149,27 @@ class PruneTests(PruneTestCase):
         self.assertIn("  removed  9.9.6", proc.out)
         self.assertIn("2 project(s) found", proc.out)
 
+    def test_a_directory_reached_through_a_deeper_link_first_is_still_searched(self):
+        # Reached first through the link, six directories down, the target's children were cut, and
+        # reached later by its own path, one down, it was skipped as seen: its project lost its version.
+        # Both orders, since the order of a directory's entries is the file system's.
+        for chain, target in (("a", "z"), ("z", "a")):
+            with self.subTest(link_under=chain):
+                code = self.tmp / f"links-{chain}"
+                deep = code.joinpath(chain, "b", "c", "d", "e")
+                deep.mkdir(parents=True)
+                project = code / target / "p" / "q"
+                project.mkdir(parents=True)
+                (project / "cortex.toml").write_text('version = "9.9.6"\ntheme = "h2g2"\n', encoding="utf-8")
+                try:
+                    os.symlink(code / target, deep / "lnk", target_is_directory=True)
+                except OSError:
+                    self.skipTest("no symbolic link here")
+                proc = self.run_cortex(self.tmp, "prune", code.name, "--dry-run")
+                self.assert_ok(proc)
+                self.assertIn("1 project(s) found", proc.out)
+                self.assertIn("  kept     9.9.6 — used by ", proc.out)
+
     def test_a_project_that_cannot_be_read_is_named(self):
         broken = self.code / "broken"
         broken.mkdir()

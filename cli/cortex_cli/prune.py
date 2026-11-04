@@ -17,6 +17,7 @@ import argparse
 import os
 import sys
 import tomllib
+from collections import deque
 from pathlib import Path
 from typing import Dict, Iterator, List, TextIO
 
@@ -36,25 +37,41 @@ class PruneError(Exception):
 
 def projects(directory: Path, err: TextIO) -> Iterator[Path]:
     """The directories holding a ``cortex.toml`` under ``directory``, ``DEPTH`` levels down at most —
-    through a link to a directory too, each directory once. One it cannot read is named."""
+    through a link to a directory too, each directory once. Breadth first: a directory is reached by
+    its shortest path before any other, so that a deeper one, through a link, cuts nothing under
+    it. One it cannot read is named."""
     seen = set()
-
-    def unreadable(error: OSError) -> None:
-        err.write(f"note: {display(str(error.filename))} cannot be read — a project under it is not counted\n")
-
-    for root, subdirs, files in os.walk(directory, onerror=unreadable, followlinks=True):
-        here = Path(root)
+    queue = deque([(directory, 0)])
+    while queue:
+        here, depth = queue.popleft()
         real = os.path.realpath(here)
         if real in seen:
-            subdirs[:] = []
             continue
         seen.add(real)
-        if config.PROJECT_FILE in files:
+        try:
+            with os.scandir(here) as found:
+                entries = sorted(found, key=lambda entry: entry.name)
+        except OSError as error:
+            err.write(f"note: {display(str(error.filename or here))} cannot be read — a project under it is not counted\n")
+            continue
+        if any(entry.name == config.PROJECT_FILE and not _is_dir(entry) for entry in entries):
             yield here
-        depth = len(here.relative_to(directory).parts)
-        subdirs[:] = [] if depth >= DEPTH else [
-            name for name in subdirs
-            if name not in SKIPPED and not (name == sync.LINK and (sync.is_link(here / name) or (here / name / sync.MARKER).is_file()))]
+        if depth >= DEPTH:
+            continue
+        queue.extend((here / entry.name, depth + 1) for entry in entries if _is_dir(entry) and _searched(here, entry.name))
+
+
+def _is_dir(entry: os.DirEntry) -> bool:
+    """A directory, or a link to one — as ``os.walk`` tells them."""
+    try:
+        return entry.is_dir()
+    except OSError:
+        return False
+
+
+def _searched(here: Path, name: str) -> bool:
+    """Whether the directory ``name`` of ``here`` may hold a project of the machine."""
+    return name not in SKIPPED and not (name == sync.LINK and (sync.is_link(here / name) or (here / name / sync.MARKER).is_file()))
 
 
 def versions_of(root: Path, err: TextIO) -> List[str]:
