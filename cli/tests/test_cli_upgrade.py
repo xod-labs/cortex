@@ -93,6 +93,7 @@ class UpgradeTests(UpgradeTestCase):
         self.assertIn(f"Cortex 9.9.8 → {OWN}: an upgrade — the release notes: {self.release.url}/tag/{OWN}", proc.out)
         self.assertRegex(proc.out, r"  roles +\d+ added")
         self.assertIn("      + engineering/architect\n", proc.out)
+        self.assertIn("      ~ prompt-manager\n", proc.out)       # 9.9.8's has other words
         self.assertIn("  templates ", proc.out)
         self.assertEqual(self.pinned(project), f'# ours\nversion = "{OWN}"  # the team\'s pin\ntheme = "h2g2"\n')
         lock = (project / "cortex.lock").read_text(encoding="utf-8")
@@ -202,6 +203,15 @@ class UpgradeTests(UpgradeTestCase):
         self.assertIn("CLAUDE.md is a bootstrap without the marker, not what Cortex 9.9.8 writes — a team changed it, or "
                       "an older Cortex wrote it — so it is kept, and the target's template is not written: cortex init "
                       "--force writes it again, and keeps yours as .bak", proc.err)
+
+    def test_a_layer_readme_changed_is_said_under_its_layer(self):
+        self.release.replace_spec("9.9.8", {"agents/roles/README.md": b"# Roles, as 9.9.8 had them\n"})
+        project = self.project("9.9.8")
+        proc = self.upgrade(project, "--dry-run")
+        self.assert_ok(proc)
+        roles = proc.out[proc.out.index("  roles "):proc.out.index("  capabilities ")]
+        self.assertIn("      ~ README.md\n", roles)
+        self.assertNotIn("      + README.md\n", roles)
 
     def test_a_dry_run_says_the_sync_would_refuse_as_the_run_does(self):
         project = self.project("9.9.8")

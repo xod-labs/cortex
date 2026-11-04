@@ -55,17 +55,15 @@ def compare(old: Dict[str, str], new: Dict[str, str]) -> Tuple[List[str], List[s
 
 
 def _under(hashes: Dict[str, str], prefix: str, agents: bool = False) -> Dict[str, str]:
-    """The files under ``prefix``, by path below it — an agent by its name, without ``.md``, and
-    never a layer's README, which is no agent."""
+    """The files under ``prefix``, by path below it — an agent by its name, without ``.md``; a
+    layer's README, which is no agent, by its file's."""
     found = {}
     for path, sha in hashes.items():
         if not path.startswith(prefix):
             continue
         rel = path[len(prefix):]
-        if agents:
-            if rel.rsplit("/", 1)[-1].casefold() == "readme.md":
-                continue
-            rel = rel[:-3] if rel.endswith(".md") else rel
+        if agents and rel.endswith(".md") and rel.rsplit("/", 1)[-1].casefold() != "readme.md":
+            rel = rel[:-3]
         found[rel] = sha
     return found
 
