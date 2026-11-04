@@ -902,8 +902,8 @@ class CortexLockTests(SyncTestCase):
         for text, fragment in (("format = 1\nversion = \"1.0.0\"\ndigest = \"x\"\n", 'digest "x" is no digest'),
                                (f'format = 1\nversion = "1.0.0"\ndigest = "{self.OTHER}"\nnote = "x"\n', 'unknown key "note"'),
                                (f'format = 2\nversion = "1.0.0"\ndigest = "{self.OTHER}"\n',
-                                "format 2 is written by a later Cortex — this one reads format 1: update this cortex — "
-                                "`cortex self-update`")):
+                                "format 2 is written by a later Cortex — this one reads format 1: this cortex is older "
+                                "than the project's — update it:\n    cortex self-update")):
             with self.subTest(fragment=fragment):
                 (project / "cortex.lock").write_text(text, encoding="utf-8")
                 proc = self.sync(project)
