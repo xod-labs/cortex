@@ -22,6 +22,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
+from cortex_cli import store  # noqa: E402
 from cortex_cli.store import digest  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
@@ -952,6 +953,22 @@ class CortexLockTests(SyncTestCase):
                 self.assertIn(code, proc.out)
                 self.assertIn("Warnings: 1", proc.out)
                 self.assertEqual(self.validate(project, "--strict").returncode, 1)
+
+    def test_validate_warns_on_a_stored_version_missing_a_tree(self):
+        # Pruned while it was read, or a sync cut short: a warning, never a traceback.
+        for mode in ("--store", "--link"):
+            with self.subTest(mode=mode):
+                project = self.project(name=f"app{mode}")
+                self.assert_ok(self.sync(project, mode))
+                store.make_writable(self.stored())
+                shutil.rmtree(self.stored() / "docs")
+                proc = self.validate(project)
+                self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+                self.assertIn("LOCK_DIGEST", proc.out)
+                self.assertIn("holds no docs/ — no whole spec to take the digest of", proc.out)
+                self.assertNotIn("Traceback", proc.out + proc.err)
+                self.assertEqual(self.validate(project, "--strict").returncode, 1)
+                store.remove_tree(self.stored())        # the next sync writes it whole
 
     def test_validate_reads_a_copys_digest_from_its_manifest(self):
         project = self.project(extra='sync = "copy"\n')
