@@ -213,7 +213,22 @@ class Store:
         return self.versions / str(version)
 
     def digest(self, version: Version) -> str:
-        return digest(self.path(version))
+        """The digest of ``version`` in the store — refused when it left the store while it was
+        read: a prune meanwhile, and the files read are some of its own, or none (ADR-010 §3.6).
+        Refused, not read again: a command that runs again ensures it first."""
+        removed = StoreError(f"Cortex {version} left the store while this command read it — a `cortex prune` "
+                             "meanwhile, say. Nothing of the project was changed: run the command again")
+        try:
+            found = digest(self.path(version))
+        except FileNotFoundError:
+            raise removed
+        except StoreError:
+            if not self.has(version):       # gone before it was read: no tree to read
+                raise removed
+            raise
+        if not self.has(version):
+            raise removed
+        return found
 
     def _aside(self, version: Version, why: str = "removed") -> Path:
         """Rename ``version`` out of its name — in the same directory, so that a read-only one moves
@@ -315,8 +330,12 @@ class Store:
         downloaded, and a ``replace`` cut short had left it aside."""
         self.check_served(version)
         if self.has(version):
-            self._tidy(version)
-            return "stored"
+            try:
+                self._tidy(version)
+            except FileNotFoundError:
+                pass
+            if self.has(version):   # still: not removed meanwhile — pruned, or put in again — by another
+                return "stored"
         if self.path(version).exists():
             raise StoreError(f"{self.path(version)} is there, and holds no complete spec — remove it, "
                              "then run the command again")

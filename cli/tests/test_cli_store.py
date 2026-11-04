@@ -533,6 +533,21 @@ class DigestTests(unittest.TestCase):
             the_store.replace(version)
         self.assertEqual([p.name for p in the_store.versions.iterdir()], ["2.0.0"])
 
+    def test_a_version_removed_between_two_looks_is_written_again(self):
+        # cortex prune renamed it away after has() said it was there, before the tidying.
+        the_store = store.Store(home=self.tmp / "f", own_version="9.9.9", embedded=None, checkout=self.tree,
+                                fetch=None, known={})
+        the_store.ensure(Version("9.9.9"))
+        tidy = the_store._tidy
+
+        def pruned_meanwhile(version):
+            the_store.remove(version)
+            tidy(version)
+
+        the_store._tidy = pruned_meanwhile
+        self.assertEqual(the_store.ensure(Version("9.9.9")), "written")
+        self.assertTrue(the_store.has(Version("9.9.9")))
+
     def test_a_version_put_in_again_is_whole(self):
         the_store = store.Store(home=self.tmp / "c", own_version="9.9.9", embedded=None, checkout=self.tree,
                                 fetch=None, known={})

@@ -32,6 +32,12 @@ def _sync(args: List[str]) -> int:
     return sync.run(args)
 
 
+def _prune(args: List[str]) -> int:
+    from . import prune
+
+    return prune.run(args)
+
+
 def _upgrade(args: List[str]) -> int:
     from . import upgrade
 
@@ -42,6 +48,7 @@ COMMANDS: Dict[str, Tuple[str, Callable[[List[str]], int]]] = {
     "init": ("Make a directory a Cortex project: cortex.toml, the AI tool's instructions", _init),
     "sync": ("Put the pinned Cortex version in the store, and tell the project where it is", _sync),
     "upgrade": ("Move the project to another Cortex version, saying first what changes", _upgrade),
+    "prune": ("Remove from the store the versions no project under the directories given pins", _prune),
     "validate": ("Check the project's overlays against the spec (ADR-001)", _validate),
 }
 

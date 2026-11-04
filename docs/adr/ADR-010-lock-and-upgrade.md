@@ -148,9 +148,10 @@ In the project of the current directory — the nearest `cortex.toml`, as `corte
 cortex prune DIR... [--keep VERSION]... [--dry-run]
 ```
 
-- **It finds the projects under each `DIR`**: every `cortex.toml` up to six directories down, skipping `.git`, `node_modules`, `vendor`, `.venv` and the `cortex/` a link or copy sync made. A `cortex.toml` it cannot read is named, and its version is not known.
-- **It keeps** the versions those projects pin, the binary's own version, and each `--keep`. It removes every other version from the store, and lists both: the versions kept, each with the projects that pin it, and the versions removed.
+- **It finds the projects under each `DIR`**: every `cortex.toml` up to six directories down, through links to directories too, each project once, skipping `.git`, `node_modules`, `vendor`, `.venv` and the `cortex/` a link or copy sync made. A directory or a `cortex.toml` it cannot read is named; a `cortex.toml` with a key this binary does not know still gives its `version`.
+- **It keeps** the versions those projects pin, and the ones they read now — a teammate's bump pulled and not synced yet leaves `spec` on the version before it — the binary's own version, and each `--keep`. It removes every other version from the store, and lists both: the versions kept, each with the projects that pin it, and the versions removed.
 - **No `DIR`** exits 2: there is no list of projects to fall back on (ADR-008 §3.3), and pruning without one would remove the versions of every project it was not shown.
+- **The store is listed before the projects are read**: a version a project syncs meanwhile is in no list, and stays. A version that cannot be removed is named, and the others are still removed.
 - **A version is removed by a rename first** — out of `versions/`, into a staging the store already cleans — then deleted, so that a sync running at the same time finds it whole or absent. A project whose version was removed gets it back at its next `cortex sync`, checked against its `cortex.lock`.
 - **`--dry-run`** lists, and removes nothing.
 - The runtime reads the store too (ADR-008 §3.6). A version only the runtime uses is kept with `--keep`.
