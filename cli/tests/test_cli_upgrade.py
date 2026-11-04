@@ -7,6 +7,7 @@ build of no release and downloads nothing: the tests that need a second version 
 """
 
 import functools
+import hashlib
 import io
 import os
 import shutil
@@ -26,6 +27,11 @@ from release_fixture import FakeRelease  # noqa: E402
 OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
 DOWNLOADS = unittest.skipIf(harness.BINARY, "a build of no release downloads no version")
 OLD_BOOTSTRAP = b"# Cortex AI Team\n\nWritten by 9.9.8: read cortex.local.toml first.\n"
+MARKED = b"# Cortex AI Team\n\n<!-- cortex:bootstrap layout=single format=1 -->\n\nWritten by 9.9.8, with the marker.\n"
+PERSONAL = (b"# Cortex AI Team\n\n<!-- PERSONALITY:BEGIN -->\nBe a character.\n<!-- PERSONALITY:END -->\n\n"
+            b"Written by 9.9.8: read cortex.local.toml first.\n")
+OLD_WORKSPACE = b"# Cortex AI Team \xe2\x80\x94 Workspace Mode\n\nWritten by 9.9.8: read cortex.local.toml first.\n"
+TEMPLATE = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes()
 OVERLAY = ("<!-- OVERLAY\n     Base: cortex/agents/roles/engineering/architect.md\n     Scope: workspace\n"
            "     Semantic: additive\n-->\n\n# Architect — our rules\n")
 
@@ -54,12 +60,13 @@ class UpgradeTestCase(unittest.TestCase):
                     os.chmod(path, 0o700 if os.path.isdir(path) else 0o600)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def project(self, version):
+    def project(self, version, theme="h2g2", synced=True):
         root = self.tmp / "app"
         root.mkdir(parents=True)
-        (root / "cortex.toml").write_text(f'# ours\nversion = "{version}"  # the team\'s pin\ntheme = "h2g2"\n',
+        (root / "cortex.toml").write_text(f'# ours\nversion = "{version}"  # the team\'s pin\ntheme = "{theme}"\n',
                                           encoding="utf-8")
-        self.assert_ok(self.run_cortex(root, "sync"))
+        if synced:
+            self.assert_ok(self.run_cortex(root, "sync"))
         return root
 
     def run_cortex(self, project, *args):
@@ -161,8 +168,7 @@ class UpgradeTests(UpgradeTestCase):
         proc = self.upgrade(project)
         self.assert_ok(proc)
         self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s template — no one changed it", proc.out)
-        template = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes()
-        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.instructions(template, True))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)))
         self.assertIn("Commit cortex.toml, cortex.lock, CLAUDE.md;", proc.out)
 
     def test_a_bootstrap_checked_out_with_crlf_is_still_nobodys_change(self):
@@ -170,8 +176,8 @@ class UpgradeTests(UpgradeTestCase):
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True).replace(b"\n", b"\r\n"))
         self.assert_ok(self.upgrade(project))
-        template = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes()
-        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.instructions(template, True).replace(b"\n", b"\r\n"))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(),
+                         init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n"))
 
     def test_a_dry_run_says_the_bootstrap_too_when_the_overlays_stop_it(self):
         project = self.project("9.9.8")
@@ -193,9 +199,9 @@ class UpgradeTests(UpgradeTestCase):
         proc = self.upgrade(project)
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), ours)
-        self.assertIn("CLAUDE.md is a bootstrap without the marker, and the target writes format 1. It is not what the "
-                      "pinned version writes — a team changed it, or an older Cortex wrote it — so it is kept: "
-                      "cortex init --force writes it again, and keeps yours as .bak", proc.err)
+        self.assertIn("CLAUDE.md is a bootstrap without the marker, not what Cortex 9.9.8 writes — a team changed it, or "
+                      "an older Cortex wrote it — so it is kept, and the target's template is not written: cortex init "
+                      "--force writes it again, and keeps yours as .bak", proc.err)
 
     def test_a_sync_that_fails_leaves_the_pin_as_it_was(self):
         project = self.project("9.9.8")
@@ -206,6 +212,155 @@ class UpgradeTests(UpgradeTestCase):
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertEqual(self.pinned(project), before)
         self.assertIn('version = "9.9.8"', (project / "cortex.lock").read_text(encoding="utf-8"))
+
+
+@DOWNLOADS
+class DigestTests(UpgradeTestCase):
+    """A bootstrap nobody changed is known by the digest in its marker, and written again whenever
+    the target writes another file — whatever the formats, either way (ADR-010 §3.5, step 5)."""
+
+    def marked(self, version="9.9.8", template=MARKED, name="bootstrap-instructions.md"):
+        self.release.replace_spec(version, {f"templates/{name}": template})
+        return init.stamped(init.instructions(template, True))
+
+    def test_an_untouched_bootstrap_of_the_same_format_is_written_again(self):
+        written = self.marked()
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(written)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)))
+        self.assertIn("Commit cortex.toml, cortex.lock, CLAUDE.md;", proc.out)
+
+    def test_an_untouched_bootstrap_the_target_writes_alike_is_left_as_it_is(self):
+        written = self.marked(template=TEMPLATE)
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(written)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), written)
+        self.assertNotIn("CLAUDE.md", proc.out + proc.err)
+
+    def test_a_downgrade_writes_an_untouched_bootstrap_again(self):
+        self.marked()
+        project = self.project(OWN)
+        (project / "CLAUDE.md").write_bytes(init.stamped(init.instructions(TEMPLATE, True)))
+        proc = self.upgrade(project, "9.9.8")
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(MARKED, True)))
+
+    def test_one_a_team_changed_is_kept_and_said_when_the_target_writes_another(self):
+        changed = self.marked() + b"\n## Our own rules\n"
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(changed)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
+        self.assertIn("CLAUDE.md is not what Cortex wrote, by the digest in its marker — a team changed it — so it is "
+                      "kept, and the target's template is not written: cortex init --force writes it again", proc.err)
+
+    def test_one_a_team_changed_is_not_said_when_the_target_writes_the_same(self):
+        changed = self.marked(template=TEMPLATE) + b"\n## Our own rules\n"
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(changed)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
+        self.assertNotIn("CLAUDE.md", proc.err)
+
+    def test_crlf_and_a_byte_order_mark_are_nobodys_change_and_kept(self):
+        written = self.marked()
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(b"\xef\xbb\xbf" + written.replace(b"\n", b"\r\n"))
+        self.assert_ok(self.upgrade(project))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(),
+                         b"\xef\xbb\xbf" + init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n"))
+
+    def test_already_on_it_writes_again_what_an_interrupted_upgrade_left(self):
+        # Cut short after the switch, or a pin moved by hand: 9.9.8's file under the pin of this cortex.
+        written = self.marked()
+        project = self.project(OWN)
+        (project / "CLAUDE.md").write_bytes(written)
+        proc = self.upgrade(project, "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn(f"CLAUDE.md: would be written again from Cortex {OWN}'s template — no one changed it", proc.out)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), written)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn(f"Cortex {OWN}: already on it — nothing to move", proc.out)
+        self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s template — no one changed it", proc.out)
+        self.assertIn("Commit CLAUDE.md.", proc.out)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)))
+
+    def test_without_a_digest_and_the_pinned_version_it_is_not_checked_and_said_so(self):
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))
+        shutil.rmtree(self.home / "versions" / "9.9.8")
+        self.env["CORTEX_RELEASES_URL"] = "http://127.0.0.1:9"        # pruned, and offline
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn("CLAUDE.md was not checked: its marker carries no digest, and Cortex 9.9.8, whose templates would "
+                      "tell whether a team changed it, is not in the store. It is kept: cortex init --force", proc.err)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.instructions(OLD_BOOTSTRAP, True))
+
+    def test_several_markers_are_said(self):
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.instructions(MARKED, True) + b"\n" + MARKED)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn("CLAUDE.md holds several bootstrap markers, so none is read, and it is kept: cortex init --force "
+                      "writes it again", proc.err)
+
+    def test_no_personality_is_compared_and_written_without_its_block(self):
+        self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": PERSONAL})
+        project = self.project("9.9.8", theme="none")
+        (project / "CLAUDE.md").write_bytes(init.instructions(PERSONAL, False))
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, False)))
+        self.assertNotIn(b"PERSONALITY:BEGIN", (project / "CLAUDE.md").read_bytes())
+
+    def test_a_workspace_bootstrap_without_the_marker_is_known_by_its_template(self):
+        self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions-workspace.md": OLD_WORKSPACE})
+        project = self.project("9.9.8")
+        (project / "AGENTS.md").write_bytes(init.instructions(OLD_WORKSPACE, True))
+        self.assert_ok(self.upgrade(project))
+        workspace = (harness.REPO / "templates" / "bootstrap-instructions-workspace.md").read_bytes()
+        self.assertEqual((project / "AGENTS.md").read_bytes(), init.stamped(init.instructions(workspace, True)))
+
+
+class StampTests(unittest.TestCase):
+    """The digest a bootstrap carries in its marker (ADR-010 §3.1)."""
+
+    def test_it_is_the_digest_of_the_file_with_its_marker_plain(self):
+        written = init.stamped(init.instructions(TEMPLATE, True))
+        digest = hashlib.sha256(init.instructions(TEMPLATE, True)).hexdigest()[:16]
+        self.assertIn(f"<!-- cortex:bootstrap layout=single format=1 digest={digest} -->\n".encode(), written)
+        self.assertEqual(init.markers(written), [("single", 1)])
+        self.assertIs(init.untouched(written), True)
+        self.assertEqual(init.stamped(written), written)
+
+    def test_what_git_and_editors_do_to_a_file_is_no_change(self):
+        written = init.stamped(init.instructions(TEMPLATE, True))
+        for kept in (written.replace(b"\n", b"\r\n"), b"\xef\xbb\xbf" + written, written.rstrip(b"\n"),
+                     written + b"\n\n"):
+            with self.subTest(kept=kept[:8] + kept[-4:]):
+                self.assertIs(init.untouched(kept), True)
+
+    def test_a_change_anywhere_is_one(self):
+        written = init.stamped(init.instructions(TEMPLATE, True))
+        for kept in (written.replace(b"Cortex", b"Kortex", 1), written + b"## Ours\n",
+                     written.replace(b"format=1 digest=", b"format=2 digest="),
+                     written.replace(b"layout=single", b"layout=workspace")):
+            with self.subTest(kept=kept[-40:]):
+                self.assertIs(init.untouched(kept), False)
+
+    def test_no_digest_tells_nothing(self):
+        for kept in (init.instructions(TEMPLATE, True), OLD_BOOTSTRAP,
+                     init.stamped(init.instructions(TEMPLATE, True)) * 2):
+            with self.subTest(kept=kept[:40]):
+                self.assertIsNone(init.untouched(kept))
+        self.assertEqual(init.stamped(OLD_BOOTSTRAP), OLD_BOOTSTRAP)
 
 
 @DOWNLOADS
@@ -230,6 +385,45 @@ class RollbackTests(UpgradeTestCase):
                 upgrade.upgrade(str(project), None, False, False, None, io.StringIO(), err)
         self.assertEqual({name: (project / name).read_bytes() for name in committed}, committed)
         self.assertIn("cortex.toml and cortex.lock are as they were", err.getvalue())
+
+    def in_process(self, project, a_sync):
+        sys.path[:0] = [str(harness.CLI), str(harness.CORE)]
+        from cortex_cli import store, sync, upgrade
+        environment = {"CORTEX_HOME": str(self.home), "CORTEX_RELEASES_URL": self.release.url}
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, environment), mock.patch.object(sync, "sync", a_sync), \
+                mock.patch.object(store.Store, "__init__", functools.partialmethod(store.Store.__init__, own_version=OWN)):
+            with self.assertRaises(OSError):
+                upgrade.upgrade(str(project), None, False, False, None, io.StringIO(), err)
+        return err.getvalue()
+
+    def test_the_bootstrap_written_again_is_put_back_too(self):
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))
+        committed = {name: (project / name).read_bytes() for name in ("cortex.toml", "cortex.lock", "CLAUDE.md")}
+
+        def a_sync_that_fails(root, *args, **kwargs):
+            raise OSError("the swap failed")
+
+        err = self.in_process(project, a_sync_that_fails)
+        self.assertEqual({name: (project / name).read_bytes() for name in committed}, committed)
+        self.assertIn("cortex.toml, cortex.lock and CLAUDE.md are as they were", err)
+
+    def test_a_bootstrap_that_cannot_be_written_moves_nothing(self):
+        project = self.project("9.9.8")
+        old = init.instructions(OLD_BOOTSTRAP, True)
+        (project / "CLAUDE.md").write_bytes(old)
+        committed = {name: (project / name).read_bytes() for name in ("cortex.toml", "cortex.lock", "CLAUDE.md")}
+        write_bytes = Path.write_bytes
+
+        def a_disk_that_refuses_the_new_bootstrap(path, data):
+            if path.name == "CLAUDE.md" and data != old:
+                raise OSError("no space left on device")
+            return write_bytes(path, data)
+
+        with mock.patch.object(Path, "write_bytes", a_disk_that_refuses_the_new_bootstrap):
+            self.in_process(project, lambda *args, **kwargs: None)
+        self.assertEqual({name: (project / name).read_bytes() for name in committed}, committed)
 
 
 class UpgradeHelpTests(unittest.TestCase):

@@ -16,7 +16,8 @@ git repository no ``.gitignore`` is created, and a note says so. In a project th
 
 A kept instructions file is read through the marker the templates carry under their title
 (ADR-010 §3.1): the layout it was written for, and the format of its contract. A version whose
-templates carry no marker yet keeps the checks it had.
+templates carry no marker yet keeps the checks it had. The file written carries in its marker the
+digest of what was written, by which ``cortex upgrade`` knows a file nobody changed since.
 
 Two deliberate differences: services are named by a repeatable ``--service``, the interactive
 prompt remaining only when stdin is a terminal and none was given; and an existing instructions
@@ -30,6 +31,8 @@ Everything is checked before anything of the project is written: a refusal leave
 from __future__ import annotations
 
 import argparse
+import codecs
+import hashlib
 import os
 import re
 import subprocess
@@ -54,7 +57,10 @@ PERSONALITY_END = b"<!-- PERSONALITY:END -->"
 # What some editors put before the first line of a UTF-8 file: no part of what it says.
 BOM = b"\xef\xbb\xbf"
 # The marker a bootstrap template carries under its title (ADR-010 §3.1): a whole line, read anywhere.
-BOOTSTRAP_MARKER = re.compile(rb"(?m)^<!-- cortex:bootstrap layout=(single|workspace) format=([1-9][0-9]*) -->\r?$")
+# The file Cortex writes from it carries the digest of what it wrote; the templates, none.
+BOOTSTRAP_MARKER = re.compile(rb"(?m)^<!-- cortex:bootstrap layout=(single|workspace) format=([1-9][0-9]*)"
+                              rb"(?: digest=([0-9a-f]{16}))? -->\r?$")
+DIGEST_FIELD = b" digest="
 
 
 class InitError(Exception):
@@ -172,6 +178,42 @@ def reads_the_local_file(content: bytes) -> bool:
 def markers(content: bytes) -> List[Tuple[str, int]]:
     """The bootstrap markers of a file, ``(layout, format)`` each: one in a bootstrap."""
     return [(m.group(1).decode(), int(m.group(2))) for m in BOOTSTRAP_MARKER.finditer(without_bom(content))]
+
+
+def normalised(content: bytes) -> bytes:
+    """A bootstrap as its digest reads it: without a leading byte order mark, with LF line endings
+    and one newline at the end, as ``instructions`` writes it — git may check it out with CRLF, an
+    editor may add the mark, or take the last newline away."""
+    if content.startswith(codecs.BOM_UTF8):
+        content = content[len(codecs.BOM_UTF8):]
+    return content.replace(b"\r\n", b"\n").rstrip(b"\n") + b"\n"
+
+
+def _digest(content: bytes) -> bytes:
+    return hashlib.sha256(content).hexdigest()[:16].encode()
+
+
+def stamped(content: bytes) -> bytes:
+    """A bootstrap as Cortex writes it: ``content``, written from a template, with the digest of
+    it in its marker (ADR-010 §3.1) — the first 16 hexadecimal digits of the SHA-256 of the file,
+    normalised, its marker without the digest. Left as it is without one marker to carry it."""
+    found = list(BOOTSTRAP_MARKER.finditer(content))
+    if len(found) != 1 or found[0].group(3) is not None:
+        return content
+    at = found[0].end(2)
+    return content[:at] + DIGEST_FIELD + _digest(normalised(content)) + content[at:]
+
+
+def untouched(kept: bytes) -> Optional[bool]:
+    """Whether ``kept`` is still what Cortex wrote, by the digest in its marker: ``None`` when it
+    carries none to tell — no marker, several, or one without a digest."""
+    content = normalised(kept)
+    found = list(BOOTSTRAP_MARKER.finditer(content))
+    if len(found) != 1 or found[0].group(3) is None:
+        return None
+    marker = found[0]
+    plain = content[:marker.start(3) - len(DIGEST_FIELD)] + content[marker.end(3):]
+    return _digest(plain) == marker.group(3)
 
 
 class Kept(NamedTuple):
@@ -415,7 +457,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             err.write(f"note: {display(str(instructions_file))} was written {'without' if personality else 'with'} "
                       f"the personality block this theme needs removed or added — {again}\n")
     else:
-        wanted = instructions(template, personality)
+        wanted = stamped(instructions(template, personality))
         replaced = instructions_file.exists()
         current = instructions_file.read_bytes() if replaced else None
         if current == wanted:

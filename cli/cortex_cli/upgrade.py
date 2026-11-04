@@ -5,9 +5,12 @@
 says what changes: the agents the target adds, removes and changes, layer by layer; then it runs
 the overlay validator with the target as the base, and stops if the project would fail it, unless
 ``--force``. The switch is ``version`` written in ``cortex.toml``, its comments kept, and a sync —
-``cortex.local.toml``, the link or copy, ``cortex.lock``. A bootstrap file of an older format than
-the target's is written again when it is exactly what the pinned version wrote; one a team changed
-is kept, and the command says how ``cortex init --force`` writes it again.
+``cortex.local.toml``, the link or copy, ``cortex.lock``. A bootstrap file nobody changed — the
+digest in its marker says so, or, without one, its being the pinned version's file — is written
+again from the target's template whenever that differs; one a team changed is kept, and the command
+says how ``cortex init --force`` writes it again. On the pinned version, nothing moves, and a file
+nobody changed that another version wrote — an upgrade cut short, a pin moved by hand — is written
+again.
 
 ``--dry-run`` says all of it and changes nothing in the project; the store may gain the target.
 The binary is never upgraded here: the install script does that.
@@ -16,12 +19,13 @@ The binary is never upgraded here: the install script does that.
 from __future__ import annotations
 
 import argparse
+import codecs
 import io
 import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, TextIO, Tuple
+from typing import Callable, Dict, List, Optional, TextIO, Tuple
 
 from cortex_core import validate as overlay_validator
 from cortex_core.project import shown
@@ -104,10 +108,9 @@ def _instructions_files(root: Path, named: Optional[str]) -> List[Path]:
 
 
 def written_by(kept: bytes, templates: Path, layouts: List[str], personality: bool) -> Optional[str]:
-    """The layout ``kept`` is exactly the file of, as the templates at ``templates`` write it for
-    this personality — the team's theme decides it, as for ``cortex init``; line endings aside, as
-    git may check a file out with CRLF. ``None`` when a team changed it, or another version wrote it."""
-    kept = kept.replace(b"\r\n", b"\n")
+    """The layout ``kept`` — normalised — is exactly the file of, as the templates at ``templates``
+    write it for this personality: the team's theme decides it, as for ``cortex init``. ``None``
+    when a team changed it, or another version wrote it."""
     for layout in layouts:
         template = templates / TEMPLATES[layout]
         if template.is_file() and kept == init.instructions(template.read_bytes(), personality):
@@ -115,31 +118,78 @@ def written_by(kept: bytes, templates: Path, layouts: List[str], personality: bo
     return None
 
 
-def bootstrap(path: Path, current: Path, target: Path, personality: bool) -> Tuple[Optional[bytes], Optional[str]]:
-    """What becomes of the bootstrap at ``path`` when the spec moves from ``current`` to ``target``:
-    the bytes to write, or the note to give — ``(None, None)`` when nothing is to be done."""
+def _written(templates: Path, layout: str, personality: bool) -> Optional[bytes]:
+    """The bootstrap the templates at ``templates`` write for ``layout``, as Cortex writes it."""
+    template = templates / TEMPLATES[layout]
+    return init.stamped(init.instructions(template.read_bytes(), personality)) if template.is_file() else None
+
+
+def _format(content: Optional[bytes]) -> int:
+    found = init.markers(content or b"")
+    return found[0][1] if found else 0
+
+
+def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path,
+              personality: bool) -> Tuple[Optional[bytes], Optional[str]]:
+    """What becomes of the bootstrap at ``path`` when the project moves from ``pinned``, whose spec
+    is at ``current`` — ``None`` when the store has it not — to the spec at ``target`` (ADR-010
+    §3.5, step 5): the bytes to write, or the note to give; ``(None, None)`` when nothing is to be
+    done. A file nobody changed is written again whenever the target writes another, whichever the
+    direction: its marker's digest says so, or, without one, its being the pinned version's file."""
     kept = path.read_bytes()
-    found = init.markers(kept)
-    if len(found) > 1 or not (found or init.bootstrap_of_cortex(kept)):
-        return None, None       # several markers, or no Cortex bootstrap: cortex init says so
+    content = init.normalised(kept)
+    found = init.markers(content)
+    again = "cortex init --force writes it again, and keeps yours as .bak"
+    if len(found) > 1:
+        return None, f"{display(str(path))} holds several bootstrap markers, so none is read, and it is kept: {again}"
+    if not (found or init.bootstrap_of_cortex(content)):
+        return None, None       # no Cortex bootstrap: cortex init says so
     layouts = [found[0][0]] if found else list(TEMPLATES)
-    has = found[0][1] if found else 0
-    wanted = None
-    for layout in layouts:
-        template = target / "templates" / TEMPLATES[layout]
-        marker = init.markers(template.read_bytes()) if template.is_file() else []
-        if marker:
-            wanted = max(wanted or 0, marker[0][1])
-    if wanted is None or wanted <= has:
-        return None, None       # the target writes no later format
-    layout = written_by(kept, current / "templates", layouts, personality)
+    intact = init.untouched(content)
+    if intact is None and current is None:
+        return None, (f"{display(str(path))} was not checked: its marker carries no digest, and Cortex {pinned}, whose "
+                      f"templates would tell whether a team changed it, is not in the store. It is kept: {again}")
+    layout = layouts[0] if intact else None
+    if intact is None:
+        layout = written_by(content, current / "templates", layouts, personality)
     if layout is None:
-        what = f"format {has}" if found else "a bootstrap without the marker"
-        return None, (f"{display(str(path))} is {what}, and the target writes format {wanted}. It is not what the "
-                      "pinned version writes — a team changed it, or an older Cortex wrote it — so it is kept: "
-                      "cortex init --force writes it again, and keeps yours as .bak")
-    content = init.instructions((target / "templates" / TEMPLATES[layout]).read_bytes(), personality)
-    return (content.replace(b"\n", b"\r\n") if b"\r\n" in kept else content), None
+        # A team changed it: said when the target writes another file than the pinned version, or,
+        # without the pinned version, a later format.
+        if current is not None:
+            matters = any(_written(current / "templates", name, personality) !=
+                          _written(target / "templates", name, personality) for name in layouts)
+        else:
+            matters = _format(content) < max(_format(_written(target / "templates", name, personality))
+                                             for name in layouts)
+        if not matters:
+            return None, None
+        what = "not what Cortex wrote, by the digest in its marker — a team changed it" if intact is False else \
+            (f"{f'format {found[0][1]}' if found else 'a bootstrap without the marker'}, not what Cortex {pinned} "
+             "writes — a team changed it, or an older Cortex wrote it")
+        return None, f"{display(str(path))} is {what} — so it is kept, and the target's template is not written: {again}"
+    wanted = _written(target / "templates", layout, personality)
+    if wanted is None or wanted == content:
+        return None, None
+    if b"\r\n" in kept:
+        wanted = wanted.replace(b"\n", b"\r\n")
+    return (codecs.BOM_UTF8 + wanted if kept.startswith(codecs.BOM_UTF8) else wanted), None
+
+
+def bootstraps(files: List[Path], pinned: Version, current: Optional[Path], target: Path, personality: bool,
+               err: TextIO) -> List[Tuple[Path, bytes]]:
+    """The bootstrap files to write again, and what they are now; the notes said on ``err``."""
+    rewrites = []
+    for path in files:
+        content, note = bootstrap(path, pinned, current, target, personality)
+        if note:
+            err.write(f"note: {note}\n")
+        if content is not None:
+            rewrites.append((path, content))
+    return rewrites
+
+
+def _and(names: List[str]) -> str:
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
 
 
 # --------------------------------------------------------------------------- #
@@ -180,11 +230,27 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
 
     if target == current:
         out.write(f"Cortex {current}: already on it — nothing to move\n")
-        for path in files:
-            _, note = bootstrap(path, the_store.path(current), the_store.path(current), personality) \
-                if the_store.has(current) else (None, None)
-            if note:
-                err.write(f"note: {note}\n")
+        if not files:
+            return 0
+        try:
+            the_store.ensure(current)
+        except store.StoreError as error:
+            err.write(f"note: the bootstrap files were not checked — Cortex {current} is not in the store: {error}\n")
+            return 0
+        # What an upgrade cut short, or a pin moved by hand, left: a file nobody changed, of another version.
+        rewrites = bootstraps(files, current, the_store.path(current), the_store.path(current), personality, err)
+        if dry_run:
+            for path, _ in rewrites:
+                out.write(f"{_shown_path(path, root)}: would be written again from Cortex {target}'s template — no one "
+                          "changed it\n")
+            if rewrites:
+                out.write("--dry-run: nothing of the project was changed\n")
+            return 0
+        if rewrites:
+            _write(rewrites, {}, root, err, lambda: None)
+            for path, _ in rewrites:
+                out.write(f"{_shown_path(path, root)}: written again from Cortex {target}'s template — no one changed it\n")
+            out.write(f"\nCommit {_and([_shown_path(path, root) for path, _ in rewrites])}.\n")
         return 0
 
     the_store.ensure(target)
@@ -212,13 +278,7 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
     else:
         out.write(f"The project's overlays pass against Cortex {target}.\n")
 
-    rewrites: List[Tuple[Path, bytes]] = []
-    for path in files:
-        content, note = bootstrap(path, current_path, target_path, personality) if current_path is not None else (None, None)
-        if note:
-            err.write(f"note: {note}\n")
-        if content is not None:
-            rewrites.append((path, content))
+    rewrites = bootstraps(files, current, current_path, target_path, personality, err)
 
     if dry_run:
         for path, _ in rewrites:
@@ -229,28 +289,44 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
         out.write("--dry-run: nothing of the project was changed\n")
         return 1 if stops else 0
 
-    # The pin and the lock are what the team commits: a sync that fails leaves both as they were.
-    # What it changed on this machine — cortex.local.toml, cortex/ — the next `cortex sync` puts right.
-    committed = {name: (Path(root) / name).read_bytes() if (Path(root) / name).is_file() else None
+    # The pin, the lock and the bootstrap files are what the team commits: a run that fails leaves
+    # them as they were. What the sync changed on this machine — cortex.local.toml, cortex/ — the next
+    # `cortex sync` puts right.
+    committed = {Path(root) / name: (Path(root) / name).read_bytes() if (Path(root) / name).is_file() else None
                  for name in (config.PROJECT_FILE, config.LOCK_FILE)}
-    config.write_text(os.path.join(root, config.PROJECT_FILE), config.render_project(root, {"version": str(target)}))
-    try:
+
+    def switch() -> None:
+        config.write_text(os.path.join(root, config.PROJECT_FILE), config.render_project(root, {"version": str(target)}))
         sync.sync(root, None, None, out, err, announce=False)
-    except BaseException:
-        for name, content in committed.items():
-            if content is None:
-                (Path(root) / name).unlink(missing_ok=True)
-            else:
-                (Path(root) / name).write_bytes(content)
-        err.write(f"note: {config.PROJECT_FILE} and {config.LOCK_FILE} are as they were — `cortex sync` puts this "
-                  "machine back on them\n")
-        raise
-    for path, content in rewrites:
-        path.write_bytes(content)
+
+    _write(rewrites, committed, root, err, switch)
+    for path, _ in rewrites:
         out.write(f"{_shown_path(path, root)}: written again from Cortex {target}'s template — no one changed it\n")
     written = ", ".join([config.PROJECT_FILE, config.LOCK_FILE, *(_shown_path(path, root) for path, _ in rewrites)])
     out.write(f"\nCortex {target} is ready. Commit {written}; teammates run `cortex sync` after they pull.\n")
     return 0
+
+
+def _write(rewrites: List[Tuple[Path, bytes]], committed: Dict[Path, Optional[bytes]], root: str, err: TextIO,
+           then: Callable[[], None]) -> None:
+    """Write the bootstrap files again, then run ``then`` — the switch: anything that fails puts back
+    the files, and ``committed``, as they were. The bootstrap files go first: a run cut short after
+    them leaves files whose digest the next `cortex upgrade` reads as nobody's change."""
+    before = {**committed, **{path: path.read_bytes() for path, _ in rewrites}}
+    try:
+        for path, content in rewrites:
+            path.write_bytes(content)
+        then()
+    except BaseException:
+        for path, content in before.items():
+            if content is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(content)
+        names = _and([_shown_path(path, root) for path in before])
+        err.write(f"note: {names} {'are as they were' if len(before) > 1 else 'is as it was'}"
+                  f"{' — `cortex sync` puts this machine back on them' if committed else ''}\n")
+        raise
 
 
 def run(args: List[str]) -> int:
