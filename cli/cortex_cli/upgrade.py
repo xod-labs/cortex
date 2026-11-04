@@ -286,7 +286,10 @@ class _NewerRelease(threading.Thread):
         self.start()
 
     def run(self) -> None:
-        self.found = self_update.newer_release(self.own)
+        try:
+            self.found = self_update.newer_release(self.own)
+        except Exception:       # a notice: never a traceback in the middle of the upgrade
+            self.found = None
 
     def say(self, out: TextIO) -> None:
         self.join(self_update.NOTICE_TIMEOUT)

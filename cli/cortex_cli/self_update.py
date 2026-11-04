@@ -4,15 +4,12 @@
 place of the one running, under the name it was installed with. It downloads the asset of this
 system from where the store and the install scripts download, checks it against the release's
 ``SHA256SUMS``, writes the binary beside the old one and runs it: only a binary that answers
-``--version`` with the target is installed.
-
-The replacement is a rename, on the same file system. On Linux and macOS the new binary is renamed
-over the old one, and the running process keeps the file it started from. Windows refuses to
-overwrite a running executable, not to rename it: the old one is renamed ``NAME.old`` first, and the
-next ``cortex`` that starts removes it (``tidy``).
+``--version`` with the target is installed, by a rename (``binary.replace``).
 
 The latest release is the version ``latest/download/SHA256SUMS`` redirects to, as GitHub's releases
-do. A project never moves here: ``cortex upgrade`` moves one.
+do. A latest release older than this binary — a pre-release running, a patch of an older line
+published since — is not installed unless it is named. A project never moves here: ``cortex
+upgrade`` moves one.
 """
 
 from __future__ import annotations
@@ -27,7 +24,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import time
 import zipfile
 from pathlib import Path
 from typing import Callable, List, Optional, TextIO, Tuple
@@ -35,6 +31,7 @@ from typing import Callable, List, Optional, TextIO, Tuple
 from cortex_core.project import shown
 
 from . import net, store, sync
+from .binary import environment, replace, running_binary
 from .paths import display
 from .semver import Version
 from .version import VERSION
@@ -91,18 +88,16 @@ def newer_release(own: Version, fetch: Callable[..., bytes] = net.get) -> Option
     releases do not answer within a few seconds: offline, nothing is said."""
     try:
         found, _ = latest(fetch, NOTICE_TIMEOUT)
-    except (net.DownloadError, store.StoreError):
+    except (net.DownloadError, store.StoreError, OSError, ValueError):  # a certificate store unread, say
         return None
     return found if found is not None and found > own else None
 
 
 def expected_checksum(sums: bytes, asset: str, version: Version) -> str:
-    text = sums.decode("utf-8", errors="replace")
-    for line in text.splitlines():
-        fields = line.split()
-        if len(fields) == 2 and fields[1].lstrip("*") == asset:
-            return fields[0].lower()
-    raise SelfUpdateError(f"the {SUMS} of Cortex {version} lists no {asset} — nothing was replaced")
+    found = store.listed_checksum(sums.decode("utf-8", errors="replace"), asset)
+    if found is None:
+        raise SelfUpdateError(f"the {SUMS} of Cortex {version} lists no {asset} — nothing was replaced")
+    return found
 
 
 def unpack(data: bytes, asset: str) -> bytes:
@@ -130,18 +125,11 @@ def unpack(data: bytes, asset: str) -> bytes:
 # The binary
 # --------------------------------------------------------------------------- #
 
-def running_binary() -> Optional[Path]:
-    """The binary running — through any link to it — or ``None`` from a source checkout."""
-    if getattr(sys, "frozen", False):
-        return Path(os.path.realpath(sys.executable))
-    return None
-
-
 def answers(binary: Path) -> str:
     """What ``binary --version`` prints, or why it does not run."""
     try:
         proc = subprocess.run([str(binary), "--version"], capture_output=True, timeout=RUN_TIMEOUT,
-                              stdin=subprocess.DEVNULL)
+                              stdin=subprocess.DEVNULL, env=environment())
     except (OSError, subprocess.SubprocessError) as error:
         raise SelfUpdateError(f"the new binary does not run on this machine: {error} — nothing was replaced")
     output = proc.stdout.decode("utf-8", errors="replace").strip()
@@ -149,42 +137,6 @@ def answers(binary: Path) -> str:
         why = proc.stderr.decode("utf-8", errors="replace").strip() or f"exit code {proc.returncode}"
         raise SelfUpdateError(f"the new binary does not run on this machine: {why} — nothing was replaced")
     return output.splitlines()[0] if output else ""
-
-
-def replace(new: Path, binary: Path, aside: bool = os.name == "nt") -> None:
-    """Put ``new`` in the place of ``binary``. With ``aside`` — on Windows, where a running
-    executable can be renamed but not overwritten — the old one is renamed ``NAME.old`` first, and
-    put back if the new one cannot take its name."""
-    if not aside:
-        os.replace(new, binary)
-        return
-    old = binary.with_name(binary.name + ".old")
-    if old.exists():
-        try:
-            old.unlink()
-        except OSError:     # still running: another name, which the next start removes too
-            old = binary.with_name(f"{binary.name}.old-{os.getpid()}-{time.time_ns()}")
-    os.rename(binary, old)
-    try:
-        os.rename(new, binary)
-    except BaseException:
-        os.rename(old, binary)
-        raise
-
-
-def tidy(binary: Optional[Path] = None) -> None:
-    """Remove what a replacement on Windows left beside the binary — once it no longer runs."""
-    binary = binary or running_binary()
-    if binary is None:
-        return
-    try:
-        for entry in binary.parent.glob(binary.name + ".old*"):
-            try:
-                entry.unlink()
-            except OSError:
-                pass
-    except OSError:
-        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -209,6 +161,10 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
         if target is None:
             raise SelfUpdateError(f"{base} does not say which release is the latest — name the one to install: "
                                   "cortex self-update X.Y.Z")
+        if target < own:
+            out.write(f"cortex {own}: newer than the latest release, {target} — nothing to install. "
+                      f"`cortex self-update {target}` installs it anyway\n")
+            return 0
     else:
         target = Version(wanted)
     if target == own:
@@ -251,8 +207,10 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
             return 0
         replace(new, binary)
     finally:
-        if new.exists():
-            new.unlink()
+        try:
+            new.unlink(missing_ok=True)
+        except OSError:     # still held, on Windows: the next start removes it
+            pass
 
     out.write(f"Installed cortex {target} as {display(str(binary))}, in place of {own}.\n")
     if target < own:

@@ -11,6 +11,7 @@ sensible, so the copy refuses it, and the replacement of a running executable is
 
 import io
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -19,13 +20,14 @@ import tarfile
 import tempfile
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
-from cortex_cli import self_update  # noqa: E402
+from cortex_cli import binary, self_update, store  # noqa: E402
 from cortex_cli.self_update import SelfUpdateError  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
 from release_fixture import TARGETS, FakeRelease, build, stand_in  # noqa: E402
@@ -77,7 +79,7 @@ class SelfUpdateTests(ReleaseTestCase):
         code, out, _ = self.update()
         self.assertEqual(code, 0)
         self.assertEqual(self.binary.read_bytes(), stand_in("9.9.9", False))
-        self_update.tidy(self.binary)       # on Windows, the old binary renamed aside
+        binary.tidy(self.binary)            # on Windows, the old binary renamed aside
         self.assertEqual(sorted(p.name for p in self.bin.iterdir()), ["cortex"])
         self.assertIn(f"Installed cortex 9.9.9 as {self.binary}, in place of 9.9.8.", out)
         self.assertIn("No project moved: `cortex upgrade` moves one to this version.", out)
@@ -107,6 +109,15 @@ class SelfUpdateTests(ReleaseTestCase):
         self.assertEqual(self.release.requested, [])
         self.latest_is("9.9.8")
         self.assertEqual(self.update()[0], 0)
+        self.assertFalse([path for path in self.release.requested if "cortex-" in path])
+        self.assert_untouched()
+
+    def test_a_latest_release_older_than_the_binary_is_not_installed_unless_named(self):
+        self.latest_is("9.9.8")
+        code, out, _ = self.update(own="9.9.9")
+        self.assertEqual(code, 0)
+        self.assertIn("cortex 9.9.9: newer than the latest release, 9.9.8 — nothing to install. "
+                      "`cortex self-update 9.9.8` installs it anyway", out)
         self.assertFalse([path for path in self.release.requested if "cortex-" in path])
         self.assert_untouched()
 
@@ -182,6 +193,15 @@ class SelfUpdateTests(ReleaseTestCase):
         self.assertIn("/download/9.9.9/cortex-linux-x86_64.tar.gz", self.release.requested)
         self.assert_untouched()
 
+    def test_a_new_binary_still_held_after_its_run_does_not_hide_the_result(self):
+        with mock.patch.object(Path, "unlink", side_effect=PermissionError("held by an antivirus")):
+            code, out, _ = self.update("9.9.9", dry_run=True)
+        self.assertEqual(code, 0)
+        self.assertIn("--dry-run: Cortex 9.9.9 downloaded, checked and run", out)
+        self.assertEqual(len(list(self.bin.glob(".cortex.new-*"))), 1)
+        binary.tidy(self.binary)
+        self.assert_untouched()
+
     def test_a_source_checkout_is_refused_before_anything_is_downloaded(self):
         with self.assertRaisesRegex(SelfUpdateError, "runs from a source checkout, not from a binary — there is none "
                                                      "to replace. Install one with:\n    "):
@@ -251,8 +271,41 @@ class NewerReleaseTests(ReleaseTestCase):
     def test_offline_nothing_is_said(self):
         with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": "http://127.0.0.1:9"}):
             self.assertIsNone(self_update.newer_release(Version("1.0.0")))
+        for error in (OSError("no certificate store"), ValueError("bad URL")):
+            with self.subTest(error=error):
+                self.assertIsNone(self_update.newer_release(Version("1.0.0"), fetch=mock.Mock(side_effect=error)))
         with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": "ftp://example.com"}):
             self.assertIsNone(self_update.newer_release(Version("1.0.0")))
+
+
+class EnvironmentTests(unittest.TestCase):
+    """What a built binary starts the new one in: PyInstaller's recipe (binary.environment)."""
+
+    def test_a_built_binary_resets_what_its_bootloader_set(self):
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/tmp/_MEI1", "LD_LIBRARY_PATH_ORIG": "/opt/lib"}):
+            env = binary.environment()
+        self.assertEqual((env["LD_LIBRARY_PATH"], env["PYINSTALLER_RESET_ENVIRONMENT"]), ("/opt/lib", "1"))
+        self.assertNotIn("LD_LIBRARY_PATH_ORIG", env)
+        with mock.patch.object(sys, "frozen", True, create=True), \
+                mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/tmp/_MEI1"}):
+            os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
+            self.assertNotIn("LD_LIBRARY_PATH", binary.environment())
+
+    def test_from_source_the_environment_is_left_as_it_is(self):
+        with mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/opt/lib"}):
+            env = binary.environment()
+        self.assertEqual(env["LD_LIBRARY_PATH"], "/opt/lib")
+        self.assertNotIn("PYINSTALLER_RESET_ENVIRONMENT", env)
+
+
+class ListedChecksumTests(unittest.TestCase):
+    def test_the_line_of_the_name_in_sha256sums_format(self):
+        sums = f"{'a' * 64}  cortex-spec.tar.gz\n{'B' * 64} *cortex-linux-x86_64.tar.gz\n"
+        self.assertEqual(store.listed_checksum(sums, "cortex-spec.tar.gz"), "a" * 64)
+        self.assertEqual(store.listed_checksum(sums, "cortex-linux-x86_64.tar.gz"), "b" * 64)
+        self.assertIsNone(store.listed_checksum(sums, "cortex-macos-arm64.tar.gz"))
+        self.assertIsNone(store.listed_checksum(f"{'a' * 64}  x  y\n", "x"))
 
 
 class ReplaceTests(unittest.TestCase):
@@ -267,24 +320,24 @@ class ReplaceTests(unittest.TestCase):
         return sorted(p.name for p in self.bin.iterdir())
 
     def test_renamed_over_the_old_one(self):
-        self_update.replace(self.new, self.binary, aside=False)
+        binary.replace(self.new, self.binary, aside=False)
         self.assertEqual(self.binary.read_bytes(), b"new\n")
         self.assertEqual(self.names(), ["cortex"])
 
     def test_renamed_aside_then_tidied(self):
-        self_update.replace(self.new, self.binary, aside=True)
+        binary.replace(self.new, self.binary, aside=True)
         self.assertEqual(self.binary.read_bytes(), b"new\n")
         self.assertEqual((self.bin / "cortex.old").read_bytes(), b"old\n")
-        self_update.tidy(self.binary)
+        binary.tidy(self.binary)
         self.assertEqual(self.names(), ["cortex"])
 
     def test_an_old_one_that_cannot_be_removed_yet_is_renamed_another_way(self):
         (self.bin / "cortex.old").write_bytes(b"older, still running\n")
         with mock.patch.object(Path, "unlink", side_effect=PermissionError("in use")):
-            self_update.replace(self.new, self.binary, aside=True)
+            binary.replace(self.new, self.binary, aside=True)
         self.assertEqual(self.binary.read_bytes(), b"new\n")
         self.assertEqual(len([n for n in self.names() if n.startswith("cortex.old-")]), 1)
-        self_update.tidy(self.binary)
+        binary.tidy(self.binary)
         self.assertEqual(self.names(), ["cortex"])
 
     def test_a_failure_between_the_two_renames_puts_the_old_one_back(self):
@@ -296,30 +349,35 @@ class ReplaceTests(unittest.TestCase):
                 raise PermissionError("antivirus")
             rename(src, dst)
 
-        with mock.patch.object(self_update.os, "rename", side_effect=second_fails):
+        with mock.patch.object(binary.os, "rename", side_effect=second_fails):
             with self.assertRaises(PermissionError):
-                self_update.replace(self.new, self.binary, aside=True)
+                binary.replace(self.new, self.binary, aside=True)
         self.assertEqual(self.binary.read_bytes(), b"old\n")
         self.assertEqual(self.names(), [".cortex.new-1", "cortex"])
+
+    def test_tidy_removes_a_new_binary_left_behind(self):
+        (self.bin / ".cortex.new-abc.exe").write_bytes(b"x")
+        binary.tidy(self.binary)
+        self.assertEqual(self.names(), ["cortex"])     # and the setup's .cortex.new-1 too
 
     def test_tidy_leaves_other_files(self):
         for name in ("cortex-ai", "cortex-ai.old", "notes.old"):
             (self.bin / name).write_bytes(b"x")
-        self_update.tidy(self.binary)
-        self.assertEqual(self.names(), [".cortex.new-1", "cortex", "cortex-ai", "cortex-ai.old", "notes.old"])
+        binary.tidy(self.binary)
+        self.assertEqual(self.names(), ["cortex", "cortex-ai", "cortex-ai.old", "notes.old"])
 
     def test_a_running_executable_is_replaced(self):
         """A program copied in the binary's place, started, then replaced while it runs."""
         if os.name == "nt":
             program, args = Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32" / "ping.exe", ["-n", "30", "127.0.0.1"]
-            binary = self.bin / "cortex.exe"
+            exe = self.bin / "cortex.exe"
         else:
-            program, args, binary = Path(shutil.which("sleep") or "/bin/sleep"), ["30"], self.binary
+            program, args, exe = Path(shutil.which("sleep") or "/bin/sleep"), ["30"], self.binary
         if not program.is_file():
             self.skipTest(f"no {program} to run")
-        binary.unlink(missing_ok=True)
-        shutil.copy2(program, binary)
-        proc = subprocess.Popen([str(binary), *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        exe.unlink(missing_ok=True)
+        shutil.copy2(program, exe)
+        proc = subprocess.Popen([str(exe), *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(proc.wait)
         self.addCleanup(proc.kill)
         time.sleep(0.5)
@@ -329,15 +387,15 @@ class ReplaceTests(unittest.TestCase):
             other = self.bin / ".other.exe"
             other.write_bytes(b"x")
             with self.assertRaises(PermissionError):    # why Windows needs the rename aside
-                os.replace(other, binary)
+                os.replace(other, exe)
             other.unlink()
-        self_update.replace(self.new, binary)
-        self.assertEqual(binary.read_bytes(), b"new\n")
+        binary.replace(self.new, exe)
+        self.assertEqual(exe.read_bytes(), b"new\n")
         self.assertIsNone(proc.poll())
         proc.kill()
         proc.wait()
-        self_update.tidy(binary)
-        self.assertEqual(sorted(p.name for p in self.bin.iterdir()), sorted({binary.name, "cortex"}))
+        binary.tidy(exe)
+        self.assertEqual(sorted(p.name for p in self.bin.iterdir()), sorted({exe.name, "cortex"}))
 
 
 class CommandTests(unittest.TestCase):
@@ -395,6 +453,26 @@ class BuiltBinaryTests(ReleaseTestCase):
         self.assertIn("nothing was replaced", proc.err)
         self.assertEqual(self.binary.read_bytes(), before)
         self.assertEqual(sorted(p.name for p in self.bin.iterdir()), [self.binary.name])
+
+    @unittest.skipUnless(harness.EXPECTED_VERSION, "the version the binary stands for")
+    def test_a_built_binary_runs_the_one_it_downloads(self):
+        """The binary under test served as release 9.9.9: the copy runs it — one PyInstaller binary
+        started by another — and refuses it for answering its own version, not 9.9.9."""
+        asset = self_update.asset_name(platform.system(), platform.machine())
+        directory = self.release.root / "download" / "9.9.9"
+        if asset.endswith(".zip"):
+            with zipfile.ZipFile(directory / asset, "w", zipfile.ZIP_DEFLATED) as archive:
+                archive.write(harness.BINARY, "cortex.exe")
+        else:
+            with tarfile.open(directory / asset, "w:gz") as archive:
+                archive.add(harness.BINARY, arcname="cortex")
+        build.checksums(directory)
+        before = self.binary.read_bytes()
+        proc = self.run_copy("self-update", "9.9.9")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"the binary of Cortex 9.9.9 answers 'cortex {harness.EXPECTED_VERSION}' to --version, "
+                      "not 'cortex 9.9.9' — nothing was replaced", proc.err)
+        self.assertEqual(self.binary.read_bytes(), before)
 
     @unittest.skipUnless(os.name == "nt", "Windows")
     def test_on_windows_the_next_start_removes_the_old_binary(self):

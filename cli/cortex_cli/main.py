@@ -86,9 +86,9 @@ def usage() -> str:
 def main(argv: Optional[List[str]] = None) -> int:
     console.setup()
     if os.name == "nt" and getattr(sys, "frozen", False):
-        from . import self_update
+        from . import binary
 
-        self_update.tidy()      # the binary a self-update renamed aside, now that it no longer runs
+        binary.tidy()           # the binary a self-update renamed aside, now that it no longer runs
     args = sys.argv[1:] if argv is None else list(argv)
     if not args:
         sys.stderr.write(usage())
