@@ -426,6 +426,28 @@ class RollbackTests(UpgradeTestCase):
         self.assertEqual({name: (project / name).read_bytes() for name in committed}, committed)
 
 
+class PinAfterThisCortexTests(UpgradeTestCase):
+    """A project pinned to a version after this cortex's: with no version named, it does not move
+    down — a teammate's older binary would undo the team's pin (ADR-010 §3.5, step 1)."""
+
+    def test_it_is_refused_with_no_version_named(self):
+        project = self.project("9.10.0", synced=False)
+        before = snapshot(project)
+        proc = self.upgrade(project)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"this project uses Cortex 9.10.0, newer than this cortex, {OWN} — nothing was changed. Upgrade "
+                      "this cortex to serve it:", proc.err)
+        self.assertIn(f"cortex upgrade {OWN}", proc.err)
+        self.assertEqual(snapshot(project), before)
+
+    def test_it_moves_down_to_the_version_named(self):
+        project = self.project("9.10.0", synced=False)
+        proc = self.upgrade(project, OWN)
+        self.assert_ok(proc)
+        self.assertIn(f"Cortex 9.10.0 → {OWN}: a downgrade", proc.out)
+        self.assertIn(f'version = "{OWN}"', self.pinned(project))
+
+
 class UpgradeHelpTests(unittest.TestCase):
     def test_the_command_is_listed(self):
         self.assertIn(b"  upgrade ", harness.run("--help").stdout)

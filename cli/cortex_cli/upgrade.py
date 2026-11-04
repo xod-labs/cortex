@@ -12,6 +12,8 @@ says how ``cortex init --force`` writes it again. On the pinned version, nothing
 nobody changed that another version wrote — an upgrade cut short, a pin moved by hand — is written
 again.
 
+With no ``VERSION``, a project pinned after this cortex is refused: a downgrade is named.
+
 ``--dry-run`` says all of it and changes nothing in the project; the store may gain the target.
 The binary is never upgraded here: the install script does that.
 """
@@ -220,6 +222,12 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
     project = config.load(root)
     the_store = store.Store()
     current, target = project.version, Version(wanted) if wanted else the_store.own
+    if wanted is None and current > the_store.own:
+        # The default moves a project to this cortex's version, never down: a teammate's older binary
+        # would otherwise undo the team's pin.
+        raise UpgradeError(f"this project uses Cortex {current}, newer than this cortex, {the_store.own} — nothing was "
+                           f"changed. Upgrade this cortex to serve it:\n    {store.upgrade_command(current)}\nor move the "
+                           f"project down to this cortex's version by naming it: cortex upgrade {the_store.own}")
     if target > the_store.own:
         raise UpgradeError(f"Cortex {target} is newer than this cortex, {the_store.own} — upgrade this cortex first:\n"
                            f"    {store.upgrade_command(target)}")
