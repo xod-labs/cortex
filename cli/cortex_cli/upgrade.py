@@ -302,7 +302,12 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
             out: TextIO, err: TextIO) -> int:
     asks = wanted is None and not os.environ.get("CORTEX_NO_UPDATE_CHECK")
     newer = _NewerRelease(Version(VERSION)) if asks else None
-    code = _upgrade(cwd, wanted, dry_run, force, named, out, err)
+    try:
+        code = _upgrade(cwd, wanted, dry_run, force, named, out, err)
+    except BaseException:
+        if newer is not None:       # a thread left in a request as Python exits can crash it
+            newer.join(self_update.NOTICE_TIMEOUT)
+        raise
     if newer is not None:
         newer.say(out)
     return code

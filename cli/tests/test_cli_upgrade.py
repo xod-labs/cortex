@@ -712,6 +712,29 @@ class NoticeTimeoutTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 10)
         self.assertEqual(out.getvalue(), "")
 
+    def test_a_refused_upgrade_waits_for_the_question_before_it_ends(self):
+        # A daemon thread still in its request as Python exits crashed it, -11, on a refusal.
+        asked, answered = threading.Event(), threading.Event()
+        self.addCleanup(answered.set)
+
+        def slow(own):
+            asked.set()
+            answered.wait(30)
+            return None
+
+        def refused(*args, **kwargs):
+            asked.wait(5)
+            threading.Timer(0.3, answered.set).start()
+            raise upgrade.UpgradeError("refused")
+
+        with mock.patch.object(self_update, "newer_release", side_effect=slow), \
+                mock.patch.object(upgrade, "_upgrade", side_effect=refused), \
+                mock.patch.dict(os.environ, {"CORTEX_NO_UPDATE_CHECK": ""}):
+            with self.assertRaises(upgrade.UpgradeError):
+                upgrade.upgrade("/nowhere", None, False, False, None, io.StringIO(), io.StringIO())
+        self.assertTrue(answered.is_set())
+        self.assertFalse([t for t in threading.enumerate() if isinstance(t, upgrade._NewerRelease)])
+
 
 class UpgradeHelpTests(unittest.TestCase):
     def test_the_command_is_listed(self):
