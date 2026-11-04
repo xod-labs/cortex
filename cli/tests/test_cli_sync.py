@@ -953,6 +953,16 @@ class CortexLockTests(SyncTestCase):
                 self.assertIn("Warnings: 1", proc.out)
                 self.assertEqual(self.validate(project, "--strict").returncode, 1)
 
+    def test_validate_reads_a_copys_digest_from_its_manifest(self):
+        project = self.project(extra='sync = "copy"\n')
+        self.assert_ok(self.sync(project))
+        self.assertNotIn("LOCK_", self.validate(project).out)
+        self.write_lock(project)
+        proc = self.validate(project)
+        self.assert_ok(proc)
+        self.assertIn("LOCK_DIGEST", proc.out)
+        self.assertIn(f"the spec synced is {digest(self.stored())}, and cortex.lock names {self.OTHER}", proc.out)
+
     def test_a_copy_reads_the_store_once(self):
         # Its digest is the lock's check and the copy's: one reading of every file, not two.
         sync, version = in_process()
@@ -962,6 +972,20 @@ class CortexLockTests(SyncTestCase):
             with mock.patch.object(sync.store, "digest", wraps=sync.store.digest) as taken:
                 sync.sync(str(project), None, None, io.StringIO(), io.StringIO())
         self.assertEqual(taken.call_count, 1)
+
+    def test_a_lock_that_cannot_be_written_moves_nothing(self):
+        # Written before the swap: a sync it stops leaves cortex/ and cortex.local.toml as they were.
+        sync, version = in_process()
+        project = self.project(version=version, extra='sync = "copy"\n')
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}):
+            sync.sync(str(project), None, None, io.StringIO(), io.StringIO())
+            (project / "cortex.lock").unlink()
+            before = snapshot(project / "cortex"), (project / "cortex.local.toml").read_bytes()
+            with mock.patch.object(sync.config, "write_lock", side_effect=PermissionError(13, "Permission denied")):
+                with self.assertRaises(PermissionError):
+                    sync.sync(str(project), "link", None, io.StringIO(), io.StringIO())
+        self.assertEqual((snapshot(project / "cortex"), (project / "cortex.local.toml").read_bytes()), before)
+        self.assertFalse((project / "cortex.lock").exists())
 
     @DOWNLOADS
     def test_a_version_a_sync_cut_short_set_aside_is_put_back_offline(self):

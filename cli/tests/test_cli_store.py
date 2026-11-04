@@ -20,7 +20,7 @@ sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).res
                 str(Path(__file__).resolve().parent)]
 from cortex_cli import net, store  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
-from release_fixture import spec_archive  # noqa: E402
+from release_fixture import FakeRelease, spec_archive  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
@@ -378,6 +378,43 @@ class DigestTests(unittest.TestCase):
             the_store.replace(Version("9.9.9"))
         self.assertTrue(the_store.has(Version("9.9.9")))
         self.assertEqual([p.name for p in the_store.versions.iterdir()], ["9.9.9"])
+
+    def test_the_same_version_embedded_or_downloaded_has_the_same_digest(self):
+        # A binary writes its own version from the archive it embeds, packed on its runner: not the
+        # release's bytes — other dates, another order, directories listed — and the same files.
+        release = FakeRelease(("2.0.0",))
+        self.addCleanup(release.close)
+        published = release.root / "download" / "2.0.0" / "cortex-spec.tar.gz"
+        with tarfile.open(published) as source:
+            files = {m.name: source.extractfile(m).read() for m in source.getmembers() if m.isfile()}
+        embedded = self.tmp / "runner" / "cortex-spec.tar.gz"
+        embedded.parent.mkdir()
+        with tarfile.open(embedded, "w:gz") as archive:
+            for tree in reversed(store.SPEC_TREES):
+                folder = tarfile.TarInfo(tree)
+                folder.type, folder.mode, folder.mtime = tarfile.DIRTYPE, 0o755, 1700000000
+                archive.addfile(folder)
+            for name in sorted(files, reverse=True):
+                info = tarfile.TarInfo(name)
+                info.size, info.mode, info.mtime = len(files[name]), 0o600, 1700000000
+                archive.addfile(info, io.BytesIO(files[name]))
+        self.assertNotEqual(embedded.read_bytes(), published.read_bytes())
+        written = store.Store(home=self.tmp / "own", own_version="2.0.0", embedded=embedded, fetch=None, known={})
+        downloaded = store.Store(home=self.tmp / "later", own_version="3.0.0", embedded=self.tmp / "unused.tar.gz",
+                                 known={})
+        with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": release.url}):
+            self.assertEqual(written.ensure(Version("2.0.0")), "written")
+            self.assertEqual(downloaded.ensure(Version("2.0.0")), "downloaded")
+        self.assertEqual(written.digest(Version("2.0.0")), downloaded.digest(Version("2.0.0")))
+
+    def test_every_path_of_this_spec_is_one_sha256sum_writes_as_it_is(self):
+        # The digest is sha256sum's lines (ADR-010 §3.2): sha256sum escapes a path holding "\" or
+        # a line break, and marks its line — the digest would no longer be its output.
+        for tree in store.SPEC_TREES:
+            for path in (REPO / tree).rglob("*"):
+                rel = path.relative_to(REPO).as_posix()
+                with self.subTest(path=rel):
+                    self.assertFalse(set(rel) & {"\\", "\n", "\r"}, f"{rel!r}: rename it")
 
     def test_a_missing_tree_has_no_digest(self):
         # A version removed while a sync read it: the empty set's digest would be locked.
