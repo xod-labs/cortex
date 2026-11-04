@@ -47,10 +47,14 @@ capabilities/
 │   └── opensearch.md         # OpenSearch best practices
 ├── testing/
 │   ├── component-testing.md  # Component tests (middle rung)
-│   └── e2e-testing.md        # End-to-end tests (top rung)
+│   ├── e2e-testing.md        # End-to-end tests (top rung)
+│   └── accessibility-testing.md  # A11y checks per layer, CI budget, ratchet
 ├── practices/
 │   ├── code-comments.md      # Comment discipline (stack-agnostic craft)
-│   └── competitive-intelligence.md  # Sourcing, evidence grading, bias control
+│   ├── competitive-intelligence.md  # Sourcing, evidence grading, bias control
+│   └── web-accessibility.md  # Building accessible UI (WCAG 2.2 AA)
+├── design/
+│   └── open-design.md        # Open Design mockups from a DESIGN.md
 └── security/
     └── owasp.md              # OWASP Top 10 & best practices
 ```
