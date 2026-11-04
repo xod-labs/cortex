@@ -1087,6 +1087,11 @@ class RegisterTests(SyncTestCase):
         super().setUp()
         self.registry = self.home / "projects.toml"
 
+    def sync_with(self, project, *args, **env):
+        proc = harness.run("sync", *args, cwd=project, env=dict(self.env, **env))
+        proc.out, proc.err = proc.stdout.decode(), proc.stderr.decode()
+        return proc
+
     def entries(self):
         data = tomllib.loads(self.registry.read_text(encoding="utf-8"))
         return [(entry["name"], entry["path"]) for entry in data.get("project", [])]
@@ -1230,6 +1235,25 @@ class RegisterTests(SyncTestCase):
                       "Permission denied", proc.err)
         self.assertTrue((project / "cortex.lock").is_file())
         self.assertEqual(self.registry.read_bytes(), before)
+
+    def test_cortex_no_register_set_neither_reads_nor_writes_the_registry_and_empty_counts_as_unset(self):
+        project = self.project("acme")
+        for value in ("1", "yes"):
+            with self.subTest(value=value):
+                proc = self.sync_with(project, CORTEX_NO_REGISTER=value)
+                self.assert_ok(proc)
+                self.assertNotIn("registered", proc.out + proc.err)
+                self.assertEqual(sorted(path.name for path in self.home.iterdir()), ["versions"])
+        self.registry.write_text("format = 2\n", encoding="utf-8")     # read, it would be warned of
+        proc = self.sync_with(project, CORTEX_NO_REGISTER="1")
+        self.assert_ok(proc)
+        self.assertEqual(proc.err, "")
+        self.assertEqual(sorted(path.name for path in self.home.iterdir()), ["projects.toml", "versions"])
+        self.registry.unlink()
+        proc = self.sync_with(project, CORTEX_NO_REGISTER="")
+        self.assert_ok(proc)
+        self.assertIn(f"registered as acme — {LISTS}\n", proc.out)
+        self.assertEqual(self.entries(), [("acme", display(project))])
 
     def test_an_upgrades_sync_registers_and_says_it_once(self):
         project = self.project("acme")             # pinned to this cortex, never synced: the upgrade syncs it

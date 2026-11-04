@@ -1275,6 +1275,19 @@ class RegisterTests(InitTestCase):
         self.assertIn(f"Cortex {OWN} is ready", proc.out)
         self.assertFalse(self.registry.exists())
 
+    def test_cortex_no_register_set_writes_nothing_and_empty_counts_as_unset(self):
+        self.project.mkdir(parents=True)
+        self.env["CORTEX_NO_REGISTER"] = "1"
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("registered", proc.out + proc.err)
+        self.assertEqual(sorted(path.name for path in self.home.iterdir()), ["versions"])
+        self.env["CORTEX_NO_REGISTER"] = ""
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn(f"registered as project — {LISTS}\n", proc.out)
+        self.assertEqual(self.entries(), [("project", display(self.project))])
+
 
 class BootstrapMarkerTests(unittest.TestCase):
     """A kept file read through the marker of the template the pinned version writes (ADR-010 §3.1)."""
