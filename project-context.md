@@ -33,8 +33,8 @@ cortex/
 │   ├── roles/            ← Mission cards per specialty (prompt-manager, architect…)
 │   ├── capabilities/     ← Loadable technical skills (php, symfony, docker…)
 │   └── workflows/        ← Multi-agent orchestration templates (generic)
-├── assets/               ← Ressources statiques
-├── docs/                 ← Documentation du framework
+├── assets/               ← Static resources
+├── docs/                 ← The framework's documentation
 ├── templates/            ← Project templates (entry instructions, project-context…)
 ├── cli/                  ← The `cortex` command: init, sync, upgrade, self-update, prune, project, validate
 ├── core/                 ← cortex-core, the cascade in code
