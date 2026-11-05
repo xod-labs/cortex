@@ -628,11 +628,29 @@ def _real(path) -> str:
     return os.path.normcase(os.path.realpath(path))
 
 
+def _within(top: str, path: Path) -> Optional[str]:
+    """Where ``path`` — a link, by where it points — is in the work tree whose top is ``top``, from
+    that top; ``None`` when it is elsewhere: a bootstrap linked to a shared file, or named by
+    --instructions-file, may be. The top is found among its directories by what it is, not by how
+    it is spelt: git spells the top as the disk does, and on a disk that ignores case — macOS's,
+    Windows' — the project's path may be spelt otherwise, and ``realpath`` keeps that spelling."""
+    here, below = os.path.realpath(path), []
+    while True:
+        try:
+            if os.path.samefile(here, top):
+                return os.path.join(*reversed(below)) if below else ""
+        except OSError:
+            pass                        # not there: a file git sees deleted, say
+        parent = os.path.dirname(here)
+        if parent == here:
+            return None
+        below.append(os.path.basename(here))
+        here = parent
+
+
 def _inside(top: str, path: Path) -> bool:
-    """Whether ``path`` — a link, by where it points — is in the work tree whose top is ``top``: a
-    bootstrap linked to a shared file, or named by --instructions-file, may be elsewhere."""
-    real, base = _real(path), _real(top)
-    return real == base or real.startswith(base.rstrip(os.sep) + os.sep)
+    """Whether ``path`` — a link, by where it points — is in the work tree whose top is ``top``."""
+    return _within(top, path) is not None
 
 
 def _git_paths(root: str, files: List[Path]) -> List[str]:
@@ -652,12 +670,17 @@ def _changed(root: str, top: str, files: List[Path]) -> List[Path]:
     proc = _git_ok(root, "status", "--porcelain", "-z", "--untracked-files=all", "--",
                    *_literal(_git_paths(root, files)), timeout=None)
     seen, fields = set(), iter(proc.stdout.split("\0"))
-    for field in fields:                # "XY path", and after a rename or a copy, the path it was
+    for field in fields:                # "XY path", from the top, and after a rename or a copy, the path it was
         if len(field) > 3:
-            seen.add(_real(os.path.join(top, field[3:])))
+            seen.add(_from_top(field[3:]))
             if "R" in field[:2] or "C" in field[:2]:
-                seen.add(_real(os.path.join(top, next(fields, ""))))
-    return [path for path in files if _real(path) in seen]
+                seen.add(_from_top(next(fields, "")))
+    return [path for path in files if _from_top(_within(top, path)) in seen]
+
+
+def _from_top(path: Optional[str]) -> Optional[str]:
+    """A path from the top of a work tree, as two of them compare."""
+    return None if path is None else os.path.normcase(os.path.normpath(path))
 
 
 def _before(root: str, top: str, files: List[Path]) -> Tuple[List[Path], Optional[str]]:

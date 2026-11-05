@@ -846,6 +846,21 @@ class CommitTests(GitTestCase):
                          "CLAUDE.md and cortex.toml held changes of yours before the upgrade — commit by hand what is "
                          "the team's")
 
+    @unittest.skipIf(os.name == "nt", "a link to a directory needs a privilege on Windows")
+    def test_the_top_of_the_work_tree_is_found_whatever_its_spelling(self):
+        # On a disk that ignores case — macOS's — realpath keeps the case a path was typed with, and
+        # git spells the top as the disk does. Here, a second name of the directory that realpath,
+        # made to resolve nothing, keeps as it is.
+        alpha = self.make("alpha", synced=False)
+        self.repository(alpha)
+        (alpha / "cortex.toml").write_text(self.pinned(alpha) + "# changed\n", encoding="utf-8")
+        spelt = self.code / "Alpha-as-git-spells-it"
+        spelt.symlink_to(alpha, target_is_directory=True)
+        files = [alpha / "cortex.toml", alpha / "cortex.lock", self.code / "alpha-notes.md"]
+        with mock.patch.object(os.path, "realpath", os.path.abspath):
+            self.assertEqual([upgrade._inside(str(spelt), path) for path in files], [True, True, False])
+            self.assertEqual(upgrade._changed(str(alpha), str(spelt), files[:2]), [alpha / "cortex.toml"])
+
     def test_a_commit_git_refuses_says_so_and_leaves_the_files_staged(self):
         alpha = self.make("alpha")
         first = self.repository(alpha)
