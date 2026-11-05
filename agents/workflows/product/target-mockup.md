@@ -7,8 +7,8 @@
 ## 🎯 Triggers
 
 This workflow activates when the prompt contains formulations such as:
-- "redesign", "target mockup", "mockup", "prototype", "wireframe the new …"
-- "design the new portal / screen / journey", "visual overhaul"
+- "target mockup", "mockups for the redesign", "clickable prototype of the new …", "wireframe the new …"
+- "design the new site / screen / journey", "visual overhaul"
 - "Open Design", "design system refresh"
 
 ## 👥 Agents involved

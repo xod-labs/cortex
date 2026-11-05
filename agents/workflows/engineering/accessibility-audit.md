@@ -7,7 +7,7 @@
 ## 🎯 Triggers
 
 This workflow activates when the prompt contains formulations such as:
-- "accessibility audit", "a11y audit", "WCAG", "RGAA", "EN 301 549", "Section 508"
+- "accessibility audit", "a11y audit", "WCAG audit", "RGAA audit", "EN 301 549 or Section 508 conformance"
 - "conformance rate", "accessibility statement", "are we accessible?"
 - "automate accessibility checks", "a11y in CI", "regular accessibility audits"
 
