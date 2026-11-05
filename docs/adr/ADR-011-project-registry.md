@@ -56,7 +56,7 @@ path = "/home/dev/Documents/Work/Personal/xod-labs"
 - **`format`** is the file's own format, 1 here. A later format is refused as a later `cortex.lock` is: this cortex is older, and `cortex self-update` updates it.
 - **Each `[[project]]`** has exactly two keys:
   - `name` matches `[a-z0-9][a-z0-9._-]{0,63}`, and is unique;
-  - `path` is absolute, the project's root, written as the shell names it — a link is not resolved — and unique: the grammar refuses two entries that write the same directory once normalised (`.`, `..`, a final separator, case where the system ignores it), and `cortex project add` compares paths resolved, so that it never lists a directory twice through a link.
+  - `path` is absolute, the project's root, written as the shell names it — a link is not resolved — with no control character, and unique: the grammar refuses two entries that write the same directory once normalised (`.`, `..`, a final separator, and the case on Windows), and `cortex project add` compares paths as written, then resolved, so that it never lists a directory twice — through a link, or a case the file system ignores, as on macOS.
 - **The grammar is the core's** (`cortex_core.project`), as for the three files of a project: every key is required, and an unknown key is an error. The cockpit and the runtime read the file through it.
 - **Nothing is cached.** A project's version, layout and theme are read from the project when needed. A second copy would disagree with it after the first `git pull`.
 - **Writes are whole or not at all**: a temporary file beside it, then a rename. They are taken one at a time, under a lock on a file beside it, so two syncs that register at once both land.
@@ -77,10 +77,10 @@ cortex project check
 - **`list`** gives, for each entry, in name order: its name, its path, the version it pins, the version this machine reads now (the `spec` of its `cortex.local.toml`), and its state:
   - `ok`;
   - `missing` — no directory there;
-  - `no project` — a directory without `cortex.toml`;
+  - `no-project` — a directory without `cortex.toml`;
   - `unreadable` — its directory or its files cannot be read, or this cortex refuses them, with why; its versions are given when they can still be read, as `cortex prune` reads them.
 
-  **`--json`** prints the same as one JSON array of objects — `name`, `path`, `state`, `pinned`, `reads`, `layout` and `why`, what cannot be read of an `unreadable` one — with `null` for what is not known. `layout` is read from the marker of the project's instructions file (ADR-010 §3.1), `null` without one or when two disagree. It is the cockpit's entry point (#46). Its keys only grow within `format = 1`.
+  **`--json`** prints the same as one JSON object, `{"format": 1, "projects": [...]}`: an array of objects — `name`, `path`, `state`, `pinned`, `reads`, `layout` and `why`, what cannot be read of an `unreadable` one — with `null` for what is not known. `layout` is read from the marker of the project's instructions file (ADR-010 §3.1), `null` without one or when two disagree. It is the cockpit's entry point (#46). `format` is the output's own, not the file's: the keys only grow within one, and a reader refuses a later one.
 - **`remove`** drops an entry, by name or by path. It never touches the project's files.
 - **`check`** says each entry that is not `ok`, and exits 1 if there is one. It removes nothing, and names `cortex project remove` and `cortex prune`, which do.
 - **No registry** is an empty list: `list` says so, and `check` exits 0.
@@ -147,10 +147,10 @@ Acceptance criteria:
 
 - `cortex project add` in a project registers its root, named after its directory, and says so; run again, it says the path is listed and changes nothing
 - `--name` names it; a taken name is refused; a directory with no `cortex.toml` is refused
-- `list` gives each entry's name, path, pinned version, version read now and state; `--json` gives the same as an array, `null` for what is not known
+- `list` gives each entry's name, path, pinned version, version read now and state; `--json` gives the same as one object, its `format` and its `projects`, `null` for what is not known
 - `remove` drops an entry by name and by path, and leaves the project's files byte for byte
-- `check` exits 1 on a `missing`, a `no project` and an `unreadable` entry, and removes nothing; exits 0 on an empty or missing registry
-- a registry with an unknown key, a name that does not match, two entries naming the same directory, or `format = 2` is refused, naming the file and what is wrong
+- `check` exits 1 on a `missing`, a `no-project` and an `unreadable` entry, and removes nothing; exits 0 on an empty or missing registry
+- a registry with an unknown key, a name that does not match, two entries written the same once normalised, a path with a control character, or `format = 2` is refused, naming the file and what is wrong
 - two `add` run at once both land
 
 ### Phase 2 — `cortex init` and `cortex sync` register the project
@@ -239,3 +239,13 @@ The record was *Accepted*, not yet implemented, when these were made: the body a
 - **`unreadable` is wider** (§3.2, §3.4): a directory that cannot be searched is `unreadable`, never `missing`, so `prune` does not drop it; files this cortex refuses are `unreadable` too. Their versions are given, and kept, when they can be read loosely.
 - **`--json` has a `why`**, and **`layout`** comes from the bootstrap marker, since `cortex.toml` does not record it (§3.2).
 - **The exit codes** of `cortex project` are written down (§3.2).
+
+After the counter-review of 2026-11-05:
+
+- **`--json` is one object**, `{"format": 1, "projects": [...]}`, decided by the maintainer (§3.2): an array alone did not show which contract a reader reads, and 1.5.0 freezes it. Its `format` is the output's own.
+- **`no project` is written `no-project`**, decided by the maintainer (§3.2): one word, as a value the cockpit and scripts compare.
+- **Case is folded on Windows only** (§3.1): there, by the grammar; elsewhere, a case the file system ignores is told by the file system, which `cortex project add` and the registering sync ask when the paths resolved differ.
+- **A path holds no control character** (§3.1). NUL, which no system takes in a file name, made every reader fail in a way of its own; the grammar now refuses the file, naming it.
+- **Paths are compared as written first** (§3.1): a project listed already is found without resolving the other entries' paths, so a share that does not answer no longer holds the commands that register.
+- **A `$PWD` that is not written plainly** — a `..`, a `.`, a final `/` — is ignored, as `pwd -L` ignores it, so a path is never written so.
+- **A write killed before its rename** left its temporary file: the next write sweeps it, under the lock. On Windows, a rename refused while a reader has the file open is tried again, two seconds at most.
