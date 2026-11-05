@@ -2,7 +2,8 @@
 
 They read the version ``cortex.toml`` pins, to install that binary: read wrong, the version is
 empty, and ``install.sh`` installs the latest release instead, in silence (ADR-008 §9). Then they
-sync with ``--locked``, but for a version before 1.4.0, whose binary refuses the option.
+sync with ``--locked``, but for a version before 1.4.0, whose binary refuses the option. The
+README's CI how-to copies extending-layers' lines whole.
 """
 
 import os
@@ -15,6 +16,7 @@ from pathlib import Path
 
 DOCS = Path(__file__).resolve().parents[2] / "docs"
 GUIDES = (DOCS / "migrating-to-the-binary.md", DOCS / "extending-layers.md")
+README = DOCS.parent / "README.md"
 PINS = {'version = "1.2.3"\ntheme = "h2g2"\n': "1.2.3",
         "version = '1.2.3'\ntheme = 'h2g2'\n": "1.2.3",
         '# version = "0.1.0"\n  version="1.2.3"   # the team pins it\n': "1.2.3",
@@ -47,6 +49,12 @@ class CiLinesTests(unittest.TestCase):
         self.assertEqual(block(GUIDES[0], "powershell")[:3], block(GUIDES[1], "powershell")[:3])
         for language in ("bash", "powershell"):
             self.assertEqual(gate(GUIDES[0], language), gate(GUIDES[1], language))
+
+    def test_the_readme_gives_extending_layers_lines(self):
+        text = README.read_text(encoding="utf-8")
+        copies = [found.splitlines() for found in re.findall(r"```bash\n(.*?)```", text, re.S)
+                  if "--locked from 1.4.0" in found]
+        self.assertEqual(copies, [block(GUIDES[1], "bash")])
 
     @unittest.skipIf(os.name == "nt" or not shutil.which("sh"), "a POSIX shell's lines")
     def test_the_shell_lines_sync_with_locked_from_1_4_0(self):
