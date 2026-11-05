@@ -226,6 +226,10 @@ def prune(directories: List[str], keep: List[str], dry_run: bool, out: TextIO, e
         # Dropped before a version is removed: a registry that cannot be written stops here, nothing removed.
         if gone and not _drop(gone, dry_run, out, err):
             return 1
+        # Read again just before the removals: a project registered since the first read — a sync
+        # that ended meanwhile — keeps its versions. One registered after this read loses a version
+        # it synced from the store already, until its next sync, which its assistant runs (§5).
+        _registered([entry for entry in registry.load() if entry not in entries], used, err)
     kept = {version: f"used by {', '.join(roots)}" for version, roots in used.items()}
     kept.setdefault(the_store.own, "this cortex's own")
     for version in keep:

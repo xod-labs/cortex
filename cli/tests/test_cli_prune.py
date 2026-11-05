@@ -650,6 +650,23 @@ class RegistryInProcessTests(RegistryTestCase):
         self.assertNotIn("dropped from the registry", out)
         self.assertEqual(self.entries(), [("a", display(self.a))])
 
+    def test_a_project_registered_while_the_others_are_read_keeps_its_versions(self):
+        # A sync of a project not listed yet ends while prune reads the others: it registered, and
+        # the registry read again just before the removals has it.
+        late = self.project("late", "9.9.6", reads="9.9.5")
+        real = registry.state
+
+        def a_sync_meanwhile(entry):
+            if entry.name == "a":
+                registry.add(str(late))
+            return real(entry)
+
+        with mock.patch.object(registry, "state", a_sync_meanwhile):
+            code, out, _ = self.prune()
+        self.assertEqual(code, 0, out)
+        self.assertIn("  kept     9.9.5 — used by late\n  kept     9.9.6 — used by late\n", out)
+        self.assertEqual(self.in_store(), ["9.9.5", "9.9.6", "9.9.7"])
+
     def test_the_store_is_listed_before_the_projects_are_read(self):
         # A version a sync puts in the store while prune reads the projects is in no list, and stays.
         real = registry.state
