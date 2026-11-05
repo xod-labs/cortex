@@ -1195,7 +1195,7 @@ class RegisterTests(SyncTestCase):
         self.assert_ok(proc)
         self.assertIn(f"registered as acme-2 — {LISTS}\n", proc.out)
         self.assertEqual(self.entries(), [("acme", display(old)), ("acme-2", display(new))])
-        listed = json.loads(harness.run("project", "list", "--json", cwd=self.tmp, env=self.env).stdout)
+        listed = json.loads(harness.run("project", "list", "--json", cwd=self.tmp, env=self.env).stdout)["projects"]
         self.assertEqual([(entry["name"], entry["state"]) for entry in listed], [("acme", "missing"), ("acme-2", "ok")])
 
     def test_a_registry_that_cannot_be_written_or_read_is_a_warning_and_the_sync_succeeds(self):
