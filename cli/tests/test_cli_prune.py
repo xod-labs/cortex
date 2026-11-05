@@ -425,7 +425,7 @@ class RegistryTests(RegistryTestCase):
         before = self.registry.read_bytes()
         proc = self.run_cortex(self.tmp, "prune")
         self.assert_ok(proc)
-        self.assertEqual(self.in_store(), ["9.9.6", "9.9.7", *self.own])
+        self.assertEqual(self.in_store(), sorted(["9.9.6", "9.9.7", *self.own]))
         self.assertTrue(proc.out.startswith(f"2 project(s) registered in {display(self.registry)}\n"), proc.out)
         self.assertIn("  kept     9.9.6 — used by a\n  kept     9.9.7 — used by b\n", proc.out)
         if OWN:
@@ -461,7 +461,7 @@ class RegistryTests(RegistryTestCase):
         self.assertIn(f"bare: {display(bare)} is gone — dropped from the registry\n"
                       f"gone: {display(gone)} is gone — dropped from the registry\n", proc.out)
         self.assertEqual(self.entries(), [("a", display(a))])
-        self.assertEqual(self.in_store(), ["9.9.6", *self.own])
+        self.assertEqual(self.in_store(), sorted(["9.9.6", *self.own]))
         self.assertIn("  removed  9.9.7\n", proc.out)
 
     def test_a_project_whose_cortex_local_toml_is_left_stays_with_its_version(self):
@@ -482,7 +482,7 @@ class RegistryTests(RegistryTestCase):
         self.assertIn("  kept     9.9.7 — used by away\n", proc.out)
         self.assertIn(f"stale: {display(stale)} is gone — dropped from the registry\n", proc.out)
         self.assertEqual(self.entries(), [("a", display(a)), ("away", display(away))])
-        self.assertEqual(self.in_store(), ["9.9.6", "9.9.7", *self.own])
+        self.assertEqual(self.in_store(), sorted(["9.9.6", "9.9.7", *self.own]))
         self.assertEqual(sorted(os.listdir(away)), ["cortex.local.toml"])     # the project's files are not touched
 
     def test_a_registry_whose_projects_are_all_gone_is_not_empty(self):
@@ -506,7 +506,7 @@ class RegistryTests(RegistryTestCase):
         self.assertTrue(proc.out.endswith("--dry-run: nothing was removed, and no entry was dropped\n"), proc.out)
         self.assertEqual(self.registry.read_bytes(), before)
         self.assertEqual(self.in_home(), ["projects.toml", "versions"])
-        self.assertEqual(self.in_store(), ["9.9.6", "9.9.7", *self.own])
+        self.assertEqual(self.in_store(), sorted(["9.9.6", "9.9.7", *self.own]))
         self.put("9.9.7")
         proc = self.run_cortex(self.tmp, "prune", "--dry-run", "--keep", "9.9.7")       # nothing to remove
         self.assertTrue(proc.out.endswith("Nothing to remove.\n--dry-run: no entry was dropped\n"), proc.out)
@@ -555,7 +555,7 @@ class RegistryTests(RegistryTestCase):
                 self.assertEqual(proc.err, "cortex prune: no DIR, and no project registered on this machine: pruning "
                                            "would remove every version. Give the directories of the projects — cortex "
                                            "prune DIR... — or register each one: `cortex project add` in it\n")
-                self.assertEqual(self.in_store(), ["9.9.6", *self.own])
+                self.assertEqual(self.in_store(), sorted(["9.9.6", *self.own]))
                 self.assertEqual(self.in_home(), ["versions"] if case == "none" else ["projects.toml", "versions"])
 
     def test_with_dir_the_registry_is_neither_read_nor_written(self):
@@ -566,11 +566,13 @@ class RegistryTests(RegistryTestCase):
             with self.subTest(registry=case):
                 self.put("9.9.7")
                 self.registry.write_text(text, encoding="utf-8")
+                os.utime(self.registry, ns=(0, 0))                     # a write would change it, the same bytes too
                 proc = self.run_cortex(self.tmp, "prune", "code")
                 self.assert_ok(proc)
                 self.assertIn("1 project(s) found under", proc.out)
-                self.assertEqual(self.in_store(), ["9.9.6", *self.own])
+                self.assertEqual(self.in_store(), sorted(["9.9.6", *self.own]))
                 self.assertEqual(self.registry.read_text(encoding="utf-8"), text)
+                self.assertEqual(self.registry.stat().st_mtime_ns, 0)
                 self.assertEqual(self.in_home(), ["projects.toml", "versions"])
 
     def test_a_registry_it_refuses_removes_nothing(self):
@@ -582,7 +584,7 @@ class RegistryTests(RegistryTestCase):
         self.assertTrue(proc.err.startswith(f"cortex prune: {display(self.registry)}: format 2 is written by a later "
                                             "Cortex"), proc.err)
         self.assertIn("cortex self-update", proc.err)
-        self.assertEqual(self.in_store(), ["9.9.6", *self.own])
+        self.assertEqual(self.in_store(), sorted(["9.9.6", *self.own]))
 
 
 class RegistryInProcessTests(RegistryTestCase):
