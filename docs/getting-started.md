@@ -314,14 +314,14 @@ A machine keeps the list of its Cortex projects in `projects.toml`, beside the s
 cortex project add                          # the project of the current directory, named after its directory
 cortex project add ~/code/acme --name acme  # another one, under a name of your choice
 cortex project list                         # where each one stands
-cortex project list --json                  # the same, as one JSON array
+cortex project list --json                  # the same, as one JSON object
 cortex project remove acme                  # by name or by path — the project's files are not touched
 cortex project check                        # exits 1 when one is not ok
 ```
 
 `list` gives, in name order, each project's name, its state, the version its `cortex.toml` pins, the version this machine reads now — the `spec` of its `cortex.local.toml` — its layout, from the marker of its instructions file, and its path. A project is `ok`, `missing` — no directory at its path — `no-project` — a directory without `cortex.toml` — or `unreadable`, with why. `--json` gives the same as one object, `{"format": 1, "projects": [...]}`, each project an object of `name`, `path`, `state`, `pinned`, `reads`, `layout` and `why`, with `null` for what is not known; the keys only grow within one `format`. `check` removes nothing: `cortex project remove` drops an entry.
 
-The commands write the file, whole and one at a time. Edit it by hand with care: `cortex` refuses a file with a key it does not know, a name other than lowercase letters, digits, `.`, `_` and `-`, or two entries naming the same directory.
+The commands write the file, whole and one at a time. Edit it by hand with care: `cortex` refuses a file with a key it does not know, a name other than lowercase letters, digits, `.`, `_` and `-`, a path holding a control character — of C0, from NUL to the escape, or DEL — or two entries naming the same directory. A file it refuses, every command that reads it refuses — `cortex project remove` too: fix it by hand, the entry named in the message corrected or removed.
 
 ### Add a capability (contributing to cortex)
 
