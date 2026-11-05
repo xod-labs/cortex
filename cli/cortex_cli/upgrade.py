@@ -693,7 +693,7 @@ class Interrupted(KeyboardInterrupt):
 
 
 def _move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: bool = True,
-          made: Optional[Dict[str, str]] = None) -> Outcome:
+          made: Optional[Dict[str, Tuple[str, str]]] = None) -> Outcome:
     """The upgrade of the project of ``cwd``, and what ``--branch`` and ``--commit`` ask of git around
     it (``_git_move``). Interrupted once its branch is made, it says so, and raises ``Interrupted``."""
     branched: List[str] = []
@@ -708,13 +708,14 @@ def _move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: bool 
         raise Interrupted(options.branch) from error
 
 
-def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: bool, made: Dict[str, str],
-              branched: List[str]) -> Outcome:
+def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: bool,
+              made: Dict[str, Tuple[str, str]], branched: List[str]) -> Outcome:
     """The upgrade, with the branch made once all is checked and before anything is written, where
     there is something to commit; the files the upgrade wrote committed. ``made``: the repositories
-    this run made the branch in, and the work tree it is checked out in — a second project of that
-    work tree finds it checked out, one of another work tree of the repository is refused. ``branched``
-    gets the work tree this project's branch was made in."""
+    this run made the branch in, and the work tree it is checked out in — resolved, to compare, and
+    as git names it, to say — a second project of that work tree finds it checked out, one of
+    another work tree of the repository is refused. ``branched`` gets the work tree this project's
+    branch was made in."""
     root = config.find_project(cwd)
     top = None
     if root is not None and (options.branch is not None or options.message is not None):
@@ -743,8 +744,8 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
                 out.write(f"git: on the branch {options.branch} already\n")
             return
         key, repository = _real(top), _repository(root)
-        if made.get(repository, key) != key:
-            raise UpgradeError(f"the branch {options.branch} is checked out in {display(made[repository])}, where this "
+        if made.get(repository, (key, top))[0] != key:
+            raise UpgradeError(f"the branch {options.branch} is checked out in {display(made[repository][1])}, where this "
                                "run made it, and git checks a branch out in one work tree at a time — nothing was "
                                f"changed. `cortex upgrade --branch NAME` in {display(root)} moves it on another branch")
         if _branch_exists(root, options.branch):
@@ -753,7 +754,7 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
         if options.dry_run:
             return
         _git_ok(root, "checkout", "-q", "-b", options.branch)
-        made[repository] = key
+        made[repository] = (key, top)
         branched.append(top)
         out.write(f"git: on a new branch, {options.branch}\n")
 
@@ -847,7 +848,7 @@ def _each(entries: List[registry.Entry], options: _Options, out: TextIO, err: Te
           done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]) -> None:
     """Each project's upgrade, in turn, added to ``done``: what it did — or, when it did nothing, why:
     the state it was skipped for, or its being interrupted."""
-    made: Dict[str, str] = {}
+    made: Dict[str, Tuple[str, str]] = {}
     for entry in entries:
         out.write(("\n" if done else "") + f"{entry.name}: {entry.path}\n")
         try:
