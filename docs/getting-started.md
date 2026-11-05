@@ -323,9 +323,31 @@ cortex project remove acme                  # by name or by path — the project
 cortex project check                        # exits 1 when one is not ok
 ```
 
-`list` gives, in name order, each project's name, its state, the version its `cortex.toml` pins, the version this machine reads now — the `spec` of its `cortex.local.toml` — its layout, from the marker of its instructions file, and its path. A project is `ok`, `missing` — no directory at its path — `no-project` — a directory without `cortex.toml` — or `unreadable`, with why. `--json` gives the same as one object, `{"format": 1, "projects": [...]}`, each project an object of `name`, `path`, `state`, `pinned`, `reads`, `layout` and `why`, with `null` for what is not known; the keys only grow within one `format`. `check` removes nothing: `cortex project remove` drops an entry.
+`list` gives, in name order, each project's name, its state, the version its `cortex.toml` pins, the version this machine reads now — the `spec` of its `cortex.local.toml` — its layout, from the marker of its instructions file, and its path. A project is `ok`, `missing` — no directory at its path — `no-project` — a directory without `cortex.toml` — or `unreadable`, with why. `--json` gives the same as one object, `{"format": 1, "projects": [...]}`, each project an object of `name`, `path`, `state`, `pinned`, `reads`, `layout` and `why`, with `null` for what is not known; the keys only grow within one `format`. `check` removes nothing: `cortex project remove` drops an entry, and `cortex prune` the entries whose project is gone.
 
 The commands write the file, whole and one at a time. Edit it by hand with care: `cortex` refuses a file with a key it does not know, a name other than lowercase letters, digits, `.`, `_` and `-`, a path holding a control character — of C0, from NUL to the escape, or DEL — or two entries naming the same directory. A file it refuses, every command that reads it refuses — `cortex project remove` too: fix it by hand, the entry named in the message corrected or removed.
+
+### Free the store — `cortex prune`
+
+The store keeps every version a project of the machine synced. `cortex prune` removes those no project uses any more ([ADR-010](adr/ADR-010-lock-and-upgrade.md) §3.6, [ADR-011](adr/ADR-011-project-registry.md) §3.4):
+
+```bash
+cortex prune --dry-run          # what it would remove, and the entries it would drop: nothing changes
+cortex prune                    # keeps the versions of the projects registered — `cortex project list`
+cortex prune ~/code ~/work      # of the projects under these directories instead: the registry is not read
+cortex prune --keep 1.3.0       # a version no project pins, kept — one the runtime uses, say
+```
+
+It keeps the version each project pins and the one it reads now — a teammate's bump pulled and not synced yet leaves it on the version before — the binary's own version, and each `--keep`. With no directory, the projects are the registry's:
+
+- an entry whose project is gone — `missing`, on a drive that is not mounted too, or `no-project` with nothing of Cortex left — is dropped from the registry, and said, and its version is no longer kept for it. Its next `cortex sync` registers it again;
+- a `no-project` entry whose `cortex.local.toml` still reads a version — a branch without Cortex checked out, a rebase under way — stays, and keeps that version: `cortex project remove` drops it, if the project really left Cortex;
+- an `unreadable` entry is named, and stays: the versions that can be read of it are kept — none, when not even its pin can be read;
+- with nothing registered it exits 2, rather than remove every version: register the projects, or give their directories.
+
+A project this machine never synced since 1.5.0 is not registered, and loses its version: sync it, or `cortex project add` it, before the first `cortex prune` with no directory. Its assistant notices a spec that is gone and runs `cortex sync`, which gets the version back. `CORTEX_NO_REGISTER` does not change `prune`: it keeps the commands that register from the registry, and `prune` with no directory reads it, and drops from it, whatever its value.
+
+A project it did not see — not registered, or under none of the directories — gets its version back at its next `cortex sync`, checked against its `cortex.lock`.
 
 ### Add a capability (contributing to cortex)
 

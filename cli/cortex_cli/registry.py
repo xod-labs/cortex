@@ -333,13 +333,30 @@ def _reads(read: config.Project) -> Optional[str]:
         return None
 
 
+def _left_behind(root: Path) -> Optional[str]:
+    """The version a ``cortex.local.toml`` left without its ``cortex.toml`` reads — a branch without
+    Cortex checked out, an uncommitted pin stashed, a rebase under way: the project comes back with
+    its pin, and reads that version again. ``None`` without such a file, or a version it reads.
+    ``OSError``, or ``ValueError``, when the file is there and cannot be read: what it reads is not
+    known, which is no proof that the project is gone."""
+    try:
+        spec = tomllib.loads((root / config.LOCAL_FILE).read_text(encoding="utf-8-sig")).get("spec")
+    except FileNotFoundError:
+        return None
+    if not isinstance(spec, str):
+        return None
+    # Its pin is what is missing: only its spec is read.
+    return _reads(config.Project(root=str(root), version=None, theme="none", sync=None, local_theme=None, spec=spec))
+
+
 def state(entry: Entry) -> State:
     """Where the project of ``entry`` stands (ADR-011 §3.2), read from it now:
 
     - ``MISSING`` — no directory at its path;
-    - ``NO_PROJECT`` — a directory without ``cortex.toml``;
-    - ``UNREADABLE`` — the directory, or its files, cannot be read, or this cortex refuses them:
-      ``why`` says which. Its versions are read all the same when they can be, as ``cortex prune``
+    - ``NO_PROJECT`` — a directory without ``cortex.toml``: ``reads`` is the version a
+      ``cortex.local.toml`` left there still reads (``_left_behind``);
+    - ``UNREADABLE`` — the directory, or its files, cannot be read, or this cortex refuses them —
+      a ``cortex.local.toml`` left without its ``cortex.toml`` too: ``why`` says which. Its versions are read all the same when they can be, as ``cortex prune``
       reads them;
     - ``OK``.
     """
@@ -349,7 +366,12 @@ def state(entry: Entry) -> State:
             return State(entry, MISSING)
         found = _there(os.path.join(entry.path, config.PROJECT_FILE))
         if found is None or stat.S_ISDIR(found.st_mode):
-            return State(entry, NO_PROJECT)
+            try:
+                return State(entry, NO_PROJECT, reads=_left_behind(Path(entry.path)))
+            except (OSError, ValueError) as error:
+                why = sync.os_error(error) if isinstance(error, OSError) else str(error)
+                return State(entry, UNREADABLE, why=f"no {config.PROJECT_FILE}, and its {config.LOCAL_FILE} cannot be "
+                                                    f"read — {why}")
     except OSError as error:
         return State(entry, UNREADABLE, why=sync.os_error(error))
     root = Path(entry.path)
@@ -418,7 +440,8 @@ def _check(out: TextIO) -> int:
     wrong = [found for found in states if found.state != OK]
     for found in wrong:
         why = {MISSING: f"no directory at {found.entry.path}",
-               NO_PROJECT: f"{found.entry.path} holds no {config.PROJECT_FILE}"}.get(found.state)
+               NO_PROJECT: f"{found.entry.path} holds no {config.PROJECT_FILE}" + (
+                   f", and its {config.LOCAL_FILE} still reads {found.reads}" if found.reads else "")}.get(found.state)
         out.write(f"{found.entry.name}: {found.state} — {why or f'{found.entry.path}: {found.why}'}\n")
     if not wrong:
         out.write(f"{len(states)} project(s) registered, every one ok\n")

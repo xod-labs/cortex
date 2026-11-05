@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-11-04 (proposed) · 2026-11-04 (accepted, its ten arbitrations as written)
 - **Authors:** Cortex maintainers (initiated by the maintainer, drafted by @Oolon)
-- **Affects:** `core/cortex_core/project.py` (the grammar of `projects.toml`), `cli/cortex_cli/` (a new `cortex project` command, `init`, `sync`, `prune`, `upgrade`), `README.md`, `docs/getting-started.md`, `docs/extending-layers.md`
+- **Affects:** `core/cortex_core/project.py` (the grammar of `projects.toml`), `cli/cortex_cli/` (a new `cortex project` command, `init`, `sync`, `prune`, `upgrade`), `templates/bootstrap-instructions*.md` (the rule for a spec that is gone), `README.md`, `docs/getting-started.md`, `docs/extending-layers.md`
 - **Relates to:** [ADR-008](ADR-008-cortex-binary.md) §3.3, whose store "keeps no list of projects", which this record revisits for the machine, not for the store · [ADR-010](ADR-010-lock-and-upgrade.md) §3.6 and §7.4, `cortex prune DIR...`, which takes no `DIR` once this registry exists · roadmap epic [#266](https://github.com/xod-labs/cortex/issues/266), split from [#48](https://github.com/xod-labs/cortex/issues/48) on 2026-11-04 · [#98](https://github.com/xod-labs/cortex/issues/98), the configuration cascade, which keeps `~/.cortex/config.toml`
 
 ---
@@ -103,9 +103,13 @@ cortex prune [DIR...] [--keep VERSION]... [--dry-run]
 ```
 
 - **With no `DIR`**, the projects are the registry's. The versions kept are the same as with directories (ADR-010 §3.6): what each project pins and reads now, the binary's own version, and each `--keep`.
-- **An entry whose project is gone** — `missing`, or `no project` — is dropped from the registry, and said: *acme: /home/dev/code/acme is gone — dropped from the registry*. Its version is no longer kept for it. A project on a drive that is not mounted is gone too: its next sync registers it again, and gets its version back, checked against its lock.
-- **An `unreadable` entry is kept**, and named. Its versions are kept when they can be read, as under a `DIR`, and not known otherwise (ADR-010 §3.6).
-- **An empty registry, and no `DIR`,** exits 2, as before: there is nothing to keep, and pruning would remove every version.
+- **An entry whose project is gone** — `missing`, or `no-project` with nothing of Cortex left — is dropped from the registry, and said: *acme: /home/dev/code/acme is gone — dropped from the registry*. Its version is no longer kept for it. A project on a drive that is not mounted is gone too: its next sync registers it again, and gets its version back, checked against its lock.
+- **A `no-project` entry whose `cortex.local.toml` still reads a version stays**, and keeps that version, said in a note: a branch without Cortex checked out, an uncommitted `cortex.toml` stashed, a rebase under way. The project comes back with its pin, and its next sync, offline too, finds the version it reads. `cortex project remove` drops an entry whose project really left Cortex.
+- **An `unreadable` entry is kept**, and named. The versions that can be read of it are kept, as for a project under a `DIR` whose files hold a key this binary does not know (ADR-010 §3.6) — none when not even its pin can be read.
+- **An empty registry, and no `DIR`,** exits 2, as before: there is nothing to keep, and pruning would remove every version. A registry whose every project is gone is not empty: its entries are dropped, and every version but the binary's own and each `--keep` is removed.
+- **The entries gone are dropped first**, in one write: a registry that cannot be written stops the command, and no version is removed. A removal that fails afterwards leaves the entries dropped, and the version in the store for the next `prune`.
+- **The registry is read again just before the removals**: a project registered meanwhile, by a sync that ended while `prune` read the others, keeps its versions.
+- **`CORTEX_NO_REGISTER` does not change it** (§3.3): `prune` with no `DIR` reads the registry, and drops from it, whatever its value.
 - **With `DIR...`**, nothing changes from 1.4.0: the projects are those under the directories, and the registry is neither read nor written.
 - **`--dry-run`** lists, removes nothing, and drops no entry.
 
@@ -174,6 +178,7 @@ Acceptance criteria:
 
 - with registered projects pinned to A and B, and a store holding A, B, C and the binary's own version, `cortex prune` removes C only
 - an entry whose directory is gone is dropped and said, and its version is no longer kept for it; `--dry-run` drops nothing
+- a `no-project` entry whose `cortex.local.toml` still reads a version stays, and keeps it
 - an `unreadable` entry is named and kept
 - an empty registry and no `DIR` exits 2; `cortex prune DIR` neither reads nor writes the registry
 
@@ -201,7 +206,8 @@ Acceptance criteria:
 
 - **A file outside every project** must be kept right. A project moved or deleted leaves an entry until `prune` or `remove`.
 - **Every first sync of a throwaway project registers it.** `prune` drops it once it is gone, and `CORTEX_NO_REGISTER` avoids it.
-- **`cortex prune` with no `DIR` trusts the registry**: a project that was never synced on this machine since 1.5.0 is not in it, and loses its version until its next sync, as under ADR-010 with a `DIR` that did not hold it.
+- **`cortex prune` with no `DIR` trusts the registry**: a project that was never synced on this machine since 1.5.0 is not in it, and loses its version until its next sync, as under ADR-010 with a `DIR` that did not hold it. Its assistant does not sync a project already on its version, so such a project stays unregistered until someone syncs it, or adds it, by hand: the release note says to, before the first `prune` with no `DIR`. The instructions file has a rule for what is left: *the directory `spec` names does not exist* → run `cortex sync`, which gets the version back — offline, it says what it cannot download.
+- **A sync and a `prune` at the same moment**: a project registered after `prune` read the registry the second time, just before the removals, may lose a version it synced from the store meanwhile. The same rule of the instructions file has its next conversation sync it back.
 
 ### Neutral
 
@@ -264,3 +270,17 @@ After the counter-review of 2026-11-05:
 - **`cortex sync --locked` registers**, as any sync does (§3.3): the option is about the lock, not the machine, and a CI runner sets `CORTEX_NO_REGISTER` — the guide says so.
 - **A project already listed resolves no path** (§3.3): the registering sync finds it as written, phase 1's comparison, before it looks at any directory.
 - **The suite's Cortex home** is the test process's too, not only the commands': a test that calls the modules never reads the machine's registry.
+
+### While phase 3 was implemented (2026-11-04)
+
+- **The order of `prune`** (§3.4): the entries gone are dropped first, in one write, so that a registry that cannot be written removes no version.
+- **"Empty" means no entry** (§3.4): a registry whose every project is gone has its entries dropped, and prunes on.
+- **An `unreadable` entry keeps the versions that can be read** (§3.4), as phase 1 widened `unreadable`.
+
+After the counter-review of 2026-11-05:
+
+- **A `no-project` entry is not always gone** (§3.4): when its `cortex.local.toml` still reads a version, it stays, with that version. A checkout of a branch without Cortex, a stash of an uncommitted pin, or a rebase made `prune` drop it and remove the version, and the next sync failed offline. `cortex project list` gives that version as what the entry reads, and `check` says it. One whose `cortex.local.toml` is there and cannot be read is `unreadable`, and stays too: what it reads is not known, which is no proof that the project is gone.
+- **The registry is read again just before the removals** (§3.4): a project a sync registered while `prune` read the others keeps its versions, and is counted. What is left of the race is in §5.
+- **The instructions file has a rule for a spec that is gone** (§5): *the directory `spec` names does not exist* → `cortex sync`. A project the assistant never synced — already on its version — was not registered, and the first `prune` with no `DIR` left its spec naming a directory that no rule caught. A `cortex/` that links to a checkout moved or deleted is removed first: the sync refuses it, as a link Cortex did not make — a message that names the wrong cause, #303. `cortex upgrade` to 1.5.0 writes the rule in, where no one edited the file.
+- **`CORTEX_NO_REGISTER` does not change `prune`** (§3.4): said, as phase 2 says what it changes.
+- **The tests compare a version list sorted**, since a binary's own version sorts anywhere among them; and that `prune DIR` writes no registry is checked by its time too, not only its bytes.

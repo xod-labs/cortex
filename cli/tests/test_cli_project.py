@@ -643,8 +643,14 @@ class CheckTests(StateTestCase):
         def odd(root):
             (root / "cortex.toml").write_text("version = \n", encoding="utf-8")
 
+        def left(root):
+            self.synced_elsewhere(root, "9.9.7")
+            (root / "cortex.toml").unlink()
+
         for name, spoil, said in (("gone", gone, "gone: missing — no directory at {}"),
-                                  ("bare", bare, "bare: no-project — {} holds no cortex.toml"),
+                                  ("bare", bare, "bare: no-project — {} holds no cortex.toml\n"),
+                                  ("left", left, "left: no-project — {} holds no cortex.toml, and its cortex.local.toml "
+                                                 "still reads 9.9.7\n"),
                                   ("odd", odd, "odd: unreadable — {}: cortex.toml: Invalid value")):
             with self.subTest(state=name):
                 root = self.register(self.project(name))
@@ -687,6 +693,33 @@ class StateTests(StateTestCase):
             found = registry.state(entry)
         self.assertEqual((found.state, found.pinned, found.reads), (registry.UNREADABLE, "9.9.8", "9.9.7"))
         self.assertIn("Permission denied", found.why)
+
+    def test_a_cortex_local_toml_left_says_the_version_it_reads(self):
+        root = self.project("away", version="9.9.8")
+        self.synced_elsewhere(root, "9.9.7")
+        (root / "cortex.toml").unlink()                 # a branch without Cortex checked out
+        entry = registry.Entry("away", display(root))
+        self.assertEqual(registry.state(entry), registry.State(entry, registry.NO_PROJECT, reads="9.9.7"))
+        shutil.rmtree(self.home / "versions" / "9.9.7")     # the version it read is gone
+        self.assertEqual(registry.state(entry), registry.State(entry, registry.NO_PROJECT))
+
+    def test_a_cortex_local_toml_left_that_cannot_be_read_is_unreadable(self):
+        # What it reads is not known: no proof that the project is gone, which prune would drop.
+        root = self.project("away", version="9.9.8")
+        (root / "cortex.toml").unlink()
+        entry = registry.Entry("away", display(root))
+        for case in ("a directory", "not TOML"):
+            with self.subTest(case=case):
+                local = root / "cortex.local.toml"
+                if case == "a directory":
+                    local.mkdir()
+                else:
+                    local.rmdir()
+                    local.write_text("spec = \n", encoding="utf-8")
+                found = registry.state(entry)
+                self.assertEqual((found.state, found.reads), (registry.UNREADABLE, None))
+                self.assertTrue(found.why.startswith("no cortex.toml, and its cortex.local.toml cannot be read — "),
+                                found.why)
 
     def test_a_cortex_toml_that_is_a_directory_is_no_project(self):
         root = self.code / "odd"
