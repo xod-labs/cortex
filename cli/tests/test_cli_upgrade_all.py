@@ -922,10 +922,12 @@ class CommitTests(GitTestCase):
     def test_a_change_below_the_top_is_seen_whatever_the_spelling_of_the_project(self):
         # The project in a directory of a larger work tree, its path typed in another case: git spells
         # that directory as the disk does, from the top. A change there is still a change of yours.
+        # Here, a second name of the directory — not a case variant, which a disk that ignores case,
+        # macOS's, takes for the first.
         alpha = self.make("alpha", synced=False)
         self.repository(self.code)
         (alpha / "cortex.toml").write_text(self.pinned(alpha) + "# changed\n", encoding="utf-8")
-        spelt = self.code / "ALPHA"
+        spelt = self.code / "alpha-typed-otherwise"
         spelt.symlink_to(alpha, target_is_directory=True)
         top = self.git(alpha, "rev-parse", "--show-toplevel")
         with mock.patch.object(os.path, "realpath", os.path.abspath):
