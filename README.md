@@ -293,7 +293,7 @@ cortex prune [DIR...] [--keep VERSION]... [--dry-run]
 Removes from the store the versions no project uses. It keeps the version each project pins and the one it reads now — a teammate's bump pulled and not synced yet — the binary's own version, and each `--keep`, and lists the versions kept, each with the projects that pin it, and the versions removed.
 
 - **With `DIR...`**, the projects are those under each directory: every `cortex.toml` up to six levels down, past `.git`, `node_modules`, `vendor`, `.venv` and a synced `cortex/`. The registry is neither read nor written.
-- **With no `DIR`**, the projects are the registry's. An entry whose project is gone — `missing`, or `no project` — is dropped from the registry, and said; an `unreadable` one is kept, and named, with the versions that can be read of it. The entries gone are dropped first, in one write: a registry that cannot be written stops the command before any version is removed. An empty registry exits 2: pruning would remove every version.
+- **With no `DIR`**, the projects are the registry's. An entry whose project is gone — `missing`, or `no-project` with nothing of Cortex left — is dropped from the registry, and said; an `unreadable` one is kept, and named, with the versions that can be read of it; so is a `no-project` one whose `cortex.local.toml` still reads a version — a branch without Cortex checked out — with that version. The entries gone are dropped first, in one write: a registry that cannot be written stops the command before any version is removed. The registry is read again just before the removals, for a project a sync registered meanwhile. An empty registry exits 2: pruning would remove every version. `CORTEX_NO_REGISTER` does not change it.
 
 | Option | What it does |
 |---|---|
@@ -316,7 +316,7 @@ Manages the registry, `projects.toml` in the Cortex home — `~/.cortex/projects
 | Subcommand | What it does |
 |---|---|
 | `add [PATH] [--name NAME]` | registers the project at `PATH` — by default the current one, the nearest `cortex.toml`. Its name is `--name`, or the root's directory name, lowered, any other character turned to `-`, and `-2`, `-3`… added when the name is taken. A directory with no `cortex.toml` is refused; a path already listed is said, with its name, and nothing changes; a `--name` another path holds is refused |
-| `list [--json]` | each entry, in name order: its name, its path, the version it pins, the version this machine reads now, and its state — `ok`; `missing`, no directory there; `no project`, a directory without `cortex.toml`; `unreadable` — its directory or its files cannot be read, or this cortex refuses them — with why. `--json` prints the same as one JSON array of objects — `name`, `path`, `state`, `pinned`, `reads`, `layout` (from the bootstrap file's marker) and `why` — with `null` for what is not known, for scripts and tools |
+| `list [--json]` | each entry, in name order: its name, its state, the version it pins, the version this machine reads now, its layout — from the bootstrap file's marker — and its path. The state is `ok`; `missing`, no directory there; `no-project`, a directory without `cortex.toml`; or `unreadable` — its directory or its files cannot be read, or this cortex refuses them — with why. `--json` prints the same as one JSON object, `{"format": 1, "projects": [...]}`, each project an object of `name`, `path`, `state`, `pinned`, `reads`, `layout` and `why`, with `null` for what is not known, for scripts and tools; its keys only grow within one `format` |
 | `remove NAME\|PATH` | drops an entry, by name or by path. It never touches the project's files |
 | `check` | says each entry that is not `ok`, and exits 1 if there is one. It removes nothing, and names `cortex project remove` and `cortex prune`, which do |
 
@@ -344,7 +344,7 @@ It exits `0` when clean, `1` on errors — or on warnings under `--strict` — a
 | `CORTEX_HOME` | the binary, the install scripts | where Cortex lives on this machine — the binary in `bin/`, the store in `versions/`, the registry `projects.toml`: `~/.cortex` by default, `%USERPROFILE%\.cortex` on Windows |
 | `CORTEX_RELEASES_URL` | the binary, the install scripts | where releases are downloaded from — a version's spec, `cortex self-update`'s binary, the install: GitHub's releases of `xod-labs/cortex` by default. A mirror serves the same layout, `latest/download/ASSET` and `download/VERSION/ASSET`, over https — http only to this machine, for tests. `cortex self-update` names it in a note before it downloads |
 | `CORTEX_NO_UPDATE_CHECK` | `cortex upgrade` | set to anything but an empty value, `cortex upgrade` with no `VERSION` does not ask which release is the latest — for a CI, or a network that drops what it does not allow |
-| `CORTEX_NO_REGISTER` | `cortex init`, `cortex sync`, `cortex upgrade` | set to anything but an empty value, they neither read nor write the registry — for a CI runner, or a throwaway project |
+| `CORTEX_NO_REGISTER` | `cortex init`, `cortex sync`, `cortex upgrade` | set to anything but an empty value, they neither read nor write the registry to register the project — for a CI runner, where `cortex sync --locked` registers as any sync does, or a throwaway project. `cortex project`, `cortex prune` with no `DIR` and `cortex upgrade --all` still read the registry: it is their work |
 | `CORTEX_NO_MODIFY_PATH` | `install.ps1` | `1` leaves your user `PATH` as it is, as `-NoModifyPath` does |
 | `SSL_CERT_FILE`, `SSL_CERT_DIR` | the binary | the certificates a download is checked with, as OpenSSL reads them. Unset, the binary looks where the common systems keep theirs |
 | `CORTEX_SOURCE_VERSION` | a source checkout | the version a checkout's tests stand for — for contributors; a built binary never reads it |
@@ -388,7 +388,7 @@ cortex prune ~/code ~/work      # the projects under these directories instead �
 cortex prune --keep X.Y.Z       # and a version no project pins — the runtime's, say
 ```
 
-A project nobody listed gets its version back at its next `cortex sync`, checked against its lock.
+A project nobody listed gets its version back at its next `cortex sync`, checked against its lock — its assistant runs it when it finds the spec gone. A project this machine has not synced since 1.5.0 is not registered: sync it, or `cortex project add` it, before the first `cortex prune` with no directory.
 
 ### Keep several projects in step
 
@@ -427,6 +427,7 @@ The bootstrap file has the assistant keep the machine in step with the project b
 | The assistant finds | It |
 |---|---|
 | no `cortex.local.toml`, or no `spec` in it | runs `cortex sync` at the project root — the workspace root in workspace mode |
+| a `spec` naming a directory that does not exist — `cortex prune` removed the version, or the store was emptied | runs `cortex sync`, which gets the version back |
 | a spec of another version than `cortex.toml`'s — a teammate moved it | runs `cortex sync`, and goes no further until it succeeded |
 | `cortex sync` saying this cortex is too old for the project — a newer pin, or a later lock format | runs the command the refusal names — `cortex self-update X.Y.Z`, or the install script's from a binary before 1.4.0 — then `cortex sync` again |
 | no `cortex` command, nor `cortex-ai`, on `PATH` or in `~/.cortex/bin` | tells you to install it, as [Installation](#-installation) says, and goes no further |
