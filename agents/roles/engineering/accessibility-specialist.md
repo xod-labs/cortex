@@ -109,7 +109,7 @@ in the mockup. Catching them in code costs a sprint; catching them in the mockup
 
 | Step | Output |
 |---|---|
-| Scope | Standard + version, level, in-scope surface, reference configuration (tenant, theme, locale) |
+| Scope | Standard + version, level, in-scope surface, reference configuration (environment, brand or tenant when there are several, theme, locale) |
 | Sample | Mandatory pages of the standard + representative pages + every step of each complete process |
 | Automated baseline | Violations per rule, per component, per route — the starting point of the ratchet |
 | Manual audit | Per criterion and per page: conformant / non-conformant / not applicable, with evidence |

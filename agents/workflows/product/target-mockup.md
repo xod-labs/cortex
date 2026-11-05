@@ -101,7 +101,7 @@ This workflow activates when the prompt contains formulations such as:
 - [ ] Each mockup element mapped to an existing component, a component to change, or a new one
 - [ ] The token diff applied in the design system first, then the components, then the pages
 - [ ] Tickets per component and per page, with the accessibility acceptance criteria copied in
-- [ ] A rollout plan: behind a flag per tenant or per brand when customers see the change
+- [ ] A rollout plan: behind a feature flag, one group of users at a time, when users will notice the change
 - [ ] No generated markup pasted into the application
 
 **Deliverable:** A backlog the team can build from, and a rollout the customers can expect.
