@@ -292,6 +292,18 @@ class DigestTests(UpgradeTestCase):
         self.assertEqual(rule.read_bytes(), wanted)
         self.assertNotIn("cortex.mdc", proc.out + proc.err)
 
+    def test_a_cursor_rule_without_the_marker_is_known_with_its_frontmatter_or_without(self):
+        # 9.9.8's template has no marker, so no digest: the rule is known by being 9.9.8's file — as an
+        # earlier cortex wrote it, or as this one does, the frontmatter first.
+        text = init.instructions(OLD_BOOTSTRAP, True)
+        for kept in (text, init.CURSOR_RULE + text):
+            with self.subTest(frontmatter=kept != text):
+                project = self.project("9.9.8")
+                rule = self.cursor_rule(project, kept)
+                self.assert_ok(self.upgrade(project))
+                self.assertEqual(rule.read_bytes(), init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True)))
+                shutil.rmtree(project)
+
     def test_a_cursor_rule_a_team_changed_is_kept_and_said_to_apply_only_where_mentioned(self):
         ours = self.marked(template=TEMPLATE) + b"\n## Our own rules\n"
         project = self.project("9.9.8")
