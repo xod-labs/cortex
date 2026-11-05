@@ -688,6 +688,15 @@ class StateTests(StateTestCase):
         self.assertEqual((found.state, found.pinned, found.reads), (registry.UNREADABLE, "9.9.8", "9.9.7"))
         self.assertIn("Permission denied", found.why)
 
+    def test_a_cortex_local_toml_left_says_the_version_it_reads(self):
+        root = self.project("away", version="9.9.8")
+        self.synced_elsewhere(root, "9.9.7")
+        (root / "cortex.toml").unlink()                 # a branch without Cortex checked out
+        entry = registry.Entry("away", display(root))
+        self.assertEqual(registry.state(entry), registry.State(entry, registry.NO_PROJECT, reads="9.9.7"))
+        shutil.rmtree(self.home / "versions" / "9.9.7")     # the version it read is gone
+        self.assertEqual(registry.state(entry), registry.State(entry, registry.NO_PROJECT))
+
     def test_a_cortex_toml_that_is_a_directory_is_no_project(self):
         root = self.code / "odd"
         (root / "cortex.toml").mkdir(parents=True)

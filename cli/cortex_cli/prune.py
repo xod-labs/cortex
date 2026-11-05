@@ -153,15 +153,21 @@ def _under(directories: List[str], used: Dict[Version, List[str]], err: TextIO) 
 
 def _registered(entries: List[registry.Entry], used: Dict[Version, List[str]], err: TextIO) -> List[registry.Entry]:
     """Add to ``used`` the versions of the registered projects, each read where it is (``registry.state``),
-    and return the entries whose project is gone. An ``unreadable`` one is named: it stays, and keeps
-    the versions that can be read of it, as a project under a ``DIR`` would."""
+    and return the entries whose project is gone: ``missing``, or ``no-project`` with no version read
+    there. An ``unreadable`` one is named: it stays, and keeps the versions that can be read of it, as a
+    project under a ``DIR`` would. So does a ``no-project`` one whose ``cortex.local.toml`` still reads
+    a version: a branch without Cortex checked out, and the project is back at the next one."""
     gone = []
     for entry in entries:
         found = registry.state(entry)
-        if found.state in (registry.MISSING, registry.NO_PROJECT):
+        if found.state == registry.MISSING or (found.state == registry.NO_PROJECT and not found.reads):
             gone.append(entry)
             continue
         versions = list(dict.fromkeys(version for version in (found.pinned, found.reads) if version))
+        if found.state == registry.NO_PROJECT:
+            err.write(f"note: {entry.name}: {entry.path} holds no {config.PROJECT_FILE}, but its {config.LOCAL_FILE} "
+                      f"still reads {found.reads} — a branch without Cortex checked out? It stays in the registry, and "
+                      f"keeps that version; `cortex project remove {entry.name}` drops it\n")
         if found.state == registry.UNREADABLE:
             what = (f"only its versions are read: {', '.join(versions)}" if versions
                     else "its version is not known, so none is kept for it")

@@ -452,7 +452,7 @@ class RegistryTests(RegistryTestCase):
     def test_an_entry_whose_project_is_gone_is_dropped_and_its_version_no_longer_kept(self):
         self.put("9.9.6", "9.9.7", *self.own)
         a = self.project("a", "9.9.6")
-        bare = self.project("bare", "9.9.7", reads="9.9.7")               # cortex.toml gone, cortex.local.toml left
+        bare = self.project("bare", "9.9.7")                               # cortex.toml gone, nothing of Cortex left
         (bare / "cortex.toml").unlink()
         gone = self.code / "gone"                                          # a drive not mounted, or a project deleted
         self.register(a=a, bare=bare, gone=gone)
@@ -463,7 +463,27 @@ class RegistryTests(RegistryTestCase):
         self.assertEqual(self.entries(), [("a", display(a))])
         self.assertEqual(self.in_store(), ["9.9.6", *self.own])
         self.assertIn("  removed  9.9.7\n", proc.out)
-        self.assertTrue((bare / "cortex.local.toml").is_file())            # the project's files are not touched
+
+    def test_a_project_whose_cortex_local_toml_is_left_stays_with_its_version(self):
+        # A branch without Cortex checked out, an uncommitted cortex.toml stashed, a rebase under way:
+        # cortex.local.toml, which git ignores, stays — and the project comes back with its pin.
+        self.put("9.9.6", "9.9.7", "9.9.8", *self.own)
+        a = self.project("a", "9.9.6")
+        away = self.project("away", "9.9.7", reads="9.9.7")
+        (away / "cortex.toml").unlink()
+        stale = self.project("stale", "9.9.8", reads="9.9.5")              # it reads a version gone already
+        (stale / "cortex.toml").unlink()
+        self.register(a=a, away=away, stale=stale)
+        proc = self.run_cortex(self.tmp, "prune")
+        self.assert_ok(proc)
+        self.assertIn(f"note: away: {display(away)} holds no cortex.toml, but its cortex.local.toml still reads 9.9.7 — "
+                      "a branch without Cortex checked out? It stays in the registry, and keeps that version; "
+                      "`cortex project remove away` drops it\n", proc.err)
+        self.assertIn("  kept     9.9.7 — used by away\n", proc.out)
+        self.assertIn(f"stale: {display(stale)} is gone — dropped from the registry\n", proc.out)
+        self.assertEqual(self.entries(), [("a", display(a)), ("away", display(away))])
+        self.assertEqual(self.in_store(), ["9.9.6", "9.9.7", *self.own])
+        self.assertEqual(sorted(os.listdir(away)), ["cortex.local.toml"])     # the project's files are not touched
 
     def test_a_registry_whose_projects_are_all_gone_is_not_empty(self):
         # It lists projects, which are gone: they are dropped, and their versions with them.
