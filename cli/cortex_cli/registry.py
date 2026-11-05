@@ -292,10 +292,10 @@ def drop(entries: Iterable[Entry]) -> List[Entry]:
     if not gone or not path.exists():
         return []
     with _locked(path):
-        listed = _read(path)
-        dropped = [entry for entry in listed if entry in gone]
+        held = _read(path)
+        dropped = [entry for entry in held if entry in gone]
         if dropped:
-            _write(path, [entry for entry in listed if entry not in gone])
+            _write(path, [entry for entry in held if entry not in gone])
     return dropped
 
 
