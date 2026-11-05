@@ -26,8 +26,8 @@ command ends with a line per project and what each must commit. The release is a
 ``--branch NAME`` makes the branch ``NAME`` in each project that is a git work tree and has something
 to commit, before anything of it is written — refused where it exists, unless it is the branch
 checked out; ``--commit --message M`` commits there the files the upgrade wrote, and nothing else —
-nothing at all when one of them held the developer's own changes. Neither is the default, and
-nothing is ever pushed.
+nothing at all when ``cortex.toml``, which it edits, held the developer's own changes. Neither is
+the default, and nothing is ever pushed.
 """
 
 from __future__ import annotations
@@ -627,6 +627,13 @@ def _real(path) -> str:
     return os.path.normcase(os.path.realpath(path))
 
 
+def _inside(top: str, path: Path) -> bool:
+    """Whether ``path`` — a link, by where it points — is in the work tree whose top is ``top``: a
+    bootstrap linked to a shared file, or named by --instructions-file, may be elsewhere."""
+    real, base = _real(path), _real(top)
+    return real == base or real.startswith(base.rstrip(os.sep) + os.sep)
+
+
 def _git_paths(root: str, files: List[Path]) -> List[str]:
     """``files`` as git names them in the work tree of ``root`` — a link, by where it points."""
     real = os.path.realpath(root)
@@ -652,15 +659,31 @@ def _changed(root: str, top: str, files: List[Path]) -> List[Path]:
     return [path for path in files if _real(path) in seen]
 
 
+def _theirs(root: str, top: str, pin: Path) -> Optional[str]:
+    """Why ``--commit`` is to commit nothing in the work tree of ``root``, whose top is ``top``, read
+    before the upgrade writes anything — ``None`` when nothing stops it. The pin is the one file the
+    upgrade edits and keeps the rest of: a change git sees in it — staged or not — is the developer's,
+    and would ride in the team's commit. The lock and the bootstrap files it writes whole: what they
+    held is gone once they are written, and is no part of the commit. A git that cannot tell stops
+    the commit, never the upgrade."""
+    if not _inside(top, pin):
+        return None
+    try:
+        if not _changed(root, top, [pin]):
+            return None
+    except UpgradeError as error:
+        return f"git could not tell whether {config.PROJECT_FILE} held changes of yours — {error}"
+    return f"{config.PROJECT_FILE} held changes of yours before the upgrade — commit by hand what is the team's"
+
+
 def _commit(root: str, top: str, files: List[Path], message: str,
-            theirs: List[Path]) -> Tuple[Optional[str], Optional[str]]:
+            theirs: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     """Commit ``files`` in the work tree of ``root``, whose top is ``top``, with ``message``, and
     nothing else: a change of another file, staged or not, stays as it is. Where it was committed —
     the branch, and the commit — or why nothing was: git tracks no ``cortex.toml`` there — the pin is
     this developer's own (ADR-010 §3.8); git ignores one of the files; they are as committed; or
-    ``theirs``, those git saw changed before the upgrade wrote them, hold the developer's own
-    changes, which are no part of the team's commit. ``UpgradeError`` when git fails, or refuses the
-    commit — the files stay staged then."""
+    ``theirs``, what ``_theirs`` found before the upgrade. ``UpgradeError`` when git fails, or refuses
+    the commit — the files stay staged then."""
     paths = _git_paths(root, files)
     if _git(root, "ls-files", "--error-unmatch", "--", *_literal([config.PROJECT_FILE])).returncode != 0:
         return None, f"git does not track its {config.PROJECT_FILE} — the pin is this developer's own"
@@ -669,10 +692,8 @@ def _commit(root: str, top: str, files: List[Path], message: str,
         return None, f"git ignores {_and(ignored)}"
     if not _changed(root, top, files):
         return None, f"{_and(paths)} {'are' if len(paths) > 1 else 'is'} as committed already"
-    if theirs:
-        names = [_shown_path(path, root) for path in theirs]
-        return None, (f"{_and(names)} held changes of yours before the upgrade wrote "
-                      f"{'them' if len(names) > 1 else 'it'} — commit by hand what is the team's")
+    if theirs is not None:
+        return None, theirs
     _git_ok(root, "add", "--", *_literal(paths), timeout=None)
     if _git(root, "diff", "--cached", "--quiet", "--", *_literal(paths)).returncode == 0:
         return None, f"{_and(paths)} {'are' if len(paths) > 1 else 'is'} as committed already"
@@ -725,11 +746,9 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
                 (["nothing is committed"] if options.message is not None else [])
             err.write(f"note: {display(root)} is in no git work tree — {' and '.join(what)} there\n")
     branching = options.branch is not None and top is not None
-    pin = Path(root) / config.PROJECT_FILE if root is not None else None
-    theirs: List[Path] = []
+    theirs = None
     if options.message is not None and top is not None and not options.dry_run:
-        # What git sees changed before anything is written is the developer's: never committed.
-        theirs = _changed(root, top, [pin, Path(root) / config.LOCK_FILE, *_instructions_files(Path(root), options.named)])
+        theirs = _theirs(root, top, Path(root) / config.PROJECT_FILE)       # before anything is written
     asked = []
 
     def branch(files: List[Path]) -> None:
@@ -779,11 +798,16 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
     if outcome.ignored:
         err.write(f"note: nothing to commit in {display(root)} — git ignores {_and(outcome.names())}\n")
         return outcome
-    written = {_real(path) for path in outcome.files}
+    outside = [path for path in outcome.files if not _inside(top, path)]
+    if outside:
+        names = [display(str(path)) for path in outside]
+        err.write(f"note: {_and(names)} {'are' if len(names) > 1 else 'is'} outside the git work tree of "
+                  f"{display(root)} — not committed with it\n")
+        outcome.files = [path for path in outcome.files if path not in outside]
+        if not outcome.files:
+            return outcome
     try:
-        outcome.committed, outcome.uncommitted = _commit(
-            root, top, outcome.files, options.message,
-            [path for path in theirs if path == pin or _real(path) in written])
+        outcome.committed, outcome.uncommitted = _commit(root, top, outcome.files, options.message, theirs)
     except UpgradeError as error:
         outcome.code, outcome.uncommitted = 1, str(error)
         out.flush()

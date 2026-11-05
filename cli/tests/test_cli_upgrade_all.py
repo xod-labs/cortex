@@ -703,13 +703,91 @@ class CommitTests(GitTestCase):
             self.assert_moved(root)
             self.assertEqual(self.head(root), first[root])
             self.assertIn(f"  {root.name:<5}  {display(root)}: cortex.toml and cortex.lock — not committed: cortex.toml "
-                          "held changes of yours before the upgrade wrote it — commit by hand what is the team's\n",
-                          proc.out)
+                          "held changes of yours before the upgrade — commit by hand what is the team's\n", proc.out)
             self.assertIn(f"note: nothing is committed in {display(root)} — cortex.toml held changes of yours", proc.err)
         self.assertIn('theme = "none"', self.pinned(alpha))
         self.assertEqual(self.git(alpha, "diff", "--cached", "--name-only"), "notes.md")
         self.assertEqual(self.git(beta, "diff", "--cached"), staged)
         self.assertIn("# not staged", self.pinned(beta))
+
+    def test_a_lock_or_a_bootstrap_never_committed_or_deleted_is_committed(self):
+        # The upgrade writes them whole: what they held is gone, and no change of yours rides in the commit.
+        alpha, beta = self.make("alpha", bootstrap=True), self.make("beta")
+        for root in (alpha, beta):
+            self.repository(root)
+        self.git(alpha, "rm", "-q", "--cached", "cortex.lock", "CLAUDE.md")      # a 1.4.0 sync's, never committed
+        self.git(alpha, "commit", "-q", "-m", "the lock and the bootstrap, untracked")
+        (beta / "cortex.lock").unlink()
+        self.register(alpha, beta)
+        proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        self.assertEqual(self.changed(alpha), ["CLAUDE.md", "cortex.lock", "cortex.toml"])
+        self.assertEqual(self.changed(beta), ["cortex.lock", "cortex.toml"])
+        for root in (alpha, beta):
+            self.assertEqual(self.git(root, "status", "--porcelain"), "")
+        self.assertNotIn("changes of yours", proc.out + proc.err)
+
+    def test_on_the_pinned_version_a_lock_never_committed_is_committed(self):
+        alpha = self.make("alpha")
+        (alpha / "cortex.toml").write_text(self.pinned(alpha).replace('"9.9.8"', f'"{OWN}"'), encoding="utf-8")
+        self.repository(alpha)
+        self.git(alpha, "rm", "-q", "--cached", "cortex.lock")                    # untracked, the one file written
+        self.git(alpha, "commit", "-q", "-m", "the lock, untracked")
+        self.register(alpha)
+        self.assert_ok(self.upgrade_all("--commit", "--message", self.MESSAGE))
+        self.assertEqual(self.changed(alpha), ["cortex.lock"])
+        self.assertEqual(self.git(alpha, "log", "-1", "--format=%s"), self.MESSAGE)
+
+    def test_a_pin_moved_by_hand_and_not_committed_commits_nothing(self):
+        # On the pinned version the lock alone is written: committed, it would say a version the
+        # committed pin does not.
+        alpha = self.make("alpha")
+        first = self.repository(alpha)
+        (alpha / "cortex.toml").write_text(self.pinned(alpha).replace('"9.9.8"', f'"{OWN}"'), encoding="utf-8")
+        self.register(alpha)
+        proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        self.assertEqual(self.head(alpha), first)
+        self.assertIn(f"  alpha  {display(alpha)}: cortex.lock — not committed: cortex.toml held changes of yours "
+                      "before the upgrade — commit by hand what is the team's\n", proc.out)
+
+    def test_a_bootstrap_of_yours_is_not_committed_and_stops_no_commit(self):
+        alpha = self.make("alpha", bootstrap=True)
+        self.repository(alpha)
+        mine = (alpha / "CLAUDE.md").read_bytes() + b"\nOur own rule, not committed.\n"
+        (alpha / "CLAUDE.md").write_bytes(mine)                          # a team's change: kept, not written
+        self.register(alpha)
+        proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        self.assertEqual(self.changed(alpha), ["cortex.lock", "cortex.toml"])
+        self.assertEqual(self.git(alpha, "status", "--porcelain"), " M CLAUDE.md")
+        self.assertEqual((alpha / "CLAUDE.md").read_bytes(), mine)
+
+    def test_a_bootstrap_outside_the_work_tree_is_written_and_left_out_of_the_commit(self):
+        alpha = self.make("alpha")
+        shared = self.code / "shared.md"                                 # the team's, beside the repository
+        shared.write_bytes(init.instructions(OLD_BOOTSTRAP, True))
+        self.repository(alpha)
+        proc = self.upgrade(alpha, "--instructions-file", str(shared), "--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        self.assert_moved(alpha)
+        self.assertNotEqual(shared.read_bytes(), init.instructions(OLD_BOOTSTRAP, True))
+        self.assertEqual(self.changed(alpha), ["cortex.lock", "cortex.toml"])
+        self.assertIn(f"note: {display(shared)} is outside the git work tree of {display(alpha)} — not committed with "
+                      "it\n", proc.err)
+        self.assertIn(f"\nCortex {OWN} is ready. Committed cortex.toml, cortex.lock on ", proc.out)
+
+    def test_a_git_that_cannot_tell_stops_the_commit_never_the_upgrade(self):
+        alpha = self.make("alpha", synced=False)
+        top, pin = str(alpha), alpha / "cortex.toml"
+        with mock.patch.object(upgrade, "_changed", side_effect=upgrade.UpgradeError("git status failed — fatal: x")):
+            self.assertEqual(upgrade._theirs(top, top, pin), "git could not tell whether cortex.toml held changes of "
+                                                             "yours — git status failed — fatal: x")
+        with mock.patch.object(upgrade, "_changed", return_value=[]):
+            self.assertIsNone(upgrade._theirs(top, top, pin))
+        elsewhere = str(self.code / "elsewhere")                         # a pin outside the work tree is not read
+        with mock.patch.object(upgrade, "_changed", side_effect=AssertionError("read")):
+            self.assertIsNone(upgrade._theirs(elsewhere, elsewhere, pin))
 
     def test_a_commit_git_refuses_says_so_and_leaves_the_files_staged(self):
         alpha = self.make("alpha")
