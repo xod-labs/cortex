@@ -716,22 +716,47 @@ class CommitTests(GitTestCase):
         self.assertEqual(self.git(beta, "diff", "--cached"), staged)
         self.assertIn("# not staged", self.pinned(beta))
 
-    def test_a_lock_or_a_bootstrap_never_committed_or_deleted_is_committed(self):
-        # The upgrade writes them whole: what they held is gone, and no change of yours rides in the commit.
-        alpha, beta = self.make("alpha", bootstrap=True), self.make("beta")
+    def test_a_lock_never_committed_or_deleted_is_committed(self):
+        # Written whole from the pin, it is the same whatever it held: no change of yours rides in the commit.
+        alpha, beta = self.make("alpha"), self.make("beta")
         for root in (alpha, beta):
             self.repository(root)
-        self.git(alpha, "rm", "-q", "--cached", "cortex.lock", "CLAUDE.md")      # a 1.4.0 sync's, never committed
-        self.git(alpha, "commit", "-q", "-m", "the lock and the bootstrap, untracked")
+        self.git(alpha, "rm", "-q", "--cached", "cortex.lock")                    # a 1.4.0 sync's, never committed
+        self.git(alpha, "commit", "-q", "-m", "the lock, untracked")
         (beta / "cortex.lock").unlink()
         self.register(alpha, beta)
         proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
         self.assert_ok(proc)
-        self.assertEqual(self.changed(alpha), ["CLAUDE.md", "cortex.lock", "cortex.toml"])
-        self.assertEqual(self.changed(beta), ["cortex.lock", "cortex.toml"])
         for root in (alpha, beta):
+            self.assertEqual(self.changed(root), ["cortex.lock", "cortex.toml"])
             self.assertEqual(self.git(root, "status", "--porcelain"), "")
         self.assertNotIn("changes of yours", proc.out + proc.err)
+
+    def test_a_bootstrap_written_again_over_changes_of_yours_is_not_committed(self):
+        # Written again only where no one changed it: a change of yours decided it. Committed, a
+        # template restored over a team's edit — cortex init --force — would undo the edit in HEAD.
+        alpha, beta = self.make("alpha", bootstrap=True), self.make("beta", bootstrap=True)
+        first = {alpha: self.repository(alpha)}
+        self.git(alpha, "rm", "-q", "--cached", "CLAUDE.md")                      # cortex init's, never committed
+        self.git(alpha, "commit", "-q", "-m", "the bootstrap, untracked")
+        first[alpha] = self.head(alpha)
+        pristine = (beta / "CLAUDE.md").read_bytes()
+        self.repository(beta)
+        (beta / "CLAUDE.md").write_bytes(pristine + b"\nTeam rule: run the linter.\n")
+        self.git(beta, "commit", "-qam", "the team's rule")
+        first[beta] = self.head(beta)
+        (beta / "CLAUDE.md").write_bytes(pristine)                              # the template, restored here
+        self.register(alpha, beta)
+        proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        for root in (alpha, beta):
+            self.assert_moved(root)
+            self.assertEqual(self.head(root), first[root])
+            self.assertNotEqual((root / "CLAUDE.md").read_bytes(), pristine)     # written again all the same
+            self.assertIn(f"  {root.name:<5}  {display(root)}: cortex.toml, cortex.lock and CLAUDE.md — not committed: "
+                          "CLAUDE.md held changes of yours before the upgrade — commit by hand what is the team's\n",
+                          proc.out)
+        self.assertIn("Team rule", self.git(beta, "show", "HEAD:CLAUDE.md"))
 
     def test_on_the_pinned_version_a_lock_never_committed_is_committed(self):
         alpha = self.make("alpha")
@@ -806,15 +831,20 @@ class CommitTests(GitTestCase):
 
     def test_a_git_that_cannot_tell_stops_the_commit_never_the_upgrade(self):
         alpha = self.make("alpha", synced=False)
-        top, pin = str(alpha), alpha / "cortex.toml"
+        top, pin, lock, claude = str(alpha), alpha / "cortex.toml", alpha / "cortex.lock", alpha / "CLAUDE.md"
         with mock.patch.object(upgrade, "_changed", side_effect=upgrade.UpgradeError("git status failed — fatal: x")):
-            self.assertEqual(upgrade._theirs(top, top, pin), "git could not tell whether cortex.toml held changes of "
-                                                             "yours — git status failed — fatal: x")
-        with mock.patch.object(upgrade, "_changed", return_value=[]):
-            self.assertIsNone(upgrade._theirs(top, top, pin))
-        elsewhere = str(self.code / "elsewhere")                         # a pin outside the work tree is not read
+            before = upgrade._before(top, top, [pin])
+        self.assertEqual(before, ([], "git status failed — fatal: x"))
+        self.assertEqual(upgrade._theirs(top, pin, *before, [pin, lock]),
+                         "git could not tell whether cortex.toml or a bootstrap file held changes of yours — git status "
+                         "failed — fatal: x")
+        elsewhere = str(self.code / "elsewhere")                         # a file outside the work tree is not read
         with mock.patch.object(upgrade, "_changed", side_effect=AssertionError("read")):
-            self.assertIsNone(upgrade._theirs(elsewhere, elsewhere, pin))
+            self.assertEqual(upgrade._before(elsewhere, elsewhere, [pin, claude]), ([], None))
+        self.assertIsNone(upgrade._theirs(top, pin, [claude], None, [pin, lock]))        # kept, not written
+        self.assertEqual(upgrade._theirs(top, pin, [claude, pin], None, [pin, lock, claude]),
+                         "CLAUDE.md and cortex.toml held changes of yours before the upgrade — commit by hand what is "
+                         "the team's")
 
     def test_a_commit_git_refuses_says_so_and_leaves_the_files_staged(self):
         alpha = self.make("alpha")
