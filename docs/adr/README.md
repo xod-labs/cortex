@@ -17,7 +17,7 @@ An ADR documents a **significant architectural decision**: the context that trig
 | Aspect | Rule |
 |---|---|
 | **Filename** | `ADR-{NNN}-{kebab-case-title}.md` (e.g. `ADR-001-layered-overrides.md`) |
-| **Numbering** | Strict sequential, never reused — even for superseded ADRs |
+| **Numbering** | Strict sequential, never reused — even for superseded ADRs. A planned record holds no number: its epic is titled `ADR · …`, and the record takes the next free number the day its text is written (since 2026-11-04) |
 | **Status** | One of: `Proposed`, `Accepted`, `Implemented`, `Deprecated`, `Superseded by ADR-XXX` — `Implemented` applies to a phased ADR once every phase has merged |
 | **Modification policy** | Append-only. What was decided is never rewritten. To **replace** a decision, write a new ADR that supersedes the old one, and mark the old one `Superseded by ADR-XXX` — the only metadata change allowed. To **adjust** it — a contract refined during implementation, a consequence found later — append a dated entry to the ADR's own `Amendments` section, the last one, saying what changed and why, and pointing at the issues that carry it. A section-sized adjustment does not warrant a new ADR; a changed decision does. See [docs/process/adr-implementation.md §9](../process/adr-implementation.md#9-closing-an-adr), item 2. |
 | **Scope** | Decisions that affect Cortex's structure, contracts, or behavior. Not implementation details. |
@@ -55,6 +55,7 @@ An ADR delivered in several steps adds:
 | [ADR-008](ADR-008-cortex-binary.md) | The `cortex` binary — one-line install, one store per machine, `cortex.toml` per project | Implemented | 2026-09-30 |
 | [ADR-009](ADR-009-release-cycle.md) | The release cycle — every merge into `main` is a release, drafted by CI, published from GitHub | Implemented | 2026-10-31 |
 | [ADR-010](ADR-010-lock-and-upgrade.md) | `cortex.lock`, `cortex upgrade` and the bootstrap marker | Implemented | 2026-11-04 |
+| [ADR-011](ADR-011-project-registry.md) | The project registry — a machine's Cortex projects, for the CLI and the cockpit | Accepted | 2026-11-04 |
 
 ## Authoring an ADR
 
