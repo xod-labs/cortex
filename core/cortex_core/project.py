@@ -32,8 +32,9 @@ REGISTRY_FILE = "projects.toml"
 REGISTRY_KEYS: Tuple[str, ...] = ("format", "project")
 REGISTRY_ENTRY_KEYS: Tuple[str, ...] = ("name", "path")
 REGISTRY_FORMAT = 1
-# What a path of projects.toml never holds: NUL, which no system takes in a file name, and the others
-# a terminal reads as commands, which a message would print.
+# What a path of projects.toml never holds: the C0 controls and DEL — NUL, which no system takes in a
+# file name, and the others a terminal reads as commands, which a message would print. The C1 controls
+# and the bidirectional marks are not refused: a file name may hold them.
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 # The name of a project of the registry: lowercase, so that two never differ by case alone.
 PROJECT_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}", re.ASCII)

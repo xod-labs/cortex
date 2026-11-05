@@ -145,6 +145,9 @@ class RegistryTests(unittest.TestCase):
                  'project 1: path ".*a\\\\u0000b" holds a control character — projects.toml takes none in a path'),
                 (self.registry({**acme, "path": self.path("a\nb")}), 'project 1: path .* holds a control character'),
                 (self.registry({**acme, "path": self.path("a\x7fb")}), 'project 1: path .* holds a control character'),
+                (self.registry({**acme, "path": self.path("a\tb")}), 'project 1: path .* holds a control character'),
+                (self.registry({**acme, "path": self.path("a\x1b[2Jb")}),
+                 'project 1: path ".*a\\\\u001b\\[2Jb" holds a control character'),
                 (self.registry(acme, {**acme, "path": self.path("other")}),
                  'project 2: name "acme" is project 1\'s too — two projects never share a name')):
             with self.subTest(data=data):
