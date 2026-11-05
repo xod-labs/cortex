@@ -271,6 +271,38 @@ class DigestTests(UpgradeTestCase):
         self.assertEqual((project / "CLAUDE.md").read_bytes(), written)
         self.assertNotIn("CLAUDE.md", proc.out + proc.err)
 
+    def cursor_rule(self, project, content):
+        rule = project / ".cursor" / "rules" / "cortex.mdc"
+        rule.parent.mkdir(parents=True)
+        rule.write_bytes(content)
+        return rule
+
+    def test_a_cursor_rule_is_written_again_with_the_frontmatter_that_applies_it(self):
+        # Written before 1.6.0 with no frontmatter, Cursor applied it only where a chat mentioned it (#306).
+        written = self.marked(template=TEMPLATE)        # the target writes the same text: the frontmatter alone is new
+        project = self.project("9.9.8")
+        rule = self.cursor_rule(project, written)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        wanted = init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True))
+        self.assertEqual(rule.read_bytes(), wanted)
+        self.assertIn("Commit cortex.toml, cortex.lock, .cursor/rules/cortex.mdc;", proc.out)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual(rule.read_bytes(), wanted)
+        self.assertNotIn("cortex.mdc", proc.out + proc.err)
+
+    def test_a_cursor_rule_a_team_changed_is_kept_and_said_to_apply_only_where_mentioned(self):
+        ours = self.marked(template=TEMPLATE) + b"\n## Our own rules\n"
+        project = self.project("9.9.8")
+        rule = self.cursor_rule(project, ours)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual(rule.read_bytes(), ours)
+        self.assertIn(".cursor/rules/cortex.mdc is not what Cortex wrote — a team changed it — and it has no `alwaysApply: "
+                      "true` in a frontmatter: Cursor applies it only where a chat mentions it. It is kept: cortex init "
+                      "--force writes it again, and keeps yours as .bak\n", proc.err)
+
     def test_a_downgrade_writes_an_untouched_bootstrap_again(self):
         self.marked()
         project = self.project(OWN)

@@ -1216,6 +1216,21 @@ class OptionTests(InitTestCase):
         self.init("--workspace", "--service", "api")
         self.assertFalse((self.project / "agents" / "project-overview.md").exists())
 
+    def test_a_cursor_rule_is_written_for_every_conversation_and_one_without_it_said(self):
+        proc = self.init("--tool", "cursor")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        rule = self.project / ".cursor" / "rules" / "cortex.mdc"
+        written = rule.read_bytes()
+        self.assertTrue(written.startswith(b"---\ndescription: Cortex"), written[:80])
+        self.assertIn(b"\nalwaysApply: true\n---\n# Cortex AI Team\n", written)
+        self.assertTrue(init_command.untouched(written))
+        rule.write_bytes(init_command.without_frontmatter(written))              # an earlier cortex's
+        proc = self.init("--tool", "cursor")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn(f"note: {display(rule)} has no `alwaysApply: true` in a frontmatter: Cursor applies it only where "
+                      "a chat mentions it — cortex init --force writes it again, and keeps it as .bak\n", proc.err)
+        self.assertEqual(rule.read_bytes(), init_command.without_frontmatter(written))
+
 
 class RegisterTests(InitTestCase):
     """Once all of it succeeded, init registers the project in the machine's registry, and says so
@@ -1344,6 +1359,24 @@ class BootstrapMarkerTests(unittest.TestCase):
         self.assertIsNone(init_command.kept_bootstrap(notes_first, self.template()))
         last_line = b"Our notes.\n\n<!-- cortex:bootstrap layout=single format=1 -->"
         self.assertEqual(init_command.markers(last_line), [("single", 1)])
+
+    def test_a_cursor_rule_opens_on_the_frontmatter_that_applies_it_always(self):
+        # With no alwaysApply, no description and no globs, Cursor applies a rule only where a chat
+        # mentions it (#306).
+        text = init_command.instructions(self.template("single"), True)
+        rule = init_command.stamped(init_command.for_tool(Path(".cursor/rules/cortex.mdc"), text))
+        self.assertTrue(rule.startswith(init_command.CURSOR_RULE + b"# Cortex AI Team\n"))
+        self.assertTrue(init_command.applies_always(rule))
+        self.assertTrue(init_command.untouched(rule))                             # the digest covers the frontmatter
+        self.assertFalse(init_command.untouched(rule.replace(b"alwaysApply: true", b"alwaysApply: false")))
+        for name in ("CLAUDE.md", "AGENTS.md", ".github/copilot-instructions.md"):
+            self.assertEqual(init_command.for_tool(Path(name), text), text)
+        # Read through it: a Cortex bootstrap, of the layout its title says when the templates carry no marker.
+        before = b"# Cortex AI Team\n\nRead cortex.local.toml first.\n"
+        self.assertTrue(init_command.bootstrap_of_cortex(init_command.CURSOR_RULE + before))
+        self.assertIsNone(init_command.kept_bootstrap(init_command.CURSOR_RULE + before, before))
+        for kept in (before, b"---\ndescription: Cortex\n---\n" + before, b"---\nalwaysApply: false\n---\n" + before):
+            self.assertFalse(init_command.applies_always(kept))
 
     def test_a_byte_order_mark_hides_nothing(self):
         bom = b"\xef\xbb\xbf"
