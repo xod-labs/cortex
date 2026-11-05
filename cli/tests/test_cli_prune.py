@@ -485,6 +485,18 @@ class RegistryTests(RegistryTestCase):
         self.assertEqual(self.in_store(), sorted(["9.9.6", "9.9.7", *self.own]))
         self.assertEqual(sorted(os.listdir(away)), ["cortex.local.toml"])     # the project's files are not touched
 
+    def test_a_cortex_local_toml_left_that_cannot_be_read_keeps_its_entry(self):
+        self.put("9.9.6", *self.own)
+        a, odd = self.project("a", "9.9.6"), self.project("odd", "9.9.7", reads="9.9.7")
+        (odd / "cortex.toml").unlink()
+        (odd / "cortex.local.toml").write_bytes(b"\xff\xfe")             # not UTF-8
+        self.register(a=a, odd=odd)
+        proc = self.run_cortex(self.tmp, "prune")
+        self.assert_ok(proc)
+        self.assertIn(f"note: odd: {display(odd)}: no cortex.toml, and its cortex.local.toml cannot be read — ", proc.err)
+        self.assertIn(" — it stays in the registry, and its version is not known, so none is kept for it\n", proc.err)
+        self.assertEqual(self.entries(), [("a", display(a)), ("odd", display(odd))])
+
     def test_a_registry_whose_projects_are_all_gone_is_not_empty(self):
         # It lists projects, which are gone: they are dropped, and their versions with them.
         self.put("9.9.6", *self.own)

@@ -336,10 +336,12 @@ def _reads(read: config.Project) -> Optional[str]:
 def _left_behind(root: Path) -> Optional[str]:
     """The version a ``cortex.local.toml`` left without its ``cortex.toml`` reads — a branch without
     Cortex checked out, an uncommitted pin stashed, a rebase under way: the project comes back with
-    its pin, and reads that version again. ``None`` without such a file, or a version it reads."""
+    its pin, and reads that version again. ``None`` without such a file, or a version it reads.
+    ``OSError``, or ``ValueError``, when the file is there and cannot be read: what it reads is not
+    known, which is no proof that the project is gone."""
     try:
         spec = tomllib.loads((root / config.LOCAL_FILE).read_text(encoding="utf-8-sig")).get("spec")
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+    except FileNotFoundError:
         return None
     if not isinstance(spec, str):
         return None
@@ -353,8 +355,8 @@ def state(entry: Entry) -> State:
     - ``MISSING`` — no directory at its path;
     - ``NO_PROJECT`` — a directory without ``cortex.toml``: ``reads`` is the version a
       ``cortex.local.toml`` left there still reads (``_left_behind``);
-    - ``UNREADABLE`` — the directory, or its files, cannot be read, or this cortex refuses them:
-      ``why`` says which. Its versions are read all the same when they can be, as ``cortex prune``
+    - ``UNREADABLE`` — the directory, or its files, cannot be read, or this cortex refuses them —
+      a ``cortex.local.toml`` left without its ``cortex.toml`` too: ``why`` says which. Its versions are read all the same when they can be, as ``cortex prune``
       reads them;
     - ``OK``.
     """
@@ -364,7 +366,12 @@ def state(entry: Entry) -> State:
             return State(entry, MISSING)
         found = _there(os.path.join(entry.path, config.PROJECT_FILE))
         if found is None or stat.S_ISDIR(found.st_mode):
-            return State(entry, NO_PROJECT, reads=_left_behind(Path(entry.path)))
+            try:
+                return State(entry, NO_PROJECT, reads=_left_behind(Path(entry.path)))
+            except (OSError, ValueError) as error:
+                why = sync.os_error(error) if isinstance(error, OSError) else str(error)
+                return State(entry, UNREADABLE, why=f"no {config.PROJECT_FILE}, and its {config.LOCAL_FILE} cannot be "
+                                                    f"read — {why}")
     except OSError as error:
         return State(entry, UNREADABLE, why=sync.os_error(error))
     root = Path(entry.path)

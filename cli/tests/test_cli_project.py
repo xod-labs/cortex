@@ -697,6 +697,24 @@ class StateTests(StateTestCase):
         shutil.rmtree(self.home / "versions" / "9.9.7")     # the version it read is gone
         self.assertEqual(registry.state(entry), registry.State(entry, registry.NO_PROJECT))
 
+    def test_a_cortex_local_toml_left_that_cannot_be_read_is_unreadable(self):
+        # What it reads is not known: no proof that the project is gone, which prune would drop.
+        root = self.project("away", version="9.9.8")
+        (root / "cortex.toml").unlink()
+        entry = registry.Entry("away", display(root))
+        for case in ("a directory", "not TOML"):
+            with self.subTest(case=case):
+                local = root / "cortex.local.toml"
+                if case == "a directory":
+                    local.mkdir()
+                else:
+                    local.rmdir()
+                    local.write_text("spec = \n", encoding="utf-8")
+                found = registry.state(entry)
+                self.assertEqual((found.state, found.reads), (registry.UNREADABLE, None))
+                self.assertTrue(found.why.startswith("no cortex.toml, and its cortex.local.toml cannot be read — "),
+                                found.why)
+
     def test_a_cortex_toml_that_is_a_directory_is_no_project(self):
         root = self.code / "odd"
         (root / "cortex.toml").mkdir(parents=True)
