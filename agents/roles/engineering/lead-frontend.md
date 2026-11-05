@@ -155,7 +155,8 @@ Storybook       : {Component}.stories.{ext}
 - `languages/` → load the project’s frontend language (TypeScript)
 - `frameworks/` → load the project's frontend framework (+ `frameworks/starlight.md` when the project uses Starlight)
 - `testing/` → `component-testing.md` (+ `e2e-testing.md` for browser journeys) — the frontend test pyramid,
-  and `accessibility-testing.md` — which a11y check runs where, without slowing the pull request
+  + `accessibility-testing.md` when the task wires accessibility checks — which runs where, without slowing
+  the pull request
 - `release/` → always load `release/semver.md` and `release/changelog.md` — shipping discipline
 - `security/` → always load `security/owasp.md`
 - `practices/` → always load `practices/code-comments.md` — the why, not the what; descriptive, not narrative —
