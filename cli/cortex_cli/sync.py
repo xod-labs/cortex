@@ -13,6 +13,9 @@ in ``cortex.local.toml``. The spec reaches the project in one of three modes:
 ``cortex/`` becomes a name: the directory ``spec`` names. Sync never deletes what it did not
 write — a submodule, a clone, any other directory at ``cortex/`` is refused, in every mode — and
 switching back to ``store`` removes the link or the copy it made, and nothing else.
+
+A sync that succeeded registers the project in the machine's ``projects.toml`` when it is not
+listed there, and says so once (ADR-011 §3.3) — unless ``CORTEX_NO_REGISTER`` is set.
 """
 
 from __future__ import annotations
@@ -37,13 +40,14 @@ from typing import Dict, List, Optional, TextIO, Tuple
 
 from cortex_core.validate import shown
 
-from . import claude, config, store
+from . import claude, config, registry, store
 from .paths import display, working_directory
 
 LINK = "cortex"
 MARKER = ".synced"
 MARKER_NOTE = "A read-only copy of the Cortex spec, written by `cortex sync`: run it again to change this copy, never edit it."
 STAGING = ".cortex-sync-"
+NO_REGISTER = "CORTEX_NO_REGISTER"     # set, and not empty: init, sync and upgrade leave the registry alone
 
 
 class SyncError(Exception):
@@ -702,17 +706,44 @@ def unswap(target: Path, aside: Optional[Path]) -> None:
 
 def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
          claude_access: Optional[bool] = None, notes: bool = True, locked: bool = False,
-         announce: bool = True) -> None:
+         announce: bool = True, registers: bool = True) -> None:
     """Sync the project at or above ``cwd``. ``notes`` off, what git ignores is left to the
     caller — ``cortex init`` writes .gitignore once ``cortex/`` has its final form. ``locked``,
     ``cortex.lock`` is never written: a sync that would write it stops. ``announce`` off, the
-    project is not named: ``cortex upgrade`` has named it already."""
+    project is not named: ``cortex upgrade`` has named it already. ``registers`` off, the project
+    is not registered: ``cortex init`` registers it once all of it succeeded, not only its sync."""
     root = config.find_project(cwd)
     if root is None:
         raise SyncError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
                         "a Cortex project")
     with project_lock(Path(root), err):
         _sync(root, mode, source, out, err, claude_access, notes, locked, announce)
+    if registers:
+        register(root, out, err)
+
+
+def register(root: str, out: TextIO, err: TextIO) -> None:
+    """Register the project at ``root`` when the machine's registry does not list it, and say so
+    once (ADR-011 §3.3) — after a sync, or an init, that succeeded. Named as ``cortex project add``
+    names it; an entry is never renamed nor moved: a project moved on disk is registered again,
+    under a free name. A registry that cannot be read or written is a warning, never a failure:
+    the project is synced, and not listed.
+
+    A project listed already costs a read of the registry, without its lock, and no look at the
+    other entries' directories: nothing is written, and nothing waits for another command's write.
+    ``CORTEX_NO_REGISTER``, set to anything but an empty value, leaves the registry alone, neither
+    read nor written."""
+    if os.environ.get(NO_REGISTER):
+        return
+    root = os.path.abspath(root)
+    try:
+        if registry.listed(registry.load(), root) is not None:
+            return
+    except registry.RegistryError:
+        pass                                # add reads it again, and warns why
+    entry, added = registry.add(root, warn=err)
+    if added:
+        out.write(f"registered as {entry.name} — {registry.LISTS}\n")
 
 
 def check_lock(root: str, version: store.Version, the_store: store.Store, out: TextIO,

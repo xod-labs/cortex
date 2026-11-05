@@ -6,7 +6,10 @@ site-packages. With ``CORTEX_TEST_BINARY`` naming a built binary, the same tests
 instead (ADR-008 phase 1), and ``CORTEX_TEST_VERSION``, when set, is the version it must print.
 
 Either way the command runs with a ``PATH`` that holds one empty directory: the binary must need
-no Python on the host, and nothing else from ``PATH`` either.
+no Python on the host, and nothing else from ``PATH`` either. And with a ``CORTEX_HOME`` of the
+suite's own, an empty directory, unless the test names one: no test reads or writes the store, or
+the registry, of the machine it runs on — nor does a test that calls the modules: the suite's
+process has that home too.
 """
 
 import atexit
@@ -30,6 +33,9 @@ SOURCE_CALL = ("import sys; sys.path[:0] = [sys.argv.pop(1), sys.argv.pop(1)]; "
 _KEPT = ("SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "LOCALAPPDATA")
 _EMPTY_PATH = tempfile.mkdtemp(prefix="cortex-empty-path-")
 atexit.register(shutil.rmtree, _EMPTY_PATH, ignore_errors=True)
+_HOME = tempfile.mkdtemp(prefix="cortex-home-")
+atexit.register(shutil.rmtree, _HOME, ignore_errors=True)
+os.environ["CORTEX_HOME"] = _HOME
 
 
 def command(*args):
@@ -41,6 +47,7 @@ def command(*args):
 def environment(**extra):
     env = {name: os.environ[name] for name in _KEPT if name in os.environ}
     env["PATH"] = _EMPTY_PATH
+    env["CORTEX_HOME"] = _HOME
     env.update(extra)
     return env
 
