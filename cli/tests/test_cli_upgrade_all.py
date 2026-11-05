@@ -333,7 +333,8 @@ class AllInProcessTests(AllTestCase):
             f"\nWhat each project must commit:\n  alpha  {display(roots[0])}: cortex.toml\n" + NOT_COMMITTED),
             out.getvalue())
         self.assertEqual(err.getvalue(), "cortex upgrade: interrupted — `cortex upgrade --all` again finishes the "
-                                         "project cut short, and moves those not reached\n")
+                                         "project cut short, and moves those not reached; what the one cut short has "
+                                         "left to commit, `git status` there says\n")
 
     def in_process(self, asks=True):
         return mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home), "CORTEX_RELEASES_URL": self.release.url,
@@ -781,6 +782,27 @@ class CommitTests(GitTestCase):
         self.assertIn(f"note: {display(shared)} is outside the git work tree of {display(alpha)} — not committed with "
                       "it\n", proc.err)
         self.assertIn(f"\nCortex {OWN} is ready. Committed cortex.toml, cortex.lock on ", proc.out)
+
+    def test_run_again_it_names_what_a_commit_refused_left_to_commit(self):
+        alpha, beta = self.make("alpha"), self.make("beta")
+        for root in (alpha, beta):
+            self.repository(root)
+        self.git(alpha, "config", "commit.gpgsign", "true")
+        self.git(alpha, "config", "gpg.program", sys.executable)        # takes none of gpg's options: it fails
+        self.register(alpha, beta)
+        args = ("--branch", "cortex-up", "--commit", "--message", self.MESSAGE)
+        self.assertEqual(self.upgrade_all(*args).returncode, 1)
+        self.git(alpha, "config", "commit.gpgsign", "false")
+        proc = self.upgrade_all(*args)
+        self.assert_ok(proc)
+        self.assertIn(f"note: nothing was written in {display(alpha)}, and cortex.toml and cortex.lock hold changes git "
+                      "has not committed — a run cut short, or a commit refused? `git status` there says what is left "
+                      "to commit\n", proc.err)
+        self.assertTrue(self.summary(proc).endswith(
+            "\nNothing this run wrote is to commit.\n"
+            f"  alpha  {display(alpha)}: nothing written — cortex.toml and cortex.lock not committed, from before: "
+            "`git status` there says what\n"), self.summary(proc))
+        self.assertNotIn("beta   " + display(beta), self.summary(proc))
 
     def test_a_git_that_cannot_tell_stops_the_commit_never_the_upgrade(self):
         alpha = self.make("alpha", synced=False)

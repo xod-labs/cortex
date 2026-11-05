@@ -73,6 +73,7 @@ class Outcome:
     committed: Optional[str] = None                     # --commit: where — the branch, and the commit
     uncommitted: Optional[str] = None                   # --commit: why nothing was
     ignored: bool = False                               # git ignores every one of the files: nothing to commit
+    left: List[Path] = field(default_factory=list)      # --commit, nothing written: files git sees changed still
 
     def names(self) -> List[str]:
         return [_shown_path(path, self.root) for path in self.files]
@@ -705,6 +706,18 @@ def _commit(root: str, top: str, files: List[Path], message: str,
     return f"{_on_branch(root) or 'a detached HEAD'}, {commit}", None
 
 
+def _left(root: str, top: str, named: Optional[str]) -> List[Path]:
+    """The files of the team — the pin, the lock, the bootstrap files — that git sees changed in the
+    work tree of ``root``, whose top is ``top``, when the upgrade wrote nothing: what a run before
+    this one may have left to commit. Said, never committed; nothing when git cannot tell."""
+    root_path = Path(root)
+    files = [root_path / config.PROJECT_FILE, root_path / config.LOCK_FILE, *_instructions_files(root_path, named)]
+    try:
+        return _changed(root, top, [path for path in files if _inside(top, path)])
+    except UpgradeError:
+        return []
+
+
 class Interrupted(KeyboardInterrupt):
     """Ctrl-C during the upgrade of a project that ``--branch`` made a branch for."""
 
@@ -793,10 +806,19 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
         out.write(f"git: no branch {options.branch} is made — nothing was written\n")
     if top is not None and outcome.why is None and outcome.files:
         outcome.ignored = len(_ignored(root, outcome.files)) == len(outcome.files)
-    if options.message is None or options.dry_run or outcome.why is not None or not outcome.files:
+    if options.message is None or options.dry_run or outcome.why is not None:
         return outcome
     if top is None:
-        outcome.uncommitted = "in no git work tree"
+        if outcome.files:
+            outcome.uncommitted = "in no git work tree"
+        return outcome
+    if not outcome.files:
+        outcome.left = _left(root, top, options.named)
+        if outcome.left:
+            names = [_shown_path(path, root) for path in outcome.left]
+            err.write(f"note: nothing was written in {display(root)}, and {_and(names)} "
+                      f"{'hold' if len(names) > 1 else 'holds'} changes git has not committed — a run cut short, or "
+                      "a commit refused? `git status` there says what is left to commit\n")
         return outcome
     if outcome.ignored:
         err.write(f"note: nothing to commit in {display(root)} — git ignores {_and(outcome.names())}\n")
@@ -859,7 +881,7 @@ def upgrade_all(options: _Options, out: TextIO, err: TextIO) -> int:
         out.flush()
         _summary(done, target, options, out)
         err.write("cortex upgrade: interrupted — `cortex upgrade --all` again finishes the project cut short, and "
-                  "moves those not reached\n")
+                  "moves those not reached; what the one cut short has left to commit, `git status` there says\n")
         return 130
     except BaseException:
         if newer is not None:
@@ -920,10 +942,19 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
     written = [(entry, outcome) for entry, outcome, _ in done if outcome is not None and outcome.why is None
                and outcome.files]
     commits = [(entry, outcome) for entry, outcome in written if not outcome.ignored]
+    left = [(entry, outcome) for entry, outcome, _ in done if outcome is not None and outcome.left]
+
+    def from_before() -> None:
+        for entry, outcome in left:
+            names = [_shown_path(path, outcome.root) for path in outcome.left]
+            out.write(f"  {entry.name:<{width}}  {entry.path}: nothing written — {_and(names)} not committed, from "
+                      "before: `git status` there says what\n")
+
     if not commits:
-        out.write("\nNothing to commit, in any project.\n")
+        out.write("\nNothing this run wrote is to commit.\n" if left else "\nNothing to commit, in any project.\n")
         for entry, outcome in written:
             out.write(f"  {entry.name:<{width}}  {entry.path}: git ignores {_and(outcome.names())}\n")
+        from_before()
         return
     committing = options.message is not None and not options.dry_run
     out.write(f"\nWhat each project {'would have to' if options.dry_run else 'must'} commit:\n")
@@ -934,6 +965,7 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
         said = "" if not committing else f" — committed on {outcome.committed}" if outcome.committed else \
             f" — not committed: {_first(outcome.uncommitted)}"
         out.write(f"  {entry.name:<{width}}  {entry.path}: {_and(outcome.names())}{said}\n")
+    from_before()
     if options.dry_run:
         out.write("--dry-run: nothing of any project was changed — no branch was made, nothing was committed.\n")
         return
