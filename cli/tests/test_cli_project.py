@@ -643,8 +643,14 @@ class CheckTests(StateTestCase):
         def odd(root):
             (root / "cortex.toml").write_text("version = \n", encoding="utf-8")
 
+        def left(root):
+            self.synced_elsewhere(root, "9.9.7")
+            (root / "cortex.toml").unlink()
+
         for name, spoil, said in (("gone", gone, "gone: missing — no directory at {}"),
-                                  ("bare", bare, "bare: no-project — {} holds no cortex.toml"),
+                                  ("bare", bare, "bare: no-project — {} holds no cortex.toml\n"),
+                                  ("left", left, "left: no-project — {} holds no cortex.toml, and its cortex.local.toml "
+                                                 "still reads 9.9.7\n"),
                                   ("odd", odd, "odd: unreadable — {}: cortex.toml: Invalid value")):
             with self.subTest(state=name):
                 root = self.register(self.project(name))
