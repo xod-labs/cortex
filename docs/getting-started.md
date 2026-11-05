@@ -340,9 +340,12 @@ cortex prune --keep 1.3.0       # a version no project pins, kept — one the ru
 
 It keeps the version each project pins and the one it reads now — a teammate's bump pulled and not synced yet leaves it on the version before — the binary's own version, and each `--keep`. With no directory, the projects are the registry's:
 
-- an entry whose project is gone — `missing` or `no project`, on a drive that is not mounted too — is dropped from the registry, and said, and its version is no longer kept for it. Its next `cortex sync` registers it again;
+- an entry whose project is gone — `missing`, on a drive that is not mounted too, or `no-project` with nothing of Cortex left — is dropped from the registry, and said, and its version is no longer kept for it. Its next `cortex sync` registers it again;
+- a `no-project` entry whose `cortex.local.toml` still reads a version — a branch without Cortex checked out, a rebase under way — stays, and keeps that version: `cortex project remove` drops it, if the project really left Cortex;
 - an `unreadable` entry is named, and stays: the versions that can be read of it are kept — none, when not even its pin can be read;
 - with nothing registered it exits 2, rather than remove every version: register the projects, or give their directories.
+
+A project this machine never synced since 1.5.0 is not registered, and loses its version: sync it, or `cortex project add` it, before the first `cortex prune` with no directory. Its assistant notices a spec that is gone and runs `cortex sync`, which gets the version back. `CORTEX_NO_REGISTER` does not change `prune`: it keeps the commands that register from the registry, and `prune` with no directory reads it, and drops from it, whatever its value.
 
 A project it did not see — not registered, or under none of the directories — gets its version back at its next `cortex sync`, checked against its `cortex.lock`.
 
