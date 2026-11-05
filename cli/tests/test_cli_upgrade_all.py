@@ -854,6 +854,38 @@ class CommitTests(GitTestCase):
             "`git status` there says what\n"), self.summary(proc))
         self.assertNotIn("beta   " + display(beta), self.summary(proc))
 
+    def test_what_a_run_before_left_is_said_beside_what_this_one_committed(self):
+        alpha, beta = self.make("alpha"), self.make("beta")
+        for root in (alpha, beta):
+            self.repository(root)
+        self.git(beta, "config", "commit.gpgsign", "true")
+        self.git(beta, "config", "gpg.program", sys.executable)         # takes none of gpg's options: it fails
+        self.register(beta)
+        self.assertEqual(self.upgrade_all("--commit", "--message", self.MESSAGE).returncode, 1)
+        self.git(beta, "config", "commit.gpgsign", "false")
+        self.register(alpha, beta)
+        proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        commit = f"{self.branch(alpha)}, {self.git(alpha, 'rev-parse', '--short', 'HEAD')}"
+        self.assertTrue(self.summary(proc).endswith(
+            "\nWhat each project must commit:\n"
+            f"  alpha  {display(alpha)}: cortex.toml and cortex.lock — committed on {commit}\n"
+            f"  beta   {display(beta)}: nothing written — cortex.toml and cortex.lock not committed, from before: "
+            "`git status` there says what\n"
+            "Nothing was pushed. Teammates run `cortex sync` after they pull.\n"), self.summary(proc))
+
+    @unittest.skipIf(os.name == "nt", "a link to a file needs a privilege on Windows")
+    def test_what_is_left_is_read_inside_the_work_tree_and_nothing_when_git_cannot_tell(self):
+        alpha = self.make("alpha")
+        (self.code / "alpha-notes.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))
+        (alpha / "CLAUDE.md").symlink_to(Path("..") / "alpha-notes.md")      # outside: git would refuse the path
+        self.repository(alpha)
+        (alpha / "cortex.toml").write_text(self.pinned(alpha) + "# left\n", encoding="utf-8")
+        top = self.git(alpha, "rev-parse", "--show-toplevel")
+        self.assertEqual(upgrade._left(str(alpha), top, None), [alpha / "cortex.toml"])
+        with mock.patch.object(upgrade, "_changed", side_effect=upgrade.UpgradeError("git status failed — fatal: x")):
+            self.assertEqual(upgrade._left(str(alpha), top, None), [])
+
     def test_a_git_that_cannot_tell_stops_the_commit_never_the_upgrade(self):
         alpha = self.make("alpha", synced=False)
         top, pin, lock, claude = str(alpha), alpha / "cortex.toml", alpha / "cortex.lock", alpha / "CLAUDE.md"
@@ -999,6 +1031,40 @@ class CommitTests(GitTestCase):
         self.assert_ok(self.upgrade_all("--commit", "--message", self.MESSAGE))
         self.assertEqual(self.changed(alpha), ["cortex.lock", "cortex.toml", "shared/assistant.md"])
         self.assertEqual(self.git(alpha, "status", "--porcelain"), "")
+
+
+@DOWNLOADS
+@NEEDS_GIT
+class CommitInProcessTests(GitTestCase):
+    """What a process cannot show: a git that fails at one step only."""
+
+    MESSAGE = CommitTests.MESSAGE
+
+    def test_a_git_that_cannot_tell_before_the_upgrade_commits_nothing(self):
+        alpha = self.make("alpha")
+        first = self.repository(alpha)
+        changed, calls = upgrade._changed, []
+
+        def blind_before(*args, **kwargs):            # the status read before anything is written, and it alone
+            calls.append(args)
+            if len(calls) == 1:
+                raise upgrade.UpgradeError("git status failed — fatal: index file corrupt")
+            return changed(*args, **kwargs)
+
+        environment = {"CORTEX_HOME": str(self.home), "CORTEX_RELEASES_URL": self.release.url,
+                       "CORTEX_NO_UPDATE_CHECK": "1", "GIT_CONFIG_NOSYSTEM": "1",
+                       "GIT_CONFIG_GLOBAL": self.env["GIT_CONFIG_GLOBAL"]}
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, environment), mock.patch.object(upgrade, "_changed", blind_before), \
+                mock.patch.object(store.Store, "__init__", functools.partialmethod(store.Store.__init__, own_version=OWN)):
+            code = upgrade.upgrade(str(alpha), None, False, False, None, out, err, message=self.MESSAGE)
+        self.assertEqual(code, 0, err.getvalue())
+        self.assert_moved(alpha)
+        self.assertEqual(self.head(alpha), first)
+        self.assertIn(f"note: nothing is committed in {display(alpha)} — git could not tell whether cortex.toml or a "
+                      "bootstrap file held changes of yours — git status failed — fatal: index file corrupt\n",
+                      err.getvalue())
+        self.assertIn(f"\nCortex {OWN} is ready. Commit cortex.toml, cortex.lock; teammates run", out.getvalue())
 
 
 @DOWNLOADS
