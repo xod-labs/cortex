@@ -9,6 +9,8 @@ In these instructions, `cortex/` is the directory that `spec` names in `cortex.l
 
 **No `cortex.local.toml`, or no `spec` in it** → Cortex is not synced on this machine. Run `cortex sync` at the workspace root, and go no further until it succeeded.
 
+**The directory `spec` names does not exist** → this machine no longer has the version the workspace reads: `cortex prune` removed it, or the store was emptied. Run `cortex sync` at the workspace root, and go no further until it succeeded.
+
 **The spec is of a version other than `cortex.toml`'s** — `spec` ends in `…/versions/1.1.0`, or `cortex/` is a copy whose `cortex/.synced` says `"version": "1.1.0"`, where `version = "1.2.0"` → a teammate moved the workspace to another version, and this machine has not synced it yet. Run `cortex sync`, and go no further until it succeeded. There is nothing to compare when `cortex/` is a link, which names no version, nor when `.synced` says `"version": null`: that copy is of a checkout, on purpose.
 
 **`cortex sync` says this cortex is too old for the workspace** — the workspace uses a newer version, or its `cortex.lock` a later format → run the command it names to update it — `cortex self-update`, or the install script's command from a cortex before 1.4.0 — then `cortex sync` again.
