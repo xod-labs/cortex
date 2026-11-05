@@ -372,8 +372,11 @@ class GitTestCase(AllTestCase):
         self.env.update(PATH=os.pathsep.join([os.path.dirname(GIT), self.env["PATH"]]), GIT_CONFIG_NOSYSTEM="1",
                         GIT_CONFIG_GLOBAL=str(empty))
 
-    def git(self, root, *args, check=True):
-        proc = subprocess.run([GIT, "-C", str(root), *args], env=self.env, capture_output=True, encoding="utf-8",
+    def git(self, root, *args, check=True, path=None):
+        """git in ``root``, with the command's environment — and ``path`` after its PATH, for a set-up
+        step that needs the machine's tools."""
+        env = self.env if path is None else dict(self.env, PATH=os.pathsep.join([self.env["PATH"], path]))
+        proc = subprocess.run([GIT, "-C", str(root), *args], env=env, capture_output=True, encoding="utf-8",
                               errors="replace", stdin=subprocess.DEVNULL)
         if check:
             self.assertEqual(proc.returncode, 0, f"git {' '.join(args)}: {proc.stderr}")
@@ -729,7 +732,9 @@ class CommitTests(GitTestCase):
         top.mkdir()
         (top / "README.md").write_text("super\n", encoding="utf-8")
         self.repository(top)
-        self.git(top, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(source), "mod")
+        # `git submodule` is a shell script on some systems — Homebrew's on macOS — that needs basename.
+        self.git(top, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(source), "mod",
+                 path=os.environ.get("PATH", ""))
         self.git(top, "commit", "-q", "-m", "the submodule")
         mod = top / "mod"
         for key, value in (("user.name", "Cortex Tests"), ("user.email", "tests@example.com")):
