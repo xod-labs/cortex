@@ -8,9 +8,10 @@
 > What to build is in `practices/web-accessibility.md`; this card is how to check it, and where.
 
 Accessibility testing has the same pyramid as any other testing, with one difference that shapes
-everything: **the machine can only check a minority of the criteria**. By volume, automated rules find
-roughly a third to a half of the issues; the rest — is the alt text meaningful, is the focus order
-logical, is this error message understandable — needs a person and an assistive technology. So
+everything: **the machine can only check a minority of the criteria** — about a third of WCAG 2.1 AA's.
+By volume it finds more: 57 % of the issues in Deque's 2021 study of its own audits, a vendor's figure.
+The rest — is the alt text meaningful, is the focus order logical, is this error message
+understandable — needs a person and an assistive technology. So
 automation has one job: **stop regressions cheaply**. Conformance is a manual audit's job.
 
 ## 🧱 The layers

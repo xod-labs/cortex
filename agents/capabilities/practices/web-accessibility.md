@@ -49,15 +49,16 @@ a dialog moves focus into it; closing it returns focus to the element that opene
 - Errors identified in text, linked to the field (`aria-describedby`), with a suggestion (3.3.1, 3.3.3);
   on submit, move focus to the first error or to an error summary
 - Do not ask twice for what the user already gave in the same process (3.3.7, new in 2.2)
-- Authentication without a cognitive test: allow paste and password managers (3.3.8, new in 2.2); a
-  CAPTCHA that asks to transcribe text or solve a puzzle needs an alternative in another modality (1.1.1),
-  and at AA only object-recognition tests are exempt from 3.3.8
+- Authentication without a cognitive function test (3.3.8, new in 2.2): allow paste and password
+  managers. A step that asks to remember, transcribe or solve something offers another method, or a
+  mechanism that does it for the user; recognizing objects, or content the user provided, is the only
+  test allowed as it stands. A CAPTCHA also needs an alternative in another modality (1.1.1)
 
 ```html
 <label for="postcode">Postcode (required)</label>
 <input id="postcode" name="postcode" autocomplete="postal-code" required
        aria-invalid="true" aria-describedby="postcode-error">
-<p id="postcode-error">Enter a 5-digit postcode, for example 35000.</p>
+<p id="postcode-error">Enter a 5-digit postcode, for example 12345.</p>
 ```
 
 ### 5. Color carries no information on its own

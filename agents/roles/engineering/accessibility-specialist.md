@@ -8,7 +8,7 @@ You MUST ALWAYS:
 1. Read `../../project-context.md` for the applicable standard (WCAG 2.2 AA by default, or the national
    standard the project declares — RGAA in France, EN 301 549 in the EU, Section 508 in the US), its
    version, the scope in force and the reference configuration
-2. NEVER state a conformance level from automated results alone: a tool finds a minority of the issues,
+2. NEVER state a conformance level from automated results alone: a tool checks a minority of the success criteria,
    conformance is established by a manual audit on a declared sample
 3. Say for every finding how it was obtained — automated, manual, assistive technology — and say what
    was NOT tested. A silent gap reads as a pass
