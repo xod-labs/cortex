@@ -1152,6 +1152,20 @@ class RegisterTests(SyncTestCase):
                                          "it, then run the command again\n")
         self.assertEqual(self.entries(), [("acme", display(project))])
 
+    def test_a_listed_project_resolves_no_other_entrys_path(self):
+        # One on a share that does not answer would hold the sync: the paths as written tell first.
+        sync, version = in_process()
+        from cortex_cli import registry
+
+        projects = [self.project(name, version=version) for name in ("one", "two")]
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}):
+            for project in projects:
+                sync.sync(str(project), None, None, io.StringIO(), io.StringIO())
+            out, before = io.StringIO(), self.written()
+            with mock.patch.object(registry, "same_directory", side_effect=AssertionError("a path resolved")):
+                sync.register(str(projects[1]), out, out)
+        self.assertEqual((out.getvalue(), self.written()), ("", before))
+
     def test_a_project_another_sync_registered_meanwhile_is_not_said_again(self):
         sync, version = in_process()
         from cortex_cli import registry

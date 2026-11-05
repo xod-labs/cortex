@@ -47,7 +47,7 @@ LINK = "cortex"
 MARKER = ".synced"
 MARKER_NOTE = "A read-only copy of the Cortex spec, written by `cortex sync`: run it again to change this copy, never edit it."
 STAGING = ".cortex-sync-"
-NO_REGISTER = "CORTEX_NO_REGISTER"     # set, and not empty: init and sync leave the registry alone
+NO_REGISTER = "CORTEX_NO_REGISTER"     # set, and not empty: init, sync and upgrade leave the registry alone
 
 
 class SyncError(Exception):
@@ -729,14 +729,14 @@ def register(root: str, out: TextIO, err: TextIO) -> None:
     under a free name. A registry that cannot be read or written is a warning, never a failure:
     the project is synced, and not listed.
 
-    A project listed already costs a read of the registry, without its lock: nothing is written,
-    and nothing waits for another command's write. ``CORTEX_NO_REGISTER``, set to anything but an
+    A project listed already costs a read of the registry, without its lock, and no look at the
+    other entries' directories: nothing is written, and nothing waits for another command's write. ``CORTEX_NO_REGISTER``, set to anything but an
     empty value, leaves the registry alone, neither read nor written."""
     if os.environ.get(NO_REGISTER):
         return
     root = os.path.abspath(root)
     try:
-        if any(registry.same_directory(entry.path, root) for entry in registry.load()):
+        if registry.listed(registry.load(), root) is not None:
             return
     except registry.RegistryError:
         pass                                # add reads it again, and warns why
