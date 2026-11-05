@@ -32,7 +32,7 @@ The store grows by one directory per version a machine ever synced. A version is
 - **`cortex self-update [VERSION]`** replaces the binary with a release's — the latest by default — downloaded and checked as the install script does it: against the `SHA256SUMS` of the host it comes from. Every refusal of a version newer than the binary names it, and `cortex upgrade` says when a release newer than the binary is out.
 - **The bootstrap asks the assistant to keep the machine in step**: a spec missing, or of another version than `cortex.toml`'s, and it runs `cortex sync`; a binary too old for the pin, and it runs `cortex self-update`, then `cortex sync`. It says what it runs, its tool asks the user first when set to, and it never moves the project's pin of its own accord.
 
-Out of scope: the digests of images a project depends on, which #99 listed, wait for a project to declare images (§7); the configuration cascade and the IDE modes (#98); a registry of a machine's projects, which a record of its own adds (§7); the multi-project runtime (ADR-021, #48); the first install of the binary, which stays the install script's.
+Out of scope: the digests of images a project depends on, which #99 listed, wait for a project to declare images (§7); the configuration cascade and the IDE modes (#98); a registry of a machine's projects, which a record of its own adds (§7); the multi-project runtime (#48); the first install of the binary, which stays the install script's.
 
 ## 3. Detailed contract
 
@@ -339,7 +339,7 @@ Acceptance criteria:
 1. **The digests of the images a project depends on**, listed in #99: no project declares an image yet. The ADR that binds a project to the runtime's images extends `cortex.lock` with a `format` of its own.
 2. **The runtime checking the lock**: a run that records the digest it ran with, and refuses a spec whose digest differs.
 3. **The epics after this one shift by one number**: the epics numbered 010 to 022 on 2026-10-30 become 011 to 023, as ADR-002 and ADR-008 record in amendments.
-4. **A registry of the machine's projects** — `~/.cortex/projects.toml`, so that `cortex prune` and `cortex upgrade --all` run from anywhere, and the cockpit (ADR-019) finds a machine's projects. Split from #48 on 2026-11-04 into a record of its own, [#266](https://github.com/xod-labs/cortex/issues/266). `cortex prune` then takes no `DIR`.
+4. **A registry of the machine's projects** — `~/.cortex/projects.toml`, so that `cortex prune` and `cortex upgrade --all` run from anywhere, and the cockpit (#46) finds a machine's projects. Split from #48 on 2026-11-04 into a record of its own, [#266](https://github.com/xod-labs/cortex/issues/266). `cortex prune` then takes no `DIR`.
 5. **Where a release comes from**: `cortex self-update`, `cortex sync` and the install scripts check a download against the `SHA256SUMS` of the host that serves it — integrity, not origin (§3.7). Checking the release's attestation, or a signature of `SHA256SUMS` that the binary checks with a key it embeds, for the binary and the spec together — [#275](https://github.com/xod-labs/cortex/issues/275), raised by the counter-review of 2026-11-04.
 
 ## 8. References
@@ -389,7 +389,7 @@ Bluspark's second round, bounded to what the first changed. Most findings were t
 - **Self-update** (§3.7): the new binary's file is made once it is downloaded, so a long download loses it to no other start's tidying; a start removes only the names a self-update gives; a Windows downgrade before 1.4.0 says the old binary stays; a directory named after a version is said to get another version.
 - **The CI lines of the docs** keep `--locked` for projects pinned to 1.4.0 or later: 1.3 refuses the option.
 
-### After 1.4.0 — the text corrected
+### After 1.4.0 — the text corrected (2026-11-04)
 
 Bluspark's last notes on the text, read after the release; none changes what was shipped:
 
@@ -401,4 +401,4 @@ Bluspark's last notes on the text, read after the release; none changes what was
 - **§4, phase 3**: a version newer than the binary is refused naming `cortex self-update`, not "the upgrade command".
 - **§5**: the asset self-update downloads is that of the binary's own build target (§3.7, step 3).
 - **The header**: `cli/build.py` is affected, since it stamps the build target in the binary.
-- **The planned records this one names by number** — the multi-project runtime, ADR-021 (§2), and the cockpit, ADR-019 (§7) — have no number since 2026-11-04: a planned record takes one only once its text is written. They are #48 and #46. The project registry this record leaves to a record of its own (§7.4) is ADR-011.
+- **The planned records this one named by number** — the multi-project runtime, ADR-021 (§2), and the cockpit, ADR-019 (§7) — have no number since 2026-11-04: a planned record takes one only once its text is written. They are #48 and #46, and the text names them so. The project registry this record leaves to a record of its own (§7.4) is ADR-011.
