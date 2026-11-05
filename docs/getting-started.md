@@ -319,7 +319,7 @@ cortex project remove acme                  # by name or by path — the project
 cortex project check                        # exits 1 when one is not ok
 ```
 
-`list` gives, in name order, each project's name, its state, the version its `cortex.toml` pins, the version this machine reads now — the `spec` of its `cortex.local.toml` — its layout, from the marker of its instructions file, and its path. A project is `ok`, `missing` — no directory at its path — `no project` — a directory without `cortex.toml` — or `unreadable`, with why. `--json` gives the same as objects of `name`, `path`, `state`, `pinned`, `reads`, `layout` and `why`, with `null` for what is not known. `check` removes nothing: `cortex project remove` drops an entry.
+`list` gives, in name order, each project's name, its state, the version its `cortex.toml` pins, the version this machine reads now — the `spec` of its `cortex.local.toml` — its layout, from the marker of its instructions file, and its path. A project is `ok`, `missing` — no directory at its path — `no-project` — a directory without `cortex.toml` — or `unreadable`, with why. `--json` gives the same as one object, `{"format": 1, "projects": [...]}`, each project an object of `name`, `path`, `state`, `pinned`, `reads`, `layout` and `why`, with `null` for what is not known; the keys only grow within one `format`. `check` removes nothing: `cortex project remove` drops an entry.
 
 The commands write the file, whole and one at a time. Edit it by hand with care: `cortex` refuses a file with a key it does not know, a name other than lowercase letters, digits, `.`, `_` and `-`, or two entries naming the same directory.
 
