@@ -62,6 +62,7 @@ labels=(
     "adr:008|5319e7|ADR-008 - The cortex binary, one store per machine"
     "adr:009|d4c5f9|ADR-009 - The release cycle"
     "adr:010|c5def5|ADR-010 - cortex.lock, cortex upgrade and the bootstrap marker"
+    "adr:011|bfdadc|ADR-011 - The project registry"
 
     # Phase within the ADR. The number is the ADR's own, not the execution order.
     "phase:1|c5def5|ADR phase 1"

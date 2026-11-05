@@ -306,6 +306,49 @@ chmod u+w agents/workflows/engineering/my-workflow.md   # the spec is read-only,
 
 In `link` or `copy` mode the template is at `cortex/templates/workflow.md.template` in the project.
 
+### List your machine's projects — `cortex project`
+
+A machine keeps the list of its Cortex projects in `projects.toml`, beside the store: `~/.cortex/projects.toml`, or `$CORTEX_HOME/projects.toml` ([ADR-011](adr/ADR-011-project-registry.md)). An entry is a project root — the directory of `cortex.toml`, the workspace root in workspace mode — with a name and a path, nothing else: what a project pins and reads is read from the project each time.
+
+`cortex init` and `cortex sync` fill it — and `cortex upgrade`, which syncs. Once one of them has succeeded, a project the registry does not list is added, named after its directory, and said once: *registered as acme — `cortex project list` lists this machine's projects*. An entry is never renamed or moved: a project moved on disk is registered again at its new path, under a free name, and its old entry is `missing` until `cortex project remove` drops it. A registry that cannot be read or written is a warning, never a failed sync. On a CI runner — `cortex sync --locked` registers as any sync does — or for a throwaway project, set `CORTEX_NO_REGISTER` to any value but an empty one: the three commands then neither read nor write the registry. `cortex project` still does: managing it is its work. So does `cortex upgrade --all` read it, the list it moves.
+
+`cortex project` manages it by hand:
+
+```bash
+cortex project add                          # the project of the current directory, named after its directory
+cortex project add ~/code/acme --name acme  # another one, under a name of your choice
+cortex project list                         # where each one stands
+cortex project list --json                  # the same, as one JSON object
+cortex project remove acme                  # by name or by path — the project's files are not touched
+cortex project check                        # exits 1 when one is not ok
+```
+
+`list` gives, in name order, each project's name, its state, the version its `cortex.toml` pins, the version this machine reads now — the `spec` of its `cortex.local.toml` — its layout, from the marker of its instructions file, and its path. A project is `ok`, `missing` — no directory at its path — `no-project` — a directory without `cortex.toml` — or `unreadable`, with why. `--json` gives the same as one object, `{"format": 1, "projects": [...]}`, each project an object of `name`, `path`, `state`, `pinned`, `reads`, `layout` and `why`, with `null` for what is not known; the keys only grow within one `format`. `check` removes nothing: `cortex project remove` drops an entry, and `cortex prune` the entries whose project is gone.
+
+The commands write the file, whole and one at a time. Edit it by hand with care: `cortex` refuses a file with a key it does not know, a name other than lowercase letters, digits, `.`, `_` and `-`, a path holding a control character — of C0, from NUL to the escape, or DEL — or two entries naming the same directory. A file it refuses, every command that reads it refuses — `cortex project remove` too: fix it by hand, the entry named in the message corrected or removed.
+
+### Free the store — `cortex prune`
+
+The store keeps every version a project of the machine synced. `cortex prune` removes those no project uses any more ([ADR-010](adr/ADR-010-lock-and-upgrade.md) §3.6, [ADR-011](adr/ADR-011-project-registry.md) §3.4):
+
+```bash
+cortex prune --dry-run          # what it would remove, and the entries it would drop: nothing changes
+cortex prune                    # keeps the versions of the projects registered — `cortex project list`
+cortex prune ~/code ~/work      # of the projects under these directories instead: the registry is not read
+cortex prune --keep 1.3.0       # a version no project pins, kept — one the runtime uses, say
+```
+
+It keeps the version each project pins and the one it reads now — a teammate's bump pulled and not synced yet leaves it on the version before — the binary's own version, and each `--keep`. With no directory, the projects are the registry's:
+
+- an entry whose project is gone — `missing`, on a drive that is not mounted too, or `no-project` with nothing of Cortex left — is dropped from the registry, and said, and its version is no longer kept for it. Its next `cortex sync` registers it again;
+- a `no-project` entry whose `cortex.local.toml` still reads a version — a branch without Cortex checked out, a rebase under way — stays, and keeps that version: `cortex project remove` drops it, if the project really left Cortex;
+- an `unreadable` entry is named, and stays: the versions that can be read of it are kept — none, when not even its pin can be read;
+- with nothing registered it exits 2, rather than remove every version: register the projects, or give their directories.
+
+A project this machine never synced since 1.5.0 is not registered, and loses its version: sync it, or `cortex project add` it, before the first `cortex prune` with no directory. Its assistant notices a spec that is gone and runs `cortex sync`, which gets the version back. `CORTEX_NO_REGISTER` does not change `prune`: it keeps the commands that register from the registry, and `prune` with no directory reads it, and drops from it, whatever its value.
+
+A project it did not see — not registered, or under none of the directories — gets its version back at its next `cortex sync`, checked against its `cortex.lock`.
+
 ### Add a capability (contributing to cortex)
 
 Capabilities live in `cortex/agents/capabilities/`. To add a *new* capability to the framework (PR upstream), work in a clone of the Cortex repository — the spec in the store is read-only — and test it in a host project with `cortex sync --from PATH`:
@@ -374,7 +417,8 @@ Yes. `@Hactar` invokes the Lead Backend directly. But going through the PM guara
 
 **Q: Is Cortex updated automatically?**
 The machine follows the project; the project moves only when the team moves it. A project stays on the `version` its `cortex.toml` pins:
-- **The project:** run `cortex upgrade` — `--dry-run` first says what changes and checks your overlays. It writes `version` in `cortex.toml` and syncs. Each teammate syncs once they pull the change — their assistant runs `cortex sync` itself when it finds the spec of another version than `cortex.toml`'s, saying so, and `cortex validate` refuses a spec synced for another version.
+- **The project:** run `cortex upgrade` — `--dry-run` first says what changes and checks your overlays. It writes `version` in `cortex.toml` and syncs. Each teammate syncs once they pull the change — their assistant runs `cortex sync` itself when it finds the spec of another version than `cortex.toml`'s, saying so, and `cortex validate` refuses a spec synced for another version. The assistant runs `cortex upgrade` only when you ask for it, the dry run first — never of its own accord: moving the pin is the team's decision.
+- **Every project of the machine:** `cortex upgrade --all --dry-run`, then `cortex upgrade --all`, moves each project of the registry — `cortex project list` lists them — to the same version. A project that refuses stops none of the others, one that is not `ok` is skipped, and the command ends with a line per project and the files each must commit. Nothing is committed by default: `--branch NAME` makes the branch `NAME` in each git project with something to commit, before anything is written, and `--commit --message MESSAGE` commits there the files the upgrade wrote, and nothing else — nothing at all where `cortex.toml`, or a bootstrap file it wrote, held changes of yours. Nothing is pushed. Run again after fixing a project that refused, the same command refuses none it moved: a project with nothing to write gets no branch, and one already on `NAME` is written there. Interrupted, it still ends with a line per project, and exits 130. Both options work without `--all` too, for the one project.
 - **The binary:** `cortex self-update`. A binary serves every version from 1.0.0 up to its own; a project pinned to a newer one is refused, with the `cortex self-update` command that installs it — which the assistant runs too, before it syncs. With no version given, `cortex upgrade` says when a release newer than the binary is out.
 
 Check the [changelog](../changelog/) before updating in production.

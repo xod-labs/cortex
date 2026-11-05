@@ -1,9 +1,9 @@
-"""The grammar of ``cortex.toml`` and ``cortex.local.toml`` — ADR-008 §3.4 — and of
-``cortex.lock`` — ADR-010 §3.2.
+"""The grammar of ``cortex.toml`` and ``cortex.local.toml`` — ADR-008 §3.4 — of
+``cortex.lock`` — ADR-010 §3.2 — and of the machine's ``projects.toml`` — ADR-011 §3.1.
 
-One definition for the two readers, the ``cortex`` command and the runtime, so that neither
-accepts a file the other refuses. It checks what a TOML parser returned: each reader parses the file
-with its own ``tomllib``.
+One definition for the readers, the ``cortex`` command, the runtime and the cockpit, so that none
+accepts a file another refuses. It checks what a TOML parser returned: each reader parses the file
+with its own ``tomllib``. It reads nothing else: a check that needs the file system is the reader's.
 
 Versions and theme names are ASCII, matched whole: ``\\d`` would take the digits of any script,
 and ``$`` a trailing newline — ``"1.0.0\\n"`` would then name a directory of the store.
@@ -12,6 +12,7 @@ and ``$`` a trailing newline — ``"1.0.0\\n"`` would then name a directory of t
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Mapping, Tuple
 
@@ -27,6 +28,17 @@ LOCK_KEYS: Tuple[str, ...] = ("format", "version", "digest")
 LOCK_FORMAT = 1
 # The digest of a spec: SHA-256, lowercase hex.
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
+REGISTRY_FILE = "projects.toml"
+REGISTRY_KEYS: Tuple[str, ...] = ("format", "project")
+REGISTRY_ENTRY_KEYS: Tuple[str, ...] = ("name", "path")
+REGISTRY_FORMAT = 1
+# What a path of projects.toml never holds: the C0 controls and DEL — NUL, which no system takes in a
+# file name, and the others a terminal reads as commands, which a message would print. The C1 controls
+# and the bidirectional marks are not refused: a file name may hold them.
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+# The name of a project of the registry: lowercase, so that two never differ by case alone.
+PROJECT_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}", re.ASCII)
+PROJECT_NAME_RULE = 'lowercase letters, digits, ".", "_" and "-", 64 at most, the first a letter or a digit'
 
 _IDENTIFIER = r"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
 # X.Y.Z, or a pre-release, as Semantic Versioning writes them; no build metadata.
@@ -41,7 +53,7 @@ class ProjectFileError(ValueError):
 
 
 class LaterFormatError(ProjectFileError):
-    """A ``cortex.lock`` of a format a later Cortex writes."""
+    """A ``cortex.lock``, or a ``projects.toml``, of a format a later Cortex writes."""
 
 
 def is_version(value: object) -> bool:
@@ -50,6 +62,18 @@ def is_version(value: object) -> bool:
 
 def is_theme(value: object) -> bool:
     return isinstance(value, str) and THEME.fullmatch(value) is not None
+
+
+def is_project_name(value: object) -> bool:
+    return isinstance(value, str) and PROJECT_NAME.fullmatch(value) is not None
+
+
+def directory_key(path: str) -> str:
+    """``path`` as two entries of ``projects.toml`` that name one directory write it alike: ``.``,
+    ``..`` and a final separator undone, and, on Windows, the case. Read from the text alone — a
+    link, or a case the file system ignores elsewhere, is the file system's, which the reader
+    resolves."""
+    return os.path.normcase(os.path.normpath(path))
 
 
 def shown(value: object) -> str:
@@ -122,3 +146,56 @@ def check_lock(data: Mapping) -> None:
     if not isinstance(data["digest"], str) or DIGEST.fullmatch(data["digest"]) is None:
         raise ProjectFileError(f'{LOCK_FILE}: digest {shown(data["digest"])} is no digest — "sha256:" and 64 lowercase '
                                "hexadecimal digits")
+
+
+def check_registry(data: Mapping, name: str = REGISTRY_FILE) -> None:
+    """Refuse a ``projects.toml`` that is not one (ADR-011 §3.1): ``format`` an integer this
+    Cortex reads — ``LaterFormatError`` for a later one, whatever else it holds — and each
+    ``[[project]]`` exactly a ``name`` and an absolute ``path``, no two with the same name, nor
+    writing the same directory (``directory_key``). ``name`` is how the messages name the file: it
+    is not in a project, and its reader names where it is."""
+    if "format" not in data:
+        raise ProjectFileError(f'{name}: "format" is required')
+    form = data["format"]
+    if isinstance(form, bool) or not isinstance(form, int) or form < 1:
+        raise ProjectFileError(f'{name}: "format" must be a positive integer, without quotes')
+    if form > REGISTRY_FORMAT:
+        raise LaterFormatError(f"{name}: format {form} is written by a later Cortex — this one reads format "
+                               f"{REGISTRY_FORMAT}")
+    for key in data:
+        if key not in REGISTRY_KEYS:
+            raise ProjectFileError(f"{name}: unknown key {shown(key)} — {REGISTRY_FILE} takes {listed(REGISTRY_KEYS)} "
+                                   "only")
+    entries = data.get("project", [])
+    if not isinstance(entries, list) or not all(isinstance(entry, dict) for entry in entries):
+        raise ProjectFileError(f'{name}: "project" must be tables, each headed [[project]]')
+    names: dict = {}
+    paths: dict = {}
+    for number, entry in enumerate(entries, 1):
+        where = f"{name}: project {number}"
+        for key in entry:
+            if key not in REGISTRY_ENTRY_KEYS:
+                raise ProjectFileError(f"{where}: unknown key {shown(key)} — a project takes "
+                                       f"{listed(REGISTRY_ENTRY_KEYS)} only")
+        for key in REGISTRY_ENTRY_KEYS:
+            if key not in entry:
+                raise ProjectFileError(f'{where}: "{key}" is required')
+            if not isinstance(entry[key], str):
+                raise ProjectFileError(f'{where}: "{key}" must be a string, in quotes')
+        if not is_project_name(entry["name"]):
+            raise ProjectFileError(f'{where}: name {shown(entry["name"])} is no project name — {PROJECT_NAME_RULE}')
+        if not os.path.isabs(entry["path"]):
+            raise ProjectFileError(f'{where}: path {shown(entry["path"])} is not absolute')
+        if CONTROL.search(entry["path"]):
+            raise ProjectFileError(f'{where}: path {shown(entry["path"])} holds a control character — '
+                                   f"{REGISTRY_FILE} takes none in a path")
+        if entry["name"] in names:
+            raise ProjectFileError(f'{where}: name {shown(entry["name"])} is project {names[entry["name"]]}\'s too — '
+                                   "two projects never share a name")
+        key = directory_key(entry["path"])
+        if key in paths:
+            first, number_first = paths[key]
+            raise ProjectFileError(f"{where}: path {shown(entry['path'])} names the directory of project {number_first}, "
+                                   f"{shown(first)} — two projects never name the same directory")
+        names[entry["name"]] = number
+        paths[key] = (entry["path"], number)
