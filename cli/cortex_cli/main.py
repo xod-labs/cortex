@@ -59,7 +59,7 @@ def _self_update(args: List[str]) -> int:
 COMMANDS: Dict[str, Tuple[str, Callable[[List[str]], int]]] = {
     "init": ("Make a directory a Cortex project: cortex.toml, the AI tool's instructions", _init),
     "sync": ("Put the pinned Cortex version in the store, and tell the project where it is", _sync),
-    "upgrade": ("Move the project to another Cortex version, saying first what changes", _upgrade),
+    "upgrade": ("Move the project, or every registered one, to another Cortex version, saying what changes", _upgrade),
     "self-update": ("Replace this cortex with a release's binary — the latest, by default", _self_update),
     "prune": ("Remove from the store the versions no project of this machine pins", _prune),
     "project": ("List this machine's Cortex projects, and add, remove or check them", _project),
