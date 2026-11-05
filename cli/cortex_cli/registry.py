@@ -5,9 +5,9 @@ one entry per project root, the directory of ``cortex.toml``: a ``name`` and a `
 else. The grammar is the core's (``cortex_core.project.check_registry``), which the cockpit and the
 runtime read the file with too.
 
-A path is written as the shell names it, a link not resolved; ``add`` compares it resolved with the
-paths listed, so that two entries never name the same directory — the core sees the text alone,
-and refuses two that write the same one.
+A path is written as the shell names it, a link not resolved; ``add`` compares it with the paths
+listed — as written first, then resolved — so that two entries never name the same directory: the
+core sees the text alone, and refuses two that write the same one.
 
 The file is written whole or not at all — a temporary file beside it, then a rename — and one write
 at a time, under a lock on ``projects.toml.lock`` beside it: two commands that register at once
@@ -22,10 +22,12 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import glob
 import json
 import os
 import stat
 import sys
+import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +42,9 @@ from .paths import display, working_directory
 FILE = project.REGISTRY_FILE
 HEADER = "# The Cortex projects of this machine (ADR-011). Written by cortex — `cortex project` edits it.\n"
 LOCK_WAIT = 30    # seconds a write waits for another: one takes milliseconds
+# Windows refuses to replace a file another process has open — a reader takes no lock, the cockpit
+# among them — for the milliseconds of its read: the rename is tried again, two seconds at most.
+REPLACE_TRIES, REPLACE_PAUSE = (20, 0.1) if os.name == "nt" else (1, 0)
 # The format of ``cortex project list --json``, the cockpit's contract (ADR-011 §3.6): its keys
 # only grow within one. It is the output's own, not the file's.
 LIST_FORMAT = 1
@@ -129,17 +134,26 @@ def _write(path: Path, entries: List[Entry]) -> None:
         project.check_registry(tomllib.loads(text))
     except (UnicodeEncodeError, tomllib.TOMLDecodeError, ProjectFileError) as error:
         raise RegistryError(f"{display(str(path))} is not written: it would not read back — {error}")
-    try:
-        config.write_text(str(path), text)
-    except OSError as error:
-        raise RegistryError(f"{display(str(path))} cannot be written — {sync.os_error(error)}")
+    for tries_left in range(REPLACE_TRIES - 1, -1, -1):
+        try:
+            config.write_text(str(path), text)
+            return
+        except PermissionError as error:
+            if not tries_left:
+                raise RegistryError(f"{display(str(path))} cannot be written — {sync.os_error(error)}")
+            time.sleep(REPLACE_PAUSE)
+        except OSError as error:
+            raise RegistryError(f"{display(str(path))} cannot be written — {sync.os_error(error)}")
 
 
 @contextlib.contextmanager
 def _locked(path: Path) -> Iterator[None]:
     """One write of the registry at a time: the others wait for it, ``LOCK_WAIT`` seconds at most.
     The lock is on a file beside it, never replaced: the registry itself is, at each write. Where
-    the file system takes no lock, the write goes on without it."""
+    the file system takes no lock, the write goes on without it.
+
+    Held, it sweeps the temporary files a write killed before its rename left: no other write is
+    under way."""
     lock = path.with_name(path.name + ".lock")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -155,6 +169,10 @@ def _locked(path: Path) -> Iterator[None]:
                                     "wait for it, then run the command again")
         except OSError:
             pass                            # a file system without the lock
+        if locked:
+            for stale in path.parent.glob(glob.escape(path.name) + ".*.tmp"):
+                with contextlib.suppress(OSError):
+                    stale.unlink()
         yield
     finally:
         if locked:
@@ -171,6 +189,16 @@ def same_directory(one: str, other: str) -> bool:
         return os.path.samefile(one, other)
     except OSError:
         return False
+
+
+def listed(entries: Iterable[Entry], root: str) -> Optional[Entry]:
+    """The entry that names the directory ``root``. The paths are compared as written first, and
+    resolved (``same_directory``) only when none matches: a project listed already costs no look
+    at the others' directories — one on a share that does not answer would hold every sync."""
+    entries = list(entries)
+    key = project.directory_key(display(root))
+    written = next((entry for entry in entries if project.directory_key(entry.path) == key), None)
+    return written or next((entry for entry in entries if same_directory(entry.path, root)), None)
 
 
 def default_name(root: str, taken: Iterable[str]) -> str:
@@ -211,9 +239,9 @@ def add(root: str, name: Optional[str] = None, warn: Optional[TextIO] = None) ->
         path = registry_path()
         with _locked(path):
             entries = _read(path)
-            listed = next((entry for entry in entries if same_directory(entry.path, root)), None)
-            if listed is not None:
-                return listed, False
+            there = listed(entries, root)
+            if there is not None:
+                return there, False
             if name is None:
                 name = default_name(root, (entry.name for entry in entries))
             holder = next((entry for entry in entries if entry.name == name), None)
@@ -237,8 +265,7 @@ def find(entries: Iterable[Entry], key: str, cwd: Optional[str] = None) -> Optio
     named = next((entry for entry in entries if entry.name == key), None)
     if named is not None:
         return named
-    path = os.path.abspath(os.path.join(cwd or working_directory(), key))
-    return next((entry for entry in entries if same_directory(entry.path, path)), None)
+    return listed(entries, os.path.abspath(os.path.join(cwd or working_directory(), key)))
 
 
 def remove(key: str, cwd: Optional[str] = None) -> Entry:

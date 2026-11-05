@@ -12,11 +12,13 @@ def working_directory() -> str:
     On macOS the temporary directories are behind a link, ``/var`` to ``/private/var``: resolved,
     the project root would no longer be a prefix of the paths the user types — ``--service
     $PWD/api`` — and the report would print them whole. ``$PWD`` naming another directory, or
-    none — a process not started by a shell — leaves ``getcwd``'s answer.
+    none — a process not started by a shell — leaves ``getcwd``'s answer, as does one that is not
+    written plainly — a ``..``, a ``.``, a final ``/`` — which a shell never sets, and which would
+    be written so in ``projects.toml`` (``pwd -L`` ignores it too).
     """
     cwd = os.getcwd()
     pwd = os.environ.get("PWD")
-    if pwd and os.path.isabs(pwd):
+    if pwd and os.path.isabs(pwd) and os.path.normpath(pwd) == (pwd.replace(os.altsep, os.sep) if os.altsep else pwd):
         try:
             if os.path.samefile(pwd, cwd):
                 return pwd

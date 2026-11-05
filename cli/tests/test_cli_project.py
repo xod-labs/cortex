@@ -196,6 +196,63 @@ class AddTests(ProjectTestCase):
         self.assertIn(f"{display(root)} is registered already, as link", proc.out)
         self.assertEqual(self.entries(), [("link", display(link))])
 
+    def test_a_pwd_not_written_plainly_is_not_written_so(self):
+        root = self.project("acme")
+        (root / "sub").mkdir()
+        proc = self.run_cortex(root, "project", "add", env=dict(self.env, PWD=f"{root}/sub/.."))
+        self.assert_ok(proc)
+        self.assertEqual(self.entries(), [("acme", display(root))])
+
+    def test_a_directory_the_resolved_paths_miss_is_found_by_the_file_system(self):
+        # A case macOS ignores, which realpath keeps: os.path.samefile tells, as it does through a
+        # link that realpath is kept from resolving here.
+        root = self.project("acme")
+        link = self.tmp / "link"
+        try:
+            os.symlink(root, link, target_is_directory=True)
+        except OSError:
+            self.skipTest("no symbolic link here")
+        with self.in_process(), mock.patch("os.path.realpath", side_effect=lambda path: str(path)):
+            self.assertEqual(registry.add(str(root)), (registry.Entry("acme", display(root)), True))
+            self.assertEqual(registry.add(str(link)), (registry.Entry("acme", display(root)), False))
+        self.assertEqual(self.entries(), [("acme", display(root))])
+
+    def test_a_project_listed_as_written_is_found_without_resolving_any_path(self):
+        roots = [self.project(name) for name in ("one", "two", "three")]
+        with self.in_process():
+            for root in roots:
+                registry.add(str(root))
+            with mock.patch.object(registry, "same_directory", side_effect=AssertionError("resolved")):
+                self.assertEqual(registry.add(str(roots[1]) + "/"), (registry.Entry("two", display(roots[1])), False))
+                self.assertEqual(registry.find(registry.load(), str(roots[2])).name, "three")
+
+    def test_a_temporary_file_a_killed_write_left_is_swept(self):
+        self.home.mkdir()
+        stale = self.home / "projects.toml.4242.tmp"
+        stale.write_text("format = 1\n", encoding="utf-8")
+        self.assert_ok(self.run_cortex(self.project("acme"), "project", "add"))
+        self.assertFalse(stale.exists())
+        self.assertEqual(sorted(os.listdir(self.home)), ["projects.toml", "projects.toml.lock"])
+
+    def test_a_rename_refused_for_a_moment_is_tried_again(self):
+        # Windows, while a reader has the file open: PermissionError, for the milliseconds of a read.
+        root, write, refused = self.project("acme"), config.write_text, []
+
+        def busy(path, text):
+            if len(refused) < 2:
+                refused.append(path)
+                raise PermissionError(errno.EACCES, "Access is denied")
+            write(path, text)
+
+        with self.in_process(), mock.patch.object(registry, "REPLACE_TRIES", 3), \
+                mock.patch.object(registry, "REPLACE_PAUSE", 0), mock.patch.object(config, "write_text", busy):
+            self.assertEqual(registry.add(str(root))[1], True)
+            refused.clear()
+            with mock.patch.object(registry, "REPLACE_TRIES", 2):
+                with self.assertRaisesRegex(registry.RegistryError, "projects.toml cannot be written — .*Access is denied"):
+                    registry.remove("acme")
+        self.assertEqual(self.entries(), [("acme", display(root))])
+
     def test_a_registry_it_refuses_is_never_overwritten(self):
         root = self.project("acme")
         for text, fragment in (('format = 1\nextra = "x"\n', 'unknown key "extra"'),
