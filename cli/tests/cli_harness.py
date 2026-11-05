@@ -8,7 +8,8 @@ instead (ADR-008 phase 1), and ``CORTEX_TEST_VERSION``, when set, is the version
 Either way the command runs with a ``PATH`` that holds one empty directory: the binary must need
 no Python on the host, and nothing else from ``PATH`` either. And with a ``CORTEX_HOME`` of the
 suite's own, an empty directory, unless the test names one: no test reads or writes the store, or
-the registry, of the machine it runs on.
+the registry, of the machine it runs on — nor does a test that calls the modules: the suite's
+process has that home too.
 """
 
 import atexit
@@ -34,6 +35,7 @@ _EMPTY_PATH = tempfile.mkdtemp(prefix="cortex-empty-path-")
 atexit.register(shutil.rmtree, _EMPTY_PATH, ignore_errors=True)
 _HOME = tempfile.mkdtemp(prefix="cortex-home-")
 atexit.register(shutil.rmtree, _HOME, ignore_errors=True)
+os.environ["CORTEX_HOME"] = _HOME
 
 
 def command(*args):
