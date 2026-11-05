@@ -131,6 +131,18 @@ class AllTests(AllTestCase):
                       self.summary(proc))
         self.assertFalse((self.code / "gone").exists())
 
+    def test_an_unreadable_project_is_skipped_and_said_and_it_exits_0(self):
+        alpha, beta = self.make("alpha"), self.make("beta")
+        (beta / "cortex.toml").write_text('version = "9.9.8\n', encoding="utf-8")       # no TOML: not read
+        self.register(alpha, beta)
+        before = snapshot(beta)
+        proc = self.upgrade_all()
+        self.assert_ok(proc)
+        self.assert_moved(alpha)
+        self.assertEqual(snapshot(beta), before)
+        self.assertIn(f"\nbeta: {display(beta)}\nskipped: unreadable — ", proc.out)
+        self.assertIn(f"  alpha  moved 9.9.8 → {OWN}\n  beta   skipped: unreadable\n", self.summary(proc))
+
     def test_a_pin_newer_than_this_cortex_is_refused_and_the_others_move(self):
         alpha, beta = self.make("alpha"), self.make("beta", "9.10.0", synced=False)
         self.register(alpha, beta)
@@ -296,10 +308,32 @@ class AllInProcessTests(AllTestCase):
 
         with self.in_process(), mock.patch.object(self_update, "newer_release", side_effect=slow), \
                 mock.patch.object(upgrade, "_upgrade", side_effect=interrupted):
-            with self.assertRaises(KeyboardInterrupt):
-                upgrade.upgrade_all(self.options(), io.StringIO(), io.StringIO())
+            self.assertEqual(upgrade.upgrade_all(self.options(), io.StringIO(), io.StringIO()), 130)
         self.assertTrue(answered.is_set())
         self.assertFalse([t for t in threading.enumerate() if isinstance(t, upgrade._NewerRelease)])
+
+    def test_an_interrupted_run_says_what_each_project_did_and_exits_130(self):
+        roots = [self.make(name, synced=False) for name in ("alpha", "beta", "gamma")]
+        self.register(*roots)
+
+        def one(cwd, *args, **kwargs):
+            if cwd.endswith("/beta"):
+                raise KeyboardInterrupt
+            return upgrade.Outcome(cwd, Version("9.9.8"), Version(OWN), files=[Path(cwd) / "cortex.toml"])
+
+        out, err = io.StringIO(), io.StringIO()
+        with self.in_process(asks=False), mock.patch.object(upgrade, "_upgrade", side_effect=one):
+            code = upgrade.upgrade_all(self.options(), out, err)
+        self.assertEqual(code, 130)
+        self.assertTrue(out.getvalue().endswith(
+            f" in each registered project:\n"
+            f"  alpha  moved 9.9.8 → {OWN}\n"
+            "  beta   interrupted — it may be half written: `git status` there says what was written\n"
+            "  gamma  not reached\n"
+            f"\nWhat each project must commit:\n  alpha  {display(roots[0])}: cortex.toml\n" + NOT_COMMITTED),
+            out.getvalue())
+        self.assertEqual(err.getvalue(), "cortex upgrade: interrupted — `cortex upgrade --all` again finishes the "
+                                         "project cut short, and moves those not reached\n")
 
     def in_process(self, asks=True):
         return mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home), "CORTEX_RELEASES_URL": self.release.url,

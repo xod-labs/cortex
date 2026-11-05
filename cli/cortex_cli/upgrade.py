@@ -687,7 +687,8 @@ def _first(why: str) -> str:
 def upgrade_all(options: _Options, out: TextIO, err: TextIO) -> int:
     """``cortex upgrade --all``: each registered project, in name order, to the same target. One that
     is not ``ok`` is skipped; one that refuses stops none of the others, and the command exits 1. It
-    ends with a line per project, and what each must commit. The release is asked for once."""
+    ends with a line per project, and what each must commit. The release is asked for once.
+    Interrupted, it ends so all the same, the projects not reached said, and exits 130."""
     entries = registry.load()
     if not entries:
         out.write(f"Nothing to move. {registry.NONE}\n")
@@ -697,10 +698,20 @@ def upgrade_all(options: _Options, out: TextIO, err: TextIO) -> int:
     if options.wanted:
         _served(the_store, target, f"cortex upgrade --all {target}")       # every project would refuse it
     newer = _asking(options.wanted)
+    done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]] = []
     try:
-        done = _each(entries, options, out, err)
-    except BaseException:
+        _each(entries, options, out, err, done)
+    except KeyboardInterrupt:
         if newer is not None:       # a thread left in a request as Python exits can crash it
+            newer.join(self_update.NOTICE_TIMEOUT)
+        done += [(entry, None, "not reached") for entry in entries[len(done):]]
+        out.flush()
+        _summary(done, target, options, out)
+        err.write("cortex upgrade: interrupted — `cortex upgrade --all` again finishes the project cut short, and "
+                  "moves those not reached\n")
+        return 130
+    except BaseException:
+        if newer is not None:
             newer.join(self_update.NOTICE_TIMEOUT)
         raise
     _summary(done, target, options, out)
@@ -709,10 +720,10 @@ def upgrade_all(options: _Options, out: TextIO, err: TextIO) -> int:
     return 1 if any(outcome is not None and outcome.code for _, outcome, _ in done) else 0
 
 
-def _each(entries: List[registry.Entry], options: _Options, out: TextIO,
-          err: TextIO) -> List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]:
-    """Each project's upgrade, in turn: what it did — or the state it was skipped for."""
-    done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]] = []
+def _each(entries: List[registry.Entry], options: _Options, out: TextIO, err: TextIO,
+          done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]) -> None:
+    """Each project's upgrade, in turn, added to ``done``: what it did — or, when it did nothing, why:
+    the state it was skipped for, or its being interrupted."""
     made: Dict[str, str] = {}
     for entry in entries:
         out.write(("\n" if done else "") + f"{entry.name}: {entry.path}\n")
@@ -722,27 +733,29 @@ def _each(entries: List[registry.Entry], options: _Options, out: TextIO,
                 why = {registry.MISSING: "no directory there",
                        registry.NO_PROJECT: f"no {config.PROJECT_FILE} there"}.get(found.state, found.why)
                 out.write(f"skipped: {found.state} — {why}\n")
-                done.append((entry, None, found.state))
+                done.append((entry, None, f"skipped: {found.state}"))
                 continue
             outcome = _move(entry.path, options, out, err, announce=False, made=made)
         except REFUSALS as error:
             outcome = Outcome(entry.path, None, None, 1, _refusal(error))
             out.flush()
             err.write(f"cortex upgrade: {outcome.why}\n")
+        except KeyboardInterrupt:
+            done.append((entry, None, "interrupted — it may be half written: `git status` there says what was written"))
+            raise
         done.append((entry, outcome, None))
         out.flush()
-    return done
 
 
 def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]], target: Version,
              options: _Options, out: TextIO) -> None:
-    """A line per project — moved, already on the target, refused, skipped — then what each must
-    commit, by path, or what --commit did."""
+    """A line per project — moved, already on the target, refused, skipped, interrupted, not reached
+    — then what each must commit, by path, or what --commit did."""
     width = max(len(entry.name) for entry, _, _ in done)
     out.write(f"\nCortex {target}, in each registered project{' — a dry run' if options.dry_run else ''}:\n")
-    for entry, outcome, skipped in done:
+    for entry, outcome, said in done:
         if outcome is None:
-            status = f"skipped: {skipped}"
+            status = said
         elif outcome.why is not None:
             status = f"refused: {_first(outcome.why)}"
         elif outcome.target != outcome.pinned:
