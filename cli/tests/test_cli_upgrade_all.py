@@ -126,8 +126,8 @@ class AllTests(AllTestCase):
         self.assert_ok(proc)
         self.assert_moved(alpha)
         self.assertIn(f"\ngone: {display(self.code / 'gone')}\nskipped: missing — no directory there\n", proc.out)
-        self.assertIn(f"\nempty: {display(self.code / 'empty')}\nskipped: no project — no cortex.toml there\n", proc.out)
-        self.assertIn(f"  alpha  moved 9.9.8 → {OWN}\n  empty  skipped: no project\n  gone   skipped: missing\n",
+        self.assertIn(f"\nempty: {display(self.code / 'empty')}\nskipped: no-project — no cortex.toml there\n", proc.out)
+        self.assertIn(f"  alpha  moved 9.9.8 → {OWN}\n  empty  skipped: no-project\n  gone   skipped: missing\n",
                       self.summary(proc))
         self.assertFalse((self.code / "gone").exists())
 
