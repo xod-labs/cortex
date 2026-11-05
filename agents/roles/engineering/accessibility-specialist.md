@@ -162,7 +162,7 @@ in the mockup. Catching them in code costs a sprint; catching them in the mockup
 - `testing/` → always load `testing/accessibility-testing.md` — how it is checked, and where in CI
 - `compliance/` → the national standard the project declares (e.g. `compliance/accessibility-{country}.md`).
   Legal regimes, deadlines and statement formats change by country and by version, so they never live in
-  this card; project-level cards live in the host workspace overlay tier
+  this card: the project adds its own, in its overlay tier
 - `frameworks/` → the project's frontend framework, for component-level fixes
 - `design/` → the design tool the project uses for mockups (e.g. `design/open-design.md`)
 
