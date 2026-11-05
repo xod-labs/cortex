@@ -664,6 +664,23 @@ class StateTests(StateTestCase):
         entry = registry.Entry("file", display(self.code / "file"))
         self.assertEqual(registry.state(entry), registry.State(entry, registry.MISSING))
 
+    def test_a_path_under_a_file_is_missing(self):
+        self.code.mkdir()
+        (self.code / "file").write_text("x\n", encoding="utf-8")
+        entry = registry.Entry("under", display(self.code / "file" / "acme"))
+        self.assertEqual(registry.state(entry), registry.State(entry, registry.MISSING))
+
+    def test_project_files_that_cannot_be_read_still_give_their_versions(self):
+        # cortex.local.toml that cannot be read, as root too: its versions read as prune reads them.
+        root = self.project("acme", version="9.9.8")
+        self.synced_elsewhere(root, "9.9.7")
+        entry = registry.Entry("acme", display(root))
+        with self.in_process(), mock.patch.object(config, "load", side_effect=PermissionError(errno.EACCES,
+                                                                                               "Permission denied")):
+            found = registry.state(entry)
+        self.assertEqual((found.state, found.pinned, found.reads), (registry.UNREADABLE, "9.9.8", "9.9.7"))
+        self.assertIn("Permission denied", found.why)
+
     def test_a_cortex_toml_that_is_a_directory_is_no_project(self):
         root = self.code / "odd"
         (root / "cortex.toml").mkdir(parents=True)
