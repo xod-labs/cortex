@@ -40,10 +40,13 @@ from .paths import display, working_directory
 FILE = project.REGISTRY_FILE
 HEADER = "# The Cortex projects of this machine (ADR-011). Written by cortex — `cortex project` edits it.\n"
 LOCK_WAIT = 30    # seconds a write waits for another: one takes milliseconds
+# The format of ``cortex project list --json``, the cockpit's contract (ADR-011 §3.6): its keys
+# only grow within one. It is the output's own, not the file's.
+LIST_FORMAT = 1
 LISTS = "`cortex project list` lists this machine's projects"
 NONE = "No project is registered on this machine — `cortex project add` registers the one of the current directory"
 # What ``state`` says of a project.
-OK, MISSING, NO_PROJECT, UNREADABLE = "ok", "missing", "no project", "unreadable"
+OK, MISSING, NO_PROJECT, UNREADABLE = "ok", "missing", "no-project", "unreadable"
 
 
 class RegistryError(Exception):
@@ -68,7 +71,8 @@ class State:
     layout: Optional[str] = None    # "single" or "workspace", by the marker of its bootstrap
 
     def as_json(self) -> dict:
-        """The object ``cortex project list --json`` gives for it — its keys only grow within format 1."""
+        """The object ``cortex project list --json`` gives for it — its keys only grow within
+        ``LIST_FORMAT``."""
         return {"name": self.entry.name, "path": self.entry.path, "state": self.state, "pinned": self.pinned,
                 "reads": self.reads, "layout": self.layout, "why": self.why}
 
@@ -364,7 +368,8 @@ def _add(options: argparse.Namespace, out: TextIO) -> int:
 def _list(options: argparse.Namespace, out: TextIO) -> int:
     states = [state(entry) for entry in load()]
     if options.json:
-        out.write(json.dumps([found.as_json() for found in states], indent=2) + "\n")
+        out.write(json.dumps({"format": LIST_FORMAT, "projects": [found.as_json() for found in states]}, indent=2)
+                  + "\n")
         return 0
     if not states:
         out.write(NONE + "\n")
@@ -415,11 +420,11 @@ def run(args: List[str]) -> int:
     adding.add_argument("--name", metavar="NAME", help="the name to register it as, instead of its directory's")
     listing = actions.add_parser("list", help="where each project stands",
                                  description="Each registered project, in name order: its name, its state — ok, "
-                                             "missing, no project or unreadable — the version it pins, the version "
+                                             "missing, no-project or unreadable — the version it pins, the version "
                                              "this machine reads now, its layout and its path.")
     listing.add_argument("--json", action="store_true",
-                         help="the same, as one JSON array of objects: name, path, state, pinned, reads, layout and "
-                              "why — null for what is not known")
+                         help='the same, as one JSON object: "format", 1, and "projects", an array of objects: '
+                              "name, path, state, pinned, reads, layout and why — null for what is not known")
     removing = actions.add_parser("remove", help="drop a project from the registry — its files are not touched",
                                   description="Drop a project from the registry, by its name or its path. Its "
                                               "files are not touched.")

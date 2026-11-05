@@ -417,9 +417,13 @@ class StateTestCase(ProjectTestCase):
         return root
 
     def listed(self):
+        """The projects of list --json, its format checked: the cockpit reads it so."""
         proc = self.run_cortex(self.tmp, "project", "list", "--json")
         self.assert_ok(proc)
-        return json.loads(proc.out)
+        found = json.loads(proc.out)
+        self.assertEqual(list(found), ["format", "projects"])
+        self.assertEqual(found["format"], 1)
+        return found["projects"]
 
     def one(self, root):
         """What list --json says of the project at ``root``."""
@@ -454,7 +458,7 @@ class ListTests(StateTestCase):
         (odd / "cortex.toml").write_text('version = "1.4.0"\ntheme = "h2g2"\nlater = "x"\n', encoding="utf-8")
         why = 'cortex.toml: unknown key "later" — cortex.toml takes version, theme, sync and claude_access'
         self.assertEqual(self.listed(), [
-            {"name": "bare", "path": display(bare), "state": "no project", "pinned": None, "reads": None,
+            {"name": "bare", "path": display(bare), "state": "no-project", "pinned": None, "reads": None,
              "layout": None, "why": None},
             {"name": "gone", "path": display(gone), "state": "missing", "pinned": None, "reads": None, "layout": None,
              "why": None},
@@ -464,13 +468,13 @@ class ListTests(StateTestCase):
              "why": None}])
         proc = self.run_cortex(self.tmp, "project", "list")
         self.assert_ok(proc)
-        width = len("no project")
+        width, pinned = len("no-project"), max(len("PINNED"), len(OWN))       # OWN is a binary's version
         self.assertEqual(proc.out.splitlines(), [
-            f"NAME  {'STATE':<{width}}  PINNED  {'READS':<{len(OWN)}}  LAYOUT  PATH",
-            f"bare  no project  -       {'-':<{len(OWN)}}  -       {display(bare)}",
-            f"gone  missing     -       {'-':<{len(OWN)}}  -       {display(gone)}",
-            f"odd   unreadable  1.4.0   {'-':<{len(OWN)}}  -       {display(odd)} — {why}",
-            f"zeta  ok          {OWN:<6}  {OWN}  -       {display(ok)}"])
+            f"NAME  {'STATE':<{width}}  {'PINNED':<{pinned}}  {'READS':<{len(OWN)}}  LAYOUT  PATH",
+            f"bare  no-project  {'-':<{pinned}}  {'-':<{len(OWN)}}  -       {display(bare)}",
+            f"gone  missing     {'-':<{pinned}}  {'-':<{len(OWN)}}  -       {display(gone)}",
+            f"odd   unreadable  {'1.4.0':<{pinned}}  {'-':<{len(OWN)}}  -       {display(odd)} — {why}",
+            f"zeta  ok          {OWN:<{pinned}}  {OWN}  -       {display(ok)}"])
 
     def test_a_file_written_by_hand_is_listed_in_name_order(self):
         self.write_registry(("zeta", self.code / "z"), ("alpha", self.code / "a"))
@@ -576,7 +580,7 @@ class CheckTests(StateTestCase):
             (root / "cortex.toml").write_text("version = \n", encoding="utf-8")
 
         for name, spoil, said in (("gone", gone, "gone: missing — no directory at {}"),
-                                  ("bare", bare, "bare: no project — {} holds no cortex.toml"),
+                                  ("bare", bare, "bare: no-project — {} holds no cortex.toml"),
                                   ("odd", odd, "odd: unreadable — {}: cortex.toml: Invalid value")):
             with self.subTest(state=name):
                 root = self.register(self.project(name))
