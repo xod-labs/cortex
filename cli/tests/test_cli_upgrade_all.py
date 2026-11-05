@@ -519,7 +519,12 @@ class BranchTests(GitTestCase):
         self.git(one, "worktree", "add", "-q", "-b", "other", str(two))
         self.assert_ok(self.run_cortex(two, "sync"))
         self.register(one, two)
-        before = worktree(two)
+        before, start = worktree(two), self.branch(one)
+        proc = self.upgrade_all("--dry-run", "--branch", "cortex-up")          # refused as the run refuses it
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"  two  refused: the branch cortex-up would be checked out in {display(one)}, where this run "
+                      "would make it, and git checks a branch out", proc.out)
+        self.assertEqual((self.branch(one), self.branch(two)), (start, "other"))
         proc = self.upgrade_all("--branch", "cortex-up")
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertEqual((self.branch(one), self.branch(two)), ("cortex-up", "other"))

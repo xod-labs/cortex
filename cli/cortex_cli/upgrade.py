@@ -764,13 +764,16 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
             return
         key, repository = _real(top), _repository(root)
         if made.get(repository, (key, top))[0] != key:
-            raise UpgradeError(f"the branch {options.branch} is checked out in {display(made[repository][1])}, where this "
-                               "run made it, and git checks a branch out in one work tree at a time — nothing was "
-                               f"changed. `cortex upgrade --branch NAME` in {display(root)} moves it on another branch")
+            dry = options.dry_run
+            raise UpgradeError(f"the branch {options.branch} {'would be' if dry else 'is'} checked out in "
+                               f"{display(made[repository][1])}, where this run {'would make' if dry else 'made'} it, "
+                               "and git checks a branch out in one work tree at a time — nothing was changed. "
+                               f"`cortex upgrade --branch NAME` in {display(root)} moves it on another branch")
         if _branch_exists(root, options.branch):
             raise UpgradeError(f"the branch {options.branch} exists already in {display(top)} — nothing was changed. "
                                "Name another one with --branch")
         if options.dry_run:
+            made[repository] = (key, top)       # as the run would: a project of another work tree is refused
             return
         _git_ok(root, "checkout", "-q", "-b", options.branch)
         made[repository] = (key, top)
