@@ -230,9 +230,12 @@ class AddTests(ProjectTestCase):
         self.home.mkdir()
         stale = self.home / "projects.toml.4242.tmp"
         stale.write_text("format = 1\n", encoding="utf-8")
+        others = ["notes.tmp", "projects.toml.bak", "projects.toml.tmp"]        # the sweep takes the registry's only
+        for name in others:
+            (self.home / name).write_text("x\n", encoding="utf-8")
         self.assert_ok(self.run_cortex(self.project("acme"), "project", "add"))
         self.assertFalse(stale.exists())
-        self.assertEqual(sorted(os.listdir(self.home)), ["projects.toml", "projects.toml.lock"])
+        self.assertEqual(sorted(os.listdir(self.home)), sorted(["projects.toml", "projects.toml.lock", *others]))
 
     def test_a_rename_refused_for_a_moment_is_tried_again(self):
         # Windows, while a reader has the file open: PermissionError, for the milliseconds of a read.
@@ -387,8 +390,12 @@ class ConcurrencyTests(ProjectTestCase):
             raise OSError(errno.EBADF, os.strerror(errno.EBADF))
 
         root = self.project("acme")
+        self.home.mkdir()
+        live = self.home / "projects.toml.4242.tmp"        # another write's, under way: without the lock, no sweep
+        live.write_text("format = 1\n", encoding="utf-8")
         with self.in_process(), mock.patch.object(sync, "_try_lock", no_lock):
             self.assertEqual(registry.add(str(root)), (registry.Entry("acme", display(root)), True))
+        self.assertTrue(live.is_file())
 
     def test_the_lock_is_a_file_beside_the_registry_never_replaced(self):
         self.assert_ok(self.run_cortex(self.project("acme"), "project", "add"))
