@@ -44,6 +44,12 @@ def _upgrade(args: List[str]) -> int:
     return upgrade.run(args)
 
 
+def _project(args: List[str]) -> int:
+    from . import registry
+
+    return registry.run(args)
+
+
 def _self_update(args: List[str]) -> int:
     from . import self_update
 
@@ -56,6 +62,7 @@ COMMANDS: Dict[str, Tuple[str, Callable[[List[str]], int]]] = {
     "upgrade": ("Move the project to another Cortex version, saying first what changes", _upgrade),
     "self-update": ("Replace this cortex with a release's binary — the latest, by default", _self_update),
     "prune": ("Remove from the store the versions no project under the directories given pins", _prune),
+    "project": ("List this machine's Cortex projects, and add, remove or check them", _project),
     "validate": ("Check the project's overlays against the spec (ADR-001)", _validate),
 }
 
