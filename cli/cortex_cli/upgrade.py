@@ -23,9 +23,11 @@ most, and said by nothing offline. ``CORTEX_NO_UPDATE_CHECK``, set, keeps it fro
 ``cortex upgrade --all`` moves every project of the registry (ADR-011 §3.5), in name order, to the
 same target: one that is not ``ok`` is skipped, one that refuses stops none of the others, and the
 command ends with a line per project and what each must commit. The release is asked for once.
-``--branch NAME`` makes the branch ``NAME`` in each project that is a git work tree, before anything
-of it is written — refused where it exists; ``--commit --message M`` commits there the files the
-upgrade wrote, and nothing else. Neither is the default, and nothing is ever pushed.
+``--branch NAME`` makes the branch ``NAME`` in each project that is a git work tree and has something
+to commit, before anything of it is written — refused where it exists, unless it is the branch
+checked out; ``--commit --message M`` commits there the files the upgrade wrote, and nothing else —
+nothing at all when one of them held the developer's own changes. Neither is the default, and
+nothing is ever pushed.
 """
 
 from __future__ import annotations
@@ -70,6 +72,7 @@ class Outcome:
     files: List[Path] = field(default_factory=list)     # what the team commits, written — or that would be
     committed: Optional[str] = None                     # --commit: where — the branch, and the commit
     uncommitted: Optional[str] = None                   # --commit: why nothing was
+    ignored: bool = False                               # git ignores every one of the files: nothing to commit
 
     def names(self) -> List[str]:
         return [_shown_path(path, self.root) for path in self.files]
@@ -364,7 +367,10 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
 def _ending(outcome: Outcome, out: TextIO) -> None:
     """What the project must commit — or what ``--commit`` committed, and where."""
     names = outcome.names()
-    if outcome.target != outcome.pinned:
+    if outcome.ignored:
+        ready = f"Cortex {outcome.target} is ready. " if outcome.target != outcome.pinned else ""
+        out.write(f"\n{ready}Nothing to commit: git ignores {_and(names)}.\n")
+    elif outcome.target != outcome.pinned:
         done = f"Committed {', '.join(names)} on {outcome.committed} — nothing was pushed" if outcome.committed else \
             f"Commit {', '.join(names)}"
         out.write(f"\nCortex {outcome.target} is ready. {done}; teammates run `cortex sync` after they pull.\n")
@@ -384,10 +390,12 @@ def _served(the_store: store.Store, target: Version, again: str) -> None:
 
 def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: Optional[str],
              out: TextIO, err: TextIO, announce: bool = True,
-             prepare: Optional[Callable[[], None]] = None) -> Outcome:
+             prepare: Optional[Callable[[List[Path]], None]] = None) -> Outcome:
     """The upgrade of the project at or above ``cwd`` (ADR-010 §3.5): what it did, or would do.
     ``announce`` off, the project is not named — ``--all`` has named it. ``prepare`` runs once all is
-    checked, before anything of the project is written — so never on a dry run: ``--branch``'s branch."""
+    checked, before anything of the project is written, with the files the team commits that will be
+    written — and never when there are none: ``--branch``'s branch. A dry run runs it too, where it
+    may refuse, and makes nothing."""
     root = config.find_project(cwd)
     if root is None:
         raise UpgradeError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
@@ -450,6 +458,8 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
 
     rewrites = bootstraps(files, current, current_path, target_path, personality, err)
     team = [Path(root) / config.PROJECT_FILE, Path(root) / config.LOCK_FILE, *(path for path, _ in rewrites)]
+    if prepare is not None and not stops and refused is None:
+        prepare(team)
 
     if dry_run:
         for path, _ in rewrites:
@@ -464,8 +474,6 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
             f"the sync would refuse it — {refused}" if refused is not None else None
         return Outcome(root, current, target, 0 if why is None else 1, why, team)
 
-    if prepare is not None:
-        prepare()
     # The pin, the lock and the bootstrap files are what the team commits: a run that fails leaves
     # them as they were. What the sync changed on this machine — cortex.local.toml, cortex/ — the next
     # `cortex sync` puts right.
@@ -483,7 +491,8 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
 
 
 def _resume(root: str, project: config.Project, the_store: store.Store, files: List[Path], personality: bool,
-            dry_run: bool, out: TextIO, err: TextIO, prepare: Optional[Callable[[], None]] = None) -> Outcome:
+            dry_run: bool, out: TextIO, err: TextIO,
+            prepare: Optional[Callable[[List[Path]], None]] = None) -> Outcome:
     """On the pinned version, finish what an upgrade cut short, or a pin moved by hand, left: a
     bootstrap file nobody changed, of another version, written again; this machine and the lock,
     when they are not on the pin, synced (ADR-010 §3.5, step 1)."""
@@ -501,18 +510,19 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
         out.write(f"{behind}, and {config.PROJECT_FILE} pins Cortex {current} — an upgrade cut short, or a pin moved by "
                   f"hand: {'the sync would put them on it' if dry_run else 'syncing'}\n")
     lock = Path(root) / config.LOCK_FILE
+    relock = behind is not None and getattr(config.load_lock(root), "version", None) != current
+    team = ([lock] if relock else []) + [path for path, _ in rewrites]
+    if prepare is not None and team:
+        prepare(team)
     if dry_run:
         for path, _ in rewrites:
             out.write(f"{_shown_path(path, root)}: would be written again from Cortex {current}'s template — no one "
                       "changed it\n")
         if rewrites or behind is not None:
             out.write("--dry-run: nothing of the project was changed\n")
-        relock = behind is not None and getattr(config.load_lock(root), "version", None) != current
-        return Outcome(root, current, current, files=([lock] if relock else []) + [path for path, _ in rewrites])
+        return Outcome(root, current, current, files=team)
     if not rewrites and behind is None:
         return Outcome(root, current, current)
-    if prepare is not None:
-        prepare()
     locked = lock.read_bytes() if lock.is_file() else None
     _write(rewrites, {lock: locked} if behind is not None else {}, root, err,
            (lambda: sync.sync(root, None, None, out, err, announce=False)) if behind is not None else (lambda: None))
@@ -595,37 +605,116 @@ def _branch_exists(root: str, name: str) -> bool:
 
 
 def _branch_name(name: str) -> bool:
-    """Whether git takes ``name`` for a branch."""
-    return _git(working_directory(), "check-ref-format", "--branch", name).returncode == 0
+    """Whether git takes ``name`` for a new branch, as it is written: ``@{-1}`` and its like, which
+    ``check-ref-format --branch`` expands to a branch that exists, are refused."""
+    cwd = working_directory()
+    return (_git(cwd, "check-ref-format", "--branch", name).returncode == 0
+            and _git(cwd, "check-ref-format", f"refs/heads/{name}").returncode == 0)
 
 
-def _commit(root: str, files: List[Path], message: str) -> Tuple[Optional[str], Optional[str]]:
-    """Commit ``files`` in the work tree of ``root``, with ``message``, and nothing else: a change of
-    another file, staged or not, stays as it is. Where it was committed — the branch, and the commit
-    — or why nothing was: git ignores one of the files, or tracks no ``cortex.toml`` there — the pin
-    is this developer's own (ADR-010 §3.8). ``UpgradeError`` when git fails."""
+def _on_branch(root: str) -> Optional[str]:
+    """The branch checked out in the work tree of ``root`` — ``None`` on a detached HEAD."""
+    return _git(root, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip() or None
+
+
+def _repository(root: str) -> str:
+    """The repository of the work tree of ``root``: its linked work trees share it, and its branches."""
+    found = _git_ok(root, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    return os.path.normcase(os.path.realpath(found))
+
+
+def _real(path) -> str:
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _git_paths(root: str, files: List[Path]) -> List[str]:
+    """``files`` as git names them in the work tree of ``root`` — a link, by where it points."""
     real = os.path.realpath(root)
-    paths = [display(os.path.relpath(os.path.realpath(path), real)) for path in files]     # a link: where it points
+    return [display(os.path.relpath(os.path.realpath(path), real)) for path in files]
+
+
+def _ignored(root: str, files: List[Path]) -> List[str]:
+    """Those of ``files`` git ignores, as git names them."""
+    return [path for path in _git_paths(root, files) if _git(root, "check-ignore", "-q", "--", path).returncode == 0]
+
+
+def _changed(root: str, top: str, files: List[Path]) -> List[Path]:
+    """Those of ``files`` git sees changed in the work tree of ``root``, whose top is ``top``: staged,
+    not staged, or untracked."""
+    proc = _git_ok(root, "status", "--porcelain", "-z", "--untracked-files=all", "--",
+                   *_literal(_git_paths(root, files)), timeout=None)
+    seen, fields = set(), iter(proc.stdout.split("\0"))
+    for field in fields:                # "XY path", and after a rename or a copy, the path it was
+        if len(field) > 3:
+            seen.add(_real(os.path.join(top, field[3:])))
+            if "R" in field[:2] or "C" in field[:2]:
+                seen.add(_real(os.path.join(top, next(fields, ""))))
+    return [path for path in files if _real(path) in seen]
+
+
+def _commit(root: str, top: str, files: List[Path], message: str,
+            theirs: List[Path]) -> Tuple[Optional[str], Optional[str]]:
+    """Commit ``files`` in the work tree of ``root``, whose top is ``top``, with ``message``, and
+    nothing else: a change of another file, staged or not, stays as it is. Where it was committed —
+    the branch, and the commit — or why nothing was: git tracks no ``cortex.toml`` there — the pin is
+    this developer's own (ADR-010 §3.8); git ignores one of the files; they are as committed; or
+    ``theirs``, those git saw changed before the upgrade wrote them, hold the developer's own
+    changes, which are no part of the team's commit. ``UpgradeError`` when git fails, or refuses the
+    commit — the files stay staged then."""
+    paths = _git_paths(root, files)
     if _git(root, "ls-files", "--error-unmatch", "--", *_literal([config.PROJECT_FILE])).returncode != 0:
         return None, f"git does not track its {config.PROJECT_FILE} — the pin is this developer's own"
-    ignored = [path for path in paths if _git(root, "check-ignore", "-q", "--", path).returncode == 0]
+    ignored = _ignored(root, files)
     if ignored:
         return None, f"git ignores {_and(ignored)}"
+    if not _changed(root, top, files):
+        return None, f"{_and(paths)} {'are' if len(paths) > 1 else 'is'} as committed already"
+    if theirs:
+        names = [_shown_path(path, root) for path in theirs]
+        return None, (f"{_and(names)} held changes of yours before the upgrade wrote "
+                      f"{'them' if len(names) > 1 else 'it'} — commit by hand what is the team's")
     _git_ok(root, "add", "--", *_literal(paths), timeout=None)
     if _git(root, "diff", "--cached", "--quiet", "--", *_literal(paths)).returncode == 0:
         return None, f"{_and(paths)} {'are' if len(paths) > 1 else 'is'} as committed already"
-    _git_ok(root, "commit", "-q", "-m", message, "--", *_literal(paths), timeout=None)       # its hooks run
+    proc = _git(root, "commit", "-q", "-m", message, "--", *_literal(paths), timeout=None)      # its hooks run
+    if proc.returncode != 0:
+        raise UpgradeError(f"git refused the commit — {(proc.stderr or proc.stdout).strip() or proc.returncode}\n"
+                           f"{_and(paths)} {'stay' if len(paths) > 1 else 'stays'} staged, ready to commit by hand")
     commit = _git_ok(root, "rev-parse", "--short", "HEAD").stdout.strip()
-    branch = _git(root, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
-    return f"{branch or 'a detached HEAD'}, {commit}", None
+    return f"{_on_branch(root) or 'a detached HEAD'}, {commit}", None
+
+
+class Interrupted(KeyboardInterrupt):
+    """Ctrl-C during the upgrade of a project that ``--branch`` made a branch for."""
+
+    def __init__(self, branch: str):
+        super().__init__(branch)
+        self.branch = branch
 
 
 def _move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: bool = True,
           made: Optional[Dict[str, str]] = None) -> Outcome:
     """The upgrade of the project of ``cwd``, and what ``--branch`` and ``--commit`` ask of git around
-    it: the branch made once all is checked, before anything is written — refused where it exists;
-    the files the upgrade wrote committed. ``made``: the work trees this run made the branch in, by
-    their top — a second project of one of them finds it made, and does not refuse it."""
+    it (``_git_move``). Interrupted once its branch is made, it says so, and raises ``Interrupted``."""
+    branched: List[str] = []
+    try:
+        return _git_move(cwd, options, out, err, announce, {} if made is None else made, branched)
+    except KeyboardInterrupt as error:
+        if not branched:
+            raise
+        out.flush()
+        err.write(f"\nnote: interrupted — the branch {options.branch} was made for it, and is checked out in "
+                  f"{display(branched[0])}: `git status` there says what was written\n")
+        raise Interrupted(options.branch) from error
+
+
+def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: bool, made: Dict[str, str],
+              branched: List[str]) -> Outcome:
+    """The upgrade, with the branch made once all is checked and before anything is written, where
+    there is something to commit; the files the upgrade wrote committed. ``made``: the repositories
+    this run made the branch in, and the work tree it is checked out in — a second project of that
+    work tree finds it checked out, one of another work tree of the repository is refused. ``branched``
+    gets the work tree this project's branch was made in."""
     root = config.find_project(cwd)
     top = None
     if root is not None and (options.branch is not None or options.message is not None):
@@ -634,18 +723,38 @@ def _move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: bool 
             what = (["no branch is made"] if options.branch is not None else []) + \
                 (["nothing is committed"] if options.message is not None else [])
             err.write(f"note: {display(root)} is in no git work tree — {' and '.join(what)} there\n")
-    made = {} if made is None else made
-    key = os.path.normcase(os.path.realpath(top)) if top is not None else ""
-    branching = options.branch is not None and top is not None and made.get(key) != options.branch
-    if branching and _branch_exists(root, options.branch):
-        raise UpgradeError(f"the branch {options.branch} exists already in {display(top)} — nothing was changed. "
-                           "Name another one with --branch")
-    branched = []
+    branching = options.branch is not None and top is not None
+    pin = Path(root) / config.PROJECT_FILE if root is not None else None
+    theirs: List[Path] = []
+    if options.message is not None and top is not None and not options.dry_run:
+        # What git sees changed before anything is written is the developer's: never committed.
+        theirs = _changed(root, top, [pin, Path(root) / config.LOCK_FILE, *_instructions_files(Path(root), options.named)])
+    asked = []
 
-    def branch() -> None:
+    def branch(files: List[Path]) -> None:
+        asked.append(True)
+        ignored = _ignored(root, files)
+        if len(ignored) == len(files):
+            if not options.dry_run:
+                out.write(f"git: no branch {options.branch} is made — git ignores {_and(ignored)}\n")
+            return
+        if _on_branch(root) == options.branch:
+            if not options.dry_run:
+                out.write(f"git: on the branch {options.branch} already\n")
+            return
+        key, repository = _real(top), _repository(root)
+        if made.get(repository, key) != key:
+            raise UpgradeError(f"the branch {options.branch} is checked out in {display(made[repository])}, where this "
+                               "run made it, and git checks a branch out in one work tree at a time — nothing was "
+                               f"changed. `cortex upgrade --branch NAME` in {display(root)} moves it on another branch")
+        if _branch_exists(root, options.branch):
+            raise UpgradeError(f"the branch {options.branch} exists already in {display(top)} — nothing was changed. "
+                               "Name another one with --branch")
+        if options.dry_run:
+            return
         _git_ok(root, "checkout", "-q", "-b", options.branch)
-        made[key] = options.branch
-        branched.append(key)
+        made[repository] = key
+        branched.append(top)
         out.write(f"git: on a new branch, {options.branch}\n")
 
     try:
@@ -656,15 +765,24 @@ def _move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: bool 
             raise
         raise UpgradeError(f"{_refusal(error)} — the branch {options.branch} was made for it, and is checked out") \
             from error
-    if branching and not branched and not options.dry_run and outcome.why is None:
+    if branching and not asked and not options.dry_run and outcome.why is None \
+            and _on_branch(root) != options.branch:
         out.write(f"git: no branch {options.branch} is made — nothing was written\n")
+    if top is not None and outcome.why is None and outcome.files:
+        outcome.ignored = len(_ignored(root, outcome.files)) == len(outcome.files)
     if options.message is None or options.dry_run or outcome.why is not None or not outcome.files:
         return outcome
     if top is None:
         outcome.uncommitted = "in no git work tree"
         return outcome
+    if outcome.ignored:
+        err.write(f"note: nothing to commit in {display(root)} — git ignores {_and(outcome.names())}\n")
+        return outcome
+    written = {_real(path) for path in outcome.files}
     try:
-        outcome.committed, outcome.uncommitted = _commit(root, outcome.files, options.message)
+        outcome.committed, outcome.uncommitted = _commit(
+            root, top, outcome.files, options.message,
+            [path for path in theirs if path == pin or _real(path) in written])
     except UpgradeError as error:
         outcome.code, outcome.uncommitted = 1, str(error)
         out.flush()
@@ -672,6 +790,11 @@ def _move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: bool 
     else:
         if outcome.uncommitted is not None:
             err.write(f"note: nothing is committed in {display(root)} — {outcome.uncommitted}\n")
+        else:
+            superproject = _git(root, "rev-parse", "--show-superproject-working-tree").stdout.strip()
+            if superproject:
+                err.write(f"note: {display(top)} is a submodule of {display(superproject)}, which now shows it changed "
+                          "— commit it there too\n")
     return outcome
 
 
@@ -740,8 +863,11 @@ def _each(entries: List[registry.Entry], options: _Options, out: TextIO, err: Te
             outcome = Outcome(entry.path, None, None, 1, _refusal(error))
             out.flush()
             err.write(f"cortex upgrade: {outcome.why}\n")
-        except KeyboardInterrupt:
-            done.append((entry, None, "interrupted — it may be half written: `git status` there says what was written"))
+        except KeyboardInterrupt as error:
+            branch = getattr(error, "branch", None)
+            made_for = f" on the branch {branch}, made for it" if branch else ""
+            done.append((entry, None, f"interrupted{made_for} — it may be half written: `git status` there says "
+                                      "what was written"))
             raise
         done.append((entry, outcome, None))
         out.flush()
@@ -763,14 +889,20 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
         else:
             status = f"already on {outcome.target}"
         out.write(f"  {entry.name:<{width}}  {status}\n")
-    commits = [(entry, outcome) for entry, outcome, _ in done
-               if outcome is not None and outcome.why is None and outcome.files]
+    written = [(entry, outcome) for entry, outcome, _ in done if outcome is not None and outcome.why is None
+               and outcome.files]
+    commits = [(entry, outcome) for entry, outcome in written if not outcome.ignored]
     if not commits:
         out.write("\nNothing to commit, in any project.\n")
+        for entry, outcome in written:
+            out.write(f"  {entry.name:<{width}}  {entry.path}: git ignores {_and(outcome.names())}\n")
         return
     committing = options.message is not None and not options.dry_run
     out.write(f"\nWhat each project {'would have to' if options.dry_run else 'must'} commit:\n")
-    for entry, outcome in commits:
+    for entry, outcome in written:
+        if outcome.ignored:
+            out.write(f"  {entry.name:<{width}}  {entry.path}: nothing — git ignores {_and(outcome.names())}\n")
+            continue
         said = "" if not committing else f" — committed on {outcome.committed}" if outcome.committed else \
             f" — not committed: {_first(outcome.uncommitted)}"
         out.write(f"  {entry.name:<{width}}  {entry.path}: {_and(outcome.names())}{said}\n")
@@ -815,7 +947,7 @@ def run(args: List[str]) -> int:
                         help="the bootstrap file to write again, when it is no known tool's")
     parser.add_argument("--branch", metavar="NAME",
                         help="make the git branch NAME, and switch to it, before anything is written — refused where "
-                             "it exists")
+                             "it exists, unless it is checked out; none where there is nothing to commit")
     parser.add_argument("--commit", action="store_true",
                         help="commit the files the upgrade wrote, and nothing else, with --message — nothing is pushed")
     parser.add_argument("--message", metavar="MESSAGE", help="the message of --commit's commit")

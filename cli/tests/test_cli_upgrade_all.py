@@ -410,6 +410,16 @@ class GitCommandLineTests(GitTestCase):
                 self.assertEqual(proc.returncode, 2, proc.out + proc.err)
                 self.assertIn('--branch "two..dots" is no branch name git takes', proc.err)
 
+    def test_a_branch_name_git_would_expand_exits_2(self):
+        repository = self.tmp / "repository"
+        repository.mkdir()
+        self.repository(repository)
+        self.git(repository, "checkout", "-q", "-b", "elsewhere")
+        self.git(repository, "checkout", "-q", "-")             # @{-1} names elsewhere now
+        proc = self.run_cortex(repository, "upgrade", "--branch", "@{-1}")
+        self.assertEqual(proc.returncode, 2, proc.out + proc.err)
+        self.assertIn('--branch "@{-1}" is no branch name git takes', proc.err)
+
 
 @DOWNLOADS
 @NEEDS_GIT
@@ -448,6 +458,91 @@ class BranchTests(GitTestCase):
         self.assertEqual(self.branch(alpha), on)
         self.assertEqual(self.git(alpha, "branch", "--list", "cortex-up"), "")
         self.assertIn("git: no branch cortex-up is made — nothing was written\n", proc.out)
+
+    def test_a_project_refused_at_its_checks_gets_no_branch(self):
+        alpha, beta = self.make("alpha"), self.make("beta")
+        self.break_overlays(alpha)
+        heads = {root: self.repository(root) for root in (alpha, beta)}
+        (beta / "cortex").mkdir()
+        (beta / "cortex" / "notes.md").write_text("ours\n", encoding="utf-8")    # a cortex/ sync did not make
+        on = {root: self.branch(root) for root in (alpha, beta)}
+        self.register(alpha, beta)
+        proc = self.upgrade_all("--branch", "cortex-up")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        for root in (alpha, beta):
+            self.assertEqual((self.branch(root), self.head(root)), (on[root], heads[root]))
+            self.assertEqual(self.git(root, "branch", "--list", "cortex-up"), "")
+        self.assertIn(f"  alpha  refused: the overlays fail against Cortex {OWN} — nothing was changed\n", proc.out)
+        self.assertIn("\n  beta   refused: cortex/ is ", proc.out)
+        self.assertNotIn("git: on a new branch", proc.out)
+        self.assertNotIn("made for it", proc.out + proc.err)
+
+    def test_the_same_run_again_moves_what_was_refused_and_refuses_none_it_moved(self):
+        alpha, beta = self.make("alpha"), self.make("beta")
+        self.break_overlays(beta)
+        for root in (alpha, beta):
+            self.repository(root)
+        self.register(alpha, beta)
+        args = ("--branch", "cortex-up", "--commit", "--message", "chore: Cortex 9.9.9")
+        self.assertEqual(self.upgrade_all(*args).returncode, 1)
+        moved = self.head(alpha)
+        shutil.rmtree(beta / "agents")
+        self.git(beta, "commit", "-q", "-am", "the overlay, fixed")
+        proc = self.upgrade_all(*args)
+        self.assert_ok(proc)
+        self.assertEqual((self.branch(alpha), self.head(alpha)), ("cortex-up", moved))
+        self.assertEqual(self.branch(beta), "cortex-up")
+        self.assert_moved(beta)
+        self.assertEqual(self.changed(beta), ["cortex.lock", "cortex.toml"])
+        self.assertNotIn("exists already", proc.out + proc.err)
+        self.assertIn(f"  alpha  already on {OWN}\n  beta   moved 9.9.8 → {OWN}\n", self.summary(proc))
+
+    def test_a_project_on_the_branch_already_is_written_there(self):
+        alpha = self.make("alpha")
+        first = self.repository(alpha)
+        self.git(alpha, "checkout", "-q", "-b", "cortex-up")
+        self.register(alpha)
+        proc = self.upgrade_all("--branch", "cortex-up", "--commit", "--message", "chore: Cortex 9.9.9")
+        self.assert_ok(proc)
+        self.assertIn("git: on the branch cortex-up already\n", proc.out)
+        self.assertEqual(self.branch(alpha), "cortex-up")
+        self.assertEqual(self.git(alpha, "log", "-1", "--format=%s%n%P"), f"chore: Cortex 9.9.9\n{first}")
+        self.assert_moved(alpha)
+
+    def test_a_branch_this_run_made_in_another_work_tree_of_the_repository_is_said(self):
+        one = self.make("one")
+        self.repository(one)
+        two = self.code / "two"
+        self.git(one, "worktree", "add", "-q", "-b", "other", str(two))
+        self.assert_ok(self.run_cortex(two, "sync"))
+        self.register(one, two)
+        before = worktree(two)
+        proc = self.upgrade_all("--branch", "cortex-up")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertEqual((self.branch(one), self.branch(two)), ("cortex-up", "other"))
+        self.assertEqual(worktree(two), before)
+        self.assertIn(f"  two  refused: the branch cortex-up is checked out in {display(one)}, where this run made it, "
+                      "and git checks a branch out in one work tree at a time — nothing was changed. `cortex upgrade "
+                      f"--branch NAME` in {display(two)} moves it on another branch\n", proc.out)
+
+    def test_where_git_ignores_every_file_written_no_branch_is_made(self):
+        alpha, beta = self.make("alpha"), self.make("beta")
+        for root in (alpha, beta):
+            self.repository(root, ignore="cortex.local.toml\ncortex.toml\ncortex.lock\n")
+        on = self.branch(alpha)
+        self.register(alpha)
+        proc = self.upgrade_all("--branch", "cortex-up")
+        self.assert_ok(proc)
+        self.assert_moved(alpha)
+        self.assertEqual(self.branch(alpha), on)
+        self.assertEqual(self.git(alpha, "branch", "--list", "cortex-up"), "")
+        self.assertIn("git: no branch cortex-up is made — git ignores cortex.toml and cortex.lock\n", proc.out)
+        self.assertTrue(self.summary(proc).endswith(
+            f"\nNothing to commit, in any project.\n  alpha  {display(alpha)}: git ignores cortex.toml and cortex.lock\n"),
+            proc.out)
+        proc = self.upgrade(beta, "--branch", "cortex-up")
+        self.assert_ok(proc)
+        self.assertIn(f"\nCortex {OWN} is ready. Nothing to commit: git ignores cortex.toml and cortex.lock.\n", proc.out)
 
     def test_the_branch_is_made_before_anything_is_written(self):
         alpha = self.make("alpha")
@@ -548,17 +643,22 @@ class CommitTests(GitTestCase):
 
     def test_where_git_does_not_track_the_pin_or_ignores_a_file_nothing_is_committed(self):
         # A workspace whose cortex.toml is not committed: the pin is the developer's own (ADR-010 §3.8).
-        alpha, beta = self.make("alpha"), self.make("beta")
+        alpha, beta, gamma = self.make("alpha"), self.make("beta"), self.make("gamma")
         first = {alpha: self.repository(alpha, ignore="cortex.local.toml\ncortex.toml\ncortex.lock\n"),
-                 beta: self.repository(beta, ignore="cortex.local.toml\ncortex.lock\n")}
-        self.register(alpha, beta)
+                 beta: self.repository(beta, ignore="cortex.local.toml\ncortex.lock\n"), gamma: self.repository(gamma)}
+        self.git(gamma, "rm", "-q", "--cached", "cortex.toml")
+        self.git(gamma, "commit", "-q", "-m", "the pin, untracked")
+        first[gamma] = self.head(gamma)
+        self.register(alpha, beta, gamma)
         proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
         self.assert_ok(proc)
-        for root in (alpha, beta):
+        for root in (alpha, beta, gamma):
             self.assert_moved(root)
             self.assertEqual(self.head(root), first[root])
-        self.assertIn(f"  alpha  {display(alpha)}: cortex.toml and cortex.lock — not committed: git does not track its "
+        self.assertIn(f"  gamma  {display(gamma)}: cortex.toml and cortex.lock — not committed: git does not track its "
                       "cortex.toml — the pin is this developer's own\n", proc.out)
+        self.assertIn(f"  alpha  {display(alpha)}: nothing — git ignores cortex.toml and cortex.lock\n", proc.out)
+        self.assertIn(f"note: nothing to commit in {display(alpha)} — git ignores cortex.toml and cortex.lock\n", proc.err)
         self.assertIn(f"  beta   {display(beta)}: cortex.toml and cortex.lock — not committed: git ignores cortex.lock\n",
                       proc.out)
         self.assertIn(f"note: nothing is committed in {display(beta)} — git ignores cortex.lock\n", proc.err)
@@ -579,6 +679,68 @@ class CommitTests(GitTestCase):
         self.assertIn(f"  beta   {display(beta)}: cortex.toml and cortex.lock — not committed: git add failed — fatal: "
                       "Unable to create ", proc.out)
         self.assertIn("— the upgrade is done, and nothing was committed\n", proc.err)
+
+    def test_files_holding_changes_of_yours_are_not_committed(self):
+        alpha, beta = self.make("alpha"), self.make("beta")
+        (alpha / "notes.md").write_text("ours\n", encoding="utf-8")
+        first = {root: self.repository(root) for root in (alpha, beta)}
+        (alpha / "cortex.toml").write_text(self.pinned(alpha).replace('theme = "h2g2"', 'theme = "none"'),
+                                           encoding="utf-8")                  # not for the team
+        (alpha / "notes.md").write_text("staged\n", encoding="utf-8")
+        self.git(alpha, "add", "notes.md")
+        pinned = self.pinned(beta)
+        (beta / "cortex.toml").write_text(pinned + "# staged\n", encoding="utf-8")
+        self.git(beta, "add", "cortex.toml")
+        (beta / "cortex.toml").write_text(pinned + "# staged\n# not staged\n", encoding="utf-8")
+        staged = self.git(beta, "diff", "--cached")
+        self.register(alpha, beta)
+        proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        for root in (alpha, beta):
+            self.assert_moved(root)
+            self.assertEqual(self.head(root), first[root])
+            self.assertIn(f"  {root.name:<5}  {display(root)}: cortex.toml and cortex.lock — not committed: cortex.toml "
+                          "held changes of yours before the upgrade wrote it — commit by hand what is the team's\n",
+                          proc.out)
+            self.assertIn(f"note: nothing is committed in {display(root)} — cortex.toml held changes of yours", proc.err)
+        self.assertIn('theme = "none"', self.pinned(alpha))
+        self.assertEqual(self.git(alpha, "diff", "--cached", "--name-only"), "notes.md")
+        self.assertEqual(self.git(beta, "diff", "--cached"), staged)
+        self.assertIn("# not staged", self.pinned(beta))
+
+    def test_a_commit_git_refuses_says_so_and_leaves_the_files_staged(self):
+        alpha = self.make("alpha")
+        first = self.repository(alpha)
+        self.git(alpha, "config", "commit.gpgsign", "true")
+        self.git(alpha, "config", "gpg.program", sys.executable)        # takes none of gpg's options: it fails
+        proc = self.upgrade(alpha, "--commit", "--message", self.MESSAGE)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assert_moved(alpha)
+        self.assertEqual(self.head(alpha), first)
+        self.assertEqual(self.git(alpha, "diff", "--cached", "--name-only").splitlines(), ["cortex.lock", "cortex.toml"])
+        self.assertIn("cortex upgrade: git refused the commit — ", proc.err)
+        self.assertIn("\ncortex.toml and cortex.lock stay staged, ready to commit by hand — the upgrade is done, and "
+                      "nothing was committed\n", proc.err)
+
+    def test_a_project_that_is_a_submodule_says_its_superproject_shows_it_changed(self):
+        source = self.make("source")
+        self.repository(source)
+        top = self.code / "super"
+        top.mkdir()
+        (top / "README.md").write_text("super\n", encoding="utf-8")
+        self.repository(top)
+        self.git(top, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(source), "mod")
+        self.git(top, "commit", "-q", "-m", "the submodule")
+        mod = top / "mod"
+        for key, value in (("user.name", "Cortex Tests"), ("user.email", "tests@example.com")):
+            self.git(mod, "config", key, value)
+        self.assert_ok(self.run_cortex(mod, "sync"))
+        self.register(mod)
+        proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        self.assertEqual(self.git(mod, "log", "-1", "--format=%s"), self.MESSAGE)
+        self.assertIn(f"note: {display(mod)} is a submodule of {display(top)}, which now shows it changed — commit it "
+                      "there too\n", proc.err)
 
     def test_on_the_pinned_version_the_lock_it_wrote_is_committed(self):
         alpha = self.make("alpha")
@@ -683,6 +845,36 @@ class BranchRefusedLaterTests(GitTestCase):
         self.assertEqual(self.branch(alpha), "cortex-up")
         self.assertIn('version = "9.9.8"', self.pinned(alpha))
         self.assertEqual(self.git(alpha, "status", "--porcelain"), "")
+
+    def test_a_project_interrupted_once_its_branch_is_made_says_the_branch(self):
+        alpha, beta = self.make("alpha"), self.make("beta")
+        for root in (alpha, beta):
+            self.repository(root)
+        self.register(alpha, beta)
+
+        def interrupted(root, *args, **kwargs):
+            raise KeyboardInterrupt
+
+        environment = {"CORTEX_HOME": str(self.home), "CORTEX_RELEASES_URL": self.release.url,
+                       "CORTEX_NO_UPDATE_CHECK": "1", "GIT_CONFIG_NOSYSTEM": "1",
+                       "GIT_CONFIG_GLOBAL": self.env["GIT_CONFIG_GLOBAL"]}
+        with mock.patch.dict(os.environ, environment), mock.patch.object(sync, "sync", interrupted), \
+                mock.patch.object(store.Store, "__init__", functools.partialmethod(store.Store.__init__, own_version=OWN)):
+            out, err = io.StringIO(), io.StringIO()
+            code = upgrade.upgrade_all(upgrade._Options(None, False, False, branch="cortex-up"), out, err)
+            self.assertEqual(code, 130)
+            self.assertIn("  alpha  interrupted on the branch cortex-up, made for it — it may be half written: `git status` "
+                          "there says what was written\n  beta   not reached\n", out.getvalue())
+            self.assertIn(f"\nnote: interrupted — the branch cortex-up was made for it, and is checked out in "
+                          f"{display(alpha)}: `git status` there says what was written\n", err.getvalue())
+            self.assertEqual(self.branch(alpha), "cortex-up")
+            self.assertEqual(self.git(alpha, "status", "--porcelain"), "")      # the files put back as they were
+            out, err = io.StringIO(), io.StringIO()
+            with self.assertRaises(KeyboardInterrupt):
+                upgrade.upgrade(str(beta), None, False, False, None, out, err, branch="cortex-up")
+            self.assertIn(f"\nnote: interrupted — the branch cortex-up was made for it, and is checked out in "
+                          f"{display(beta)}", err.getvalue())
+        self.assertEqual(self.branch(beta), "cortex-up")
 
 
 if __name__ == "__main__":
