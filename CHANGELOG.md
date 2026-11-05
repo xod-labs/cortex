@@ -12,7 +12,7 @@ release note under [`changelog/`](changelog/).
 
 ### Changed
 - **`cortex prune` with no `DIR` reads the registry** (ADR-011 §3.4). It keeps the versions of the projects registered — each one's pin, the version it reads now — the binary's own and each `--keep`. An entry whose project is gone, `missing` or `no-project` with nothing of Cortex left, is dropped from the registry, and said, before any version is removed: a registry that cannot be written stops the command, nothing removed. A `no-project` entry whose `cortex.local.toml` still reads a version — a branch without Cortex checked out — stays, and keeps it. An `unreadable` entry is named, and kept. With nothing registered it exits 2, as it did with no `DIR`; `cortex prune DIR...` works as in 1.4.0, and neither reads nor writes the registry.
-- **The instructions file has a rule for a spec that is gone** (ADR-011 §5). When the directory `spec` names does not exist — `cortex prune` removed the version, or the store was emptied — the assistant runs `cortex sync`, as it does for a project not synced. `cortex upgrade` to 1.5.0 rewrites a project's file with it, unless someone edited the file.
+- **The instructions file has a rule for a spec that is gone** (ADR-011 §5). When the directory `spec` names does not exist — `cortex prune` removed the version, or the store was emptied — the assistant runs `cortex sync`, as it does for a project not synced; a `cortex/` that links to a checkout moved or deleted, which the sync refuses (#303), it removes first. `cortex upgrade` to 1.5.0 rewrites a project's file with it, unless someone edited the file.
 
 ## [1.4.0] - 2026-11-04 — You Are Here _(Released)_
 [Full notes](changelog/1.4.0.md)
