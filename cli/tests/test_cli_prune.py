@@ -678,7 +678,8 @@ class RegistryInProcessTests(RegistryTestCase):
         with mock.patch.object(registry, "state", a_sync_meanwhile):
             code, out, _ = self.prune()
         self.assertEqual(code, 0, out)
-        self.assertIn("  kept     9.9.5 — used by late\n  kept     9.9.6 — used by late\n", out)
+        self.assertIn("1 more project(s) registered meanwhile, read too\n  kept     9.9.5 — used by late\n"
+                      "  kept     9.9.6 — used by late\n", out)
         self.assertEqual(self.in_store(), ["9.9.5", "9.9.6", "9.9.7"])
 
     def test_the_store_is_listed_before_the_projects_are_read(self):

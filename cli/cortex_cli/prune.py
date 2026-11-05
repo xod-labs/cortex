@@ -5,8 +5,9 @@ the ones they read now, this binary's own and each ``--keep``, and removes every
 the store. The projects are:
 
 - with no ``DIR``, the registry's (ADR-011), each read where it is. An entry whose project is gone —
-  ``missing``, ``no project`` — is dropped from the registry, and its version no longer kept for
-  it. An ``unreadable`` one stays, named, and keeps what can be read of its versions;
+  ``missing``, or ``no-project`` with no version read there — is dropped from the registry, and its
+  version no longer kept for it. An ``unreadable`` one stays, named, and keeps what can be read of
+  its versions; so does a ``no-project`` one whose ``cortex.local.toml`` still reads a version;
 - with ``DIR...``, as in 1.4.0, those under each ``DIR`` — every ``cortex.toml`` up to six
   directories down, past ``.git``, ``node_modules``, ``vendor``, ``.venv`` and the ``cortex/`` a link
   or copy sync made. The registry is neither read nor written.
@@ -229,7 +230,10 @@ def prune(directories: List[str], keep: List[str], dry_run: bool, out: TextIO, e
         # Read again just before the removals: a project registered since the first read — a sync
         # that ended meanwhile — keeps its versions. One registered after this read loses a version
         # it synced from the store already, until its next sync, which its assistant runs (§5).
-        _registered([entry for entry in registry.load() if entry not in entries], used, err)
+        more = [entry for entry in registry.load() if entry not in entries]
+        if more:
+            out.write(f"{len(more)} more project(s) registered meanwhile, read too\n")
+        _registered(more, used, err)
     kept = {version: f"used by {', '.join(roots)}" for version, roots in used.items()}
     kept.setdefault(the_store.own, "this cortex's own")
     for version in keep:
