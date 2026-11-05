@@ -75,7 +75,7 @@ Each technical role has a `## 🔌 Capabilities` section listing the categories 
 ```
 
 Two kinds of category coexist here: those resolved **against the project's stack** (`languages/`,
-`frameworks/`, `databases/`…) and those loaded **unconditionally** (`security/`, `practices/`, `release/`) because
+`frameworks/`, `databases/`, `design/`…) and those loaded **unconditionally** (`security/`, `practices/`, `release/`) because
 the craft they carry is true whatever the stack.
 
 ### 2. The Prompt Manager resolves the files
