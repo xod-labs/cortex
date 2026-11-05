@@ -141,6 +141,10 @@ class RegistryTests(unittest.TestCase):
                 (self.registry({**acme, "name": "Acme"}), 'project 1: name "Acme" is no project name — lowercase'),
                 (self.registry({**acme, "path": "code/acme"}), 'project 1: path "code/acme" is not absolute'),
                 (self.registry({**acme, "path": ""}), 'project 1: path "" is not absolute'),
+                (self.registry({**acme, "path": self.path("a\x00b")}),
+                 'project 1: path ".*a\\\\u0000b" holds a control character — projects.toml takes none in a path'),
+                (self.registry({**acme, "path": self.path("a\nb")}), 'project 1: path .* holds a control character'),
+                (self.registry({**acme, "path": self.path("a\x7fb")}), 'project 1: path .* holds a control character'),
                 (self.registry(acme, {**acme, "path": self.path("other")}),
                  'project 2: name "acme" is project 1\'s too — two projects never share a name')):
             with self.subTest(data=data):
@@ -148,7 +152,7 @@ class RegistryTests(unittest.TestCase):
                     project.check_registry(data)
 
     def test_two_entries_never_write_the_same_directory(self):
-        # Read from the text: a final separator, ".", ".." and, where the system ignores it, case.
+        # Read from the text: a final separator, ".", ".." and, on Windows, case.
         acme = self.path("acme")
         same = [acme + os.sep, self.path(".", "acme"), self.path("x", "..", "acme")]
         if os.path.normcase("A") == "a":

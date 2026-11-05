@@ -32,6 +32,9 @@ REGISTRY_FILE = "projects.toml"
 REGISTRY_KEYS: Tuple[str, ...] = ("format", "project")
 REGISTRY_ENTRY_KEYS: Tuple[str, ...] = ("name", "path")
 REGISTRY_FORMAT = 1
+# What a path of projects.toml never holds: NUL, which no system takes in a file name, and the others
+# a terminal reads as commands, which a message would print.
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 # The name of a project of the registry: lowercase, so that two never differ by case alone.
 PROJECT_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}", re.ASCII)
 PROJECT_NAME_RULE = 'lowercase letters, digits, ".", "_" and "-", 64 at most, the first a letter or a digit'
@@ -66,8 +69,9 @@ def is_project_name(value: object) -> bool:
 
 def directory_key(path: str) -> str:
     """``path`` as two entries of ``projects.toml`` that name one directory write it alike: ``.``,
-    ``..`` and a final separator undone, and the case, where the system ignores it. Read from the
-    text alone — a link is the file system's, which the reader resolves."""
+    ``..`` and a final separator undone, and, on Windows, the case. Read from the text alone — a
+    link, or a case the file system ignores elsewhere, is the file system's, which the reader
+    resolves."""
     return os.path.normcase(os.path.normpath(path))
 
 
@@ -181,6 +185,9 @@ def check_registry(data: Mapping, name: str = REGISTRY_FILE) -> None:
             raise ProjectFileError(f'{where}: name {shown(entry["name"])} is no project name — {PROJECT_NAME_RULE}')
         if not os.path.isabs(entry["path"]):
             raise ProjectFileError(f'{where}: path {shown(entry["path"])} is not absolute')
+        if CONTROL.search(entry["path"]):
+            raise ProjectFileError(f'{where}: path {shown(entry["path"])} holds a control character — '
+                                   f"{REGISTRY_FILE} takes none in a path")
         if entry["name"] in names:
             raise ProjectFileError(f'{where}: name {shown(entry["name"])} is project {names[entry["name"]]}\'s too — '
                                    "two projects never share a name")

@@ -531,6 +531,8 @@ class ListTests(StateTestCase):
                                (f'format = 1\n\n[[project]]\nname = "a"\npath = "{display(acme)}"\n\n[[project]]\n'
                                 f'name = "b"\npath = "{display(acme)}/"\n', "project 2: path .* names the directory of "
                                                                             "project 1"),
+                               (f'format = 1\n\n[[project]]\nname = "a"\npath = "{display(acme)}\\u0000"\n',
+                                "project 1: path .* holds a control character"),
                                ("format = 2\n", "format 2 is written by a later Cortex .* cortex self-update")):
             for action in (("list",), ("list", "--json"), ("check",)):
                 with self.subTest(text=text, action=action):
