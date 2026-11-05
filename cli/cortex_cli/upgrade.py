@@ -74,9 +74,20 @@ class Outcome:
     uncommitted: Optional[str] = None                   # --commit: why nothing was
     ignored: bool = False                               # git ignores every one of the files: nothing to commit
     left: List[Path] = field(default_factory=list)      # --commit, nothing written: files git sees changed still
+    outside: List[Path] = field(default_factory=list)   # --commit: of the files, those outside the git work tree
 
     def names(self) -> List[str]:
-        return [_shown_path(path, self.root) for path in self.files]
+        """The files to commit in the project — those outside its git work tree, ``elsewhere``."""
+        return [_shown_path(path, self.root) for path in self.files if path not in self.outside]
+
+    def elsewhere(self) -> str:
+        """The files written outside the project's git work tree, where they are, and what to do — ``""``
+        when there are none."""
+        if not self.outside:
+            return ""
+        them = "them where they are" if len(self.outside) > 1 else "it where it is"
+        where = _and([display(os.path.realpath(path)) for path in self.outside])
+        return f"{where} — outside its git work tree: commit {them}"
 
 
 # --------------------------------------------------------------------------- #
@@ -366,18 +377,21 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
 
 
 def _ending(outcome: Outcome, out: TextIO) -> None:
-    """What the project must commit — or what ``--commit`` committed, and where."""
-    names = outcome.names()
+    """What the project must commit — or what ``--commit`` committed, and where; then what is to
+    commit where it is, outside the project's git work tree."""
+    names, elsewhere = outcome.names(), outcome.elsewhere()
     if outcome.ignored:
         ready = f"Cortex {outcome.target} is ready. " if outcome.target != outcome.pinned else ""
         out.write(f"\n{ready}Nothing to commit: git ignores {_and(names)}.\n")
     elif outcome.target != outcome.pinned:
         done = f"Committed {', '.join(names)} on {outcome.committed} — nothing was pushed" if outcome.committed else \
-            f"Commit {', '.join(names)}"
+            f"Commit {', '.join(names)}" if names else ""
+        done = "; ".join(part for part in (done, elsewhere) if part)
         out.write(f"\nCortex {outcome.target} is ready. {done}; teammates run `cortex sync` after they pull.\n")
-    elif names:
-        out.write(f"\nCommitted {_and(names)} on {outcome.committed} — nothing was pushed.\n" if outcome.committed else
-                  f"\nCommit {_and(names)}.\n")
+    elif names or elsewhere:
+        done = f"Committed {_and(names)} on {outcome.committed} — nothing was pushed" if outcome.committed else \
+            f"Commit {_and(names)}" if names else ""
+        out.write(f"\n{'; '.join(part for part in (done, elsewhere) if part)}.\n")
 
 
 def _served(the_store: store.Store, target: Version, again: str) -> None:
@@ -742,6 +756,13 @@ def _commit(root: str, top: str, files: List[Path], message: str,
     return f"{_on_branch(root) or 'a detached HEAD'}, {commit}", None
 
 
+def _where(path: Path, root: str) -> str:
+    """A file written outside the git work tree of ``root``, as it is named: where it is — and, for
+    a link, the link that leads there."""
+    real = display(os.path.realpath(path))
+    return f"{real} (where {_shown_path(path, root)} leads)" if os.path.islink(path) else real
+
+
 def _left(root: str, top: str, named: Optional[str]) -> List[Path]:
     """The files of the team — the pin, the lock, the bootstrap files — that git sees changed in the
     work tree of ``root``, whose top is ``top``, when the upgrade wrote nothing: what a run before
@@ -861,17 +882,18 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
     if outcome.ignored:
         err.write(f"note: nothing to commit in {display(root)} — git ignores {_and(outcome.names())}\n")
         return outcome
-    outside = [path for path in outcome.files if not _inside(top, path)]
-    if outside:
-        names = [display(str(path)) for path in outside]
+    outcome.outside = [path for path in outcome.files if not _inside(top, path)]
+    if outcome.outside:
+        names = [_where(path, root) for path in outcome.outside]
+        them = "them where they are" if len(names) > 1 else "it where it is"
         err.write(f"note: {_and(names)} {'are' if len(names) > 1 else 'is'} outside the git work tree of "
-                  f"{display(root)} — not committed with it\n")
-        outcome.files = [path for path in outcome.files if path not in outside]
-        if not outcome.files:
-            return outcome
+                  f"{display(root)} — not committed with it: commit {them}\n")
+    inside = [path for path in outcome.files if path not in outcome.outside]
+    if not inside:
+        return outcome
     try:
-        outcome.committed, outcome.uncommitted = _commit(root, top, outcome.files, options.message,
-                                                         _theirs(root, pin, *before, outcome.files))
+        outcome.committed, outcome.uncommitted = _commit(root, top, inside, options.message,
+                                                         _theirs(root, pin, *before, inside))
     except UpgradeError as error:
         outcome.code, outcome.uncommitted = 1, str(error)
         out.flush()
@@ -1003,7 +1025,9 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
             continue
         said = "" if not committing else f" — committed on {outcome.committed}" if outcome.committed else \
             f" — not committed: {_first(outcome.uncommitted)}"
-        out.write(f"  {entry.name:<{width}}  {entry.path}: {_and(outcome.names())}{said}\n")
+        here = f"{_and(outcome.names())}{said}" if outcome.names() else ""
+        line = "; ".join(part for part in (here, outcome.elsewhere()) if part)
+        out.write(f"  {entry.name:<{width}}  {entry.path}: {line}\n")
     from_before()
     if options.dry_run:
         out.write("--dry-run: nothing of any project was changed — no branch was made, nothing was committed.\n")

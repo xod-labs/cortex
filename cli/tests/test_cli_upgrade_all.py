@@ -796,17 +796,42 @@ class CommitTests(GitTestCase):
 
     def test_a_bootstrap_outside_the_work_tree_is_written_and_left_out_of_the_commit(self):
         alpha = self.make("alpha")
-        shared = self.code / "shared.md"                                 # the team's, beside the repository
+        shared = self.code / "alpha-notes.md"         # the team's, beside the repository, its name starting as it
         shared.write_bytes(init.instructions(OLD_BOOTSTRAP, True))
         self.repository(alpha)
-        proc = self.upgrade(alpha, "--instructions-file", str(shared), "--commit", "--message", self.MESSAGE)
+        proc = self.upgrade(alpha, "--instructions-file", "../alpha-notes.md", "--commit", "--message", self.MESSAGE)
         self.assert_ok(proc)
         self.assert_moved(alpha)
         self.assertNotEqual(shared.read_bytes(), init.instructions(OLD_BOOTSTRAP, True))
         self.assertEqual(self.changed(alpha), ["cortex.lock", "cortex.toml"])
-        self.assertIn(f"note: {display(shared)} is outside the git work tree of {display(alpha)} — not committed with "
-                      "it\n", proc.err)
-        self.assertIn(f"\nCortex {OWN} is ready. Committed cortex.toml, cortex.lock on ", proc.out)
+        where = display(os.path.realpath(shared))
+        self.assertIn(f"note: {where} is outside the git work tree of {display(alpha)} — not committed with it: commit "
+                      "it where it is\n", proc.err)
+        self.assertIn(f"\nCortex {OWN} is ready. Committed cortex.toml, cortex.lock on {self.branch(alpha)}, "
+                      f"{self.git(alpha, 'rev-parse', '--short', 'HEAD')} — nothing was pushed; {where} — outside its git "
+                      "work tree: commit it where it is; teammates run `cortex sync` after they pull.\n", proc.out)
+
+    @unittest.skipIf(os.name == "nt", "a link to a file needs a privilege on Windows")
+    def test_a_bootstrap_linked_outside_the_work_tree_is_still_to_commit_where_it_is(self):
+        alpha, beta = self.make("alpha"), self.make("beta")
+        shared = self.code / "alpha-notes.md"         # beside the repository, its name starting as the repository's
+        shared.write_bytes(init.instructions(OLD_BOOTSTRAP, True))
+        (alpha / "CLAUDE.md").symlink_to(Path("..") / "alpha-notes.md")
+        for root in (alpha, beta):
+            self.repository(root)
+        self.register(alpha, beta)
+        proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        self.assertNotEqual(shared.read_bytes(), init.instructions(OLD_BOOTSTRAP, True))      # written all the same
+        self.assertEqual(self.changed(alpha), ["cortex.lock", "cortex.toml"])
+        where = display(os.path.realpath(shared))
+        self.assertIn(f"note: {where} (where CLAUDE.md leads) is outside the git work tree of {display(alpha)} — not "
+                      "committed with it: commit it where it is\n", proc.err)
+        commit = {root: f"{self.branch(root)}, {self.git(root, 'rev-parse', '--short', 'HEAD')}" for root in (alpha, beta)}
+        self.assertIn(f"\nWhat each project must commit:\n"
+                      f"  alpha  {display(alpha)}: cortex.toml and cortex.lock — committed on {commit[alpha]}; {where} — "
+                      "outside its git work tree: commit it where it is\n"
+                      f"  beta   {display(beta)}: cortex.toml and cortex.lock — committed on {commit[beta]}\n", proc.out)
 
     def test_run_again_it_names_what_a_commit_refused_left_to_commit(self):
         alpha, beta = self.make("alpha"), self.make("beta")
