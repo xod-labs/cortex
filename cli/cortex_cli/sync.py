@@ -730,8 +730,9 @@ def register(root: str, out: TextIO, err: TextIO) -> None:
     the project is synced, and not listed.
 
     A project listed already costs a read of the registry, without its lock, and no look at the
-    other entries' directories: nothing is written, and nothing waits for another command's write. ``CORTEX_NO_REGISTER``, set to anything but an
-    empty value, leaves the registry alone, neither read nor written."""
+    other entries' directories: nothing is written, and nothing waits for another command's write.
+    ``CORTEX_NO_REGISTER``, set to anything but an empty value, leaves the registry alone, neither
+    read nor written."""
     if os.environ.get(NO_REGISTER):
         return
     root = os.path.abspath(root)
