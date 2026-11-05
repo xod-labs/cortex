@@ -11,6 +11,7 @@ Cortex is a **framework of AI agents** that host projects use through the `corte
 | You want to... | Read |
 |---|---|
 | Understand what Cortex *is* | [README.md](README.md) |
+| Find what sits where in this repository | [docs/repository-layout.md](docs/repository-layout.md) |
 | Set it up in a project | [docs/getting-started.md](docs/getting-started.md) |
 | Add project-specific rules | [docs/extending-layers.md](docs/extending-layers.md) |
 | Create a personality theme | [docs/creating-a-theme.md](docs/creating-a-theme.md) |
@@ -24,7 +25,7 @@ cortex/
 ├── README.md                          # ← Entry point: keep crisp, do not bloat
 ├── CONTRIBUTING.md                    # ← This file
 ├── install.sh, install.ps1            # ← The one-line install of the `cortex` binary (ADR-008)
-├── cli/                               # ← The `cortex` command: init, sync, validate — built into a native binary
+├── cli/                               # ← The `cortex` command — built into a native binary
 ├── core/                              # ← cortex-core: the cascade in code (ADR-007)
 ├── runtime/                           # ← The engine: API, agentic loop (ADR-002)
 ├── changelog/                         # ← Per-version notes (one .md per release)
@@ -45,6 +46,8 @@ cortex/
     ├── personalities/{theme}/         # 🟢 add new themes here
     └── workflows/{category}/          # 🟢 add new generic workflows here
 ```
+
+The whole tree, with what each directory holds, is in [docs/repository-layout.md](docs/repository-layout.md).
 
 ## 🛠️ Local development setup
 

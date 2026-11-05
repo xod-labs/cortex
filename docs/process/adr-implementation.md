@@ -85,7 +85,7 @@ collapses one level at a time without manual edits.
 
 | Level | Object | Carries | Created |
 |---|---|---|---|
-| Roadmap | **epic issue**, template *ADR epic*, label `adr-epic` | the decision, what it excludes, its dependencies — dated in the Project | as soon as the ADR is on the roadmap |
+| Roadmap | **epic issue**, template *ADR epic*, label `adr-epic`, titled `ADR · <title>` until the record is written, then `ADR-NNN · <title>` | the decision, what it excludes, its dependencies — dated in the Project | as soon as the ADR is on the roadmap |
 | ADR | **milestone** `ADR-NNN — <title>` | the whole record and its progress bar | when the ADR is drafted |
 | Phase | **parent issue**, template *ADR phase*, sub-issue of the epic | the phase scope quoted from the ADR, its acceptance criteria, its branch | when the ADR is accepted |
 | Task | **sub-issue**, template *ADR task* | one testable outcome, one criterion that can fail | with its phase |

@@ -3,11 +3,15 @@
 ``cli/build.py`` writes ``_stamp.py`` for the duration of a build. A source checkout has none:
 it is no release, and says so — unless its tests name the version it stands for, with
 ``CORTEX_SOURCE_VERSION``. A build always has a stamp, and never reads that variable.
+
+The stamp also names the build's target, ``linux-x86_64`` say: the release asset ``cortex
+self-update`` downloads. A source checkout has none.
 """
 
 import os
 
 try:
-    from ._stamp import VERSION
+    from ._stamp import TARGET, VERSION
 except ImportError:
+    TARGET = None
     VERSION = os.environ.get("CORTEX_SOURCE_VERSION") or "0.0.0-dev"

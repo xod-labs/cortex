@@ -15,7 +15,7 @@ irm https://raw.githubusercontent.com/xod-labs/cortex/main/install.ps1 | iex    
 - **Where it goes.** The command lands in `~/.cortex/bin` (`%USERPROFILE%\.cortex\bin`). `install.ps1` adds that directory to your user `PATH`; `install.sh` prints the line to add to your shell profile.
 - **Name.** It installs as `cortex-ai` when another `cortex` command comes first on your `PATH`.
 - **Requirements.** It needs no Python, no Bash on Windows, and no git submodule.
-- **Upgrade.** Running the script again upgrades the binary.
+- **Upgrade.** `cortex self-update`, from 1.4.0 on, replaces the binary with the latest release's; running the script again does it too.
 
 ## 2. A single project, from a submodule
 
@@ -87,14 +87,15 @@ Before the pull, `git submodule deinit -f cortex` and `rm -rf .git/modules/corte
 
 ## 5. CI
 
-Where CI ran `./cortex/bin/validate-overlays.sh --strict`, it installs the binary of the version `cortex.toml` pins, and syncs:
+Where CI ran `./cortex/bin/validate-overlays.sh --strict`, it installs the binary of the version `cortex.toml` pins, and syncs — with `--locked` from Cortex 1.4.0, so that a `cortex.lock` missing or naming another version fails the job rather than being written; the lines leave it out for a project pinned before 1.4.0:
 
 ```bash
 version="$(LC_ALL=C tr -d '\357\273\277' < cortex.toml | sed -n "s/^[[:space:]]*version[[:space:]]*=[[:space:]]*[\"']\([^\"']*\)[\"'].*/\\1/p" | head -n 1)"
 [ -n "$version" ] || { echo "cortex.toml pins no version" >&2; exit 1; }
 curl -fsSL https://raw.githubusercontent.com/xod-labs/cortex/main/install.sh | sh -s -- "$version"
 export PATH="$HOME/.cortex/bin:$PATH"
-cortex sync && cortex validate --strict
+case "$version" in 0.* | 1.[0-3].*) locked= ;; *) locked=--locked ;; esac    # --locked from 1.4.0
+cortex sync $locked && cortex validate --strict
 ```
 
 On a Windows runner, in PowerShell:
@@ -105,7 +106,8 @@ if (-not $pinned) { throw "cortex.toml pins no version" }
 $version = $pinned.Matches[0].Groups[1].Value
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/xod-labs/cortex/main/install.ps1))) -Version $version
 $env:Path = "$env:USERPROFILE\.cortex\bin;$env:Path"
-cortex sync; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+$locked = @(if ([version]($version -replace '[-+].*$', '') -ge [version]'1.4.0') { '--locked' })   # --locked from 1.4.0
+cortex sync @locked; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 cortex validate --strict; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 ```
 

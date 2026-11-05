@@ -248,14 +248,15 @@ The validator catches the common mistakes:
 - Trying to override a non-overridable file (`characters.md`)
 - `replacement` semantic used outside `workflows/`
 
-CI integration is recommended — fail the pipeline if `cortex validate --strict` returns non-zero. The CI job installs the binary of the version `cortex.toml` pins — its checks are that version's — then runs `cortex sync`:
+CI integration is recommended — fail the pipeline if `cortex validate --strict` returns non-zero. The CI job installs the binary of the version `cortex.toml` pins — its checks are that version's — then runs `cortex sync --locked`, which never writes `cortex.lock`: a lock missing, or naming another version than `cortex.toml`, fails the job instead of being written where nobody commits it. `--locked` is from Cortex 1.4.0, and the lines leave it out for a project pinned before it:
 
 ```bash
 version="$(LC_ALL=C tr -d '\357\273\277' < cortex.toml | sed -n "s/^[[:space:]]*version[[:space:]]*=[[:space:]]*[\"']\([^\"']*\)[\"'].*/\\1/p" | head -n 1)"
 [ -n "$version" ] || { echo "cortex.toml pins no version" >&2; exit 1; }
 curl -fsSL https://raw.githubusercontent.com/xod-labs/cortex/main/install.sh | sh -s -- "$version"
 export PATH="$HOME/.cortex/bin:$PATH"
-cortex sync
+case "$version" in 0.* | 1.[0-3].*) locked= ;; *) locked=--locked ;; esac    # --locked from 1.4.0
+cortex sync $locked
 cortex validate --strict
 ```
 
@@ -267,7 +268,8 @@ if (-not $pinned) { throw "cortex.toml pins no version" }
 $version = $pinned.Matches[0].Groups[1].Value
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/xod-labs/cortex/main/install.ps1))) -Version $version
 $env:Path = "$env:USERPROFILE\.cortex\bin;$env:Path"
-cortex sync; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+$locked = @(if ([version]($version -replace '[-+].*$', '') -ge [version]'1.4.0') { '--locked' })   # --locked from 1.4.0
+cortex sync @locked; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 cortex validate --strict; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 ```
 
@@ -275,14 +277,27 @@ cortex validate --strict; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
 To move a project to another Cortex version:
 
-1. Change `version` in `cortex.toml`
-2. Run `cortex sync` — it puts that version in the store, downloaded once per machine, and points `spec` at it. A version newer than the installed binary is refused, with the command that upgrades the binary. Teammates run `cortex sync` after they pull the change
-3. Run `cortex validate` immediately
-4. Investigate any error reported (most common: a base file was moved or renamed upstream, breaking a `Base:` header)
-5. Update overlay headers to point to the new path, OR delete the overlay if it's no longer needed
-6. Read the entry for the new version in Cortex's [`changelog/`](../changelog/) — it lists breaking renames
+1. Run `cortex upgrade --dry-run` — or `cortex upgrade X.Y.Z --dry-run` for another version than the binary's own. It puts that version in the store, says which roles, capabilities, personalities and workflows it adds, removes and changes, and checks your overlays against it. A version newer than the installed binary is refused, with the `cortex self-update` command that installs it, and so is a project pinned to one when no version is given: it moves down only to a version you name. With no version given, it also says when a release newer than the binary is out
+2. If an overlay fails — most often a base file moved or renamed upstream, breaking a `Base:` header — update the header to the new path, OR delete the overlay if it's no longer needed. Read the entry for the new version in Cortex's [`changelog/`](../changelog/): it lists breaking renames
+3. Run `cortex upgrade` — it writes `version` in `cortex.toml`, syncs, rewrites `cortex.lock`, and rewrites the instructions file if nobody changed it — the digest in its marker line tells — and the new version writes another. One your team adapted is kept: `cortex init --force` writes it again, and keeps yours as `.bak`
+4. Commit `cortex.toml`, `cortex.lock` and the instructions file if it was written again — or let `--commit --message MESSAGE` commit them, below. Teammates sync after they pull the change — their assistant runs `cortex sync` itself, and `cortex self-update` first when their binary is older than the new version
+
+The assistant runs `cortex upgrade` only when you ask for it, the dry run first, and never of its own accord ([ADR-010 §3.8](adr/ADR-010-lock-and-upgrade.md)): the pin is the team's decision, made in a commit. The same holds for `--all`.
 
 Still on a git submodule or a standalone clone of Cortex? See [Moving to the `cortex` binary](migrating-to-the-binary.md).
+
+### Every project of the machine — `cortex upgrade --all`
+
+`cortex upgrade --all` runs the steps above in each project of this machine's registry ([ADR-011](adr/ADR-011-project-registry.md); `cortex project list` lists them), in name order, to the same version — `X.Y.Z` when you name it, the binary's own otherwise:
+
+1. Run `cortex upgrade --all --dry-run` — each project's dry run, then a line per project: *would move 1.4.0 → 1.5.0*, *already on 1.5.0*, *refused: …* or *skipped: missing*, and the files each one would have to commit. It exits 1 when a project would be refused, as the run would
+2. Fix what refuses, as in step 2 above — or leave it: a project that refuses stops none of the others
+3. Run `cortex upgrade --all` — a project whose overlays fail, whose sync refuses, or whose pin is newer than the binary is refused; one that is not `ok` — `missing`, `no-project`, `unreadable` — is skipped. It ends with a line per project, then the files each one must commit, by path, and exits 1 if one was refused. It asks once whether a release newer than the binary is out
+4. Commit in each project — or let the command do it, as an option:
+   - `--branch NAME` makes the branch `NAME` in each project that is a git work tree and has something to commit, and switches to it, before anything of it is written. A project where `NAME` exists already is refused, and the others go on — unless `NAME` is the branch it is on: it is written there. So the same command, run again once you fixed a project that refused, moves that one and refuses none it moved before. A project with nothing to write gets no branch, and neither does one where git ignores every file the upgrade writes. Nothing is stashed: changes you have not committed stay where they are
+   - `--commit --message MESSAGE` commits, in each project the upgrade wrote files in, those files and nothing else — another change, staged or not, stays as it is. The message is required: your commit convention is your own. A project outside git, one whose `cortex.toml` git does not track — a workspace that does not commit its pin — one where git ignores a file it wrote, and one where `cortex.toml`, or a bootstrap file the upgrade wrote, held changes of yours before it — a local edit, a hunk you staged, a template you restored — are said, and nothing is committed there: commit by hand what is the team's. The lock, written whole from the pin, does not count, and a file the upgrade wrote outside the work tree — a bootstrap linked to a shared file — is left out of the commit, and said. A commit git refuses — a hook, a signature — is said with what git said, and the files stay staged. Nothing is pushed
+
+`--dry-run` makes no branch and commits nothing. Interrupted — Ctrl-C — `--all` still ends with a line per project, the one cut short and those not reached said, and exits 130: the same command again finishes them, and names the files a run cut short left to commit — `git status` there says what. `--branch` and `--commit` work the same without `--all`, for the one project; `--instructions-file` names one project's file, and is refused with `--all`.
 
 ## 🤔 FAQ
 

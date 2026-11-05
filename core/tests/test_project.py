@@ -1,6 +1,7 @@
 """The grammar of cortex.toml and cortex.local.toml — ADR-008 §3.4, one definition for the
-command and the runtime."""
+command and the runtime — of cortex.lock, ADR-010 §3.2, and of projects.toml, ADR-011 §3.1."""
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -65,6 +66,131 @@ class FileTests(unittest.TestCase):
             project.check_project({"version": "1.0.0", "theme": "h2g2", "claude_entry": "/x"})
         with self.assertRaisesRegex(project.ProjectFileError, 'unknown key "version"'):
             project.check_local({"version": "1.0.0"})
+
+
+class LockTests(unittest.TestCase):
+    DIGEST = "sha256:" + "0123456789abcdef" * 4
+
+    def test_a_lock(self):
+        project.check_lock({"format": 1, "version": "1.4.0", "digest": self.DIGEST})
+
+    def test_what_a_lock_refuses(self):
+        good = {"format": 1, "version": "1.4.0", "digest": self.DIGEST}
+        for change, fragment in (({"extra": "x"}, 'unknown key "extra" — cortex.lock takes format, version and digest only'),
+                                 ({"format": "1"}, '"format" must be a positive integer'),
+                                 ({"format": True}, '"format" must be a positive integer'),
+                                 ({"format": 0}, '"format" must be a positive integer'),
+                                 ({"version": "1.4"}, 'version "1.4" is no version'),
+                                 ({"digest": self.DIGEST.upper()}, "is no digest"),
+                                 ({"digest": "sha1:" + "0" * 40}, "is no digest"),
+                                 ({"digest": self.DIGEST + "\n"}, "is no digest")):
+            with self.subTest(change=change):
+                with self.assertRaisesRegex(project.ProjectFileError, fragment):
+                    project.check_lock({**good, **change})
+        for key in project.LOCK_KEYS:
+            with self.subTest(missing=key):
+                with self.assertRaisesRegex(project.ProjectFileError, f'"{key}" is required'):
+                    project.check_lock({k: v for k, v in good.items() if k != key})
+
+    def test_a_later_format_is_its_own_error(self):
+        with self.assertRaisesRegex(project.LaterFormatError, "format 2 is written by a later Cortex"):
+            project.check_lock({"format": 2, "version": "1.4.0", "digest": self.DIGEST})
+
+
+class RegistryTests(unittest.TestCase):
+    """projects.toml: format 1, and [[project]] tables of a name and an absolute path."""
+
+    ROOT = os.path.abspath(os.sep)          # "/" here, the drive's root on Windows
+
+    def path(self, *parts):
+        return os.path.join(self.ROOT, "code", *parts)
+
+    def registry(self, *entries, **top):
+        return {"format": 1, **top, "project": [dict(entry) for entry in entries]}
+
+    def test_a_registry(self):
+        project.check_registry({"format": 1})                     # no project yet
+        project.check_registry(self.registry({"name": "acme", "path": self.path("acme")},
+                                             {"name": "xod-labs", "path": self.path("xod-labs")}))
+
+    def test_names(self):
+        for name in ("a", "0", "acme", "a.b_c-d", "x" * 64, "9lives"):
+            with self.subTest(name=name):
+                self.assertTrue(project.is_project_name(name))
+        # Case alone never tells two apart; a name is ASCII, matched whole.
+        for name in ("Acme", "-acme", ".acme", "_acme", "x" * 65, "a b", "a/b", "acme\n", "", "caf\u00e9", None, 1):
+            with self.subTest(name=name):
+                self.assertFalse(project.is_project_name(name))
+
+    def test_what_a_registry_refuses(self):
+        acme = {"name": "acme", "path": self.path("acme")}
+        for data, fragment in (
+                ({"project": [acme]}, 'projects.toml: "format" is required'),
+                (self.registry(acme, extra="x"), 'unknown key "extra" — projects.toml takes format and project only'),
+                ({"format": "1"}, '"format" must be a positive integer'),
+                ({"format": True}, '"format" must be a positive integer'),
+                ({"format": 0}, '"format" must be a positive integer'),
+                ({"format": 1, "project": acme}, '"project" must be tables, each headed \\[\\[project\\]\\]'),
+                ({"format": 1, "project": ["acme"]}, '"project" must be tables'),
+                (self.registry(acme, {**acme, "name": "b", "theme": "h2g2"}),
+                 'project 2: unknown key "theme" — a project takes name and path only'),
+                (self.registry({"path": self.path("acme")}), 'project 1: "name" is required'),
+                (self.registry({"name": "acme"}), 'project 1: "path" is required'),
+                (self.registry({**acme, "name": 1}), 'project 1: "name" must be a string'),
+                (self.registry({**acme, "path": ["x"]}), 'project 1: "path" must be a string'),
+                (self.registry({**acme, "name": "Acme"}), 'project 1: name "Acme" is no project name — lowercase'),
+                (self.registry({**acme, "path": "code/acme"}), 'project 1: path "code/acme" is not absolute'),
+                (self.registry({**acme, "path": ""}), 'project 1: path "" is not absolute'),
+                (self.registry({**acme, "path": self.path("a\x00b")}),
+                 'project 1: path ".*a\\\\u0000b" holds a control character — projects.toml takes none in a path'),
+                (self.registry({**acme, "path": self.path("a\nb")}), 'project 1: path .* holds a control character'),
+                (self.registry({**acme, "path": self.path("a\x7fb")}), 'project 1: path .* holds a control character'),
+                (self.registry({**acme, "path": self.path("a\tb")}), 'project 1: path .* holds a control character'),
+                (self.registry({**acme, "path": self.path("a\x1b[2Jb")}),
+                 'project 1: path ".*a\\\\u001b\\[2Jb" holds a control character'),
+                (self.registry(acme, {**acme, "path": self.path("other")}),
+                 'project 2: name "acme" is project 1\'s too — two projects never share a name')):
+            with self.subTest(data=data):
+                with self.assertRaisesRegex(project.ProjectFileError, fragment):
+                    project.check_registry(data)
+
+    def test_two_entries_never_write_the_same_directory(self):
+        # Read from the text: a final separator, ".", ".." and, on Windows, case.
+        acme = self.path("acme")
+        same = [acme + os.sep, self.path(".", "acme"), self.path("x", "..", "acme")]
+        if os.path.normcase("A") == "a":
+            same.append(acme.upper())
+        for other in same:
+            with self.subTest(other=other):
+                with self.assertRaisesRegex(project.ProjectFileError,
+                                            "project 2: path .* names the directory of project 1, .* — two projects "
+                                            "never name the same directory"):
+                    project.check_registry(self.registry({"name": "a", "path": acme}, {"name": "b", "path": other}))
+        project.check_registry(self.registry({"name": "a", "path": acme}, {"name": "b", "path": self.path("acme-2")}))
+
+    def test_the_messages_name_the_file_as_its_reader_does(self):
+        with self.assertRaises(project.ProjectFileError) as caught:
+            project.check_registry({"format": 1, "extra": 1}, "/home/dev/.cortex/projects.toml")
+        self.assertTrue(str(caught.exception).startswith('/home/dev/.cortex/projects.toml: unknown key "extra"'))
+
+    def test_a_later_format_is_its_own_error_whatever_it_holds(self):
+        # A later format may add keys: it is said to be later, not to hold unknown keys.
+        for data in ({"format": 2}, {"format": 2, "project": [{"name": "Acme", "port": 8080}], "runtime": {}}):
+            with self.subTest(data=data):
+                with self.assertRaisesRegex(project.LaterFormatError,
+                                            "projects.toml: format 2 is written by a later Cortex — this one reads "
+                                            "format 1"):
+                    project.check_registry(data)
+
+    def test_a_value_is_never_printed_raw(self):
+        for data in (self.registry({"name": "\x1b[2Jred", "path": self.path("a")}),
+                     self.registry({"name": "a", "path": "\x1b]0;x\x07"}),
+                     {"format": 1, "\x1b[31mkey": "x"}):
+            with self.subTest(data=data):
+                with self.assertRaises(project.ProjectFileError) as caught:
+                    project.check_registry(data)
+                self.assertNotIn("\x1b", str(caught.exception))
+                self.assertIn("\\u001b", str(caught.exception))
 
 
 if __name__ == "__main__":

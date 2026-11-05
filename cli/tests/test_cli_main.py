@@ -111,6 +111,12 @@ class WorkingDirectoryTests(unittest.TestCase):
     def test_a_pwd_naming_another_directory_is_ignored(self):
         self.assertEqual(self.project_root(str(self.tmp)), str(self.tmp / "real"))
 
+    def test_a_pwd_not_written_plainly_is_ignored(self):
+        # A shell never sets one so; a path written with it would be written so in projects.toml.
+        for pwd in (f"{self.tmp / 'link'}/", f"{self.tmp / 'link'}/.", f"{self.tmp / 'link'}/cortex/.."):
+            with self.subTest(pwd=pwd):
+                self.assertEqual(self.project_root(pwd), str(self.tmp / "real"))
+
     def test_without_pwd_the_directory_is_resolved(self):
         # subprocess passes no PWD of its own: harness.run sets one only from cwd, and here the
         # environment is given, without it.
@@ -142,7 +148,7 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_the_command_never_imports_the_runtime(self):
-        # Driving the runtime is ADR-016's, over HTTP: never by importing it.
+        # Driving the runtime is the unified client protocol's (#45), over HTTP: never by importing it.
         offenders = [py.name for py in sorted(PACKAGE.rglob("*.py"))
                      if "cortex_runtime" in absolute_imports(py.read_text(encoding="utf-8"))]
         self.assertEqual(offenders, [])

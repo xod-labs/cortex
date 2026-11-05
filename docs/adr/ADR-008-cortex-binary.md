@@ -501,3 +501,21 @@ ADR-009 became the release cycle on 2026-10-30, and every record planned after i
 - **A pre-release is a version, not a throwaway test of the pipeline** (§9, *Phase 1 — the build, the assets, the scripts*). It is cut by hand from an integration branch — `X.Y.Z-alpha.N`, `-beta.N`, `-rc.N` — and, immutable once published, it stays. A release that changes the pipeline publishes a release candidate first.
 - **A binary knows the spec archives of immutable pre-releases** (§3.3), from 1.0.0 on: nothing can build them again under their tag. A mutable pre-release is still left out (§9, *After 1.0.0 — found in use*).
 - **The commit convention is checked**, on every pull request, and asks for a subject in the present tense that says what the commit does (ADR-009 §3.8).
+
+### 2026-11 — the planned records are numbered one higher again
+
+ADR-010 became `cortex.lock`, `cortex upgrade` and the bootstrap marker on 2026-11-03 ([#99](https://github.com/xod-labs/cortex/issues/99)): the follow-up of §7 that this record calls #99. Every record planned after it moved up by one. In this record, ADR-012 is now ADR-013 ([#40](https://github.com/xod-labs/cortex/issues/40)), and ADR-017 is now ADR-018 ([#45](https://github.com/xod-labs/cortex/issues/45)).
+
+### After 1.3.2 — ADR-010 takes up the follow-up of §7
+
+[ADR-010](ADR-010-lock-and-upgrade.md), implemented in 1.4.0, is the follow-up §7 calls #99: *`cortex.lock` and upgrade tooling*. What it changes here:
+
+- **A project commits a third file, `cortex.lock`** (§3.4): the version it resolved and the digest of that version's spec. `cortex sync` writes it, and refuses a spec whose files differ from it (§3.5); `cortex sync --locked`, in CI, never writes it.
+- **The store still keeps no list of projects** (§3.3). `cortex prune DIR...` removes the versions no project under the directories it is given pins, by a rename first; a version put in the store again is set aside first, and put back if the new one cannot be had.
+- **The binary moves itself**: `cortex self-update` replaces it with a release's, checked against that release's `SHA256SUMS` (§3.2). The install scripts stay the way to install the first one. Every refusal of a version newer than the binary names `cortex self-update` instead of the install script's command.
+- **`cortex init` reads a kept bootstrap through its marker** (§3.7), `<!-- cortex:bootstrap layout=… format=N -->`, not through its first line, and writes the marker with the digest of what it wrote.
+- **The bootstrap has the assistant run `cortex sync` itself**, and `cortex self-update` when the pin asks for it, where it asked the user to (§3.7).
+
+### 2026-11 — the planned records hold no number
+
+ADR-011 became the project registry on 2026-11-04 ([#266](https://github.com/xod-labs/cortex/issues/266)): the list of a machine's projects that §3.3 left out of the store, kept beside it. Rather than move every planned record up by one a third time, the maintainer decided that a planned record holds no number: it takes the next free one once its text is written. In this record, ADR-013 is the multi-provider LLM abstraction, [#40](https://github.com/xod-labs/cortex/issues/40), and ADR-018 the unified client protocol, [#45](https://github.com/xod-labs/cortex/issues/45), neither numbered yet. Four places of the body, written before either renumbering, still say ADR-011 for the provider abstraction: §1, §3.6, §5 (*Positive*) and §7. That record is #40's, numbered once its text is written; ADR-011 is now the project registry.
