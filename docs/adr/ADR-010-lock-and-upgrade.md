@@ -1,9 +1,9 @@
 # ADR-010 — `cortex.lock`, `cortex upgrade` and the bootstrap marker
 
 - **Status:** Implemented
-- **Date:** 2026-11-03 (proposed) · 2026-11-04 (accepted) · 2026-11-04 (implemented, 1.4.0)
+- **Date:** 2026-11-03 (proposed) · 2026-11-04 (accepted, with the amendments listed in §9) · 2026-11-04 (implemented, 1.4.0)
 - **Authors:** Cortex maintainers (initiated by the maintainer, drafted by @Oolon)
-- **Affects:** `cli/cortex_cli/` (`sync`, `init`, `validate`, the store, three new commands `upgrade`, `prune` and `self-update`), `core/cortex_core/project.py` (the grammar of `cortex.lock`), `templates/` (the two bootstrap templates), the init parity matrix, `README.md`, `docs/getting-started.md`, `docs/extending-layers.md`, `docs/migrating-to-the-binary.md`
+- **Affects:** `cli/cortex_cli/` (`sync`, `init`, `validate`, the store, three new commands `upgrade`, `prune` and `self-update`), `core/cortex_core/project.py` (the grammar of `cortex.lock`), `cli/build.py` (the build target stamped in the binary), `templates/` (the two bootstrap templates), the init parity matrix, `README.md`, `docs/getting-started.md`, `docs/extending-layers.md`, `docs/migrating-to-the-binary.md`
 - **Relates to:** [ADR-008](ADR-008-cortex-binary.md) — §3.3 (the store), §3.4 (`cortex.toml`), §3.5 (`cortex sync`), §3.7 (`cortex init` and the bootstrap file) and §7, which left the lock, the upgrade and the pruning to this record; ADR-008 records it in its own amendments when this ADR is implemented · roadmap epic [#99](https://github.com/xod-labs/cortex/issues/99) · [#141](https://github.com/xod-labs/cortex/issues/141), folded in on 2026-11-03
 
 ---
@@ -12,7 +12,7 @@
 
 ADR-008 gave every project a committed `cortex.toml` that pins one released version of the spec, and every machine one store that holds each version once. It stopped there on purpose (§7): *"`cortex.lock` and upgrade tooling — a resolved manifest, `cortex upgrade`, pruning unused versions from the store — #99."*
 
-Since then, every merge into `main` is a release (ADR-009): seven releases in October, three on 2026-11-03 alone. Moving a project is still done by hand, and four gaps show:
+Since then, every merge into `main` is a release (ADR-009): six releases in October, and two more on 2026-11-03 alone, each after its release candidate. Moving a project is still done by hand, and four gaps show:
 
 - **Nothing records what a project actually ran with.** `cortex.toml` names a version, and the store holds whatever arrived under that name. A version is checked against its release's `SHA256SUMS` once, when it is downloaded, and against the table of checksums a binary embeds — which knows only the releases before that binary. Nothing a team commits says *which bytes* that version was, so nothing can tell a teammate's spec from yours, or a store altered after the download from the one the team used.
 - **Moving a project to another version is four manual steps** (`docs/extending-layers.md`, *Upgrade workflow*): edit `version`, run `cortex sync`, run `cortex validate`, then read the changelog to learn what moved. Nothing says which roles, capabilities or workflows the new version adds, removes or changes, nor whether the project's overlays still find the base files they extend — until `validate` fails after the switch. And the bootstrap file stays as the old version wrote it: `cortex init` keeps an existing one unless `--force`, which replaces it, even when the team adapted it.
@@ -32,7 +32,7 @@ The store grows by one directory per version a machine ever synced. A version is
 - **`cortex self-update [VERSION]`** replaces the binary with a release's — the latest by default — downloaded and checked as the install script does it: against the `SHA256SUMS` of the host it comes from. Every refusal of a version newer than the binary names it, and `cortex upgrade` says when a release newer than the binary is out.
 - **The bootstrap asks the assistant to keep the machine in step**: a spec missing, or of another version than `cortex.toml`'s, and it runs `cortex sync`; a binary too old for the pin, and it runs `cortex self-update`, then `cortex sync`. It says what it runs, its tool asks the user first when set to, and it never moves the project's pin of its own accord.
 
-Out of scope: the digests of images a project depends on, which #99 listed, wait for a project to declare images (§7); the configuration cascade and the IDE modes (#98); a registry of a machine's projects, which a record of its own adds (§7); the multi-project runtime (ADR-021, #48); the first install of the binary, which stays the install script's.
+Out of scope: the digests of images a project depends on, which #99 listed, wait for a project to declare images (§7); the configuration cascade and the IDE modes (#98); a registry of a machine's projects, which a record of its own adds (§7); the multi-project runtime (#48); the first install of the binary, which stays the install script's.
 
 ## 3. Detailed contract
 
@@ -137,7 +137,7 @@ cortex upgrade [VERSION] [--dry-run] [--force] [--instructions-file PATH]
 
 In the project of the current directory — the nearest `cortex.toml`, as `cortex sync` finds it:
 
-1. **The target** is `VERSION`, or the binary's own version — never below the pin: with no `VERSION`, a project pinned to a version newer than the binary is refused, exit 1, nothing changed, naming `cortex self-update` with the pinned version, and `cortex upgrade` with the binary's own to move the project down. A project moves down only when `VERSION` names the version. A version the binary does not serve is refused as by `cortex sync`: a newer one naming `cortex self-update` (§3.7), one before 1.0.0 with the versions served. A malformed one exits 2. The target is the pinned version → *already on X*: nothing moves, and what an upgrade cut short or a pin moved by hand left is finished. Step 5 runs: a bootstrap nobody changed whose text is not the pinned version's — another version wrote it, or the theme changed — is written again. A machine that reads another version, or none, and a `cortex.lock` missing or naming another version, are synced, said, and the lock named to commit; a spec synced from a checkout is left alone. The dry run says it, and changes nothing. Moving down from a pin this binary does not serve, what changes is not said: this cortex does not serve the pinned version.
+1. **The target** is `VERSION`, or the binary's own version — never below the pin: with no `VERSION`, a project pinned to a version newer than the binary is refused, exit 1, nothing changed, naming `cortex self-update` with the pinned version, and `cortex upgrade` with the binary's own to move the project down. A project moves down only when `VERSION` names the version. A version the binary does not serve is refused as by `cortex sync`: a newer one naming `cortex self-update` (§3.7), one before 1.0.0 with the versions served. A malformed one exits 2. The target is the pinned version → *already on X*: nothing moves, and what a pin moved by hand, or an upgrade cut short during its sync, left is finished. Step 5 runs: a bootstrap nobody changed whose text is not the pinned version's — another version wrote it, the pin having moved by hand, or the theme changed — is written again. A machine that reads another version, or none, and a `cortex.lock` missing or naming another version, are synced, said, and the lock named to commit; a spec synced from a checkout is left alone. The dry run says it, and changes nothing. Moving down from a pin this binary does not serve, what changes is not said: this cortex does not serve the pinned version.
 2. **The target is put in the store**, downloaded and checked if need be, as by `cortex sync`.
 3. **What changes is said**, comparing the two versions' trees:
    - for each layer — roles, capabilities, personalities, workflows — the files added, removed and changed, by name, the layer's `README.md` among them;
@@ -156,7 +156,7 @@ In the project of the current directory — the nearest `cortex.toml`, as `corte
 
 `--dry-run` runs steps 1 to 5 and the refusals of step 6, and changes nothing in the project; the store may gain the target version. The exit code is that of a real run: 1 when step 4 would stop it, or step 6 refuse it.
 
-**A release newer than the binary.** With no `VERSION`, `cortex upgrade` asks where the releases are which version is the latest — a few seconds at most — and, when it is newer than the binary, says so: *Cortex 1.5.0 is out — `cortex self-update`, then `cortex upgrade`, moves the project to it*. Offline, or with a `VERSION`, it says nothing of it. `CORTEX_NO_UPDATE_CHECK`, set to anything but an empty value, turns the question off — a CI, or a network that drops what it does not allow rather than refusing it. It never moves the binary itself.
+**A release newer than the binary.** With no `VERSION`, `cortex upgrade` asks the releases host which version is the latest — a few seconds at most — and, when it is newer than the binary, says so: *Cortex 1.5.0 is out — `cortex self-update`, then `cortex upgrade`, moves the project to it*. Offline, or with a `VERSION`, it says nothing of it. `CORTEX_NO_UPDATE_CHECK`, set to anything but an empty value, turns the question off — a CI, or a network that drops what it does not allow rather than refusing it. It never moves the binary itself.
 
 ### 3.6 `cortex prune`
 
@@ -218,7 +218,7 @@ These rules are part of format 1 (§3.1): no released template carried a marker 
 
 ## 4. Phases
 
-Execution order: **1 → 2 → 3 → 4 → 5**. All five ship in one release, 1.4.0: new commands and a new committed file, nothing a project must change.
+Execution order: **1 → 2 → 3 → 4 → 5**. All five ship in one release, 1.4.0: new commands and a new committed file, nothing a project must change. Two release candidates came first, `1.4.0-rc.1` and `1.4.0-rc.2`, cut from the release branch, and `cortex self-update` ran from one to the other on the four targets.
 
 ### Phase 1 — The bootstrap marker
 
@@ -258,7 +258,7 @@ Acceptance criteria:
 - on a project pinned to an older version, `cortex upgrade` moves it to the binary's version: `version` is written with the file's comments kept, the spec synced and the lock rewritten; the output names the agents added, removed and changed, by layer
 - `cortex upgrade X` to an older version says *downgrade*, and moves it; to the pinned version says *already on X* and moves nothing
 - with no `VERSION`, a project pinned to a version newer than the binary is refused, exit 1, the project unchanged
-- a version newer than the binary is refused with the upgrade command; a malformed one exits 2
+- a version newer than the binary is refused, naming `cortex self-update` (§3.7); a malformed one exits 2
 - `--dry-run` leaves every file of the project byte for byte, and exits as the real run would
 - an overlay whose `Base:` the target removed stops the upgrade, exit 1, with the validator's report and the project unchanged; `--force` moves it anyway
 - `cortex init` writes the bootstrap's marker with its digest; a bootstrap whose digest matches is written again whenever the target's template differs, in either direction; one a team changed is kept, and the command names `cortex init --force`; one without a digest is compared with the pinned version's template, and said *not checked* when that version cannot be had
@@ -308,10 +308,10 @@ Acceptance criteria:
 - **One more committed file**, and one more line in every bootstrap file, with a digest that means nothing to a reader. A project's first sync with 1.4.0 adds `cortex.lock` as an uncommitted change.
 - **Every sync reads the pinned version once more**, to compute its digest: under a megabyte of reading.
 - **A modified bootstrap file is never rewritten by `cortex upgrade`.** The team carries its changes over by hand after `cortex init --force`, as today.
-- **A bootstrap written before 1.4.0 has no digest**, so only the pinned version's template can tell it untouched. Once its pin has moved without it — by hand, or by an upgrade cut short — the file no longer matches that template, and `cortex upgrade` keeps it, saying nothing on the pinned version: `cortex init --force` writes it again. A file with a marker but no digest — a 1.4.0 pre-release's — is written again once to gain its digest, even when its text is the target's.
+- **A bootstrap written before 1.4.0 has no digest**, so only the pinned version's template can tell it untouched. Once its pin has moved without it — by hand, or by an upgrade that could not check it, the pinned version pruned and offline (*not checked*) — the file no longer matches that template, and `cortex upgrade` keeps it, saying nothing on the pinned version: `cortex init --force` writes it again. A file with a marker but no digest — a 1.4.0 pre-release's — is written again once to gain its digest, even when its text is the target's.
 - **A run killed while it writes a bootstrap file leaves `FILE.<pid>.tmp` beside it**, as a write of `cortex.toml` killed there does: the file itself is whole.
 - **`cortex prune` is only as good as the directories it is shown.** A project elsewhere loses its version, and gets it back at its next sync, which needs the network.
-- **A binary that replaces itself repeats the install scripts' checks** in Python — the asset of this system, its `SHA256SUMS` — and leaves, on Windows, a `.old` beside the new binary until the next run.
+- **A binary that replaces itself repeats the install scripts' checks** in Python — the asset of the binary's own build target, its `SHA256SUMS` — and leaves, on Windows, a `.old` beside the new binary until the next run.
 - **The assistant runs commands on its own** — `cortex sync`, `cortex self-update` — within what the user's tool allows: a tool set to run commands unasked downloads a binary unasked, checked against the `SHA256SUMS` of the host that serves it — not against who built it, until #275.
 
 ### Neutral
@@ -339,7 +339,7 @@ Acceptance criteria:
 1. **The digests of the images a project depends on**, listed in #99: no project declares an image yet. The ADR that binds a project to the runtime's images extends `cortex.lock` with a `format` of its own.
 2. **The runtime checking the lock**: a run that records the digest it ran with, and refuses a spec whose digest differs.
 3. **The epics after this one shift by one number**: the epics numbered 010 to 022 on 2026-10-30 become 011 to 023, as ADR-002 and ADR-008 record in amendments.
-4. **A registry of the machine's projects** — `~/.cortex/projects.toml`, so that `cortex prune` and `cortex upgrade --all` run from anywhere, and the cockpit (ADR-019) finds a machine's projects. Split from #48 on 2026-11-04 into a record of its own, [#266](https://github.com/xod-labs/cortex/issues/266). `cortex prune` then takes no `DIR`.
+4. **A registry of the machine's projects** — `~/.cortex/projects.toml`, so that `cortex prune` and `cortex upgrade --all` run from anywhere, and the cockpit (#46) finds a machine's projects. Split from #48 on 2026-11-04 into a record of its own, [#266](https://github.com/xod-labs/cortex/issues/266). `cortex prune` then takes no `DIR`.
 5. **Where a release comes from**: `cortex self-update`, `cortex sync` and the install scripts check a download against the `SHA256SUMS` of the host that serves it — integrity, not origin (§3.7). Checking the release's attestation, or a signature of `SHA256SUMS` that the binary checks with a key it embeds, for the binary and the spec together — [#275](https://github.com/xod-labs/cortex/issues/275), raised by the counter-review of 2026-11-04.
 
 ## 8. References
@@ -388,3 +388,17 @@ Bluspark's second round, bounded to what the first changed. Most findings were t
 - **The command is looked up when a rule needs it** (§3.8), not at every conversation, in `~/.cortex/bin` too, and accepts `cortex` followed by any version, a pre-release's included. The rule for a spec of another version says to go no further until the sync succeeded.
 - **Self-update** (§3.7): the new binary's file is made once it is downloaded, so a long download loses it to no other start's tidying; a start removes only the names a self-update gives; a Windows downgrade before 1.4.0 says the old binary stays; a directory named after a version is said to get another version.
 - **The CI lines of the docs** keep `--locked` for projects pinned to 1.4.0 or later: 1.3 refuses the option.
+
+### After 1.4.0 — the text corrected (2026-11-04)
+
+Bluspark's last notes on the text, read after the release; none changes what was shipped:
+
+- **The status says what was accepted**: the text as phase 5 left it, with the amendments listed above.
+- **§1**: the releases of October and of 2026-11-03 are counted without their release candidates — six, then two.
+- **§3.5, step 1, and §5**: since the bootstrap files are written before `version` (step 6), an upgrade cut short no longer moves the pin without them. What leaves a bootstrap behind its pin is a pin moved by hand, or an upgrade that could not check the file, the pinned version pruned and offline. An upgrade cut short during its sync still leaves the lock and the machine to finish.
+- **§3.5**: the release check asks the releases host which version is the latest.
+- **§4**: the two release candidates, and the self-update from one to the other on the four targets, arbitration 19 of #242.
+- **§4, phase 3**: a version newer than the binary is refused naming `cortex self-update`, not "the upgrade command".
+- **§5**: the asset self-update downloads is that of the binary's own build target (§3.7, step 3).
+- **The header**: `cli/build.py` is affected, since it stamps the build target in the binary.
+- **The planned records this one named by number** — the multi-project runtime, ADR-021 (§2), and the cockpit, ADR-019 (§7) — have no number since 2026-11-04: a planned record takes one only once its text is written. They are #48 and #46, and the text names them so. The project registry this record leaves to a record of its own (§7.4) is ADR-011.
