@@ -683,13 +683,24 @@ def _changed(root: str, top: str, files: List[Path]) -> List[Path]:
     not staged, or untracked."""
     proc = _git_ok(root, "status", "--porcelain", "-z", "--untracked-files=all", "--",
                    *_literal(_git_paths(root, files)), timeout=None)
-    seen, fields = set(), iter(proc.stdout.split("\0"))
+    seen, fields = [], iter(proc.stdout.split("\0"))
     for field in fields:                # "XY path", from the top, and after a rename or a copy, the path it was
         if len(field) > 3:
-            seen.add(_from_top(field[3:]))
+            seen.append(field[3:])
             if "R" in field[:2] or "C" in field[:2]:
-                seen.add(_from_top(next(fields, "")))
-    return [path for path in files if _from_top(_within(top, path)) in seen]
+                seen.append(next(fields, ""))
+    return [path for path in files if any(_same(top, path, name) for name in seen)]
+
+
+def _same(top: str, path: Path, name: str) -> bool:
+    """Whether ``name``, a path git gives from the top of the work tree, is ``path``: the same file
+    on disk, however each is spelt — git spells the directories below the top as the disk does, and
+    the project's path may spell them otherwise. By the text when one of them is not there, a file
+    git sees deleted."""
+    try:
+        return os.path.samefile(path, os.path.join(top, name))
+    except OSError:
+        return _from_top(_within(top, path)) == _from_top(name)
 
 
 def _from_top(path: Optional[str]) -> Optional[str]:
