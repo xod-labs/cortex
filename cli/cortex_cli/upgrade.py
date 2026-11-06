@@ -197,6 +197,8 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     if not (found or init.bootstrap_of_cortex(content)):
         return None, None       # no Cortex bootstrap: cortex init says so
     layouts = [found[0][0]] if found else list(TEMPLATES)
+    if layouts == ["workspace"]:        # without --workspace, cortex init writes a single project's
+        again = "cortex init --force --workspace writes it again, and keeps yours as .bak"
     # ADR-012 §3.4: the end marker of the file `cortex init --force` writes, the target's — none before format 2.
     ends = any(init.END_MARKER.search(_written(target / "templates", name, personality, path) or b"") for name in layouts)
     below = " — your own rules go below its end marker, where Cortex keeps them" if ends else ""

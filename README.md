@@ -165,7 +165,7 @@ cd workspace/
 cortex init --workspace --service backend --service apps/frontend
 ```
 
-Each `--service` is a folder of the workspace and gets its own `project-overview.md` and `project-context.md`, with the folder's name as its `@alias` (`apps/frontend` → `@frontend`). On a terminal with no `--service`, the command asks for the services. The workspace root gets `cortex.toml`, `cortex.lock`, `cortex.local.toml` and the bootstrap file, written from the workspace template — its marker says `layout=workspace`. When `agents/` is its own git repository, the team's `agents/project-overview.md` and `agents/project-context.md` are scaffolded too ([ADR-006](docs/adr/ADR-006-workspace-shareable-repo.md)).
+Each `--service` is a folder of the workspace and gets its own `project-overview.md` and `project-context.md`, with the folder's name as its `@alias` (`apps/frontend` → `@frontend`). On a terminal with no `--service`, the command asks for the services. The workspace root gets `cortex.toml`, `cortex.lock`, `cortex.local.toml` and the bootstrap file, written from the workspace template — its marker says `layout=workspace`. Declare the services — `@alias`, folder, description — in a table below that file's end marker, where `cortex upgrade` keeps it. When `agents/` is its own git repository, the team's `agents/project-overview.md` and `agents/project-context.md` are scaffolded too ([ADR-006](docs/adr/ADR-006-workspace-shareable-repo.md)).
 
 To target a service in a prompt, use its alias:
 ```
