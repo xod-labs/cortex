@@ -19,9 +19,9 @@ automation has one job: **stop regressions cheaply**. Conformance is a manual au
 | Layer | Tool | Catches | Cannot catch | Cost |
 |---|---|---|---|---|
 | Static lint | `eslint-plugin-*-a11y` | missing `alt`, unlabeled controls, click without keyboard, bad `tabindex`, invalid ARIA in templates | anything decided at runtime | seconds |
-| HTML validation | html-validate (a11y rules on) | invalid nesting, missing required attributes and content, duplicate ids | runtime state | seconds |
+| HTML validation | html-validate (a11y rules on) | invalid nesting, missing required attributes and content, duplicate ids — a WCAG 2.2 failure only where they break a name, a role or a relationship (1.3.1, 4.1.2): 4.1.1 Parsing is gone | runtime state | seconds |
 | Component | axe on a mounted component (`jest-axe`, `vitest-axe`, Storybook test-runner) | names, roles, ARIA states, labels, per state of the component | **contrast, target size, reflow** under jsdom/happy-dom — no layout, no computed colors | seconds (DOM), minutes (Storybook in a browser) |
-| Page | axe in a real browser (`@axe-core/playwright`, `cypress-axe`, pa11y-ci) | everything axe knows, contrast included, on real pages and real data | meaning, order, usability | minutes per route |
+| Page | axe in a real browser (`@axe-core/playwright`, `cypress-axe`, pa11y-ci with its axe runner — its default runner is HTML_CodeSniffer) | everything axe knows, contrast included, on real pages and real data | meaning, order, usability | minutes per route |
 | Trend | Lighthouse CI | a score over time | conformance — a 100 is not a statement | minutes |
 | Manual | keyboard, screen readers, zoom, contrast checker, the standard's audit tool | the criteria no rule covers | — | hours per page |
 
@@ -51,7 +51,9 @@ A product that was never tested will not pass on day one. Do not wait for zero t
 
 ## 🏷️ axe configuration
 
-- Tags for WCAG 2.2 AA: `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa`, `wcag22aa`
+- Tags for WCAG 2.2 AA: `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa`, `wcag22aa`. `target-size`, the only
+  `wcag22aa` rule, is off by default: it runs only when the tags are selected through `runOnly`
+  (`withTags()` in `@axe-core/playwright`), or when it is enabled by name
 - `best-practice` rules reported separately, as warnings — they are not WCAG failures
 - Disable a rule only with a comment naming the reason and the ticket; never globally to get green
 - Scan at least two viewports: desktop, and 320 CSS px wide (reflow)
