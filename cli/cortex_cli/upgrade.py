@@ -202,7 +202,7 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
                       f"templates would tell whether a team changed it, is not in the store. It is kept: {again}")
     layout = layouts[0] if intact else None
     if intact is None:
-        layout = written_by(content, current / "templates", layouts, personality, path)
+        layout = written_by(init.parts(content)[0], current / "templates", layouts, personality, path)
     if layout is None:
         # A team changed it: said when the target writes another file than the pinned version, or,
         # without the pinned version, a later format — and, of a Cursor rule, when it lacks the
@@ -231,6 +231,15 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     if wanted is None or wanted == init.parts(content)[0]:
         return None, None
     block, team = init.parts(init.without_bom(kept))    # ADR-012 §3.4: the team's part goes back as it was
+    if init.normalised(block) != init.normalised(init.parts(content)[0]):
+        # The bytes split elsewhere than the digest read — line endings it takes for one (CR CR LF): written,
+        # the team's part would be lost.
+        return None, (f"{display(str(path))} was not written again: its line endings hide where Cortex's block ends. "
+                      f"It is kept: {again}")
+    if team and init.END_MARKER.search(wanted) is None:
+        # A target of format 1 has no end marker: the team's part would end up inside Cortex's block.
+        return None, (f"{display(str(path))} has a part of its own below its end marker, and the target's template, of "
+                      f"format {_format(wanted)}, has no place for it — so it is kept as it is")
     if b"\r\n" in block:
         wanted = wanted.replace(b"\n", b"\r\n")
     return (init.BOM + wanted if kept.startswith(init.BOM) else wanted) + team, None

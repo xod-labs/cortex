@@ -347,6 +347,31 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(MARKED, True)))
 
+    def test_a_downgrade_to_format_1_keeps_a_file_with_a_team_s_part(self):
+        # A template of format 1 has no end marker: written, the team's part would end up inside Cortex's block.
+        self.marked()
+        project = self.project(OWN)
+        kept = init.stamped(init.instructions(TEMPLATE, True)) + b"## Our own rules\n"
+        (project / "CLAUDE.md").write_bytes(kept)
+        proc = self.upgrade(project, "9.9.8")
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
+        self.assertIn("CLAUDE.md has a part of its own below its end marker, and the target's template, of format 1, has "
+                      "no place for it — so it is kept as it is\n", proc.err)
+
+    def test_line_endings_that_hide_the_end_marker_keep_the_file(self):
+        # CR CR LF, as a Windows script that writes text over CRLF leaves it: the digest reads the file as
+        # Cortex wrote it, the bytes split nowhere — written, the team's part would be lost.
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        kept = (self.marked(template=older) + b"## Our own rules\n").replace(b"\n", b"\r\r\n")
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(kept)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
+        self.assertIn("CLAUDE.md was not written again: its line endings hide where Cortex's block ends. It is kept: "
+                      "cortex init --force writes it again, and keeps yours as .bak\n", proc.err)
+
     def test_one_a_team_changed_is_kept_and_said_when_the_target_writes_another(self):
         changed = self.marked() + b"\n## Our own rules\n"
         project = self.project("9.9.8")
