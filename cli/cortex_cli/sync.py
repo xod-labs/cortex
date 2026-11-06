@@ -437,10 +437,12 @@ def leaving(path: Path) -> str:
     return "Move or remove it, then run the command again."
 
 
-def existing_entry(target: Path, the_store: store.Store, project: config.Project) -> Optional[str]:
+def existing_entry(target: Path, the_store: store.Store, project: config.Project,
+                   replaces: bool = False) -> Optional[str]:
     """What sync made at ``cortex/`` — ``"link"``, ``"copy"`` — or ``None`` when nothing is there.
     Anything else there is refused, and so is a copy holding a file sync did not write: removing
-    it would lose that file."""
+    it would lose that file. ``replaces`` — a link sync from a checkout, ``--link --from`` — a link
+    the project reads that leads nowhere is ``"gone"``: the sync names where it should lead (#310)."""
     if not os.path.lexists(target):
         return None
     if is_link(target):
@@ -450,6 +452,8 @@ def existing_entry(target: Path, the_store: store.Store, project: config.Project
         if project.spec == LINK and not os.path.exists(target):
             # A link the project reads, that leads nowhere: to a checkout a `--from` sync linked, moved or
             # deleted since, or into a store moved since — CORTEX_HOME changed. One message says both (#312).
+            if replaces:
+                return "gone"
             raise SyncError(f"{LINK}/ is a link to {shown(display(pointed))}, which leads nowhere — a checkout or a "
                             f"store moved or deleted since it was linked. Remove it, then `cortex sync` for the "
                             f"version {config.PROJECT_FILE} pins, or `cortex sync --link --from` the checkout it "
@@ -798,7 +802,8 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     the_store = store.Store()
     target = Path(root) / LINK
     tidy(Path(root))
-    existing = existing_entry(target, the_store, project)
+    existing = existing_entry(target, the_store, project, replaces=source is not None and mode == "link")
+    gone = link_target(target) if existing == "gone" else None
 
     if source is not None:
         spec_source = Path(os.path.abspath(source))
@@ -863,6 +868,8 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if mode == "store":
         out.write("The spec is read where it is: nothing of it is in the project.\n")
     elif mode == "link":
+        if gone is not None:
+            out.write(f"{LINK}/ was a link to {display(gone)}, which led nowhere: replaced.\n")
         out.write(f"{LINK}/ links to {display(str(spec_source))}.\n")
     else:
         out.write(f"{LINK}/ is a read-only copy of {display(str(spec_source))}.\n")
