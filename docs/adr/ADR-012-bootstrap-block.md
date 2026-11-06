@@ -73,14 +73,14 @@ The digest of ADR-010 §3.1 is computed as before — the first 16 hexadecimal d
 
 - **A new file** is written in format 2, its team's part empty.
 - **A file that is there, without `--force`,** is kept, with the note of ADR-010 §3.1, as before. A format 2 file of the right layout is a bootstrap of this version.
-- **With `--force`,** the old file is kept as `.bak`, as before. Cortex's block is written again, and **the team's part of the old file follows it**, byte for byte, when the old file has an end marker; the block then takes the old file's line endings and byte order mark, as `cortex upgrade` writes it. A file without an end marker — format 1, or a file a team wrote — has no team's part: it is replaced whole, as before.
+- **With `--force`,** the old file is kept as `.bak`, as before. Cortex's block is written again, and **the team's part of the old file follows it**, byte for byte, when the old file has an end marker; the block then takes the old file's line endings and byte order mark, as `cortex upgrade` writes it. A file without an end marker — format 1, or a file a team wrote — has no team's part: it is replaced whole, as before. So is any file when the template has no end marker — a version before format 2, after a move down: the team's part would join Cortex's block, and stays in the `.bak`.
 
 ### 3.4 `cortex upgrade`
 
 ADR-010 §3.5, step 5, applies to Cortex's block:
 
 - **The block is as Cortex wrote it** — its digest says so, or, without a digest, it is the pinned version's block. The target's block is written, followed by the team's part as it was. A format 1 file nobody changed becomes format 2, with an empty team's part.
-- **The block was changed** — a team wrote above the end marker, or removed it. The file is kept, with the note of ADR-010, which now also says to write one's rules below the end marker of the file `cortex init --force` writes.
+- **The block was changed** — a team wrote above the end marker, or removed it. The file is kept, with the note of ADR-010, which now also says to write one's rules below the end marker of the file `cortex init --force` writes — when it has one — and, of a workspace's file, names `cortex init --force --workspace`: without the option, `cortex init` writes a single project's bootstrap.
 - **A target whose template has no end marker** — a move down to a version before 1.7.0 — keeps a file that has a team's part, with a note: written, the team's part would end up inside Cortex's block.
 - **A bootstrap with no marker that is neither the pinned version's file nor the target's** is kept with a note, on the pinned version too, instead of being passed over in silence once the pin has moved (#313).
 - **Line endings and the byte order mark:** the block is written with the line endings and the mark the file had, as before — a run of carriage returns before a line feed comes back as CR LF. The team's part is put back as it was.
@@ -166,4 +166,10 @@ All phases ship in one release, 1.7.0, with #310, #311, #312 and #314.
 
 ## 9. Amendments
 
-None yet.
+The record was *Accepted*, not yet implemented, when these were made: the body above already says each. They are listed against the text Bluspark's counter-review read on 2026-11-06.
+
+### The counter-review of 2026-11-06
+
+- **A workspace's services table goes below the end marker** (§3.5, phase 1). The workspace template held a table to fill inside Cortex's block: filled, it failed the digest, and `cortex upgrade` kept the file, which stopped following Cortex. A sentence now says where the table goes, and which folders are the services when there is none. ADR-001 §3.5, where the Prompt Manager tells workspace mode by a services table, reads it there.
+- **The note says where a team's rules go only when the file `cortex init --force` writes has an end marker** (§3.4) — the target's template, which before format 2 has none — and names `--workspace` for a workspace's file.
+- **`cortex init --force` writes a template without an end marker whole** (§3.3): after a move down to a version before format 2, the team's part would have joined Cortex's block, as `cortex upgrade` refuses to make it.
