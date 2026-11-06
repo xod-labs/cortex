@@ -589,24 +589,42 @@ class DigestTests(UpgradeTestCase):
         for pinned, content, note in cases:
             with self.subTest(pinned=pinned):
                 project = self.project(pinned)
-                (project / "CLAUDE.md").write_bytes(content)
-                proc = self.upgrade(project, "9.9.8")
-                self.assert_ok(proc)
-                self.assertEqual((project / "CLAUDE.md").read_bytes(), content)
-                self.assertIn(note, proc.err)
-                shutil.rmtree(project)
+                try:
+                    (project / "CLAUDE.md").write_bytes(content)
+                    proc = self.upgrade(project, "9.9.8")
+                    self.assert_ok(proc)
+                    self.assertEqual((project / "CLAUDE.md").read_bytes(), content)
+                    self.assertIn(note, proc.err)
+                finally:
+                    shutil.rmtree(project)
 
     def test_already_on_it_a_marked_file_a_team_changed_is_kept_unsaid(self):
         # #313 is a bootstrap with no marker (ADR-012 §3.4). A file with one — a digest or not — that a team
         # changed is said when the target writes another file than the pinned version: on it, the target does not.
-        changed = init.instructions(MARKED, True) + b"\n## Our own rules\n"
-        self.marked()
+        written = self.marked()
+        project = self.project("9.9.8")
+        for changed in (init.instructions(MARKED, True) + b"\n## Our own rules\n", written + b"\n## Our own rules\n"):
+            with self.subTest(digest=changed.startswith(written)):
+                (project / "CLAUDE.md").write_bytes(changed)
+                proc = self.upgrade(project, "9.9.8")
+                self.assert_ok(proc)
+                self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
+                self.assertNotIn("CLAUDE.md", proc.out + proc.err)
+
+    def test_a_workspace_bootstrap_a_team_changed_is_said_to_need_workspace(self):
+        # Without --workspace, cortex init --force writes a single project's bootstrap: the note names it.
+        name = "bootstrap-instructions-workspace.md"
+        older = (harness.REPO / "templates" / name).read_bytes().replace(b"## Where the spec is",
+                                                                        b"## Where the spec is, in 9.9.8", 1)
+        changed = self.marked(template=older, name=name).replace(END, b"## Our own rules\n\n" + END)
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(changed)
-        proc = self.upgrade(project, "9.9.8")
+        proc = self.upgrade(project)
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
-        self.assertNotIn("CLAUDE.md", proc.out + proc.err)
+        self.assertIn("CLAUDE.md is not what Cortex wrote, by the digest in its marker — a team changed it — so it is kept, "
+                      "and the target's template is not written: cortex init --force --workspace writes it again, and "
+                      "keeps yours as .bak — your own rules go below its end marker, where Cortex keeps them\n", proc.err)
 
     def test_already_on_it_writes_again_what_an_interrupted_upgrade_left(self):
         # Cut short after the switch, or a pin moved by hand: 9.9.8's file under the pin of this cortex.
