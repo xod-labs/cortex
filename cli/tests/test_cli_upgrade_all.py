@@ -1042,6 +1042,20 @@ class CommitTests(GitTestCase):
         self.assertIn(f"note: nothing is committed in {display(alpha)} — cortex.lock is as committed already\n", proc.err)
         self.assertNotIn("Commit cortex.lock", proc.out)
 
+    def test_a_move_to_files_as_committed_already_asks_to_commit_nothing(self):
+        # A pin moved back by hand, not committed: the move writes the files as they are committed.
+        alpha = self.make("alpha", OWN)
+        first = self.repository(alpha)
+        for name in ("cortex.toml", "cortex.lock"):
+            text = (alpha / name).read_text(encoding="utf-8")
+            (alpha / name).write_text(text.replace(f'"{OWN}"', '"9.9.8"', 1), encoding="utf-8")
+        proc = self.upgrade(alpha, "--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        self.assertEqual(self.head(alpha), first)
+        self.assertIn(f"note: nothing is committed in {display(alpha)} — cortex.toml and cortex.lock are as committed "
+                      "already\n", proc.err)
+        self.assertIn(f"\nCortex {OWN} is ready. Teammates run `cortex sync` after they pull.\n", proc.out)
+
     @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
     def test_as_committed_already_a_file_written_outside_is_still_said_to_commit_there(self):
         # #326: what is as committed is the work tree's; a file written outside it is still to commit where it is.

@@ -80,15 +80,12 @@ You are the Prompt Manager. On every request:
 
 ## Services declared in this workspace
 
-<!--
-  List of services and their @alias values.
-  Updated manually — `cortex init --workspace --service NAME` scaffolds a service's own files.
--->
+The workspace's services — `@alias`, folder, description — are declared in a table below the end marker, at the bottom of this file. With no table there, a service's `@alias` is the one at the top of its `project-overview.md`.
 
-| @alias | Folder | Description |
-|--------|--------|-------------|
-| <!-- @backend --> | <!-- service-a/ --> | <!-- Main API --> |
-| <!-- @frontend --> | <!-- service-b/ --> | <!-- Web application --> |
+<!--
+  Declare them there, where `cortex upgrade` and `cortex init --force` keep them: a table written here, in Cortex's block,
+  keeps the file from following Cortex. `cortex init --workspace --service NAME` scaffolds a service's own files.
+-->
 
 ## References (read on demand depending on context)
 - **Context (team + developer, additive):** `{workspace_root}/agents/project-overview.md` / `project-context.md` (team, if versioned) **and** `{workspace_root}/project-overview.md` / `project-context.md` (developer) — both read, not cascaded. See [ADR-006](cortex/docs/adr/ADR-006-workspace-shareable-repo.md).

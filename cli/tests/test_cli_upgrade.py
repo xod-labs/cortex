@@ -569,6 +569,45 @@ class DigestTests(UpgradeTestCase):
                       "or an older Cortex wrote it — so it is kept: cortex init --force writes it again, and keeps yours "
                       "as .bak — your own rules go below its end marker, where Cortex keeps them\n", proc.err)
 
+    def test_a_target_without_an_end_marker_is_not_said_to_keep_rules_below_it(self):
+        # ADR-012 §3.4: below the end marker of the file `cortex init --force` writes — the target's, and a
+        # target before format 2 has none: up, on the pinned version (#313), and down.
+        older = MARKED.replace(b"Written by 9.9.8", b"Written by 9.9.7")
+        self.marked(version="9.9.7", template=older)
+        self.marked()
+        newer = init.stamped(init.instructions(TEMPLATE, True)).replace(END, b"## Our own rules\n\n" + END)
+        kept = " — so it is kept, and the target's template is not written: cortex init --force writes it again, and " \
+               "keeps yours as .bak\n"
+        cases = (
+            ("9.9.7", init.stamped(init.instructions(older, True)) + b"\n## Our own rules\n",
+             "CLAUDE.md is not what Cortex wrote, by the digest in its marker — a team changed it" + kept),
+            ("9.9.8", b"# Cortex AI Team\n\nWritten by an older Cortex: read cortex.local.toml first.\n",
+             "CLAUDE.md is a bootstrap without the marker, not what Cortex 9.9.8 writes — a team changed it, or an older "
+             "Cortex wrote it — so it is kept: cortex init --force writes it again, and keeps yours as .bak\n"),
+            (OWN, newer, "CLAUDE.md is not what Cortex wrote, by the digest in its marker — a team changed it" + kept),
+        )
+        for pinned, content, note in cases:
+            with self.subTest(pinned=pinned):
+                project = self.project(pinned)
+                (project / "CLAUDE.md").write_bytes(content)
+                proc = self.upgrade(project, "9.9.8")
+                self.assert_ok(proc)
+                self.assertEqual((project / "CLAUDE.md").read_bytes(), content)
+                self.assertIn(note, proc.err)
+                shutil.rmtree(project)
+
+    def test_already_on_it_a_marked_file_a_team_changed_is_kept_unsaid(self):
+        # #313 is a bootstrap with no marker (ADR-012 §3.4). A file with one — a digest or not — that a team
+        # changed is said when the target writes another file than the pinned version: on it, the target does not.
+        changed = init.instructions(MARKED, True) + b"\n## Our own rules\n"
+        self.marked()
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(changed)
+        proc = self.upgrade(project, "9.9.8")
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
+        self.assertNotIn("CLAUDE.md", proc.out + proc.err)
+
     def test_already_on_it_writes_again_what_an_interrupted_upgrade_left(self):
         # Cut short after the switch, or a pin moved by hand: 9.9.8's file under the pin of this cortex.
         written = self.marked()
