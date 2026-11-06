@@ -7,9 +7,11 @@
 ## 🎯 Triggers
 
 This workflow activates when the prompt contains formulations such as:
-- "accessibility audit", "a11y audit", "WCAG audit", "RGAA audit", "EN 301 549 or Section 508 conformance"
-- "conformance rate", "accessibility statement", "are we accessible?"
-- "automate accessibility checks", "a11y in CI", "regular accessibility audits"
+- "accessibility audit", "audit the accessibility of …", "a11y audit", "WCAG audit", "RGAA audit"
+- "EN 301 549 conformance", "Section 508 conformance"
+- "conformance rate", "accessibility statement", "are we accessible?", "regular accessibility audits"
+
+> Not this workflow: wiring accessibility checks into tests or CI → `frontend-testing.md`.
 
 ## 👥 Agents involved
 

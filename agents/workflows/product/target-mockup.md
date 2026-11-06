@@ -8,8 +8,9 @@
 
 This workflow activates when the prompt contains formulations such as:
 - "target mockup", "mockups for the redesign", "clickable prototype of the new …", "wireframe the new …"
-- "design the new site / screen / journey", "visual overhaul"
-- "Open Design", "design system refresh"
+- "redesign the site / journey", "visual overhaul", "design system refresh"
+
+> Not this workflow: one new screen or page → `engineering/feature-development.md`.
 
 ## 👥 Agents involved
 
