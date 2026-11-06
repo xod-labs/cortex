@@ -1,7 +1,7 @@
 # ADR-012 — The bootstrap file: Cortex's block, then the team's
 
-- **Status:** Accepted
-- **Date:** 2026-11-06 (proposed and accepted: the maintainer's arbitrations of 2026-11-06, §2)
+- **Status:** Implemented
+- **Date:** 2026-11-06 (proposed and accepted: the maintainer's arbitrations of 2026-11-06, §2) · 2026-11-07 (implemented, 1.7.0)
 - **Authors:** Cortex maintainers (initiated by the maintainer, drafted by @Oolon)
 - **Affects:** `templates/bootstrap-instructions*.md` (format 2, the end marker), `cli/cortex_cli/init.py` (the digest of Cortex's block, `cortex init --force`), `cli/cortex_cli/upgrade.py` (the split and the merge), `cli/tests/fixtures/init/expected.json`, `README.md`, `docs/getting-started.md`, `docs/migrating-to-the-binary.md`
 - **Relates to:** [ADR-010](ADR-010-lock-and-upgrade.md) §3.1 (the marker and its digest) and §3.5 step 5 (a bootstrap nobody changed is written again), which this record narrows to Cortex's block · [ADR-006](ADR-006-workspace-shareable-repo.md) (the team's and the developer's context files) · #98 (the IDE modes, which will write resolved prompts into Cortex's block) · #313
