@@ -1433,7 +1433,7 @@ class BootstrapMarkerTests(unittest.TestCase):
                 self.assertEqual(init_command.parts(content), expected)
 
     def test_cortex_s_block_holds_no_table_a_team_fills(self):
-        # Every workspace fills its table of services: in Cortex's block, it would keep the file from following Cortex.
+        # A workspace fills its table of services: in Cortex's block, it would keep the file from following Cortex.
         for name in ("bootstrap-instructions.md", "bootstrap-instructions-workspace.md"):
             with self.subTest(name):
                 block = init_command.parts((harness.REPO / "templates" / name).read_bytes())[0]
