@@ -611,6 +611,20 @@ class DigestTests(UpgradeTestCase):
                 self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
                 self.assertNotIn("CLAUDE.md", proc.out + proc.err)
 
+    def test_a_workspace_bootstrap_without_the_marker_is_said_to_need_workspace(self):
+        # Written before the marker, by a Cortex before 1.4.0, and a team listed its services in it: its title says
+        # it is a workspace's.
+        self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions-workspace.md": OLD_WORKSPACE})
+        changed = init.instructions(OLD_WORKSPACE, True) + b"\n| `@api` | api/ | Our API |\n"
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(changed)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
+        self.assertIn("CLAUDE.md is a bootstrap without the marker, not what Cortex 9.9.8 writes — a team changed it, or "
+                      "an older Cortex wrote it — so it is kept, and the target's template is not written: cortex init "
+                      "--force --workspace writes it again, and keeps yours as .bak", proc.err)
+
     def test_a_workspace_bootstrap_a_team_changed_is_said_to_need_workspace(self):
         # Without --workspace, cortex init --force writes a single project's bootstrap: the note names it.
         name = "bootstrap-instructions-workspace.md"
