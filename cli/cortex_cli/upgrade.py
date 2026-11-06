@@ -192,12 +192,14 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     content = init.normalised(kept)
     found = init.markers(content)
     again = "cortex init --force writes it again, and keeps yours as .bak"
-    below = " — your own rules go below its end marker, where Cortex keeps them"     # ADR-012 §3.4
     if len(found) > 1:
         return None, f"{display(str(path))} holds several bootstrap markers, so none is read, and it is kept: {again}"
     if not (found or init.bootstrap_of_cortex(content)):
         return None, None       # no Cortex bootstrap: cortex init says so
     layouts = [found[0][0]] if found else list(TEMPLATES)
+    # ADR-012 §3.4: the end marker of the file `cortex init --force` writes, the target's — none before format 2.
+    ends = any(init.END_MARKER.search(_written(target / "templates", name, personality, path) or b"") for name in layouts)
+    below = " — your own rules go below its end marker, where Cortex keeps them" if ends else ""
     intact = init.untouched(content)
     if intact is None and current is None:
         return None, (f"{display(str(path))} was not checked: its marker carries no digest, and Cortex {pinned}, whose "
@@ -419,8 +421,8 @@ def _ending(outcome: Outcome, out: TextIO) -> None:
         done = f"Committed {', '.join(names)} on {outcome.committed} — nothing was pushed" if outcome.committed else \
             f"Commit {', '.join(names)}" if names else ""
         done = "; ".join(part for part in (done, elsewhere) if part)
-        out.write(f"\nCortex {outcome.target} is ready. {done + '; ' if done else ''}teammates run `cortex sync` after "
-                  "they pull.\n")
+        out.write(f"\nCortex {outcome.target} is ready. {done + '; teammates' if done else 'Teammates'} run `cortex sync` "
+                  "after they pull.\n")
     elif names or elsewhere:
         done = f"Committed {_and(names)} on {outcome.committed} — nothing was pushed" if outcome.committed else \
             f"Commit {_and(names)}" if names else ""
