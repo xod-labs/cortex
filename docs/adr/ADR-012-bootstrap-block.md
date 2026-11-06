@@ -87,7 +87,7 @@ ADR-010 §3.5, step 5, applies to Cortex's block:
 
 ### 3.5 Where a rule goes
 
-The docs say, for each kind of rule of §1:
+The docs say where each kind of rule of §1 goes, and a workspace's services:
 
 | Rule | Where |
 |---|---|
@@ -107,7 +107,7 @@ The marker of ADR-010, its layouts, and where it is read; what `cortex init` and
 > §3.1 to §3.3, and the merge of §3.4: the end marker in both templates and format 2, the digest over Cortex's block, `cortex init` and `cortex init --force`, and `cortex upgrade` putting the team's part back after the block it writes. The digest stops seeing the team's part in this phase, so the merge comes with it: no phase may write a block over a team's part it then loses.
 
 **Acceptance criteria:**
-- both templates close Cortex's text with the end marker and its comment, and carry `format=2`; the workspace template's table of services, which every workspace fills, gives way to a sentence that says it goes below the end marker; the init matrix differs by those lines only
+- both templates close Cortex's text with the end marker and its comment, and carry `format=2`; the workspace template's table of services, which a workspace fills, gives way to a sentence that says it goes below the end marker; the init matrix differs by those lines only
 - the digest a written file carries covers its block: text added after the end marker leaves the file untouched; a change above it, or the end marker removed, does not
 - a marker or an end marker in the team's part is the team's text
 - `cortex init --force` on a file with an end marker writes the block again and keeps the team's part byte for byte, CRLF and byte order mark included, the old file kept as `.bak`; on a file without one, it replaces the file whole
