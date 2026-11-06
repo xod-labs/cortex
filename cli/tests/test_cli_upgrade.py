@@ -387,6 +387,23 @@ class DigestTests(UpgradeTestCase):
                          init.BOM + init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n") + team)
         self.assertIn("Commit cortex.toml, cortex.lock, CLAUDE.md;", proc.out)
 
+    def test_a_team_s_part_under_a_block_the_target_writes_alike_is_left_as_it_is(self):
+        written = self.marked(template=TEMPLATE) + b"## Our own rules\n"
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(written)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), written)
+        self.assertNotIn("CLAUDE.md", proc.out + proc.err)
+
+    def test_the_block_keeps_its_own_line_endings_whatever_the_team_s_part_has(self):
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        team = b"## Our own rules\r\nWritten on Windows.\r\n"
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(self.marked(template=older) + team)
+        self.assert_ok(self.upgrade(project))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)) + team)
+
     def test_already_on_it_writes_again_what_an_interrupted_upgrade_left(self):
         # Cut short after the switch, or a pin moved by hand: 9.9.8's file under the pin of this cortex.
         written = self.marked()
