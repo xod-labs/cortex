@@ -1392,9 +1392,9 @@ class BootstrapMarkerTests(unittest.TestCase):
         self.assertEqual(init_command.without_frontmatter(kept), body)
         self.assertFalse(init_command.applies_always(kept))
 
-    def test_always_apply_is_read_as_yaml_reads_true(self):
-        for line, always in ((b"alwaysApply: true", True), (b"alwaysApply: True", True), (b"alwaysApply: TRUE", True),
-                             (b"alwaysApply: true  # every conversation", True), (b"alwaysApply: false", False),
+    def test_always_apply_is_read_as_cursor_documents_it(self):
+        for line, always in ((b"alwaysApply: true", True), (b"alwaysApply: true ", True), (b"alwaysApply: True", False),
+                             (b"alwaysApply: true  # every conversation", False), (b"alwaysApply: false", False),
                              (b"alwaysApply: trueish", False), (b"description: alwaysApply: true", False)):
             with self.subTest(line=line):
                 rule = b"---\r\n" + line + b"\r\n---\r\n# Cortex AI Team\r\n"
