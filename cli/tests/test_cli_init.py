@@ -514,10 +514,19 @@ class OptionTests(InitTestCase):
         self.assertEqual(proc.returncode, 1, proc.err)                               # before anything is written
         self.assertIn("which leads nowhere", proc.err)
         self.assertEqual(self.read("cortex.toml"), pinned)
+        proc = self.init("--tool", "claude", "--link", "--no-personality")         # no checkout named: refused,
+        self.assertEqual(proc.returncode, 1, proc.err)                               # the theme key left as it was
+        self.assertEqual(self.read("cortex.toml"), pinned)
         proc = self.init("--tool", "claude", "--link", "--from", str(moved))
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn("which led nowhere: replaced.", proc.out)
         self.assertEqual(os.path.realpath(self.project / "cortex"), os.path.realpath(moved))
+        again = self.tmp / "moved-again"
+        moved.rename(again)
+        proc = self.init("--tool", "claude", "--from", str(again))                  # sync = "link" in cortex.toml
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("which led nowhere: replaced.", proc.out)
+        self.assertEqual(os.path.realpath(self.project / "cortex"), os.path.realpath(again))
 
     def test_a_directory_given(self):
         proc = self.init("sub/app", cwd=self.project)
