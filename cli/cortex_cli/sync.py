@@ -455,9 +455,9 @@ def existing_entry(target: Path, the_store: store.Store, project: config.Project
             if replaces:
                 return "gone"
             raise SyncError(f"{LINK}/ is a link to {shown(display(pointed))}, which leads nowhere — a checkout or a "
-                            f"store moved or deleted since it was linked. Remove it, then `cortex sync` for the "
-                            f"version {config.PROJECT_FILE} pins, or `cortex sync --link --from` the checkout it "
-                            f"should follow.")
+                            f"store moved or deleted since it was linked. `cortex sync --link --from` the checkout it "
+                            f"should follow, which replaces it, or remove it, then `cortex sync` for the version "
+                            f"{config.PROJECT_FILE} pins.")
         raise SyncError(f"{LINK}/ is a link to {shown(display(pointed))}, which Cortex did not make. Move or remove it, "
                         "then run the command again.")
     if target.is_dir() and not (target / ".git").exists() and (target / MARKER).is_file():
@@ -869,7 +869,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         out.write("The spec is read where it is: nothing of it is in the project.\n")
     elif mode == "link":
         if gone is not None:
-            out.write(f"{LINK}/ was a link to {display(gone)}, which led nowhere: replaced.\n")
+            out.write(f"{LINK}/ was a link to {shown(display(gone))}, which led nowhere: replaced.\n")
         out.write(f"{LINK}/ links to {display(str(spec_source))}.\n")
     else:
         out.write(f"{LINK}/ is a read-only copy of {display(str(spec_source))}.\n")

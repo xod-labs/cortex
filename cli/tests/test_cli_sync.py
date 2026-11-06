@@ -25,6 +25,7 @@ sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).res
 import cli_harness as harness  # noqa: E402
 from cortex_cli import store  # noqa: E402
 from cortex_cli.store import digest  # noqa: E402
+from cortex_cli.sync import link_target  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
 OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
@@ -270,23 +271,23 @@ class ForeignCortexTests(SyncTestCase):
         self.assertIn("which Cortex did not make", proc.err)
         self.assertEqual(os.readlink(project / "cortex"), str(elsewhere))
 
-    @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
-    def test_a_link_to_a_checkout_that_is_gone_is_replaced_by_a_link_sync_from_a_checkout_only(self):
+    def test_a_link_to_a_checkout_that_is_gone_is_replaced_by_a_link_sync_from_a_checkout_only(self):        # a junction on Windows: no privilege
         checkout, moved = self.tmp / "checkout", self.tmp / "moved"
         for tree in ("agents", "templates", "docs"):
             (checkout / tree).mkdir(parents=True)
         project = self.project()
         self.assert_ok(self.sync(project, "--link", "--from", str(checkout)))
-        pointed = os.readlink(project / "cortex")
+        pointed = link_target(project / "cortex")
         checkout.rename(moved)
         for args in ((), ("--link",), ("--copy", "--from", str(moved)), ("--from", str(moved))):
             with self.subTest(args=args):                               # no checkout named, or no link made
                 proc = self.sync(project, *args)
                 self.assertEqual(proc.returncode, 1)
                 self.assertIn(f"cortex/ is a link to {display(pointed)}, which leads nowhere — a checkout or a store "
-                              "moved or deleted since it was linked. Remove it, then `cortex sync` for the version "
-                              "cortex.toml pins, or `cortex sync --link --from` the checkout it should follow.", proc.err)
-                self.assertEqual(os.readlink(project / "cortex"), pointed)
+                              "moved or deleted since it was linked. `cortex sync --link --from` the checkout it should "
+                              "follow, which replaces it, or remove it, then `cortex sync` for the version cortex.toml "
+                              "pins.", proc.err)
+                self.assertEqual(link_target(project / "cortex"), pointed)
         proc = self.sync(project, "--link", "--from", str(moved))       # where the checkout is now
         self.assert_ok(proc)
         self.assertIn(f"cortex/ was a link to {display(pointed)}, which led nowhere: replaced.\n", proc.out)
@@ -294,8 +295,7 @@ class ForeignCortexTests(SyncTestCase):
         self.assertEqual(self.spec(project), "cortex")
         self.assertEqual([p.name for p in project.iterdir() if p.name.startswith(".cortex-")], [])
 
-    @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
-    def test_a_project_that_links_by_default_replaces_it_from_a_checkout_too(self):
+    def test_a_project_that_links_by_default_replaces_it_from_a_checkout_too(self):        # a junction on Windows: no privilege
         checkout, moved = self.tmp / "checkout", self.tmp / "moved"
         for tree in ("agents", "templates", "docs"):
             (checkout / tree).mkdir(parents=True)
@@ -319,7 +319,8 @@ class ForeignCortexTests(SyncTestCase):
         proc = self.sync(project)
         self.assertEqual(proc.returncode, 1)
         self.assertIn(f"cortex/ is a link to {display(pointed)}, which leads nowhere — a checkout or a store "
-                      "moved or deleted since it was linked. Remove it, then `cortex sync`", proc.err)
+                      "moved or deleted since it was linked. `cortex sync --link --from` the checkout it should "
+                      "follow, which replaces it, or remove it, then `cortex sync`", proc.err)
         self.assertNotIn("which Cortex did not make", proc.err)
         self.assertEqual(os.readlink(project / "cortex"), pointed)
         os.unlink(project / "cortex")                                   # what it says to do
@@ -901,6 +902,16 @@ class ValidateTests(SyncTestCase):
         self.assertIn("cortex/ is a link to", proc.err)
         self.assertNotIn("\x1b", proc.err)
         self.assertIn("\\x1b]0;pwned\\x07", proc.err)
+        checkout, linked = self.tmp / "checkout", self.project("linked")
+        for tree in ("agents", "templates", "docs"):
+            (checkout / tree).mkdir(parents=True)
+        self.assert_ok(self.sync(linked, "--link", "--from", str(checkout)))     # spec = "cortex": a link it reads
+        os.unlink(linked / "cortex")
+        os.symlink(self.tmp / "\x1b]0;pwned\x07", linked / "cortex")
+        proc = self.sync(linked, "--link", "--from", str(checkout))      # replaced: its name said as escaped
+        self.assert_ok(proc)
+        self.assertNotIn("\x1b", proc.out)
+        self.assertIn("\\x1b]0;pwned\\x07, which led nowhere: replaced.", proc.out)
         copied = self.project("copied", extra='sync = "copy"\n')
         self.assert_ok(self.sync(copied))
         os.chmod(copied / "cortex" / "agents", 0o755)
