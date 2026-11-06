@@ -191,17 +191,16 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     kept = path.read_bytes()
     content = init.normalised(kept)
     found = init.markers(content)
-    again = "cortex init --force writes it again, and keeps yours as .bak"
+    # Without --workspace, cortex init writes a single project's: a workspace's file says it is one by its
+    # markers, or, written before the marker, by its title — as cortex init reads it (ADR-010 §3.1).
+    title = init.without_frontmatter(content).split(b"\n", 1)[0]
+    workspace = all(layout == "workspace" for layout, _ in found) if found else b"Workspace Mode" in title
+    again = f"cortex init --force{' --workspace' if workspace else ''} writes it again, and keeps yours as .bak"
     if len(found) > 1:
         return None, f"{display(str(path))} holds several bootstrap markers, so none is read, and it is kept: {again}"
     if not (found or init.bootstrap_of_cortex(content)):
         return None, None       # no Cortex bootstrap: cortex init says so
     layouts = [found[0][0]] if found else list(TEMPLATES)
-    # Without --workspace, cortex init writes a single project's: a workspace's file says it is one by its
-    # marker, or, written before the marker, by its title — as cortex init reads it (ADR-010 §3.1).
-    title = init.without_frontmatter(content).split(b"\n", 1)[0]
-    if layouts == ["workspace"] or (not found and b"Workspace Mode" in title):
-        again = "cortex init --force --workspace writes it again, and keeps yours as .bak"
     # ADR-012 §3.4: the end marker of the file `cortex init --force` writes, the target's — none before format 2.
     ends = any(init.END_MARKER.search(_written(target / "templates", name, personality, path) or b"") for name in layouts)
     below = " — your own rules go below its end marker, where Cortex keeps them" if ends else ""
