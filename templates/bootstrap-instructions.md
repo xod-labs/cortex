@@ -1,6 +1,6 @@
 # Cortex AI Team
 
-<!-- cortex:bootstrap layout=single format=1 -->
+<!-- cortex:bootstrap layout=single format=2 -->
 <!-- Keep the line above as it is: `cortex init` and `cortex upgrade` read it. -->
 
 ## Where the spec is — read this first
@@ -69,3 +69,6 @@ You are the Prompt Manager. On every request:
 - **Personalities:** `cortex/agents/personalities/{theme}/` — theme files (overrides at `agents/personalities/{theme}/` for `theme.md` and character cards; `characters.md` is not overridable)
 - **Generic workflows:** `cortex/agents/workflows/` — orchestration templates (overrides at `agents/workflows/`)
 - **Layer override guide:** `cortex/docs/extending-layers.md` — how overlays work and when to use them
+
+<!-- Below the next line, this file is yours: `cortex upgrade` and `cortex init --force` keep what you write there. -->
+<!-- cortex:bootstrap end -->

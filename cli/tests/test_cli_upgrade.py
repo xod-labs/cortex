@@ -38,6 +38,7 @@ PERSONAL = (b"# Cortex AI Team\n\n<!-- PERSONALITY:BEGIN -->\nBe a character.\n<
             b"Written by 9.9.8: read cortex.local.toml first.\n")
 OLD_WORKSPACE = b"# Cortex AI Team \xe2\x80\x94 Workspace Mode\n\nWritten by 9.9.8: read cortex.local.toml first.\n"
 TEMPLATE = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes()
+END = b"<!-- cortex:bootstrap end -->"
 OVERLAY = ("<!-- OVERLAY\n     Base: cortex/agents/roles/engineering/architect.md\n     Scope: workspace\n"
            "     Semantic: additive\n-->\n\n# Architect — our rules\n")
 
@@ -306,7 +307,7 @@ class DigestTests(UpgradeTestCase):
                 shutil.rmtree(project)
 
     def test_a_cursor_rule_a_team_changed_is_kept_and_said_to_apply_only_where_mentioned(self):
-        ours = self.marked(template=TEMPLATE) + b"\n## Our own rules\n"
+        ours = self.marked(template=TEMPLATE).replace(END, b"## Our own rules\n\n" + END)   # above it: Cortex's block
         project = self.project("9.9.8")
         rule = self.cursor_rule(project, ours)
         proc = self.upgrade(project)
@@ -329,7 +330,7 @@ class DigestTests(UpgradeTestCase):
                       "cortex init --force writes it again, and keeps yours as .bak\n", proc.err)
 
     def test_a_cursor_rule_a_team_changed_that_applies_always_is_kept_unsaid(self):
-        ours = init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True)) + b"\n## Our own rules\n"
+        ours = init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True)).replace(END, b"## Our own rules\n\n" + END)
         self.marked(template=TEMPLATE)                          # the target writes the same text
         project = self.project("9.9.8")
         rule = self.cursor_rule(project, ours)
@@ -357,7 +358,7 @@ class DigestTests(UpgradeTestCase):
                       "kept, and the target's template is not written: cortex init --force writes it again", proc.err)
 
     def test_one_a_team_changed_is_not_said_when_the_target_writes_the_same(self):
-        changed = self.marked(template=TEMPLATE) + b"\n## Our own rules\n"
+        changed = self.marked(template=TEMPLATE).replace(END, b"## Our own rules\n\n" + END)   # above it: Cortex's block
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(changed)
         proc = self.upgrade(project)
@@ -372,6 +373,19 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(self.upgrade(project))
         self.assertEqual((project / "CLAUDE.md").read_bytes(),
                          b"\xef\xbb\xbf" + init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n"))
+
+    def test_the_team_s_part_follows_the_target_s_block_byte_for_byte(self):
+        # ADR-012 §3.4: Cortex's block as Cortex wrote it is written again; what is below the end marker stays.
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        written = self.marked(template=older)
+        team = b"## Our own rules\r\n\r\nRun the linter first.\r\n<!-- cortex:bootstrap end -->\r\nStill ours."
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.BOM + written.replace(b"\n", b"\r\n") + team)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(),
+                         init.BOM + init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n") + team)
+        self.assertIn("Commit cortex.toml, cortex.lock, CLAUDE.md;", proc.out)
 
     def test_already_on_it_writes_again_what_an_interrupted_upgrade_left(self):
         # Cut short after the switch, or a pin moved by hand: 9.9.8's file under the pin of this cortex.
@@ -473,13 +487,13 @@ class DigestTests(UpgradeTestCase):
 
 
 class StampTests(unittest.TestCase):
-    """The digest a bootstrap carries in its marker (ADR-010 §3.1)."""
+    """The digest a bootstrap carries in its marker (ADR-010 §3.1), of Cortex's block (ADR-012 §3.2)."""
 
     def test_it_is_the_digest_of_the_file_with_its_marker_plain(self):
         written = init.stamped(init.instructions(TEMPLATE, True))
         digest = hashlib.sha256(init.instructions(TEMPLATE, True)).hexdigest()[:16]
-        self.assertIn(f"<!-- cortex:bootstrap layout=single format=1 digest={digest} -->\n".encode(), written)
-        self.assertEqual(init.markers(written), [("single", 1)])
+        self.assertIn(f"<!-- cortex:bootstrap layout=single format=2 digest={digest} -->\n".encode(), written)
+        self.assertEqual(init.markers(written), [("single", 2)])
         self.assertIs(init.untouched(written), True)
         self.assertEqual(init.stamped(written), written)
 
@@ -490,17 +504,30 @@ class StampTests(unittest.TestCase):
             with self.subTest(kept=kept[:8] + kept[-4:]):
                 self.assertIs(init.untouched(kept), True)
 
-    def test_a_change_anywhere_is_one(self):
+    def test_a_change_in_cortex_s_block_is_one(self):
         written = init.stamped(init.instructions(TEMPLATE, True))
-        for kept in (written.replace(b"Cortex", b"Kortex", 1), written + b"## Ours\n",
-                     written.replace(b"format=1 digest=", b"format=2 digest="),
+        end = b"<!-- cortex:bootstrap end -->\n"
+        for kept in (written.replace(b"Cortex", b"Kortex", 1), written.replace(end, b"## Ours\n" + end),
+                     written.replace(end, b"") + b"## Ours\n",        # the end marker gone: all of it is the block
+                     written.replace(b"format=2 digest=", b"format=3 digest="),
                      written.replace(b"layout=single", b"layout=workspace")):
             with self.subTest(kept=kept[-40:]):
                 self.assertIs(init.untouched(kept), False)
 
+    def test_the_team_s_part_is_no_change(self):
+        written = init.stamped(init.instructions(TEMPLATE, True))
+        for team in (b"## Ours\n", b"## Ours\r\n\r\nRun the linter first.",
+                     b"<!-- cortex:bootstrap layout=workspace format=9 digest=0123456789abcdef -->\n"
+                     b"<!-- cortex:bootstrap end -->\n"):          # quoted by the team: its own text
+            with self.subTest(team=team):
+                self.assertIs(init.untouched(written + team), True)
+                self.assertEqual(init.markers(written + team), [("single", 2)])
+                self.assertEqual(init.parts(written + team), (written, team))
+
     def test_no_digest_tells_nothing(self):
-        for kept in (init.instructions(TEMPLATE, True), OLD_BOOTSTRAP,
-                     init.stamped(init.instructions(TEMPLATE, True)) * 2):
+        written = init.stamped(init.instructions(TEMPLATE, True))
+        twice = written.replace(b"<!-- cortex:bootstrap end -->", written.split(b"\n")[2] + b"\n<!-- cortex:bootstrap end -->")
+        for kept in (init.instructions(TEMPLATE, True), OLD_BOOTSTRAP, twice):
             with self.subTest(kept=kept[:40]):
                 self.assertIsNone(init.untouched(kept))
         self.assertEqual(init.stamped(OLD_BOOTSTRAP), OLD_BOOTSTRAP)

@@ -63,6 +63,8 @@ BOM = b"\xef\xbb\xbf"
 BOOTSTRAP_MARKER = re.compile(rb"(?m)^<!-- cortex:bootstrap layout=(single|workspace) format=([1-9][0-9]*)"
                               rb"(?: digest=([0-9a-f]{16}))? -->\r?$")
 DIGEST_FIELD = b" digest="
+# The line that closes Cortex's block in a bootstrap of format 2 (ADR-012 §3.1): what follows it is the team's.
+END_MARKER = re.compile(rb"(?m)^<!-- cortex:bootstrap end -->\r?$")
 # What a Cursor rule opens on, that Cursor applies it in every conversation. Its documentation applies a
 # rule with `alwaysApply: false`, no `description` and no `globs` only where a chat @-mentions it; one with
 # no frontmatter, inferred to be read the same, is still to see in a real conversation (#306, #137).
@@ -211,9 +213,22 @@ def reads_the_local_file(content: bytes) -> bool:
     return config.LOCAL_FILE.encode() in content
 
 
+def parts(content: bytes) -> Tuple[bytes, bytes]:
+    """Cortex's block and the team's part of a bootstrap (ADR-012 §3.1): the block runs to the end of the
+    first end marker's line after the marker, and the rest is the team's. A file with no end marker after a
+    marker is all Cortex's block."""
+    begin = BOOTSTRAP_MARKER.search(content)
+    end = END_MARKER.search(content, begin.end()) if begin else None
+    if end is None:
+        return content, b""
+    cut = end.end() + content[end.end():end.end() + 1].count(b"\n")
+    return content[:cut], content[cut:]
+
+
 def markers(content: bytes) -> List[Tuple[str, int]]:
-    """The bootstrap markers of a file, ``(layout, format)`` each: one in a bootstrap."""
-    return [(m.group(1).decode(), int(m.group(2))) for m in BOOTSTRAP_MARKER.finditer(without_bom(content))]
+    """The bootstrap markers of a file, ``(layout, format)`` each: one in a bootstrap. Those of the team's
+    part are its text."""
+    return [(m.group(1).decode(), int(m.group(2))) for m in BOOTSTRAP_MARKER.finditer(parts(without_bom(content))[0])]
 
 
 def normalised(content: bytes) -> bytes:
@@ -228,26 +243,41 @@ def _digest(content: bytes) -> bytes:
 
 
 def stamped(content: bytes) -> bytes:
-    """A bootstrap as Cortex writes it: ``content``, written from a template, with the digest of
-    it in its marker (ADR-010 §3.1) — the first 16 hexadecimal digits of the SHA-256 of the file,
-    normalised, its marker without the digest. Left as it is without one marker to carry it."""
-    found = list(BOOTSTRAP_MARKER.finditer(content))
+    """A bootstrap as Cortex writes it: ``content``, written from a template, with the digest of its
+    block in its marker (ADR-010 §3.1, ADR-012 §3.2) — the first 16 hexadecimal digits of the SHA-256 of
+    Cortex's block, normalised, its marker without the digest. Left as it is without one marker to carry it."""
+    block, team = parts(content)
+    found = list(BOOTSTRAP_MARKER.finditer(block))
     if len(found) != 1 or found[0].group(3) is not None:
         return content
     at = found[0].end(2)
-    return content[:at] + DIGEST_FIELD + _digest(normalised(content)) + content[at:]
+    return block[:at] + DIGEST_FIELD + _digest(normalised(block)) + block[at:] + team
 
 
 def untouched(kept: bytes) -> Optional[bool]:
-    """Whether ``kept`` is still what Cortex wrote, by the digest in its marker: ``None`` when it
-    carries none to tell — no marker, several, or one without a digest."""
-    content = normalised(kept)
-    found = list(BOOTSTRAP_MARKER.finditer(content))
+    """Whether Cortex's block of ``kept`` is still what Cortex wrote, by the digest in its marker, whatever
+    the team's part holds (ADR-012 §3.2): ``None`` when it carries none to tell — no marker, several, or one
+    without a digest."""
+    block = parts(without_bom(kept).replace(b"\r\n", b"\n"))[0]
+    found = list(BOOTSTRAP_MARKER.finditer(block))
     if len(found) != 1 or found[0].group(3) is None:
         return None
     marker = found[0]
-    plain = content[:marker.start(3) - len(DIGEST_FIELD)] + content[marker.end(3):]
-    return _digest(plain) == marker.group(3)
+    plain = block[:marker.start(3) - len(DIGEST_FIELD)] + block[marker.end(3):]
+    return _digest(normalised(plain)) == marker.group(3)
+
+
+def with_team_part(written: bytes, kept: bytes) -> bytes:
+    """``written``, a bootstrap as Cortex writes it, followed by the team's part of ``kept``, byte for byte
+    (ADR-012 §3.3, §3.4): ``written`` as it is when ``kept`` has none. With a team's part, the block takes
+    ``kept``'s line endings and byte order mark, so that the file keeps one of each."""
+    team = parts(without_bom(kept))[1]
+    if not team:
+        return written
+    block = parts(written)[0]
+    if b"\r\n" in parts(without_bom(kept))[0]:
+        block = block.replace(b"\n", b"\r\n")
+    return (BOM if kept.startswith(BOM) else b"") + block + team
 
 
 class Kept(NamedTuple):
@@ -497,6 +527,8 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         wanted = stamped(for_tool(instructions_file, instructions(template, personality)))
         replaced = instructions_file.exists()
         current = instructions_file.read_bytes() if replaced else None
+        if current is not None:
+            wanted = with_team_part(wanted, current)    # ADR-012 §3.3: the team's part stays
         if current == wanted:
             out.write(f"✓ {display(str(instructions_file))} is what --force would write: left as it is\n")
         else:

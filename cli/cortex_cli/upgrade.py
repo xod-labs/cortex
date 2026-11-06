@@ -228,11 +228,12 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
         return None, (f"{display(str(path))} is {what} — so it is kept, and the target's template is not written"
                       f"{rule}: {again}")
     wanted = _written(target / "templates", layout, personality, path)
-    if wanted is None or wanted == content:
+    if wanted is None or wanted == init.parts(content)[0]:
         return None, None
-    if b"\r\n" in kept:
+    block, team = init.parts(init.without_bom(kept))    # ADR-012 §3.4: the team's part goes back as it was
+    if b"\r\n" in block:
         wanted = wanted.replace(b"\n", b"\r\n")
-    return (init.BOM + wanted if kept.startswith(init.BOM) else wanted), None
+    return (init.BOM + wanted if kept.startswith(init.BOM) else wanted) + team, None
 
 
 def bootstraps(files: List[Path], pinned: Version, current: Optional[Path], target: Path, personality: bool,

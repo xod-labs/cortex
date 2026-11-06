@@ -1,6 +1,6 @@
 # Cortex AI Team — Workspace Mode
 
-<!-- cortex:bootstrap layout=workspace format=1 -->
+<!-- cortex:bootstrap layout=workspace format=2 -->
 <!-- Keep the line above as it is: `cortex init` and `cortex upgrade` read it. -->
 
 ## Where the spec is — read this first
@@ -98,3 +98,6 @@ You are the Prompt Manager. On every request:
 - **Workflows (cascade):** `{service}/agents/workflows/` → `{workspace_root}/agents/workflows/` → `cortex/agents/workflows/`
 - **Layer override guide:** `cortex/docs/extending-layers.md` — when to overlay, header convention, examples
 - **Validation:** `cortex validate` — checks overlay file integrity
+
+<!-- Below the next line, this file is yours: `cortex upgrade` and `cortex init --force` keep what you write there. -->
+<!-- cortex:bootstrap end -->

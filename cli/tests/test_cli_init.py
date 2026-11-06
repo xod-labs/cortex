@@ -139,6 +139,38 @@ class OptionTests(InitTestCase):
         self.assertEqual(self.read("CLAUDE.md.bak"), "# ours\n")
         self.assertIn("CLAUDE.md.bak", proc.out)
 
+    def test_force_writes_cortex_s_block_again_and_keeps_the_team_s_part(self):
+        # Below the end marker, the file is the team's (ADR-012 §3.3): kept byte for byte, and the block
+        # takes the file's line endings and byte order mark.
+        expected = EXPECTED["single-claude"]["files"]["CLAUDE.md"].encode("utf-8")
+        ours = b"## Our own rules\r\n\r\nRun the linter first.\r\n<!-- cortex:bootstrap end -->\r\nStill ours."
+        old = init_command.BOM + expected.replace(b"Cortex AI Team", b"Cortex AI Team (Acme)", 1).replace(b"\n", b"\r\n") + ours
+        (self.project / "CLAUDE.md").write_bytes(old)
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertEqual((self.project / "CLAUDE.md").read_bytes(),
+                         init_command.BOM + expected.replace(b"\n", b"\r\n") + ours)
+        self.assertEqual((self.project / "CLAUDE.md.bak").read_bytes(), old)
+
+    def test_a_bootstrap_of_format_1_kept_is_said_older(self):
+        old = EXPECTED["single-claude"]["files"]["CLAUDE.md"].replace("<!-- cortex:bootstrap end -->\n", "").replace("format=2", "format=1")
+        (self.project / "CLAUDE.md").write_text(old, encoding="utf-8")
+        proc = self.init("--tool", "claude")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertEqual(self.read("CLAUDE.md"), old)
+        self.assertIn(f"note: {display(self.project / 'CLAUDE.md')} is an older Cortex bootstrap: format 1, where this "
+                      "version writes format 2 — cortex init --force writes it again, and keeps it as .bak\n", proc.err)
+
+    def test_force_replaces_whole_a_file_without_the_end_marker(self):
+        # No end marker, no team's part: a file of format 1, or one a team wrote, is replaced whole.
+        expected = EXPECTED["single-claude"]["files"]["CLAUDE.md"]
+        old = expected.replace("<!-- cortex:bootstrap end -->\n", "").replace("format=2", "format=1") + "## Ours\n"
+        (self.project / "CLAUDE.md").write_text(old, encoding="utf-8")
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertEqual(self.read("CLAUDE.md"), expected)
+        self.assertEqual(self.read("CLAUDE.md.bak"), old)
+
     @unittest.skipUnless(HAS_GIT, "needs git")
     def test_git_ignores_cortex_in_link_and_copy_modes(self):
         # A link is a file to git: `/cortex/` would not match it, and the link — with the absolute
@@ -1346,6 +1378,28 @@ class BootstrapMarkerTests(unittest.TestCase):
         later = init_command.kept_bootstrap(self.template(format=3), self.template(format=2))
         self.assertEqual(later.sentence, "was written by a later Cortex: format 3, where this version writes format 2")
         self.assertFalse(later.force)
+
+    def test_the_team_s_part_follows_the_first_end_marker_after_the_marker(self):
+        end = b"<!-- cortex:bootstrap end -->"
+        block = self.template(format=2) + end + b"\n"
+        cases = (
+            (block + b"ours\n", (block, b"ours\n")),
+            (block + b"a\n" + end + b"\nb\n", (block, b"a\n" + end + b"\nb\n")),      # a second one is the team's text
+            (block.replace(b"\n", b"\r\n") + b"ours\r\n", (block.replace(b"\n", b"\r\n"), b"ours\r\n")),
+            (block[:-1], (block[:-1], b"")),                                       # the last line, no line break
+            (end + b"\n" + block + b"ours\n", (end + b"\n" + block, b"ours\n")),  # one above the marker ends nothing
+            (self.template(format=2) + b"ours\n", (self.template(format=2) + b"ours\n", b"")),   # no end marker
+            (b"# Ours\n" + end + b"\nmore\n", (b"# Ours\n" + end + b"\nmore\n", b"")),     # no marker at all
+        )
+        for content, expected in cases:
+            with self.subTest(content=content):
+                self.assertEqual(init_command.parts(content), expected)
+
+    def test_a_marker_in_the_team_s_part_is_its_text(self):
+        block = self.template(format=2) + b"<!-- cortex:bootstrap end -->\n"
+        kept = block + b"<!-- cortex:bootstrap layout=single format=1 -->\n"
+        self.assertEqual(init_command.markers(kept), [("workspace", 2)])
+        self.assertIsNone(init_command.kept_bootstrap(kept, self.template(format=2)))
 
     def test_two_markers_are_none(self):
         twice = self.template() + b"<!-- cortex:bootstrap layout=single format=1 -->\n"
