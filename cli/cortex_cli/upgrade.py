@@ -1050,7 +1050,12 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
         out.write(f"  {entry.name:<{width}}  {status}\n")
     written = [(entry, outcome) for entry, outcome, _ in done if outcome is not None and outcome.why is None
                and outcome.files]
-    commits = [(entry, outcome) for entry, outcome in written if not (outcome.ignored or outcome.clean)]
+    def nothing(outcome: Outcome) -> bool:
+        """Nothing to commit for it: git ignores its files, or they are as committed already — and none
+        was written outside its work tree, to commit where it is (#326)."""
+        return outcome.ignored or (outcome.clean and not outcome.outside)
+
+    commits = [(entry, outcome) for entry, outcome in written if not nothing(outcome)]
     left = [(entry, outcome) for entry, outcome, _ in done if outcome is not None and outcome.left]
 
     def from_before() -> None:
@@ -1069,13 +1074,13 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
     committing = options.message is not None and not options.dry_run
     out.write(f"\nWhat each project {'would have to' if options.dry_run else 'must'} commit:\n")
     for entry, outcome in written:
-        if outcome.ignored or outcome.clean:     # #326: as committed already, as for a file git ignores
+        if nothing(outcome):
             why = outcome.uncommitted if outcome.clean else f"git ignores {_and(outcome.names())}"
             out.write(f"  {entry.name:<{width}}  {entry.path}: nothing — {why}\n")
             continue
         said = "" if not committing else f" — committed on {outcome.committed}" if outcome.committed else \
             f" — not committed: {_first(outcome.uncommitted)}"
-        here = f"{_and(outcome.names())}{said}" if outcome.names() else ""
+        here = f"nothing — {outcome.uncommitted}" if outcome.clean else f"{_and(outcome.names())}{said}" if outcome.names() else ""
         line = "; ".join(part for part in (here, outcome.elsewhere()) if part)
         out.write(f"  {entry.name:<{width}}  {entry.path}: {line}\n")
     from_before()
