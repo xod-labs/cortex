@@ -36,8 +36,8 @@ auditor can both trust, and keep it that way release after release.
 
 ### Audit
 - Frame the scope: standard and version, level, pages and journeys, reference configuration
-- Build the sample by the standard's method when it has one (mandatory pages + representative pages +
-  complete processes, for instance)
+- Build the sample by the standard's method when it has one (mandatory pages + representative pages, for
+  instance), and include every step of each complete process: WCAG requires it (5.2.3)
 - Run the automated baseline, then the manual audit per criterion, with keyboard and screen readers
 - Compute the conformance rate the way the standard defines it, never another way — WCAG defines none
 
@@ -111,7 +111,7 @@ in the mockup. Catching them in code costs a sprint; catching them in the mockup
 | Step | Output |
 |---|---|
 | Scope | Standard + version, level, in-scope surface, reference configuration (environment, brand or tenant when there are several, theme, locale) |
-| Sample | The standard's method when it has one (mandatory pages + representative pages + every step of each complete process, for instance) |
+| Sample | The standard's method when it has one (mandatory pages + representative pages, for instance), and every step of each complete process (WCAG 5.2.3) |
 | Automated baseline | Violations per rule, per component, per route — the starting point of the ratchet |
 | Manual audit | Per criterion and per page: conformant / non-conformant / not applicable, with evidence |
 | Rate | When the standard defines one: computed with its own formula, on the declared sample |

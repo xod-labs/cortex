@@ -59,7 +59,8 @@ reviewed and tested — never a by-product of a mockup.
 
 Before a mockup is approved:
 
-- every text and UI pair passes contrast in every theme (4.5:1 text, 3:1 large text and non-text)
+- every text and UI pair passes contrast in every theme (4.5:1 text, 3:1 large text and non-text); a
+  disabled control is exempt
 - focus states are drawn, not left to the browser
 - targets are at least 24 × 24 CSS px, or spaced (2.5.8)
 - errors, empty, loading and disabled states exist, and none relies on color alone

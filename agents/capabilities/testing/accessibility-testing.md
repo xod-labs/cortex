@@ -33,7 +33,7 @@ they **never** sit on the required path of every pull request.
 | Tier | Runs | Layers | Budget | Blocking |
 |---|---|---|---|---|
 | **Pull request** | every push | static lint on changed files, HTML validation, component axe on changed components (jsdom/happy-dom — a Storybook test-runner in a browser runs on demand) | the minute, no browser | ✅ yes — on **new** violations only |
-| **On demand** | a label or a manual trigger on a UI-heavy pull request | page axe on the routes the change touches | minutes | ❌ advisory |
+| **On demand** | a label or a manual trigger on a UI-heavy pull request | page axe on the routes the change touches; component axe in a Storybook test-runner | minutes | ❌ advisory |
 | **Scheduled** | nightly, against a deployed environment | page axe on every in-scope route, in each key state; Lighthouse CI | as long as it needs | ❌ never blocks a PR — it opens an issue or alerts on a regression |
 | **Periodic** | per release, per quarter, on a new version of the standard | manual audit of the sample | days | — |
 

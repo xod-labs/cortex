@@ -72,7 +72,7 @@ This workflow activates when the prompt contains formulations such as:
 **Agent:** `accessibility-specialist` · **Load:** `practices/web-accessibility.md`
 
 **Checklist:**
-- [ ] Contrast pairs in every theme and state; nothing conveyed by color alone
+- [ ] Contrast pairs in every theme and state — a disabled control is exempt; nothing conveyed by color alone
 - [ ] Focus visible and drawn; targets ≥ 24 × 24 CSS px, or spaced (2.5.8); reflow at 320 px
 - [ ] Error presentation: in text, next to the field, with a suggestion, plus a summary on submit
 - [ ] Charts, maps and media have their text alternative in the design, not "to be added later"
