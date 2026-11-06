@@ -60,8 +60,9 @@ A product that was never tested will not pass on day one. Do not wait for zero t
 
 A page scanned in its default state hides most of its widgets. For each route, scan after the
 interactions that reveal content: open menus and dialogs, an expanded accordion, a form submitted
-empty (error state), an async list loaded. In journey tests, call the scan at those points rather than
-writing separate scan-only tests.
+empty (error state), an async list loaded. In the scheduled journey run, call the scan at those points
+(behind a flag the pull-request E2E job leaves off) rather than writing separate scan-only tests: an E2E
+job that gates pull requests once stable must not carry a browser scan onto their required path.
 
 **Determinism:** wait for an app-ready signal, not a timeout; disable animations; seed the data;
 authenticate once and reuse the storage state; block service workers that intercept navigations.
