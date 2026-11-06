@@ -1013,8 +1013,21 @@ class CommitTests(GitTestCase):
         self.assert_ok(proc)
         self.assertEqual(self.head(alpha), first)
         self.assertEqual((alpha / "cortex.lock").read_text(encoding="utf-8"), lock)
-        self.assertIn(f"  alpha  {display(alpha)}: cortex.lock — not committed: cortex.lock is as committed already\n",
-                      proc.out)
+        self.assertIn(f"\nNothing to commit, in any project.\n  alpha  {display(alpha)}: cortex.lock is as committed already\n",
+                      proc.out)                                          # #326: not under what to commit
+        self.assertNotIn("What each project must commit", proc.out)
+
+    def test_a_project_as_committed_already_beside_one_committed_is_said_to_need_nothing(self):
+        alpha, beta = self.make("alpha", OWN), self.make("beta", bootstrap=True)
+        self.repository(alpha)
+        self.repository(beta)
+        lock = (alpha / "cortex.lock").read_text(encoding="utf-8")
+        (alpha / "cortex.lock").write_text(lock.replace(f'"{OWN}"', '"9.9.8"', 1), encoding="utf-8")
+        self.register(alpha, beta)
+        proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        self.assertIn(f"  alpha  {display(alpha)}: nothing — cortex.lock is as committed already\n", proc.out)
+        self.assertIn(f"  beta   {display(beta)}: cortex.toml, cortex.lock and CLAUDE.md — committed on ", proc.out)
 
     def test_files_as_committed_already_are_not_said_to_commit(self):
         # #313: on its version, a lock out of step written back as committed — the ending asks to commit

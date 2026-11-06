@@ -13,6 +13,7 @@ release note under [`changelog/`](changelog/).
 
 ### Fixed
 - **`cortex upgrade` passed over two things in silence** ([#313](https://github.com/xod-labs/cortex/issues/313)). On the pinned version, a bootstrap with no marker that is not that version's file — an older Cortex's, or one a team changed — is now said, as it is when the version moves. And `--commit` no longer ends on "Commit cortex.lock." after finding the lock as committed already.
+- **`cortex upgrade --all` no longer lists a project as committed already under what to commit** ([#326](https://github.com/xod-labs/cortex/issues/326)). Its summary says *nothing — cortex.lock is as committed already*, as it says of files git ignores.
 - **`testing/component-testing` no longer says component axe catches contrast** ([#311](https://github.com/xod-labs/cortex/issues/311)). jsdom and happy-dom compute no colors, and jest-axe turns the rule off: the component rung checks names, roles, labels and ARIA states, and contrast needs a real browser, as `testing/accessibility-testing` says.
 - **Six role cards lost an emoji to a replacement character** ([#314](https://github.com/xod-labs/cortex/issues/314)): `architect`, `consultant-platform`, `lead-backend`, `lead-frontend`, `qa-automation` and `prompt-manager` showed a replacement character in their "Anti-patterns" heading and before the next one. The 🚫 is back, and `repo checks` now refuses a tracked file that holds U+FFFD.
 
