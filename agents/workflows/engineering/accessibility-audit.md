@@ -67,13 +67,13 @@ law imposes on the project (`compliance/accessibility-{jurisdiction}.md`), the p
 - [ ] Each criterion of the standard, on each page of the sample: conformant / non-conformant /
       not applicable, with the element and the evidence
 - [ ] Keyboard-only and screen-reader passes on every complete process
-- [ ] Zoom 200 %, reflow at 320 px, contrast in every theme and state
+- [ ] Zoom 200 %, reflow at 320 px, contrast in every theme and state — a disabled control is exempt
 - [ ] The standard's audit tool used when it has one; the rate computed with the standard's formula when
       it defines one
 - [ ] What was not tested stated explicitly
 
-**Deliverable:** The audit grid, and an internal conformance rate labeled as internal when the standard
-defines one.
+**Deliverable:** The audit grid and, when the standard defines one, an internal conformance rate labeled as
+internal.
 
 ---
 
@@ -112,7 +112,8 @@ defines one.
 **Agent:** `regulatory-compliance-writer` (with `accessibility-specialist` for the evidence)
 
 **Checklist:**
-- [ ] The statement in the standard's format, its status derived from the audited rate only
+- [ ] The statement in the standard's format, its status derived from the audit only — from the rate when
+      the standard defines one
 - [ ] Non-conformities, exemptions and the contact mechanism listed
 - [ ] The improvement plans — multi-year, yearly — when the standard or the law requires them
 - [ ] Who audited (internal or external), when, on which sample — said plainly
@@ -137,7 +138,7 @@ defines one.
 
 - [ ] Frame, baseline, manual audit grid and remediation backlog exist and are linked
 - [ ] The pull request tier blocks new violations without a browser; the scheduled tier runs nightly
-- [ ] The rate and the statement say exactly what was audited, by whom, and what was not
+- [ ] The rate, when there is one, and the statement say exactly what was audited, by whom, and what was not
 - [ ] The recurring cadence has dates and owners
 
 ## 🔗 Related workflows
