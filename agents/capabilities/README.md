@@ -54,7 +54,7 @@ capabilities/
 │   ├── competitive-intelligence.md  # Sourcing, evidence grading, bias control
 │   └── web-accessibility.md  # Building accessible UI (WCAG 2.2 AA)
 ├── design/
-│   └── open-design.md        # Open Design mockups from a DESIGN.md
+│   └── open-design.md        # Open Design mockups from a design system package
 └── security/
     └── owasp.md              # OWASP Top 10 & best practices
 ```
