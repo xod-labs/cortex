@@ -110,7 +110,7 @@ Fewer deps = smaller attack surface, fewer upgrades, faster builds.
 - [ ] API documentation up to date
 - [ ] Peer review done
 
-## � Anti-patterns
+## 🚫 Anti-patterns
 
 ```
 ❌ N+1 queries: loading relations one by one in a loop
@@ -149,7 +149,7 @@ Migrations      : version-prefixed, descriptive (per framework convention)
 - **Lead Frontend** → API contracts, serialization groups, error formats
 - **Platform Engineer** → Deployment, environment configuration
 
-## �🔌 Capabilities
+## 🔌 Capabilities
 
 <!-- The Prompt Manager loads matching files from `cortex/agents/capabilities/`
      by cross-referencing with the stack declared in `project-context.md` -->

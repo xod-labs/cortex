@@ -1,6 +1,6 @@
 # Cortex AI Team — Workspace Mode
 
-<!-- cortex:bootstrap layout=workspace format=1 -->
+<!-- cortex:bootstrap layout=workspace format=2 -->
 <!-- Keep the line above as it is: `cortex init` and `cortex upgrade` read it. -->
 
 ## Where the spec is — read this first
@@ -9,7 +9,7 @@ In these instructions, `cortex/` is the directory that `spec` names in `cortex.l
 
 **No `cortex.local.toml`, or no `spec` in it** → Cortex is not synced on this machine. Run `cortex sync` at the workspace root, and go no further until it succeeded.
 
-**The directory `spec` names does not exist** → this machine no longer has the version the workspace reads: `cortex prune` removed it, or the store was emptied. Run `cortex sync` at the workspace root, and go no further until it succeeded. A `cortex/` that links to a checkout moved or deleted (`cortex sync --link --from`) is refused by the sync: remove the link, then ask the developer for the checkout's new path — `cortex sync --link --from` it — or sync the version `cortex.toml` pins.
+**The directory `spec` names does not exist** → this machine no longer has the version the workspace reads: `cortex prune` removed it, or the store was emptied. Run `cortex sync` at the workspace root, and go no further until it succeeded. A `cortex/` link that leads nowhere — to a checkout or a store moved or deleted since — is refused by the sync: ask the developer for the checkout's new path and `cortex sync --link --from` it, which replaces the link, or remove the link, then sync the version `cortex.toml` pins.
 
 **The spec is of a version other than `cortex.toml`'s** — `spec` ends in `…/versions/1.1.0`, or `cortex/` is a copy whose `cortex/.synced` says `"version": "1.1.0"`, where `version = "1.2.0"` → a teammate moved the workspace to another version, and this machine has not synced it yet. Run `cortex sync`, and go no further until it succeeded. There is nothing to compare when `cortex/` is a link, which names no version, nor when `.synced` says `"version": null`: that copy is of a checkout, on purpose.
 
@@ -80,15 +80,12 @@ You are the Prompt Manager. On every request:
 
 ## Services declared in this workspace
 
-<!--
-  List of services and their @alias values.
-  Updated manually — `cortex init --workspace --service NAME` scaffolds a service's own files.
--->
+The workspace's services — `@alias`, folder, description — are declared in a table below the end marker, at the bottom of this file. With no table there, the services are the workspace's folders that hold a `project-overview.md` — `agents/` and `cortex/` aside — and each one's `@alias` is in the `<!-- @alias: … -->` line at the top of that file.
 
-| @alias | Folder | Description |
-|--------|--------|-------------|
-| <!-- @backend --> | <!-- service-a/ --> | <!-- Main API --> |
-| <!-- @frontend --> | <!-- service-b/ --> | <!-- Web application --> |
+<!--
+  Declare them there, where `cortex upgrade` and `cortex init --force` keep them: a table written here, in Cortex's block,
+  keeps the file from following Cortex. `cortex init --workspace --service NAME` scaffolds a service's own files.
+-->
 
 ## References (read on demand depending on context)
 - **Context (team + developer, additive):** `{workspace_root}/agents/project-overview.md` / `project-context.md` (team, if versioned) **and** `{workspace_root}/project-overview.md` / `project-context.md` (developer) — both read, not cascaded. See [ADR-006](cortex/docs/adr/ADR-006-workspace-shareable-repo.md).
@@ -98,3 +95,6 @@ You are the Prompt Manager. On every request:
 - **Workflows (cascade):** `{service}/agents/workflows/` → `{workspace_root}/agents/workflows/` → `cortex/agents/workflows/`
 - **Layer override guide:** `cortex/docs/extending-layers.md` — when to overlay, header convention, examples
 - **Validation:** `cortex validate` — checks overlay file integrity
+
+<!-- Below the next line, this file is yours: `cortex upgrade` and `cortex init --force` keep what you write there. -->
+<!-- cortex:bootstrap end -->
