@@ -1432,12 +1432,19 @@ class BootstrapMarkerTests(unittest.TestCase):
             with self.subTest(content=content):
                 self.assertEqual(init_command.parts(content), expected)
 
+    def test_a_template_without_an_end_marker_is_written_whole(self):
+        # A version before format 2, after a move down: the team's part would join Cortex's block, and the
+        # file would never follow Cortex again — it stays in the .bak.
+        kept = self.template(format=2) + b"<!-- cortex:bootstrap end -->\nours\n"
+        written = init_command.stamped(self.template(format=1))
+        self.assertEqual(init_command.with_team_part(written, kept), written)
+
     def test_cortex_s_block_holds_no_table_a_team_fills(self):
         # A workspace fills its table of services: in Cortex's block, it would keep the file from following Cortex.
         for name in ("bootstrap-instructions.md", "bootstrap-instructions-workspace.md"):
             with self.subTest(name):
                 block = init_command.parts((harness.REPO / "templates" / name).read_bytes())[0]
-                self.assertIn(init_command.END_MARKER.search(block).group(), block)
+                self.assertIsNotNone(init_command.END_MARKER.search(block))
                 self.assertNotRegex(block, rb"(?m)^\|")
 
     def test_a_marker_in_the_team_s_part_is_its_text(self):
