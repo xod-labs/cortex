@@ -359,6 +359,15 @@ class DigestTests(UpgradeTestCase):
         self.assertIn("CLAUDE.md has a part of its own below its end marker, and the target's template has no end marker "
                       "to keep it below — so it is kept as it is\n", proc.err)
 
+    def test_a_downgrade_keeps_a_team_s_part_of_spaces(self):
+        # Spaces are text: written after a block of format 1, they would make a team's change of it.
+        self.marked()
+        project = self.project(OWN)
+        kept = init.stamped(init.instructions(TEMPLATE, True)) + b"   \n"
+        (project / "CLAUDE.md").write_bytes(kept)
+        self.assert_ok(self.upgrade(project, "9.9.8"))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
+
     def test_a_downgrade_writes_a_file_whose_part_below_the_end_marker_is_blank(self):
         self.marked()
         project = self.project(OWN)
@@ -390,18 +399,32 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(self.upgrade(project))
         self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)) + team)
 
-    def test_line_endings_that_hide_the_end_marker_keep_the_file(self):
-        # CR CR LF, as a Windows script that writes text over CRLF leaves it: the digest reads the file as
-        # Cortex wrote it, the bytes split nowhere — written, the team's part would be lost.
+    def test_any_run_of_crs_before_a_line_feed_is_one_line_break_to_the_digest_and_the_split(self):
+        # CR CR LF, as a Windows script that writes text over CRLF leaves it, or more CRs: read as one line break
+        # by the digest and by the split alike, so the block is written again and the team's part stays.
         older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
-        kept = (self.marked(template=older) + b"## Our own rules\n").replace(b"\n", b"\r\r\n")
+        for crs in (b"\r\r", b"\r\r\r", b"\r\r\r\r"):
+            with self.subTest(crs=crs):
+                shutil.rmtree(self.tmp / "app", ignore_errors=True)       # each case its own project
+                team = b"## Our own rules" + crs + b"\n"
+                written = self.marked(template=older).replace(b"\n", crs + b"\n")
+                project = self.project("9.9.8")
+                (project / "CLAUDE.md").write_bytes(written + team)
+                proc = self.upgrade(project)
+                self.assert_ok(proc)
+                self.assertEqual((project / "CLAUDE.md").read_bytes(),
+                                 init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n") + team)
+
+    def test_crs_on_the_marker_line_hide_no_layout(self):
+        # The marker of a workspace read with its line break, however many CRs: written again in its own layout.
+        workspace = (harness.REPO / "templates" / "bootstrap-instructions-workspace.md").read_bytes()
+        older = workspace.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        written = self.marked(template=older, name="bootstrap-instructions-workspace.md")
+        marker = written.split(b"\n")[2]
         project = self.project("9.9.8")
-        (project / "CLAUDE.md").write_bytes(kept)
-        proc = self.upgrade(project)
-        self.assert_ok(proc)
-        self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
-        self.assertIn("CLAUDE.md was not written again: its line endings hide where Cortex's block ends. It is kept: "
-                      "cortex init --force writes it again, and keeps yours as .bak\n", proc.err)
+        (project / "CLAUDE.md").write_bytes(written.replace(marker + b"\n", marker + b"\r\r\r\n"))
+        self.assert_ok(self.upgrade(project))
+        self.assertEqual(init.markers((project / "CLAUDE.md").read_bytes()), [("workspace", 2)])
 
     def test_one_a_team_changed_is_kept_and_said_when_the_target_writes_another(self):
         changed = self.marked() + b"\n## Our own rules\n"
@@ -573,7 +596,7 @@ class StampTests(unittest.TestCase):
     def test_what_git_and_editors_do_to_a_file_is_no_change(self):
         written = init.stamped(init.instructions(TEMPLATE, True))
         for kept in (written.replace(b"\n", b"\r\n"), b"\xef\xbb\xbf" + written, written.rstrip(b"\n"),
-                     written + b"\n\n"):
+                     written + b"\n\n", written.replace(b"\n", b"\r\r\r\r\n")):    # any run of CRs is one line break
             with self.subTest(kept=kept[:8] + kept[-4:]):
                 self.assertIs(init.untouched(kept), True)
 

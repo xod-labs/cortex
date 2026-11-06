@@ -231,12 +231,7 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     if wanted is None or wanted == init.parts(content)[0]:
         return None, None
     block, team = init.parts(init.without_bom(kept))    # ADR-012 §3.4: the team's part goes back as it was
-    if init.parts(init.normalised(content))[1].strip() and init.normalised(block) != init.normalised(init.parts(content)[0]):
-        # The digest reads a team's part that the bytes split elsewhere — line endings it takes for one (CR CR LF):
-        # written, the team's part would be lost.
-        return None, (f"{display(str(path))} was not written again: its line endings hide where Cortex's block ends. "
-                      f"It is kept: {again}")
-    if team.strip() and init.END_MARKER.search(wanted) is None:
+    if team.strip(b"\r\n") and init.END_MARKER.search(wanted) is None:
         # A target before format 2 has no end marker: the team's part would end up inside Cortex's block.
         return None, (f"{display(str(path))} has a part of its own below its end marker, and the target's template has "
                       "no end marker to keep it below — so it is kept as it is")

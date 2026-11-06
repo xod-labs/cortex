@@ -61,10 +61,13 @@ BOM = b"\xef\xbb\xbf"
 # The marker a bootstrap template carries under its title (ADR-010 §3.1): a whole line, read anywhere.
 # The file Cortex writes from it carries the digest of what it wrote; the templates, none.
 BOOTSTRAP_MARKER = re.compile(rb"(?m)^<!-- cortex:bootstrap layout=(single|workspace) format=([1-9][0-9]*)"
-                              rb"(?: digest=([0-9a-f]{16}))? -->\r?$")
+                              rb"(?: digest=([0-9a-f]{16}))? -->\r*$")
 DIGEST_FIELD = b" digest="
 # The line that closes Cortex's block in a bootstrap of format 2 (ADR-012 §3.1): what follows it is the team's.
-END_MARKER = re.compile(rb"(?m)^<!-- cortex:bootstrap end -->\r?$")
+END_MARKER = re.compile(rb"(?m)^<!-- cortex:bootstrap end -->\r*$")
+# A line break as the digest and the markers read it: CR LF, or the CR CR LF a Windows script leaves when it
+# writes text over CR LF — any run of CRs before an LF. One reading for both, or they split a file apart.
+LINE_BREAK = re.compile(rb"\r+\n")
 # What a Cursor rule opens on, that Cursor applies it in every conversation. Its documentation applies a
 # rule with `alwaysApply: false`, no `description` and no `globs` only where a chat @-mentions it; one with
 # no frontmatter, inferred to be read the same, is still to see in a real conversation (#306, #137).
@@ -232,10 +235,10 @@ def markers(content: bytes) -> List[Tuple[str, int]]:
 
 
 def normalised(content: bytes) -> bytes:
-    """A bootstrap as its digest reads it: without a leading byte order mark, with LF line endings
-    and one newline at the end, as ``instructions`` writes it — git may check it out with CRLF, an
+    """A bootstrap as its digest reads it: without a leading byte order mark, with LF line endings —
+    any run of CRs before an LF read as one (``LINE_BREAK``) — and one newline at the end, as ``instructions`` writes it — git may check it out with CRLF, an
     editor may add the mark, or take the last newline away."""
-    return without_bom(content).replace(b"\r\n", b"\n").rstrip(b"\n") + b"\n"
+    return LINE_BREAK.sub(b"\n", without_bom(content)).rstrip(b"\n") + b"\n"
 
 
 def _digest(content: bytes) -> bytes:
@@ -258,7 +261,7 @@ def untouched(kept: bytes) -> Optional[bool]:
     """Whether Cortex's block of ``kept`` is still what Cortex wrote, by the digest in its marker, whatever
     the team's part holds (ADR-012 §3.2): ``None`` when it carries none to tell — no marker, several, or one
     without a digest."""
-    block = parts(without_bom(kept).replace(b"\r\n", b"\n"))[0]
+    block = parts(LINE_BREAK.sub(b"\n", without_bom(kept)))[0]
     found = list(BOOTSTRAP_MARKER.finditer(block))
     if len(found) != 1 or found[0].group(3) is None:
         return None
