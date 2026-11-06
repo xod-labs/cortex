@@ -58,7 +58,7 @@ Before a mockup is approved:
 
 - every text and UI pair passes contrast in every theme (4.5:1 text, 3:1 large text and non-text)
 - focus states are drawn, not left to the browser
-- targets are at least 24 × 24 CSS px
+- targets are at least 24 × 24 CSS px, or spaced (2.5.8)
 - errors, empty, loading and disabled states exist, and none relies on color alone
 - the layout holds at 320 CSS px wide
 - headings, landmarks and focus order are annotated
