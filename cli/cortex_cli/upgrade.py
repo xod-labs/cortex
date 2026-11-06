@@ -191,6 +191,7 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     content = init.normalised(kept)
     found = init.markers(content)
     again = "cortex init --force writes it again, and keeps yours as .bak"
+    below = " — your own rules go below its end marker, where Cortex keeps them"     # ADR-012 §3.4
     if len(found) > 1:
         return None, f"{display(str(path))} holds several bootstrap markers, so none is read, and it is kept: {again}"
     if not (found or init.bootstrap_of_cortex(content)):
@@ -218,7 +219,7 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
             if cursor:
                 return None, (f"{display(str(path))} is not what Cortex wrote — a team changed it — and it has no "
                               "`alwaysApply: true` line in a frontmatter, as Cursor's documentation writes it: Cursor "
-                              f"may not apply it in every conversation. It is kept: {again}")
+                              f"may not apply it in every conversation. It is kept: {again}{below}")
             return None, None
         what = "not what Cortex wrote, by the digest in its marker — a team changed it" if intact is False else \
             (f"{f'format {found[0][1]}' if found else 'a bootstrap without the marker'}, not what Cortex {pinned} "
@@ -226,7 +227,7 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
         rule = ("; and with no `alwaysApply: true` line in a frontmatter, as Cursor's documentation writes it, "
                 "Cursor may not apply it in every conversation") if cursor else ""
         return None, (f"{display(str(path))} is {what} — so it is kept, and the target's template is not written"
-                      f"{rule}: {again}")
+                      f"{rule}: {again}{below}")
     wanted = _written(target / "templates", layout, personality, path)
     if wanted is None or wanted == init.parts(content)[0]:
         return None, None
@@ -238,6 +239,14 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     if b"\r\n" in block:
         wanted = wanted.replace(b"\n", b"\r\n")
     return (init.BOM + wanted if kept.startswith(init.BOM) else wanted) + team, None
+
+
+def _nobody(written: bytes) -> str:
+    """Why a bootstrap is written again, as the run says it: nobody changed it — or, of a file with a team's
+    part, Cortex's block, the team's part staying as it is (ADR-012 §3.4)."""
+    if init.parts(init.without_bom(written))[1]:
+        return "no one changed Cortex's block, and what is below its end marker stays as it is"
+    return "no one changed it"
 
 
 def bootstraps(files: List[Path], pinned: Version, current: Optional[Path], target: Path, personality: bool,
@@ -496,8 +505,8 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         prepare(team)
 
     if dry_run:
-        for path, _ in rewrites:
-            out.write(f"{_shown_path(path, root)}: would be written again from Cortex {target}'s template — no one changed it\n")
+        for path, content in rewrites:
+            out.write(f"{_shown_path(path, root)}: would be written again from Cortex {target}'s template — {_nobody(content)}\n")
         if stops:
             err.write(f"cortex upgrade: the overlays would fail against Cortex {target}, and stop it — fix them, "
                       "or --force moves the project anyway\n")
@@ -519,8 +528,8 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         sync.sync(root, None, None, out, err, announce=False)
 
     _write(rewrites, committed, root, err, switch)
-    for path, _ in rewrites:
-        out.write(f"{_shown_path(path, root)}: written again from Cortex {target}'s template — no one changed it\n")
+    for path, content in rewrites:
+        out.write(f"{_shown_path(path, root)}: written again from Cortex {target}'s template — {_nobody(content)}\n")
     return Outcome(root, current, target, files=team)
 
 
@@ -549,9 +558,9 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     if prepare is not None and team:
         prepare(team)
     if dry_run:
-        for path, _ in rewrites:
-            out.write(f"{_shown_path(path, root)}: would be written again from Cortex {current}'s template — no one "
-                      "changed it\n")
+        for path, content in rewrites:
+            out.write(f"{_shown_path(path, root)}: would be written again from Cortex {current}'s template — "
+                      f"{_nobody(content)}\n")
         if rewrites or behind is not None:
             out.write("--dry-run: nothing of the project was changed\n")
         return Outcome(root, current, current, files=team)
@@ -560,8 +569,8 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     locked = lock.read_bytes() if lock.is_file() else None
     _write(rewrites, {lock: locked} if behind is not None else {}, root, err,
            (lambda: sync.sync(root, None, None, out, err, announce=False)) if behind is not None else (lambda: None))
-    for path, _ in rewrites:
-        out.write(f"{_shown_path(path, root)}: written again from Cortex {current}'s template — no one changed it\n")
+    for path, content in rewrites:
+        out.write(f"{_shown_path(path, root)}: written again from Cortex {current}'s template — {_nobody(content)}\n")
     relocked = lock.is_file() and lock.read_bytes() != locked
     return Outcome(root, current, current, files=([lock] if relocked else []) + [path for path, _ in rewrites])
 

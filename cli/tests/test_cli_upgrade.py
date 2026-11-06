@@ -315,7 +315,8 @@ class DigestTests(UpgradeTestCase):
         self.assertEqual(rule.read_bytes(), ours)
         self.assertIn(".cursor/rules/cortex.mdc is not what Cortex wrote — a team changed it — and it has no `alwaysApply: "
                       "true` line in a frontmatter, as Cursor's documentation writes it: Cursor may not apply it in every "
-                      "conversation. It is kept: cortex init --force writes it again, and keeps yours as .bak\n", proc.err)
+                      "conversation. It is kept: cortex init --force writes it again, and keeps yours as .bak — your own rules go "
+                      "below its end marker, where Cortex keeps them\n", proc.err)
 
     def test_a_cursor_rule_a_team_changed_says_both_when_the_target_writes_another(self):
         ours = self.marked() + b"\n## Our own rules\n"          # 9.9.8's template is not the target's
@@ -327,7 +328,8 @@ class DigestTests(UpgradeTestCase):
         self.assertIn(".cursor/rules/cortex.mdc is not what Cortex wrote, by the digest in its marker — a team changed it "
                       "— so it is kept, and the target's template is not written; and with no `alwaysApply: true` line in a "
                       "frontmatter, as Cursor's documentation writes it, Cursor may not apply it in every conversation: "
-                      "cortex init --force writes it again, and keeps yours as .bak\n", proc.err)
+                      "cortex init --force writes it again, and keeps yours as .bak — your own rules go below its end marker, where "
+                      "Cortex keeps them\n", proc.err)
 
     def test_a_cursor_rule_a_team_changed_that_applies_always_is_kept_unsaid(self):
         ours = init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True)).replace(END, b"## Our own rules\n\n" + END)
@@ -505,6 +507,29 @@ class DigestTests(UpgradeTestCase):
         (project / "CLAUDE.md").write_bytes(self.marked(template=older) + team)
         self.assert_ok(self.upgrade(project))
         self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)) + team)
+
+    def test_a_dry_run_says_the_team_s_part_stays_and_writes_nothing(self):
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        kept = self.marked(template=older) + b"## Our own rules\n"
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(kept)
+        proc = self.upgrade(project, "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn(f"CLAUDE.md: would be written again from Cortex {OWN}'s template — no one changed Cortex's block, "
+                      "and what is below its end marker stays as it is\n", proc.out)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
+
+    def test_a_block_a_team_changed_is_kept_and_said_where_its_rules_go(self):
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        changed = self.marked(template=older).replace(END, b"## Our own rules\n\n" + END)
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(changed)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
+        self.assertIn("CLAUDE.md is not what Cortex wrote, by the digest in its marker — a team changed it — so it is kept, "
+                      "and the target's template is not written: cortex init --force writes it again, and keeps yours as "
+                      ".bak — your own rules go below its end marker, where Cortex keeps them\n", proc.err)
 
     def test_already_on_it_writes_again_what_an_interrupted_upgrade_left(self):
         # Cut short after the switch, or a pin moved by hand: 9.9.8's file under the pin of this cortex.
