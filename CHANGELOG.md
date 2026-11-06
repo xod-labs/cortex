@@ -17,7 +17,7 @@ release note under [`changelog/`](changelog/).
 - **Two workflows.** `engineering/accessibility-audit` runs an audit from its frame to the statement, the regression harness and the recurring cadence. `product/target-mockup` takes a redesign from the brief to a hand-off the team can build.
 
 ### Changed
-- **The Lead Frontend aims at WCAG 2.2 AA**, WCAG 2.1 AA before. It loads `practices/web-accessibility`, and `testing/accessibility-testing` when a task wires accessibility checks; QA automation loads the latter for a project with a user interface. `frontend-testing` keeps browser accessibility scans off the required path of pull requests.
+- **The Lead Frontend aims at WCAG 2.2 AA**, WCAG 2.1 AA before. It loads `practices/web-accessibility`, and `testing/accessibility-testing` when a task wires accessibility checks; QA automation loads the latter for a project with a user interface. `frontend-testing` keeps browser accessibility scans off the required path of pull requests, and takes the requests to wire accessibility checks into tests or CI; an audit goes to `engineering/accessibility-audit`.
 
 ### Fixed
 - **`cortex sync` names a link to a checkout that is gone for what it is** ([#303](https://github.com/xod-labs/cortex/issues/303)). A `cortex/` that `cortex sync --link --from` linked to a checkout since moved or deleted was refused as a link Cortex did not make, by every later sync. The refusal now says the checkout is gone, and what to do: remove the link, then `cortex sync --link --from` the checkout's new path, or `cortex sync` for the pinned version.
