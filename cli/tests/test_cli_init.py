@@ -1393,6 +1393,17 @@ class BootstrapMarkerTests(unittest.TestCase):
         self.assertEqual(init_command.without_frontmatter(kept), body)
         self.assertFalse(init_command.applies_always(kept))
 
+    def test_a_frontmatter_left_open_is_none_and_read_at_once(self):
+        # CRLF lines, as Git for Windows checks a file out, opening on `---` and never closing it: read in a
+        # process of its own, so that a match that runs for ever fails the test instead of hanging the suite.
+        probe = ("import sys; sys.path[:0] = sys.argv[1:]; from cortex_cli import init; "
+                 "kept = b'---\\r\\n' + b'line\\r\\n' * 40; "
+                 "assert init.without_frontmatter(kept) == kept and not init.applies_always(kept)")
+        here = Path(__file__).resolve()
+        proc = subprocess.run([sys.executable, "-c", probe, str(here.parents[1]), str(here.parents[2] / "core")],
+                              capture_output=True, text=True, timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
     def test_a_byte_order_mark_hides_nothing(self):
         bom = b"\xef\xbb\xbf"
         self.assertEqual(init_command.markers(bom + b"<!-- cortex:bootstrap layout=single format=1 -->\n"),

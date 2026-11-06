@@ -67,7 +67,9 @@ DIGEST_FIELD = b" digest="
 # rule with `alwaysApply: false`, no `description` and no `globs` only where a chat @-mentions it; one with
 # no frontmatter, inferred to be read the same, is still to see in a real conversation (#306, #137).
 CURSOR_RULE = b"---\ndescription: Cortex - the AI team's bootstrap, read first\nalwaysApply: true\n---\n"
-FRONTMATTER = re.compile(rb"\A---\r?\n(?:.*\r?\n)*?---\r?\n")
+# Each line read one way only: `.` takes a CR already, and a line that could end on `.*` or on `\r?` makes an
+# unclosed frontmatter of CRLF lines take for ever to refuse.
+FRONTMATTER = re.compile(rb"\A---\r?\n(?:.*\n)*?---\r?\n")
 
 
 class InitError(Exception):
