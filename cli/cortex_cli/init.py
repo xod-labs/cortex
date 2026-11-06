@@ -67,7 +67,9 @@ DIGEST_FIELD = b" digest="
 # rule with `alwaysApply: false`, no `description` and no `globs` only where a chat @-mentions it; one with
 # no frontmatter, inferred to be read the same, is still to see in a real conversation (#306, #137).
 CURSOR_RULE = b"---\ndescription: Cortex - the AI team's bootstrap, read first\nalwaysApply: true\n---\n"
-FRONTMATTER = re.compile(rb"\A---\r?\n(?:.*\r?\n)*?---\r?\n")
+# Each line read one way only: `.` takes a CR already, and a line that could end on `.*` or on `\r?` makes an
+# unclosed frontmatter of CRLF lines take for ever to refuse.
+FRONTMATTER = re.compile(rb"\A---\r?\n(?:.*\n)*?---\r?\n")
 
 
 class InitError(Exception):
@@ -192,7 +194,9 @@ def is_cursor_rule(path: Path) -> bool:
 def applies_always(content: bytes) -> bool:
     """Whether a Cursor rule says, in its frontmatter, that Cursor applies it in every conversation."""
     found = FRONTMATTER.match(without_bom(content))
-    return found is not None and re.search(rb"(?m)^alwaysApply:[ \t]*true[ \t]*\r?$", found.group()) is not None
+    # YAML's spellings of true, and a comment after it.
+    return found is not None and re.search(rb"(?m)^alwaysApply:[ \t]*(?:true|True|TRUE)[ \t]*(?:#[^\r\n]*)?\r?$",
+                                           found.group()) is not None
 
 
 def bootstrap_of_cortex(content: bytes) -> bool:
@@ -487,7 +491,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                       f"the personality block this theme needs removed or added — {again}\n")
         elif is_cursor_rule(instructions_file) and not applies_always(kept):
             err.write(f"note: {display(str(instructions_file))} has no `alwaysApply: true` in a frontmatter: Cursor "
-                      f"applies it only where a chat mentions it — {again}\n")
+                      f"does not apply it in every conversation — {again}\n")
     else:
         wanted = stamped(for_tool(instructions_file, instructions(template, personality)))
         replaced = instructions_file.exists()

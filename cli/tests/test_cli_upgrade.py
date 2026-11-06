@@ -278,8 +278,8 @@ class DigestTests(UpgradeTestCase):
         return rule
 
     def test_a_cursor_rule_is_written_again_with_the_frontmatter_that_applies_it(self):
-        # Written before 1.6.0 with no frontmatter: Cursor applied it only where a chat mentioned it, as its
-        # documentation reads a rule with no alwaysApply (#306; #137 is to see it in a real conversation).
+        # Written before 1.6.0 with no frontmatter: read, by inference from Cursor's documentation, only where a
+        # chat mentions it (#306; #137 is to see it in a real conversation).
         written = self.marked(template=TEMPLATE)        # the target writes the same text: the frontmatter alone is new
         project = self.project("9.9.8")
         rule = self.cursor_rule(project, written)
@@ -313,7 +313,7 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertEqual(rule.read_bytes(), ours)
         self.assertIn(".cursor/rules/cortex.mdc is not what Cortex wrote — a team changed it — and it has no `alwaysApply: "
-                      "true` in a frontmatter: Cursor applies it only where a chat mentions it. It is kept: cortex init "
+                      "true` in a frontmatter: Cursor does not apply it in every conversation. It is kept: cortex init "
                       "--force writes it again, and keeps yours as .bak\n", proc.err)
 
     def test_a_cursor_rule_a_team_changed_says_both_when_the_target_writes_another(self):
@@ -324,8 +324,8 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertEqual(rule.read_bytes(), ours)
         self.assertIn(".cursor/rules/cortex.mdc is not what Cortex wrote, by the digest in its marker — a team changed it "
-                      "— so it is kept, and the target's template is not written; it has no `alwaysApply: true` in a "
-                      "frontmatter either, so Cursor applies it only where a chat mentions it: cortex init --force "
+                      "— so it is kept, and the target's template is not written; and with no `alwaysApply: true` in a "
+                      "frontmatter, Cursor does not apply it in every conversation: cortex init --force "
                       "writes it again, and keeps yours as .bak\n", proc.err)
 
     def test_a_cursor_rule_a_team_changed_that_applies_always_is_kept_unsaid(self):
