@@ -291,6 +291,25 @@ class ForeignCortexTests(SyncTestCase):
         self.assert_ok(self.sync(project, "--link", "--from", str(moved)))
         self.assertEqual(os.path.realpath(project / "cortex"), os.path.realpath(moved))
 
+    @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
+    def test_only_the_link_a_project_reads_that_leads_nowhere_is_a_checkout_that_is_gone(self):
+        elsewhere = self.tmp / "my-cortex"
+        (elsewhere / "agents").mkdir(parents=True)                      # there, and no checkout
+        linked = self.project("linked")
+        self.assert_ok(self.sync(linked, "--link"))                     # it reads cortex/: spec = "cortex"
+        os.unlink(linked / "cortex")
+        (linked / "cortex").symlink_to(elsewhere, target_is_directory=True)
+        dangling = self.project("dangling")                             # it reads no cortex/
+        (dangling / "cortex").symlink_to(self.tmp / "nowhere", target_is_directory=True)
+        for project in (linked, dangling):
+            with self.subTest(project=project.name):
+                pointed = os.readlink(project / "cortex")
+                proc = self.sync(project, "--link")
+                self.assertEqual(proc.returncode, 1)
+                self.assertIn(f"cortex/ is a link to {display(pointed)}, which Cortex did not make", proc.err)
+                self.assertNotIn("a checkout that is gone", proc.err)
+                self.assertEqual(os.readlink(project / "cortex"), pointed)
+
 
 class LinkAndCopyTests(SyncTestCase):
     def assert_link_to(self, project, target):
