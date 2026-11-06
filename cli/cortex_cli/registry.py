@@ -356,8 +356,8 @@ def state(entry: Entry) -> State:
     - ``NO_PROJECT`` — a directory without ``cortex.toml``: ``reads`` is the version a
       ``cortex.local.toml`` left there still reads (``_left_behind``);
     - ``UNREADABLE`` — the directory, or its files, cannot be read, or this cortex refuses them —
-      a ``cortex.local.toml`` left without its ``cortex.toml`` too: ``why`` says which. Its versions are read all the same when they can be, as ``cortex prune``
-      reads them;
+      a ``cortex.local.toml`` left without its ``cortex.toml`` too: ``why`` says which. Its versions
+      are read all the same when they can be, as ``cortex prune`` reads them;
     - ``OK``.
     """
     try:
