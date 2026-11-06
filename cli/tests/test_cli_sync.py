@@ -284,9 +284,8 @@ class ForeignCortexTests(SyncTestCase):
                 proc = self.sync(project, *args)
                 self.assertEqual(proc.returncode, 1)
                 self.assertIn(f"cortex/ is a link to {display(pointed)}, a checkout that is gone — moved or "
-                              "deleted since `cortex sync --from` linked it. Remove the link, then `cortex sync --link "
-                              "--from` the checkout's new path, or `cortex sync` for the version cortex.toml pins.",
-                              proc.err)
+                              "deleted since it was linked. Remove the link, then `cortex sync --link --from` the "
+                              "checkout's new path, or `cortex sync` for the version cortex.toml pins.", proc.err)
                 self.assertEqual(os.readlink(project / "cortex"), pointed)
         os.unlink(project / "cortex")                                   # what it says to do
         self.assert_ok(self.sync(project, "--link", "--from", str(moved)))
