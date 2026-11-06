@@ -63,8 +63,9 @@ BOM = b"\xef\xbb\xbf"
 BOOTSTRAP_MARKER = re.compile(rb"(?m)^<!-- cortex:bootstrap layout=(single|workspace) format=([1-9][0-9]*)"
                               rb"(?: digest=([0-9a-f]{16}))? -->\r?$")
 DIGEST_FIELD = b" digest="
-# What a Cursor rule opens on, that Cursor applies it in every conversation: with no `alwaysApply`, no
-# `description` and no `globs`, it applies a rule only where a chat @-mentions it (#306).
+# What a Cursor rule opens on, that Cursor applies it in every conversation. Its documentation applies a
+# rule with `alwaysApply: false`, no `description` and no `globs` only where a chat @-mentions it; one with
+# no frontmatter, inferred to be read the same, is still to see in a real conversation (#306, #137).
 CURSOR_RULE = b"---\ndescription: Cortex - the AI team's bootstrap, read first\nalwaysApply: true\n---\n"
 FRONTMATTER = re.compile(rb"\A---\r?\n(?:.*\r?\n)*?---\r?\n")
 

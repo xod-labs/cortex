@@ -278,7 +278,8 @@ class DigestTests(UpgradeTestCase):
         return rule
 
     def test_a_cursor_rule_is_written_again_with_the_frontmatter_that_applies_it(self):
-        # Written before 1.6.0 with no frontmatter, Cursor applied it only where a chat mentioned it (#306).
+        # Written before 1.6.0 with no frontmatter: Cursor applied it only where a chat mentioned it, as its
+        # documentation reads a rule with no alwaysApply (#306; #137 is to see it in a real conversation).
         written = self.marked(template=TEMPLATE)        # the target writes the same text: the frontmatter alone is new
         project = self.project("9.9.8")
         rule = self.cursor_rule(project, written)
