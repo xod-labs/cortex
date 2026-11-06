@@ -327,6 +327,16 @@ class DigestTests(UpgradeTestCase):
                       "frontmatter either, so Cursor applies it only where a chat mentions it: cortex init --force "
                       "writes it again, and keeps yours as .bak\n", proc.err)
 
+    def test_a_cursor_rule_a_team_changed_that_applies_always_is_kept_unsaid(self):
+        ours = init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True)) + b"\n## Our own rules\n"
+        self.marked(template=TEMPLATE)                          # the target writes the same text
+        project = self.project("9.9.8")
+        rule = self.cursor_rule(project, ours)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual(rule.read_bytes(), ours)
+        self.assertNotIn("cortex.mdc", proc.out + proc.err)
+
     def test_a_downgrade_writes_an_untouched_bootstrap_again(self):
         self.marked()
         project = self.project(OWN)

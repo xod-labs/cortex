@@ -1230,7 +1230,16 @@ class OptionTests(InitTestCase):
         self.assertIn(f"note: {display(rule)} has no `alwaysApply: true` in a frontmatter: Cursor applies it only where "
                       "a chat mentions it — cortex init --force writes it again, and keeps it as .bak\n", proc.err)
         self.assertEqual(rule.read_bytes(), init_command.without_frontmatter(written))
+        rule.write_bytes(written + b"\n## Our own rules\n")                     # a team's, Cursor applies it always
+        proc = self.init("--tool", "cursor")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("alwaysApply", proc.err)
 
+    def test_a_rule_of_cursor_named_otherwise_opens_on_the_frontmatter_too(self):
+        proc = self.init("--tool", "custom", "--instructions-file", ".cursor/rules/team.mdc")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        written = (self.project / ".cursor" / "rules" / "team.mdc").read_bytes()
+        self.assertTrue(written.startswith(init_command.CURSOR_RULE + b"# Cortex AI Team\n"), written[:120])
 
 class RegisterTests(InitTestCase):
     """Once all of it succeeded, init registers the project in the machine's registry, and says so
@@ -1377,6 +1386,12 @@ class BootstrapMarkerTests(unittest.TestCase):
         self.assertIsNone(init_command.kept_bootstrap(init_command.CURSOR_RULE + before, before))
         for kept in (before, b"---\ndescription: Cortex\n---\n" + before, b"---\nalwaysApply: false\n---\n" + before):
             self.assertFalse(init_command.applies_always(kept))
+
+    def test_the_frontmatter_is_the_first_block_and_only_it(self):
+        body = b"# Cortex AI Team\n\n---\n\nalwaysApply: true\n\n---\n"     # a rule, and a body that quotes one
+        kept = b"---\ndescription: ours\n---\n" + body
+        self.assertEqual(init_command.without_frontmatter(kept), body)
+        self.assertFalse(init_command.applies_always(kept))
 
     def test_a_byte_order_mark_hides_nothing(self):
         bom = b"\xef\xbb\xbf"
