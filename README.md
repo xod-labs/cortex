@@ -134,7 +134,7 @@ cortex init --no-personality        # neutral professional agents (no theme)
 
 `cortex init` writes `cortex.toml` — the binary's own version and the team's theme — adds `cortex.local.toml` to `.gitignore`, and runs `cortex sync`, which puts the spec in the store, writes `cortex.lock`, and writes `spec` in `cortex.local.toml`. It then writes the bootstrap file, `project-overview.md` and `project-context.md`, each when it is missing. Fill those two in: they are what the agents know of your project.
 
-The bootstrap file is yours to adapt — retitle it, add sections — but **keep its marker line as it is**, `<!-- cortex:bootstrap layout=single format=1 digest=… -->` under the title: `cortex init` reads from it the layout and format the file was written for, and `cortex upgrade`, from its digest, whether anyone changed the file since.
+The bootstrap file is in two parts. **Cortex's block** runs from the top to the line `<!-- cortex:bootstrap end -->`: `cortex init --force` and `cortex upgrade` write it again, so keep its marker line as it is — `<!-- cortex:bootstrap layout=single format=2 digest=… -->` under the title, from which `cortex init` reads the layout and format, and `cortex upgrade`, by its digest, whether anyone changed the block. **Below the end marker, the file is yours**: write there what your tool must read first, and every later Cortex keeps it byte for byte ([ADR-012](docs/adr/ADR-012-bootstrap-block.md)). A rule of your own machine goes in your tool's user-level instructions (`~/.claude/CLAUDE.md`, …) or in your `project-context.md`; a team convention, in `project-context.md` — `agents/project-context.md` in a workspace.
 
 Then talk to the Prompt Manager in your AI tool — `@Oolon` with the H2G2 theme, `@prompt-manager` without one:
 
@@ -165,7 +165,7 @@ cd workspace/
 cortex init --workspace --service backend --service apps/frontend
 ```
 
-Each `--service` is a folder of the workspace and gets its own `project-overview.md` and `project-context.md`, with the folder's name as its `@alias` (`apps/frontend` → `@frontend`). On a terminal with no `--service`, the command asks for the services. The workspace root gets `cortex.toml`, `cortex.lock`, `cortex.local.toml` and the bootstrap file, written from the workspace template — its marker says `layout=workspace`. When `agents/` is its own git repository, the team's `agents/project-overview.md` and `agents/project-context.md` are scaffolded too ([ADR-006](docs/adr/ADR-006-workspace-shareable-repo.md)).
+Each `--service` is a folder of the workspace and gets its own `project-overview.md` and `project-context.md`, with the folder's name as its `@alias` (`apps/frontend` → `@frontend`). On a terminal with no `--service`, the command asks for the services. The workspace root gets `cortex.toml`, `cortex.lock`, `cortex.local.toml` and the bootstrap file, written from the workspace template — its marker says `layout=workspace`. Declare the services — `@alias`, folder, description — in a table below that file's end marker, where `cortex upgrade` keeps it. When `agents/` is its own git repository, the team's `agents/project-overview.md` and `agents/project-context.md` are scaffolded too ([ADR-006](docs/adr/ADR-006-workspace-shareable-repo.md)).
 
 To target a service in a prompt, use its alias:
 ```

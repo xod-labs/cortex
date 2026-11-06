@@ -38,6 +38,7 @@ PERSONAL = (b"# Cortex AI Team\n\n<!-- PERSONALITY:BEGIN -->\nBe a character.\n<
             b"Written by 9.9.8: read cortex.local.toml first.\n")
 OLD_WORKSPACE = b"# Cortex AI Team \xe2\x80\x94 Workspace Mode\n\nWritten by 9.9.8: read cortex.local.toml first.\n"
 TEMPLATE = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes()
+END = b"<!-- cortex:bootstrap end -->"
 OVERLAY = ("<!-- OVERLAY\n     Base: cortex/agents/roles/engineering/architect.md\n     Scope: workspace\n"
            "     Semantic: additive\n-->\n\n# Architect — our rules\n")
 
@@ -306,7 +307,7 @@ class DigestTests(UpgradeTestCase):
                 shutil.rmtree(project)
 
     def test_a_cursor_rule_a_team_changed_is_kept_and_said_to_apply_only_where_mentioned(self):
-        ours = self.marked(template=TEMPLATE) + b"\n## Our own rules\n"
+        ours = self.marked(template=TEMPLATE).replace(END, b"## Our own rules\n\n" + END)   # above it: Cortex's block
         project = self.project("9.9.8")
         rule = self.cursor_rule(project, ours)
         proc = self.upgrade(project)
@@ -329,7 +330,7 @@ class DigestTests(UpgradeTestCase):
                       "cortex init --force writes it again, and keeps yours as .bak\n", proc.err)
 
     def test_a_cursor_rule_a_team_changed_that_applies_always_is_kept_unsaid(self):
-        ours = init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True)) + b"\n## Our own rules\n"
+        ours = init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True)).replace(END, b"## Our own rules\n\n" + END)
         self.marked(template=TEMPLATE)                          # the target writes the same text
         project = self.project("9.9.8")
         rule = self.cursor_rule(project, ours)
@@ -346,6 +347,108 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(MARKED, True)))
 
+    def test_a_downgrade_to_format_1_keeps_a_file_with_a_team_s_part(self):
+        # A template of format 1 has no end marker: written, the team's part would end up inside Cortex's block.
+        self.marked()
+        project = self.project(OWN)
+        kept = init.stamped(init.instructions(TEMPLATE, True)) + b"## Our own rules\n"
+        (project / "CLAUDE.md").write_bytes(kept)
+        proc = self.upgrade(project, "9.9.8")
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
+        self.assertIn("CLAUDE.md has a part of its own below its end marker, and the target's template has no end marker "
+                      "to keep it below — so it is kept as it is\n", proc.err)
+
+    def test_a_downgrade_keeps_a_team_s_part_of_spaces(self):
+        # Spaces are text: written after a block of format 1, they would make a team's change of it.
+        self.marked()
+        project = self.project(OWN)
+        kept = init.stamped(init.instructions(TEMPLATE, True)) + b"   \n"
+        (project / "CLAUDE.md").write_bytes(kept)
+        self.assert_ok(self.upgrade(project, "9.9.8"))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
+
+    def test_a_downgrade_writes_a_file_whose_part_below_the_end_marker_is_blank(self):
+        self.marked()
+        project = self.project(OWN)
+        for blank in (b"\n\n", b"\r\n\r\n", b"\r\r\n"):
+            with self.subTest(blank=blank):
+                (project / "CLAUDE.md").write_bytes(init.stamped(init.instructions(TEMPLATE, True)) + blank)
+                self.assert_ok(self.upgrade(project, "9.9.8"))
+                self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(MARKED, True)) + blank)
+                self.assert_ok(self.upgrade(project, OWN))                  # back up, for the next case
+
+    def test_line_endings_the_digest_reads_as_one_write_a_file_with_no_team_s_part(self):
+        # Nothing to lose: CR CR LF in a file of format 1 nobody changed, or of format 2 with no team's part.
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        for template in (MARKED, older):
+            with self.subTest(template=template[:40]):
+                kept = self.marked(template=template).replace(b"\n", b"\r\r\n")
+                shutil.rmtree(self.tmp / "app", ignore_errors=True)       # each case its own project
+                project = self.project("9.9.8")
+                (project / "CLAUDE.md").write_bytes(kept)
+                proc = self.upgrade(project)
+                self.assert_ok(proc)
+                self.assertEqual((project / "CLAUDE.md").read_bytes(),
+                                 init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n"))
+                self.assertNotIn("line endings", proc.err)
+
+    def test_without_a_digest_a_block_of_the_pinned_version_is_read_whatever_the_team_s_part(self):
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        self.marked(template=older)
+        team = b"## Our own rules\n"
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.instructions(older, True) + team)     # its marker, with no digest
+        self.assert_ok(self.upgrade(project))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)) + team)
+
+    def test_any_run_of_crs_before_a_line_feed_is_one_line_break_to_the_digest_and_the_split(self):
+        # CR CR LF, as a Windows script that writes text over CRLF leaves it, or more CRs: read as one line break
+        # by the digest and by the split alike, so the block is written again and the team's part stays.
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        for crs in (b"\r\r", b"\r\r\r", b"\r\r\r\r"):
+            with self.subTest(crs=crs):
+                shutil.rmtree(self.tmp / "app", ignore_errors=True)       # each case its own project
+                team = b"## Our own rules" + crs + b"\n"
+                written = self.marked(template=older).replace(b"\n", crs + b"\n")
+                project = self.project("9.9.8")
+                (project / "CLAUDE.md").write_bytes(written + team)
+                proc = self.upgrade(project)
+                self.assert_ok(proc)
+                self.assertEqual((project / "CLAUDE.md").read_bytes(),
+                                 init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n") + team)
+
+    def test_crs_the_target_writes_alike_leave_the_file(self):
+        written = self.marked(template=TEMPLATE)
+        project = self.project("9.9.8")
+        kept = written.replace(b"\n", b"\r\r\n") + b"## Our own rules\r\r\n"
+        (project / "CLAUDE.md").write_bytes(kept)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
+        self.assertNotIn("CLAUDE.md", proc.out + proc.err)
+
+    def test_crs_without_a_digest_read_the_pinned_version_s_block(self):
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        self.marked(template=older)
+        team = b"## Our own rules\r\r\n"
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.instructions(older, True).replace(b"\n", b"\r\r\n") + team)
+        self.assert_ok(self.upgrade(project))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(),
+                         init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n") + team)
+
+    def test_crs_on_the_marker_line_hide_no_layout(self):
+        # The marker of a workspace read with its line break, however many CRs: written again in its own layout.
+        workspace = (harness.REPO / "templates" / "bootstrap-instructions-workspace.md").read_bytes()
+        older = workspace.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        written = self.marked(template=older, name="bootstrap-instructions-workspace.md")
+        marker = written.split(b"\n")[2]
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(written.replace(marker + b"\n", marker + b"\r\r\r\n"))
+        self.assert_ok(self.upgrade(project))
+        self.assertEqual(init.markers((project / "CLAUDE.md").read_bytes()), [("workspace", 2)])
+
     def test_one_a_team_changed_is_kept_and_said_when_the_target_writes_another(self):
         changed = self.marked() + b"\n## Our own rules\n"
         project = self.project("9.9.8")
@@ -357,7 +460,7 @@ class DigestTests(UpgradeTestCase):
                       "kept, and the target's template is not written: cortex init --force writes it again", proc.err)
 
     def test_one_a_team_changed_is_not_said_when_the_target_writes_the_same(self):
-        changed = self.marked(template=TEMPLATE) + b"\n## Our own rules\n"
+        changed = self.marked(template=TEMPLATE).replace(END, b"## Our own rules\n\n" + END)   # above it: Cortex's block
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(changed)
         proc = self.upgrade(project)
@@ -372,6 +475,36 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(self.upgrade(project))
         self.assertEqual((project / "CLAUDE.md").read_bytes(),
                          b"\xef\xbb\xbf" + init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n"))
+
+    def test_the_team_s_part_follows_the_target_s_block_byte_for_byte(self):
+        # ADR-012 §3.4: Cortex's block as Cortex wrote it is written again; what is below the end marker stays.
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        written = self.marked(template=older)
+        team = b"## Our own rules\r\n\r\nRun the linter first.\r\n<!-- cortex:bootstrap end -->\r\nStill ours."
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.BOM + written.replace(b"\n", b"\r\n") + team)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(),
+                         init.BOM + init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n") + team)
+        self.assertIn("Commit cortex.toml, cortex.lock, CLAUDE.md;", proc.out)
+
+    def test_a_team_s_part_under_a_block_the_target_writes_alike_is_left_as_it_is(self):
+        written = self.marked(template=TEMPLATE) + b"## Our own rules\n"
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(written)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), written)
+        self.assertNotIn("CLAUDE.md", proc.out + proc.err)
+
+    def test_the_block_keeps_its_own_line_endings_whatever_the_team_s_part_has(self):
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        team = b"## Our own rules\r\nWritten on Windows.\r\n"
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(self.marked(template=older) + team)
+        self.assert_ok(self.upgrade(project))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)) + team)
 
     def test_already_on_it_writes_again_what_an_interrupted_upgrade_left(self):
         # Cut short after the switch, or a pin moved by hand: 9.9.8's file under the pin of this cortex.
@@ -473,34 +606,47 @@ class DigestTests(UpgradeTestCase):
 
 
 class StampTests(unittest.TestCase):
-    """The digest a bootstrap carries in its marker (ADR-010 §3.1)."""
+    """The digest a bootstrap carries in its marker (ADR-010 §3.1), of Cortex's block (ADR-012 §3.2)."""
 
     def test_it_is_the_digest_of_the_file_with_its_marker_plain(self):
         written = init.stamped(init.instructions(TEMPLATE, True))
         digest = hashlib.sha256(init.instructions(TEMPLATE, True)).hexdigest()[:16]
-        self.assertIn(f"<!-- cortex:bootstrap layout=single format=1 digest={digest} -->\n".encode(), written)
-        self.assertEqual(init.markers(written), [("single", 1)])
+        self.assertIn(f"<!-- cortex:bootstrap layout=single format=2 digest={digest} -->\n".encode(), written)
+        self.assertEqual(init.markers(written), [("single", 2)])
         self.assertIs(init.untouched(written), True)
         self.assertEqual(init.stamped(written), written)
 
     def test_what_git_and_editors_do_to_a_file_is_no_change(self):
         written = init.stamped(init.instructions(TEMPLATE, True))
         for kept in (written.replace(b"\n", b"\r\n"), b"\xef\xbb\xbf" + written, written.rstrip(b"\n"),
-                     written + b"\n\n"):
+                     written + b"\n\n", written.replace(b"\n", b"\r\r\r\r\n")):    # any run of CRs is one line break
             with self.subTest(kept=kept[:8] + kept[-4:]):
                 self.assertIs(init.untouched(kept), True)
 
-    def test_a_change_anywhere_is_one(self):
+    def test_a_change_in_cortex_s_block_is_one(self):
         written = init.stamped(init.instructions(TEMPLATE, True))
-        for kept in (written.replace(b"Cortex", b"Kortex", 1), written + b"## Ours\n",
-                     written.replace(b"format=1 digest=", b"format=2 digest="),
+        end = b"<!-- cortex:bootstrap end -->\n"
+        for kept in (written.replace(b"Cortex", b"Kortex", 1), written.replace(end, b"## Ours\n" + end),
+                     written.replace(end, b"") + b"## Ours\n",        # the end marker gone: all of it is the block
+                     written.replace(b"format=2 digest=", b"format=3 digest="),
                      written.replace(b"layout=single", b"layout=workspace")):
             with self.subTest(kept=kept[-40:]):
                 self.assertIs(init.untouched(kept), False)
 
+    def test_the_team_s_part_is_no_change(self):
+        written = init.stamped(init.instructions(TEMPLATE, True))
+        for team in (b"## Ours\n", b"## Ours\r\n\r\nRun the linter first.",
+                     b"<!-- cortex:bootstrap layout=workspace format=9 digest=0123456789abcdef -->\n"
+                     b"<!-- cortex:bootstrap end -->\n"):          # quoted by the team: its own text
+            with self.subTest(team=team):
+                self.assertIs(init.untouched(written + team), True)
+                self.assertEqual(init.markers(written + team), [("single", 2)])
+                self.assertEqual(init.parts(written + team), (written, team))
+
     def test_no_digest_tells_nothing(self):
-        for kept in (init.instructions(TEMPLATE, True), OLD_BOOTSTRAP,
-                     init.stamped(init.instructions(TEMPLATE, True)) * 2):
+        written = init.stamped(init.instructions(TEMPLATE, True))
+        twice = written.replace(b"<!-- cortex:bootstrap end -->", written.split(b"\n")[2] + b"\n<!-- cortex:bootstrap end -->")
+        for kept in (init.instructions(TEMPLATE, True), OLD_BOOTSTRAP, twice):
             with self.subTest(kept=kept[:40]):
                 self.assertIsNone(init.untouched(kept))
         self.assertEqual(init.stamped(OLD_BOOTSTRAP), OLD_BOOTSTRAP)

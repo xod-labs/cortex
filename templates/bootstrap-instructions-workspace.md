@@ -1,6 +1,6 @@
 # Cortex AI Team — Workspace Mode
 
-<!-- cortex:bootstrap layout=workspace format=1 -->
+<!-- cortex:bootstrap layout=workspace format=2 -->
 <!-- Keep the line above as it is: `cortex init` and `cortex upgrade` read it. -->
 
 ## Where the spec is — read this first
@@ -80,15 +80,12 @@ You are the Prompt Manager. On every request:
 
 ## Services declared in this workspace
 
-<!--
-  List of services and their @alias values.
-  Updated manually — `cortex init --workspace --service NAME` scaffolds a service's own files.
--->
+The workspace's services — `@alias`, folder, description — are declared in a table below the end marker, at the bottom of this file. With no table there, the services are the workspace's folders that hold a `project-overview.md` — `agents/` and `cortex/` aside — and each one's `@alias` is in the `<!-- @alias: … -->` line at the top of that file.
 
-| @alias | Folder | Description |
-|--------|--------|-------------|
-| <!-- @backend --> | <!-- service-a/ --> | <!-- Main API --> |
-| <!-- @frontend --> | <!-- service-b/ --> | <!-- Web application --> |
+<!--
+  Declare them there, where `cortex upgrade` and `cortex init --force` keep them: a table written here, in Cortex's block,
+  keeps the file from following Cortex. `cortex init --workspace --service NAME` scaffolds a service's own files.
+-->
 
 ## References (read on demand depending on context)
 - **Context (team + developer, additive):** `{workspace_root}/agents/project-overview.md` / `project-context.md` (team, if versioned) **and** `{workspace_root}/project-overview.md` / `project-context.md` (developer) — both read, not cascaded. See [ADR-006](cortex/docs/adr/ADR-006-workspace-shareable-repo.md).
@@ -98,3 +95,6 @@ You are the Prompt Manager. On every request:
 - **Workflows (cascade):** `{service}/agents/workflows/` → `{workspace_root}/agents/workflows/` → `cortex/agents/workflows/`
 - **Layer override guide:** `cortex/docs/extending-layers.md` — when to overlay, header convention, examples
 - **Validation:** `cortex validate` — checks overlay file integrity
+
+<!-- Below the next line, this file is yours: `cortex upgrade` and `cortex init --force` keep what you write there. -->
+<!-- cortex:bootstrap end -->

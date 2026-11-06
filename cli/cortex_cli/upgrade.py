@@ -202,7 +202,7 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
                       f"templates would tell whether a team changed it, is not in the store. It is kept: {again}")
     layout = layouts[0] if intact else None
     if intact is None:
-        layout = written_by(content, current / "templates", layouts, personality, path)
+        layout = written_by(init.parts(content)[0], current / "templates", layouts, personality, path)
     if layout is None:
         # A team changed it: said when the target writes another file than the pinned version, or,
         # without the pinned version, a later format — and, of a Cursor rule, when it lacks the
@@ -228,11 +228,16 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
         return None, (f"{display(str(path))} is {what} — so it is kept, and the target's template is not written"
                       f"{rule}: {again}")
     wanted = _written(target / "templates", layout, personality, path)
-    if wanted is None or wanted == content:
+    if wanted is None or wanted == init.parts(content)[0]:
         return None, None
-    if b"\r\n" in kept:
+    block, team = init.parts(init.without_bom(kept))    # ADR-012 §3.4: the team's part goes back as it was
+    if init.LINE_BREAK.sub(b"\n", team).strip(b"\n") and init.END_MARKER.search(wanted) is None:
+        # A target before format 2 has no end marker: the team's part would end up inside Cortex's block.
+        return None, (f"{display(str(path))} has a part of its own below its end marker, and the target's template has "
+                      "no end marker to keep it below — so it is kept as it is")
+    if b"\r\n" in block:
         wanted = wanted.replace(b"\n", b"\r\n")
-    return (init.BOM + wanted if kept.startswith(init.BOM) else wanted), None
+    return (init.BOM + wanted if kept.startswith(init.BOM) else wanted) + team, None
 
 
 def bootstraps(files: List[Path], pinned: Version, current: Optional[Path], target: Path, personality: bool,

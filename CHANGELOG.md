@@ -7,6 +7,9 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+### Changed
+- **The bootstrap file is in two parts** ([ADR-012](docs/adr/ADR-012-bootstrap-block.md) §3.1–§3.5, [#317](https://github.com/xod-labs/cortex/issues/317)). Format 2 of the templates closes Cortex's text with `<!-- cortex:bootstrap end -->`; below it, the file is the team's. `cortex init --force` and `cortex upgrade` write Cortex's block again and put what follows back byte for byte, the block taking the file's line endings and byte order mark. The digest in the marker covers Cortex's block only, so a team's part no longer keeps the file from following Cortex. A format 1 file nobody changed becomes format 2 at the next upgrade; one a team changed is kept, with a note — `cortex init --force` writes format 2, and the team copies its rules from the `.bak` below the end marker. The workspace template no longer holds a table of services to fill in Cortex's block: the table goes below the end marker. The docs say where a rule of one's machine and a team convention go instead.
+
 ## [1.6.0] - 2026-11-06 — We Apologise for the Inconvenience _(Released)_
 [Full notes](changelog/1.6.0.md)
 
