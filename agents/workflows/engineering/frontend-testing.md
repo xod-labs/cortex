@@ -71,7 +71,8 @@ This workflow activates when the prompt contains formulations such as:
 **Checklist:**
 - [ ] Unit + component tests gate every PR (fast, deterministic)
 - [ ] Browser E2E in its **own** job (slower/flakier) — nightly or gating once stable, never silently disabled
-- [ ] Browser accessibility scans on a schedule, not on the required path of pull requests (see `accessibility-testing.md` §CI budget)
+- [ ] Browser accessibility scans in a nightly run of the same journeys, scan flag on — never on the required path of pull requests, even once the E2E job gates them (see `accessibility-testing.md` §CI budget)
+- [ ] A product that already has violations: the pull-request checks fail on new ones only, behind the ratchet's baseline (`accessibility-testing.md` §The ratchet)
 - [ ] Coverage reported; `--passWithNoTests`-style green-on-empty removed
 - [ ] The runner env is real (jsdom/happy-dom for components; built app for E2E)
 

@@ -14,7 +14,7 @@ release note under [`changelog/`](changelog/).
 - **Two workflows.** `engineering/accessibility-audit` runs an audit from its frame to the statement, the regression harness and the recurring cadence. `product/target-mockup` takes a redesign from the brief to a hand-off the team can build.
 
 ### Changed
-- **The Lead Frontend aims at WCAG 2.2 AA**, WCAG 2.1 AA before. It loads `practices/web-accessibility`, and `testing/accessibility-testing` when a task wires accessibility checks; QA automation loads the latter for a project with a user interface. `frontend-testing` keeps browser accessibility scans off the required path of pull requests.
+- **The Lead Frontend aims at WCAG 2.2 AA**, WCAG 2.1 AA before. It loads `practices/web-accessibility`, and `testing/accessibility-testing` when a task wires accessibility checks; QA automation loads the latter for a project with a user interface. `frontend-testing` keeps browser accessibility scans off the required path of pull requests, and takes the requests to wire accessibility checks into tests or CI; an audit goes to `engineering/accessibility-audit`.
 
 ## [1.5.0] - 2026-11-05 — Mind-Bogglingly Big _(Released)_
 [Full notes](changelog/1.5.0.md)
