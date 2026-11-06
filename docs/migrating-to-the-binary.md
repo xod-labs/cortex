@@ -38,7 +38,7 @@ git add cortex.toml .gitignore CLAUDE.md  # CLAUDE.md, or your tool's file — s
 git commit -m "Move to the cortex binary"
 ```
 
-`--force` replaces the instructions file `setup.sh` wrote: the new one reads `cortex.local.toml` first. **It keeps the old one beside it, as `FILE.bak`** — `CLAUDE.md.bak` here. Carry over what you added to it by hand — a table of services, sections of your own — then delete the `.bak`. Without `--force`, `cortex init` keeps an instructions file that is already there.
+`--force` replaces the instructions file `setup.sh` wrote: the new one reads `cortex.local.toml` first. **It keeps the old one beside it, as `FILE.bak`** — `CLAUDE.md.bak` here. Carry over what you added to it by hand — a table of services, sections of your own — below the line `<!-- cortex:bootstrap end -->` of the new file, where every later Cortex keeps it ([ADR-012](adr/ADR-012-bootstrap-block.md)), then delete the `.bak`. Without `--force`, `cortex init` keeps an instructions file that is already there.
 
 The instructions file is the tool's: `.github/copilot-instructions.md` for Copilot, `.cursor/rules/cortex.mdc` for Cursor — with the frontmatter, `alwaysApply: true`, without which Cursor does not apply the rule in every conversation — `CLAUDE.md` for Claude Code, `AGENTS.md` for `--tool agents`, the path you give with `--tool custom`. Keep your `project-overview.md`, `project-context.md` and `agents/` overlays as they are. Overlay headers keep their `Base: cortex/agents/…`: `cortex/` is now the directory `spec` names.
 
