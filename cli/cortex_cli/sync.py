@@ -448,10 +448,12 @@ def existing_entry(target: Path, the_store: store.Store, project: config.Project
         if _inside(pointed, the_store.versions) or (project.spec == LINK and is_checkout(Path(pointed))):
             return "link"
         if project.spec == LINK and not os.path.exists(target):
-            # The link a `--from` sync made, to a checkout moved or deleted since: it leads nowhere.
-            raise SyncError(f"{LINK}/ is a link to {shown(display(pointed))}, a checkout that is gone — moved or deleted "
-                            f"since it was linked. Remove the link, then `cortex sync --link --from` the checkout's "
-                            f"new path, or `cortex sync` for the version {config.PROJECT_FILE} pins.")
+            # A link the project reads, that leads nowhere: to a checkout a `--from` sync linked, moved or
+            # deleted since, or into a store moved since — CORTEX_HOME changed. One message says both (#312).
+            raise SyncError(f"{LINK}/ is a link to {shown(display(pointed))}, which leads nowhere — a checkout or a "
+                            f"store moved or deleted since it was linked. Remove it, then `cortex sync` for the "
+                            f"version {config.PROJECT_FILE} pins, or `cortex sync --link --from` the checkout it "
+                            f"should follow.")
         raise SyncError(f"{LINK}/ is a link to {shown(display(pointed))}, which Cortex did not make. Move or remove it, "
                         "then run the command again.")
     if target.is_dir() and not (target / ".git").exists() and (target / MARKER).is_file():

@@ -283,16 +283,34 @@ class ForeignCortexTests(SyncTestCase):
             with self.subTest(args=args):
                 proc = self.sync(project, *args)
                 self.assertEqual(proc.returncode, 1)
-                self.assertIn(f"cortex/ is a link to {display(pointed)}, a checkout that is gone — moved or "
-                              "deleted since it was linked. Remove the link, then `cortex sync --link --from` the "
-                              "checkout's new path, or `cortex sync` for the version cortex.toml pins.", proc.err)
+                self.assertIn(f"cortex/ is a link to {display(pointed)}, which leads nowhere — a checkout or a store "
+                              "moved or deleted since it was linked. Remove it, then `cortex sync` for the version "
+                              "cortex.toml pins, or `cortex sync --link --from` the checkout it should follow.", proc.err)
                 self.assertEqual(os.readlink(project / "cortex"), pointed)
         os.unlink(project / "cortex")                                   # what it says to do
         self.assert_ok(self.sync(project, "--link", "--from", str(moved)))
         self.assertEqual(os.path.realpath(project / "cortex"), os.path.realpath(moved))
 
     @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
-    def test_only_the_link_a_project_reads_that_leads_nowhere_is_a_checkout_that_is_gone(self):
+    def test_a_link_into_a_store_moved_since_is_said_to_lead_nowhere(self):
+        project = self.project()
+        self.assert_ok(self.sync(project, "--link"))                    # into the store: spec = "cortex"
+        pointed = os.readlink(project / "cortex")
+        moved = self.tmp / "cortex-home-moved"
+        self.home.rename(moved)
+        self.home = moved
+        self.env["CORTEX_HOME"] = str(moved)                            # CORTEX_HOME changed, the old one gone
+        proc = self.sync(project)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(f"cortex/ is a link to {display(pointed)}, which leads nowhere — a checkout or a store "
+                      "moved or deleted since it was linked. Remove it, then `cortex sync`", proc.err)
+        self.assertNotIn("which Cortex did not make", proc.err)
+        self.assertEqual(os.readlink(project / "cortex"), pointed)
+        os.unlink(project / "cortex")                                   # what it says to do
+        self.assert_ok(self.sync(project))
+
+    @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
+    def test_only_the_link_a_project_reads_is_said_to_lead_nowhere(self):
         elsewhere = self.tmp / "my-cortex"
         (elsewhere / "agents").mkdir(parents=True)                      # there, and no checkout
         linked = self.project("linked")
@@ -307,7 +325,7 @@ class ForeignCortexTests(SyncTestCase):
                 proc = self.sync(project, "--link")
                 self.assertEqual(proc.returncode, 1)
                 self.assertIn(f"cortex/ is a link to {display(pointed)}, which Cortex did not make", proc.err)
-                self.assertNotIn("a checkout that is gone", proc.err)
+                self.assertNotIn("leads nowhere", proc.err)
                 self.assertEqual(os.readlink(project / "cortex"), pointed)
 
 
