@@ -152,6 +152,34 @@ class OptionTests(InitTestCase):
                          init_command.BOM + expected.replace(b"\n", b"\r\n") + ours)
         self.assertEqual((self.project / "CLAUDE.md.bak").read_bytes(), old)
 
+    def test_force_keeps_a_team_s_part_of_crlf_under_a_block_of_lf(self):
+        expected = EXPECTED["single-claude"]["files"]["CLAUDE.md"].encode("utf-8")
+        ours = b"## Our own rules\r\nWritten on Windows.\r\n"
+        (self.project / "CLAUDE.md").write_bytes(expected.replace(b"Cortex AI Team", b"Cortex AI Team (Acme)", 1) + ours)
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertEqual((self.project / "CLAUDE.md").read_bytes(), expected + ours)
+
+    def test_force_leaves_a_file_with_the_end_marker_that_only_git_or_an_editor_changed(self):
+        # CRLF and a byte order mark are no change: with the end marker, the block takes them, nothing to replace.
+        expected = EXPECTED["single-claude"]["files"]["CLAUDE.md"].encode("utf-8")
+        kept = init_command.BOM + expected.replace(b"\n", b"\r\n")
+        (self.project / "CLAUDE.md").write_bytes(kept)
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertEqual((self.project / "CLAUDE.md").read_bytes(), kept)
+        self.assertIn("is what --force would write: left as it is", proc.out)
+        self.assertFalse((self.project / "CLAUDE.md.bak").exists())
+
+    def test_a_personality_block_quoted_in_the_team_s_part_is_its_text(self):
+        proc = self.init("--tool", "claude", "--no-personality")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        rule = self.project / "CLAUDE.md"
+        rule.write_bytes(rule.read_bytes() + b"Our notes quote <!-- PERSONALITY:BEGIN --> as it is.\n")
+        proc = self.init("--tool", "claude", "--no-personality")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("personality block", proc.err)
+
     def test_a_bootstrap_of_format_1_kept_is_said_older(self):
         old = EXPECTED["single-claude"]["files"]["CLAUDE.md"].replace("<!-- cortex:bootstrap end -->\n", "").replace("format=2", "format=1")
         (self.project / "CLAUDE.md").write_text(old, encoding="utf-8")

@@ -269,13 +269,13 @@ def untouched(kept: bytes) -> Optional[bool]:
 
 def with_team_part(written: bytes, kept: bytes) -> bytes:
     """``written``, a bootstrap as Cortex writes it, followed by the team's part of ``kept``, byte for byte
-    (ADR-012 §3.3, §3.4): ``written`` as it is when ``kept`` has none. With a team's part, the block takes
+    (ADR-012 §3.3, §3.4): ``written`` as it is when ``kept`` has no end marker. With one, the block takes
     ``kept``'s line endings and byte order mark, so that the file keeps one of each."""
-    team = parts(without_bom(kept))[1]
-    if not team:
+    old, team = parts(without_bom(kept))
+    if not team and not END_MARKER.search(old):
         return written
     block = parts(written)[0]
-    if b"\r\n" in parts(without_bom(kept))[0]:
+    if b"\r\n" in old:
         block = block.replace(b"\n", b"\r\n")
     return (BOM if kept.startswith(BOM) else b"") + block + team
 
@@ -517,7 +517,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         if found is not None:
             err.write(f"note: {display(str(instructions_file))} {found.sentence} — "
                       f"{again if found.force else 'it is kept as it is'}\n")
-        elif (PERSONALITY_BEGIN in kept) != personality:
+        elif (PERSONALITY_BEGIN in parts(without_bom(kept))[0]) != personality:      # the team's part is its text
             err.write(f"note: {display(str(instructions_file))} was written {'without' if personality else 'with'} "
                       f"the personality block this theme needs removed or added — {again}\n")
         elif is_cursor_rule(instructions_file) and not applies_always(kept):
