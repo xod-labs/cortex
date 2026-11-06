@@ -519,6 +519,32 @@ class DigestTests(UpgradeTestCase):
                       "and what is below its end marker stays as it is\n", proc.out)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
 
+    def test_a_file_written_again_with_a_team_s_part_says_its_part_stays(self):
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(self.marked(template=older) + b"## Our own rules\n")
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s template — no one changed Cortex's block, and what "
+                      "is below its end marker stays as it is\n", proc.out)
+
+    def test_already_on_it_a_block_is_written_again_and_the_team_s_part_stays(self):
+        # On the pinned version (an upgrade cut short, a pin moved by hand): the same split, the same words.
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        team = b"## Our own rules\n"
+        kept = self.marked(template=older) + team
+        project = self.project(OWN)
+        (project / "CLAUDE.md").write_bytes(kept)
+        words = "template — no one changed Cortex's block, and what is below its end marker stays as it is\n"
+        proc = self.upgrade(project, "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn(f"CLAUDE.md: would be written again from Cortex {OWN}'s {words}", proc.out)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s {words}", proc.out)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)) + team)
+
     def test_a_block_a_team_changed_is_kept_and_said_where_its_rules_go(self):
         older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
         changed = self.marked(template=older).replace(END, b"## Our own rules\n\n" + END)
