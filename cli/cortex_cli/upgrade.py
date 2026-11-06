@@ -73,6 +73,7 @@ class Outcome:
     committed: Optional[str] = None                     # --commit: where — the branch, and the commit
     uncommitted: Optional[str] = None                   # --commit: why nothing was
     ignored: bool = False                               # git ignores every one of the files: nothing to commit
+    clean: bool = False                                 # --commit: the files are as committed already
     left: List[Path] = field(default_factory=list)      # --commit, nothing written: files git sees changed still
     outside: List[Path] = field(default_factory=list)   # --commit: of the files, those outside the git work tree
 
@@ -190,12 +191,19 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     kept = path.read_bytes()
     content = init.normalised(kept)
     found = init.markers(content)
-    again = "cortex init --force writes it again, and keeps yours as .bak"
+    # Without --workspace, cortex init writes a single project's: a workspace's file says it is one by its
+    # markers, or, written before the marker, by its title — as cortex init reads it (ADR-010 §3.1).
+    title = init.without_frontmatter(content).split(b"\n", 1)[0]
+    workspace = all(layout == "workspace" for layout, _ in found) if found else b"Workspace Mode" in title
+    again = f"cortex init --force{' --workspace' if workspace else ''} writes it again, and keeps yours as .bak"
     if len(found) > 1:
         return None, f"{display(str(path))} holds several bootstrap markers, so none is read, and it is kept: {again}"
     if not (found or init.bootstrap_of_cortex(content)):
         return None, None       # no Cortex bootstrap: cortex init says so
     layouts = [found[0][0]] if found else list(TEMPLATES)
+    # ADR-012 §3.4: the end marker of the file `cortex init --force` writes, the target's — none before format 2.
+    ends = any(init.END_MARKER.search(_written(target / "templates", name, personality, path) or b"") for name in layouts)
+    below = " — your own rules go below its end marker, where Cortex keeps them" if ends else ""
     intact = init.untouched(content)
     if intact is None and current is None:
         return None, (f"{display(str(path))} was not checked: its marker carries no digest, and Cortex {pinned}, whose "
@@ -218,7 +226,10 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
             if cursor:
                 return None, (f"{display(str(path))} is not what Cortex wrote — a team changed it — and it has no "
                               "`alwaysApply: true` line in a frontmatter, as Cursor's documentation writes it: Cursor "
-                              f"may not apply it in every conversation. It is kept: {again}")
+                              f"may not apply it in every conversation. It is kept: {again}{below}")
+            if not found and intact is None:    # #313: no marker, and not the pinned version's file
+                return None, (f"{display(str(path))} is a bootstrap without the marker, not what Cortex {pinned} writes "
+                              f"— a team changed it, or an older Cortex wrote it — so it is kept: {again}{below}")
             return None, None
         what = "not what Cortex wrote, by the digest in its marker — a team changed it" if intact is False else \
             (f"{f'format {found[0][1]}' if found else 'a bootstrap without the marker'}, not what Cortex {pinned} "
@@ -226,7 +237,7 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
         rule = ("; and with no `alwaysApply: true` line in a frontmatter, as Cursor's documentation writes it, "
                 "Cursor may not apply it in every conversation") if cursor else ""
         return None, (f"{display(str(path))} is {what} — so it is kept, and the target's template is not written"
-                      f"{rule}: {again}")
+                      f"{rule}: {again}{below}")
     wanted = _written(target / "templates", layout, personality, path)
     if wanted is None or wanted == init.parts(content)[0]:
         return None, None
@@ -238,6 +249,14 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     if b"\r\n" in block:
         wanted = wanted.replace(b"\n", b"\r\n")
     return (init.BOM + wanted if kept.startswith(init.BOM) else wanted) + team, None
+
+
+def _nobody(written: bytes) -> str:
+    """Why a bootstrap is written again, as the run says it: nobody changed it — or, of a file with a team's
+    part, Cortex's block, the team's part staying as it is (ADR-012 §3.4)."""
+    if init.parts(init.without_bom(written))[1]:
+        return "no one changed Cortex's block, and what is below its end marker stays as it is"
+    return "no one changed it"
 
 
 def bootstraps(files: List[Path], pinned: Version, current: Optional[Path], target: Path, personality: bool,
@@ -398,7 +417,7 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
 def _ending(outcome: Outcome, out: TextIO) -> None:
     """What the project must commit — or what ``--commit`` committed, and where; then what is to
     commit where it is, outside the project's git work tree."""
-    names, elsewhere = outcome.names(), outcome.elsewhere()
+    names, elsewhere = ([] if outcome.clean else outcome.names()), outcome.elsewhere()
     if outcome.ignored:
         ready = f"Cortex {outcome.target} is ready. " if outcome.target != outcome.pinned else ""
         out.write(f"\n{ready}Nothing to commit: git ignores {_and(names)}.\n")
@@ -406,7 +425,8 @@ def _ending(outcome: Outcome, out: TextIO) -> None:
         done = f"Committed {', '.join(names)} on {outcome.committed} — nothing was pushed" if outcome.committed else \
             f"Commit {', '.join(names)}" if names else ""
         done = "; ".join(part for part in (done, elsewhere) if part)
-        out.write(f"\nCortex {outcome.target} is ready. {done}; teammates run `cortex sync` after they pull.\n")
+        out.write(f"\nCortex {outcome.target} is ready. {done + '; teammates' if done else 'Teammates'} run `cortex sync` "
+                  "after they pull.\n")
     elif names or elsewhere:
         done = f"Committed {_and(names)} on {outcome.committed} — nothing was pushed" if outcome.committed else \
             f"Commit {_and(names)}" if names else ""
@@ -496,8 +516,8 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         prepare(team)
 
     if dry_run:
-        for path, _ in rewrites:
-            out.write(f"{_shown_path(path, root)}: would be written again from Cortex {target}'s template — no one changed it\n")
+        for path, content in rewrites:
+            out.write(f"{_shown_path(path, root)}: would be written again from Cortex {target}'s template — {_nobody(content)}\n")
         if stops:
             err.write(f"cortex upgrade: the overlays would fail against Cortex {target}, and stop it — fix them, "
                       "or --force moves the project anyway\n")
@@ -519,8 +539,8 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         sync.sync(root, None, None, out, err, announce=False)
 
     _write(rewrites, committed, root, err, switch)
-    for path, _ in rewrites:
-        out.write(f"{_shown_path(path, root)}: written again from Cortex {target}'s template — no one changed it\n")
+    for path, content in rewrites:
+        out.write(f"{_shown_path(path, root)}: written again from Cortex {target}'s template — {_nobody(content)}\n")
     return Outcome(root, current, target, files=team)
 
 
@@ -549,9 +569,9 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     if prepare is not None and team:
         prepare(team)
     if dry_run:
-        for path, _ in rewrites:
-            out.write(f"{_shown_path(path, root)}: would be written again from Cortex {current}'s template — no one "
-                      "changed it\n")
+        for path, content in rewrites:
+            out.write(f"{_shown_path(path, root)}: would be written again from Cortex {current}'s template — "
+                      f"{_nobody(content)}\n")
         if rewrites or behind is not None:
             out.write("--dry-run: nothing of the project was changed\n")
         return Outcome(root, current, current, files=team)
@@ -560,8 +580,8 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     locked = lock.read_bytes() if lock.is_file() else None
     _write(rewrites, {lock: locked} if behind is not None else {}, root, err,
            (lambda: sync.sync(root, None, None, out, err, announce=False)) if behind is not None else (lambda: None))
-    for path, _ in rewrites:
-        out.write(f"{_shown_path(path, root)}: written again from Cortex {current}'s template — no one changed it\n")
+    for path, content in rewrites:
+        out.write(f"{_shown_path(path, root)}: written again from Cortex {current}'s template — {_nobody(content)}\n")
     relocked = lock.is_file() and lock.read_bytes() != locked
     return Outcome(root, current, current, files=([lock] if relocked else []) + [path for path, _ in rewrites])
 
@@ -757,6 +777,9 @@ def _theirs(root: str, pin: Path, before: List[Path], error: Optional[str], writ
             "commit by hand what is the team's")
 
 
+AS_COMMITTED = "as committed already"      # why --commit committed nothing, when there was nothing to
+
+
 def _commit(root: str, top: str, files: List[Path], message: str,
             theirs: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     """Commit ``files`` in the work tree of ``root``, whose top is ``top``, with ``message``, and
@@ -772,12 +795,12 @@ def _commit(root: str, top: str, files: List[Path], message: str,
     if ignored:
         return None, f"git ignores {_and(ignored)}"
     if not _changed(root, top, files):
-        return None, f"{_and(paths)} {'are' if len(paths) > 1 else 'is'} as committed already"
+        return None, f"{_and(paths)} {'are' if len(paths) > 1 else 'is'} {AS_COMMITTED}"
     if theirs is not None:
         return None, theirs
     _git_ok(root, "add", "--", *_literal(paths), timeout=None)
     if _git(root, "diff", "--cached", "--quiet", "--", *_literal(paths)).returncode == 0:
-        return None, f"{_and(paths)} {'are' if len(paths) > 1 else 'is'} as committed already"
+        return None, f"{_and(paths)} {'are' if len(paths) > 1 else 'is'} {AS_COMMITTED}"
     proc = _git(root, "commit", "-q", "-m", message, "--", *_literal(paths), timeout=None)      # its hooks run
     if proc.returncode != 0:
         raise UpgradeError(f"git refused the commit — {(proc.stderr or proc.stdout).strip() or proc.returncode}\n"
@@ -930,6 +953,7 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
         err.write(f"cortex upgrade: {error} — the upgrade is done, and nothing was committed\n")
     else:
         if outcome.uncommitted is not None:
+            outcome.clean = outcome.uncommitted.endswith(AS_COMMITTED)
             err.write(f"note: nothing is committed in {display(root)} — {outcome.uncommitted}\n")
         else:
             superproject = _git(root, "rev-parse", "--show-superproject-working-tree").stdout.strip()
@@ -1032,7 +1056,12 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
         out.write(f"  {entry.name:<{width}}  {status}\n")
     written = [(entry, outcome) for entry, outcome, _ in done if outcome is not None and outcome.why is None
                and outcome.files]
-    commits = [(entry, outcome) for entry, outcome in written if not outcome.ignored]
+    def nothing(outcome: Outcome) -> bool:
+        """Nothing to commit for it: git ignores its files, or they are as committed already — and none
+        was written outside its work tree, to commit where it is (#326)."""
+        return outcome.ignored or (outcome.clean and not outcome.outside)
+
+    commits = [(entry, outcome) for entry, outcome in written if not nothing(outcome)]
     left = [(entry, outcome) for entry, outcome, _ in done if outcome is not None and outcome.left]
 
     def from_before() -> None:
@@ -1044,18 +1073,20 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
     if not commits:
         out.write("\nNothing this run wrote is to commit.\n" if left else "\nNothing to commit, in any project.\n")
         for entry, outcome in written:
-            out.write(f"  {entry.name:<{width}}  {entry.path}: git ignores {_and(outcome.names())}\n")
+            why = outcome.uncommitted if outcome.clean else f"git ignores {_and(outcome.names())}"
+            out.write(f"  {entry.name:<{width}}  {entry.path}: {why}\n")
         from_before()
         return
     committing = options.message is not None and not options.dry_run
     out.write(f"\nWhat each project {'would have to' if options.dry_run else 'must'} commit:\n")
     for entry, outcome in written:
-        if outcome.ignored:
-            out.write(f"  {entry.name:<{width}}  {entry.path}: nothing — git ignores {_and(outcome.names())}\n")
+        if nothing(outcome):
+            why = outcome.uncommitted if outcome.clean else f"git ignores {_and(outcome.names())}"
+            out.write(f"  {entry.name:<{width}}  {entry.path}: nothing — {why}\n")
             continue
         said = "" if not committing else f" — committed on {outcome.committed}" if outcome.committed else \
             f" — not committed: {_first(outcome.uncommitted)}"
-        here = f"{_and(outcome.names())}{said}" if outcome.names() else ""
+        here = f"nothing — {outcome.uncommitted}" if outcome.clean else f"{_and(outcome.names())}{said}" if outcome.names() else ""
         line = "; ".join(part for part in (here, outcome.elsewhere()) if part)
         out.write(f"  {entry.name:<{width}}  {entry.path}: {line}\n")
     from_before()

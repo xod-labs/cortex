@@ -315,7 +315,8 @@ class DigestTests(UpgradeTestCase):
         self.assertEqual(rule.read_bytes(), ours)
         self.assertIn(".cursor/rules/cortex.mdc is not what Cortex wrote — a team changed it — and it has no `alwaysApply: "
                       "true` line in a frontmatter, as Cursor's documentation writes it: Cursor may not apply it in every "
-                      "conversation. It is kept: cortex init --force writes it again, and keeps yours as .bak\n", proc.err)
+                      "conversation. It is kept: cortex init --force writes it again, and keeps yours as .bak — your own rules go "
+                      "below its end marker, where Cortex keeps them\n", proc.err)
 
     def test_a_cursor_rule_a_team_changed_says_both_when_the_target_writes_another(self):
         ours = self.marked() + b"\n## Our own rules\n"          # 9.9.8's template is not the target's
@@ -327,7 +328,8 @@ class DigestTests(UpgradeTestCase):
         self.assertIn(".cursor/rules/cortex.mdc is not what Cortex wrote, by the digest in its marker — a team changed it "
                       "— so it is kept, and the target's template is not written; and with no `alwaysApply: true` line in a "
                       "frontmatter, as Cursor's documentation writes it, Cursor may not apply it in every conversation: "
-                      "cortex init --force writes it again, and keeps yours as .bak\n", proc.err)
+                      "cortex init --force writes it again, and keeps yours as .bak — your own rules go below its end marker, where "
+                      "Cortex keeps them\n", proc.err)
 
     def test_a_cursor_rule_a_team_changed_that_applies_always_is_kept_unsaid(self):
         ours = init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True)).replace(END, b"## Our own rules\n\n" + END)
@@ -506,6 +508,138 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(self.upgrade(project))
         self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)) + team)
 
+    def test_a_dry_run_says_the_team_s_part_stays_and_writes_nothing(self):
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        kept = self.marked(template=older) + b"## Our own rules\n"
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(kept)
+        proc = self.upgrade(project, "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn(f"CLAUDE.md: would be written again from Cortex {OWN}'s template — no one changed Cortex's block, "
+                      "and what is below its end marker stays as it is\n", proc.out)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
+
+    def test_a_file_written_again_with_a_team_s_part_says_its_part_stays(self):
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(self.marked(template=older) + b"## Our own rules\n")
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s template — no one changed Cortex's block, and what "
+                      "is below its end marker stays as it is\n", proc.out)
+
+    def test_already_on_it_a_block_is_written_again_and_the_team_s_part_stays(self):
+        # On the pinned version (an upgrade cut short, a pin moved by hand): the same split, the same words.
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        team = b"## Our own rules\n"
+        kept = self.marked(template=older) + team
+        project = self.project(OWN)
+        (project / "CLAUDE.md").write_bytes(kept)
+        words = "template — no one changed Cortex's block, and what is below its end marker stays as it is\n"
+        proc = self.upgrade(project, "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn(f"CLAUDE.md: would be written again from Cortex {OWN}'s {words}", proc.out)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s {words}", proc.out)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)) + team)
+
+    def test_a_block_a_team_changed_is_kept_and_said_where_its_rules_go(self):
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        changed = self.marked(template=older).replace(END, b"## Our own rules\n\n" + END)
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(changed)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
+        self.assertIn("CLAUDE.md is not what Cortex wrote, by the digest in its marker — a team changed it — so it is kept, "
+                      "and the target's template is not written: cortex init --force writes it again, and keeps yours as "
+                      ".bak — your own rules go below its end marker, where Cortex keeps them\n", proc.err)
+
+    def test_already_on_it_a_bootstrap_without_the_marker_of_another_version_is_said(self):
+        # #313: on the pinned version, a file of an older Cortex, or one a team changed, is said, not passed over.
+        older = b"# Cortex AI Team\n\nWritten by an older Cortex: read cortex.local.toml first.\n"
+        project = self.project(OWN)
+        (project / "CLAUDE.md").write_bytes(older)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), older)
+        self.assertIn(f"CLAUDE.md is a bootstrap without the marker, not what Cortex {OWN} writes — a team changed it, "
+                      "or an older Cortex wrote it — so it is kept: cortex init --force writes it again, and keeps yours "
+                      "as .bak — your own rules go below its end marker, where Cortex keeps them\n", proc.err)
+
+    def test_a_target_without_an_end_marker_is_not_said_to_keep_rules_below_it(self):
+        # ADR-012 §3.4: below the end marker of the file `cortex init --force` writes — the target's, and a
+        # target before format 2 has none: up, on the pinned version (#313), and down.
+        older = MARKED.replace(b"Written by 9.9.8", b"Written by 9.9.7")
+        self.marked(version="9.9.7", template=older)
+        self.marked()
+        newer = init.stamped(init.instructions(TEMPLATE, True)).replace(END, b"## Our own rules\n\n" + END)
+        kept = " — so it is kept, and the target's template is not written: cortex init --force writes it again, and " \
+               "keeps yours as .bak\n"
+        cases = (
+            ("9.9.7", init.stamped(init.instructions(older, True)) + b"\n## Our own rules\n",
+             "CLAUDE.md is not what Cortex wrote, by the digest in its marker — a team changed it" + kept),
+            ("9.9.8", b"# Cortex AI Team\n\nWritten by an older Cortex: read cortex.local.toml first.\n",
+             "CLAUDE.md is a bootstrap without the marker, not what Cortex 9.9.8 writes — a team changed it, or an older "
+             "Cortex wrote it — so it is kept: cortex init --force writes it again, and keeps yours as .bak\n"),
+            (OWN, newer, "CLAUDE.md is not what Cortex wrote, by the digest in its marker — a team changed it" + kept),
+        )
+        for pinned, content, note in cases:
+            with self.subTest(pinned=pinned):
+                project = self.project(pinned)
+                try:
+                    (project / "CLAUDE.md").write_bytes(content)
+                    proc = self.upgrade(project, "9.9.8")
+                    self.assert_ok(proc)
+                    self.assertEqual((project / "CLAUDE.md").read_bytes(), content)
+                    self.assertIn(note, proc.err)
+                finally:
+                    shutil.rmtree(project)
+
+    def test_already_on_it_a_marked_file_a_team_changed_is_kept_unsaid(self):
+        # #313 is a bootstrap with no marker (ADR-012 §3.4). A file with one — a digest or not — that a team
+        # changed is said when the target writes another file than the pinned version: on it, the target does not.
+        written = self.marked()
+        project = self.project("9.9.8")
+        for changed in (init.instructions(MARKED, True) + b"\n## Our own rules\n", written + b"\n## Our own rules\n"):
+            with self.subTest(digest=changed.startswith(written)):
+                (project / "CLAUDE.md").write_bytes(changed)
+                proc = self.upgrade(project, "9.9.8")
+                self.assert_ok(proc)
+                self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
+                self.assertNotIn("CLAUDE.md", proc.out + proc.err)
+
+    def test_a_workspace_bootstrap_without_the_marker_is_said_to_need_workspace(self):
+        # Written before the marker, by a Cortex before 1.4.0, and a team listed its services in it: its title says
+        # it is a workspace's.
+        self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions-workspace.md": OLD_WORKSPACE})
+        changed = init.instructions(OLD_WORKSPACE, True) + b"\n| `@api` | api/ | Our API |\n"
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(changed)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
+        self.assertIn("CLAUDE.md is a bootstrap without the marker, not what Cortex 9.9.8 writes — a team changed it, or "
+                      "an older Cortex wrote it — so it is kept, and the target's template is not written: cortex init "
+                      "--force --workspace writes it again, and keeps yours as .bak", proc.err)
+
+    def test_a_workspace_bootstrap_a_team_changed_is_said_to_need_workspace(self):
+        # Without --workspace, cortex init --force writes a single project's bootstrap: the note names it.
+        name = "bootstrap-instructions-workspace.md"
+        older = (harness.REPO / "templates" / name).read_bytes().replace(b"## Where the spec is",
+                                                                        b"## Where the spec is, in 9.9.8", 1)
+        changed = self.marked(template=older, name=name).replace(END, b"## Our own rules\n\n" + END)
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(changed)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
+        self.assertIn("CLAUDE.md is not what Cortex wrote, by the digest in its marker — a team changed it — so it is kept, "
+                      "and the target's template is not written: cortex init --force --workspace writes it again, and "
+                      "keeps yours as .bak — your own rules go below its end marker, where Cortex keeps them\n", proc.err)
+
     def test_already_on_it_writes_again_what_an_interrupted_upgrade_left(self):
         # Cut short after the switch, or a pin moved by hand: 9.9.8's file under the pin of this cortex.
         written = self.marked()
@@ -586,6 +720,15 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertIn("CLAUDE.md holds several bootstrap markers, so none is read, and it is kept: cortex init --force "
                       "writes it again", proc.err)
+
+    def test_several_markers_of_a_workspace_are_said_to_need_workspace(self):
+        marked = MARKED.replace(b"layout=single", b"layout=workspace")
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.instructions(marked, True) + b"\n" + marked)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn("CLAUDE.md holds several bootstrap markers, so none is read, and it is kept: cortex init --force "
+                      "--workspace writes it again", proc.err)
 
     def test_no_personality_is_compared_and_written_without_its_block(self):
         self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": PERSONAL})

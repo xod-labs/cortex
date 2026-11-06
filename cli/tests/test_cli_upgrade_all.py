@@ -1013,8 +1013,65 @@ class CommitTests(GitTestCase):
         self.assert_ok(proc)
         self.assertEqual(self.head(alpha), first)
         self.assertEqual((alpha / "cortex.lock").read_text(encoding="utf-8"), lock)
-        self.assertIn(f"  alpha  {display(alpha)}: cortex.lock — not committed: cortex.lock is as committed already\n",
-                      proc.out)
+        self.assertIn(f"\nNothing to commit, in any project.\n  alpha  {display(alpha)}: cortex.lock is as committed already\n",
+                      proc.out)                                          # #326: not under what to commit
+        self.assertNotIn("What each project must commit", proc.out)
+
+    def test_a_project_as_committed_already_beside_one_committed_is_said_to_need_nothing(self):
+        alpha, beta = self.make("alpha", OWN), self.make("beta", bootstrap=True)
+        self.repository(alpha)
+        self.repository(beta)
+        lock = (alpha / "cortex.lock").read_text(encoding="utf-8")
+        (alpha / "cortex.lock").write_text(lock.replace(f'"{OWN}"', '"9.9.8"', 1), encoding="utf-8")
+        self.register(alpha, beta)
+        proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        self.assertIn(f"  alpha  {display(alpha)}: nothing — cortex.lock is as committed already\n", proc.out)
+        self.assertIn(f"  beta   {display(beta)}: cortex.toml, cortex.lock and CLAUDE.md — committed on ", proc.out)
+
+    def test_files_as_committed_already_are_not_said_to_commit(self):
+        # #313: on its version, a lock out of step written back as committed — the ending asks to commit
+        # nothing that --commit found committed already.
+        alpha = self.make("alpha", OWN)
+        first = self.repository(alpha)
+        lock = (alpha / "cortex.lock").read_text(encoding="utf-8")
+        (alpha / "cortex.lock").write_text(lock.replace(f'"{OWN}"', '"9.9.8"', 1), encoding="utf-8")
+        proc = self.upgrade(alpha, "--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        self.assertEqual(self.head(alpha), first)
+        self.assertIn(f"note: nothing is committed in {display(alpha)} — cortex.lock is as committed already\n", proc.err)
+        self.assertNotIn("Commit cortex.lock", proc.out)
+
+    def test_a_move_to_files_as_committed_already_asks_to_commit_nothing(self):
+        # A pin moved back by hand, not committed: the move writes the files as they are committed.
+        alpha = self.make("alpha", OWN)
+        first = self.repository(alpha)
+        for name in ("cortex.toml", "cortex.lock"):
+            text = (alpha / name).read_text(encoding="utf-8")
+            (alpha / name).write_text(text.replace(f'"{OWN}"', '"9.9.8"', 1), encoding="utf-8")
+        proc = self.upgrade(alpha, "--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        self.assertEqual(self.head(alpha), first)
+        self.assertIn(f"note: nothing is committed in {display(alpha)} — cortex.toml and cortex.lock are as committed "
+                      "already\n", proc.err)
+        self.assertIn(f"\nCortex {OWN} is ready. Teammates run `cortex sync` after they pull.\n", proc.out)
+
+    @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
+    def test_as_committed_already_a_file_written_outside_is_still_said_to_commit_there(self):
+        # #326: what is as committed is the work tree's; a file written outside it is still to commit where it is.
+        alpha = self.make("alpha", OWN)
+        shared = self.code / "alpha-notes.md"
+        shared.write_bytes(init.stamped(init.instructions(MARKED, True)))
+        os.symlink(os.path.join("..", "alpha-notes.md"), alpha / "CLAUDE.md")
+        self.repository(alpha)
+        lock = (alpha / "cortex.lock").read_text(encoding="utf-8")
+        (alpha / "cortex.lock").write_text(lock.replace(f'"{OWN}"', '"9.9.8"', 1), encoding="utf-8")
+        self.register(alpha)
+        proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        where = display(os.path.realpath(shared))
+        self.assertIn(f"\nWhat each project must commit:\n  alpha  {display(alpha)}: nothing — cortex.lock is as committed "
+                      f"already; {where} — outside its git work tree: commit it where it is\n", proc.out)
 
     def test_one_project_is_committed_and_said_so(self):
         alpha = self.make("alpha", bootstrap=True)
