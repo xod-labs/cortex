@@ -1216,6 +1216,31 @@ class OptionTests(InitTestCase):
         self.init("--workspace", "--service", "api")
         self.assertFalse((self.project / "agents" / "project-overview.md").exists())
 
+    def test_a_cursor_rule_is_written_for_every_conversation_and_one_without_it_said(self):
+        proc = self.init("--tool", "cursor")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        rule = self.project / ".cursor" / "rules" / "cortex.mdc"
+        written = rule.read_bytes()
+        self.assertTrue(written.startswith(b"---\ndescription: Cortex"), written[:80])
+        self.assertIn(b"\nalwaysApply: true\n---\n# Cortex AI Team\n", written)
+        self.assertTrue(init_command.untouched(written))
+        rule.write_bytes(init_command.without_frontmatter(written))              # an earlier cortex's
+        proc = self.init("--tool", "cursor")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn(f"note: {display(rule)} has no `alwaysApply: true` line in a frontmatter, as Cursor's "
+                      "documentation writes it: Cursor may not apply it in every conversation — cortex init --force writes "
+                      "it again, and keeps it as .bak\n", proc.err)
+        self.assertEqual(rule.read_bytes(), init_command.without_frontmatter(written))
+        rule.write_bytes(written + b"\n## Our own rules\n")                     # a team's, Cursor applies it always
+        proc = self.init("--tool", "cursor")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("alwaysApply", proc.err)
+
+    def test_a_rule_of_cursor_named_otherwise_opens_on_the_frontmatter_too(self):
+        proc = self.init("--tool", "custom", "--instructions-file", ".cursor/rules/team.mdc")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        written = (self.project / ".cursor" / "rules" / "team.mdc").read_bytes()
+        self.assertTrue(written.startswith(init_command.CURSOR_RULE + b"# Cortex AI Team\n"), written[:120])
 
 class RegisterTests(InitTestCase):
     """Once all of it succeeded, init registers the project in the machine's registry, and says so
@@ -1344,6 +1369,49 @@ class BootstrapMarkerTests(unittest.TestCase):
         self.assertIsNone(init_command.kept_bootstrap(notes_first, self.template()))
         last_line = b"Our notes.\n\n<!-- cortex:bootstrap layout=single format=1 -->"
         self.assertEqual(init_command.markers(last_line), [("single", 1)])
+
+    def test_a_cursor_rule_opens_on_the_frontmatter_that_applies_it_always(self):
+        # Without `alwaysApply: true`, Cursor does not apply a rule in every conversation (#306).
+        text = init_command.instructions(self.template("single"), True)
+        rule = init_command.stamped(init_command.for_tool(Path(".cursor/rules/cortex.mdc"), text))
+        self.assertTrue(rule.startswith(init_command.CURSOR_RULE + b"# Cortex AI Team\n"))
+        self.assertTrue(init_command.applies_always(rule))
+        self.assertTrue(init_command.untouched(rule))                             # the digest covers the frontmatter
+        self.assertFalse(init_command.untouched(rule.replace(b"alwaysApply: true", b"alwaysApply: false")))
+        for name in ("CLAUDE.md", "AGENTS.md", ".github/copilot-instructions.md"):
+            self.assertEqual(init_command.for_tool(Path(name), text), text)
+        # Read through it: a Cortex bootstrap, of the layout its title says when the templates carry no marker.
+        before = b"# Cortex AI Team\n\nRead cortex.local.toml first.\n"
+        self.assertTrue(init_command.bootstrap_of_cortex(init_command.CURSOR_RULE + before))
+        self.assertIsNone(init_command.kept_bootstrap(init_command.CURSOR_RULE + before, before))
+        for kept in (before, b"---\ndescription: Cortex\n---\n" + before, b"---\nalwaysApply: false\n---\n" + before):
+            self.assertFalse(init_command.applies_always(kept))
+
+    def test_the_frontmatter_is_the_first_block_and_only_it(self):
+        body = b"# Cortex AI Team\n\n---\n\nalwaysApply: true\n\n---\n"     # a rule, and a body that quotes one
+        kept = b"---\ndescription: ours\n---\n" + body
+        self.assertEqual(init_command.without_frontmatter(kept), body)
+        self.assertFalse(init_command.applies_always(kept))
+
+    def test_always_apply_is_read_as_cursor_documents_it(self):
+        for line, always in ((b"alwaysApply: true", True), (b"alwaysApply: true ", True), (b"alwaysApply: True", False),
+                             (b"alwaysApply: true  # every conversation", False), (b"alwaysApply: false", False),
+                             (b"alwaysApply: trueish", False), (b"description: alwaysApply: true", False),
+                             (b"alwaysApply:true", False)):
+            with self.subTest(line=line):
+                rule = b"---\r\n" + line + b"\r\n---\r\n# Cortex AI Team\r\n"
+                self.assertIs(init_command.applies_always(rule), always)
+
+    def test_a_frontmatter_left_open_is_none_and_read_at_once(self):
+        # CRLF lines, as Git for Windows checks a file out, opening on `---` and never closing it: read in a
+        # process of its own, so that a match that runs for ever fails the test instead of hanging the suite.
+        probe = ("import sys; sys.path[:0] = sys.argv[1:]; from cortex_cli import init; "
+                 "kept = b'---\\r\\n' + b'line\\r\\n' * 40; "
+                 "assert init.without_frontmatter(kept) == kept and not init.applies_always(kept)")
+        here = Path(__file__).resolve()
+        proc = subprocess.run([sys.executable, "-c", probe, str(here.parents[1]), str(here.parents[2] / "core")],
+                              capture_output=True, text=True, timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
 
     def test_a_byte_order_mark_hides_nothing(self):
         bom = b"\xef\xbb\xbf"

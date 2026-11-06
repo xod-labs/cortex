@@ -53,7 +53,7 @@ cortex init
 
 # Target a specific AI tool
 cortex init --tool copilot   # → .github/copilot-instructions.md (default)
-cortex init --tool cursor    # → .cursor/rules/cortex.mdc
+cortex init --tool cursor    # → .cursor/rules/cortex.mdc, applied in every conversation (alwaysApply)
 cortex init --tool claude    # → CLAUDE.md
 cortex init --tool agents    # → AGENTS.md (Codex, etc.)
 cortex init --tool custom --instructions-file path/to/file

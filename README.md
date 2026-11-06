@@ -127,7 +127,7 @@ cortex init --no-personality        # neutral professional agents (no theme)
 | `--tool` | Bootstrap file |
 |---|---|
 | `copilot` — the default for a new project | `.github/copilot-instructions.md` |
-| `cursor` | `.cursor/rules/cortex.mdc` |
+| `cursor` | `.cursor/rules/cortex.mdc`, opening on the frontmatter — `alwaysApply: true` — that has Cursor read it in every conversation |
 | `claude` | `CLAUDE.md` |
 | `agents` — Codex, and any tool that reads it | `AGENTS.md` |
 | `custom` | the path `--instructions-file PATH` gives |

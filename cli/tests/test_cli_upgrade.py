@@ -271,6 +271,73 @@ class DigestTests(UpgradeTestCase):
         self.assertEqual((project / "CLAUDE.md").read_bytes(), written)
         self.assertNotIn("CLAUDE.md", proc.out + proc.err)
 
+    def cursor_rule(self, project, content):
+        rule = project / ".cursor" / "rules" / "cortex.mdc"
+        rule.parent.mkdir(parents=True)
+        rule.write_bytes(content)
+        return rule
+
+    def test_a_cursor_rule_is_written_again_with_the_frontmatter_that_applies_it(self):
+        # Written before 1.6.0 with no frontmatter: read, by inference from Cursor's documentation, only where a
+        # chat mentions it (#306; #137 is to see it in a real conversation).
+        written = self.marked(template=TEMPLATE)        # the target writes the same text: the frontmatter alone is new
+        project = self.project("9.9.8")
+        rule = self.cursor_rule(project, written)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        wanted = init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True))
+        self.assertEqual(rule.read_bytes(), wanted)
+        self.assertIn("Commit cortex.toml, cortex.lock, .cursor/rules/cortex.mdc;", proc.out)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual(rule.read_bytes(), wanted)
+        self.assertNotIn("cortex.mdc", proc.out + proc.err)
+
+    def test_a_cursor_rule_without_the_marker_is_known_with_its_frontmatter_or_without(self):
+        # 9.9.8's template has no marker, so no digest: the rule is known by being 9.9.8's file — as an
+        # earlier cortex wrote it, or as this one does, the frontmatter first.
+        text = init.instructions(OLD_BOOTSTRAP, True)
+        for kept in (text, init.CURSOR_RULE + text):
+            with self.subTest(frontmatter=kept != text):
+                project = self.project("9.9.8")
+                rule = self.cursor_rule(project, kept)
+                self.assert_ok(self.upgrade(project))
+                self.assertEqual(rule.read_bytes(), init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True)))
+                shutil.rmtree(project)
+
+    def test_a_cursor_rule_a_team_changed_is_kept_and_said_to_apply_only_where_mentioned(self):
+        ours = self.marked(template=TEMPLATE) + b"\n## Our own rules\n"
+        project = self.project("9.9.8")
+        rule = self.cursor_rule(project, ours)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual(rule.read_bytes(), ours)
+        self.assertIn(".cursor/rules/cortex.mdc is not what Cortex wrote — a team changed it — and it has no `alwaysApply: "
+                      "true` line in a frontmatter, as Cursor's documentation writes it: Cursor may not apply it in every "
+                      "conversation. It is kept: cortex init --force writes it again, and keeps yours as .bak\n", proc.err)
+
+    def test_a_cursor_rule_a_team_changed_says_both_when_the_target_writes_another(self):
+        ours = self.marked() + b"\n## Our own rules\n"          # 9.9.8's template is not the target's
+        project = self.project("9.9.8")
+        rule = self.cursor_rule(project, ours)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual(rule.read_bytes(), ours)
+        self.assertIn(".cursor/rules/cortex.mdc is not what Cortex wrote, by the digest in its marker — a team changed it "
+                      "— so it is kept, and the target's template is not written; and with no `alwaysApply: true` line in a "
+                      "frontmatter, as Cursor's documentation writes it, Cursor may not apply it in every conversation: "
+                      "cortex init --force writes it again, and keeps yours as .bak\n", proc.err)
+
+    def test_a_cursor_rule_a_team_changed_that_applies_always_is_kept_unsaid(self):
+        ours = init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True)) + b"\n## Our own rules\n"
+        self.marked(template=TEMPLATE)                          # the target writes the same text
+        project = self.project("9.9.8")
+        rule = self.cursor_rule(project, ours)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual(rule.read_bytes(), ours)
+        self.assertNotIn("cortex.mdc", proc.out + proc.err)
+
     def test_a_downgrade_writes_an_untouched_bootstrap_again(self):
         self.marked()
         project = self.project(OWN)

@@ -63,6 +63,13 @@ BOM = b"\xef\xbb\xbf"
 BOOTSTRAP_MARKER = re.compile(rb"(?m)^<!-- cortex:bootstrap layout=(single|workspace) format=([1-9][0-9]*)"
                               rb"(?: digest=([0-9a-f]{16}))? -->\r?$")
 DIGEST_FIELD = b" digest="
+# What a Cursor rule opens on, that Cursor applies it in every conversation. Its documentation applies a
+# rule with `alwaysApply: false`, no `description` and no `globs` only where a chat @-mentions it; one with
+# no frontmatter, inferred to be read the same, is still to see in a real conversation (#306, #137).
+CURSOR_RULE = b"---\ndescription: Cortex - the AI team's bootstrap, read first\nalwaysApply: true\n---\n"
+# Each line read one way only: `.` takes a CR already, and a line that could end on `.*` or on `\r?` makes an
+# unclosed frontmatter of CRLF lines take for ever to refuse.
+FRONTMATTER = re.compile(rb"\A---\r?\n(?:.*\n)*?---\r?\n")
 
 
 class InitError(Exception):
@@ -166,9 +173,36 @@ def without_bom(content: bytes) -> bytes:
     return content[len(BOM):] if content.startswith(BOM) else content
 
 
+def without_frontmatter(content: bytes) -> bytes:
+    """A kept file as the templates wrote it: without the byte order mark, and without the frontmatter
+    a Cursor rule opens on."""
+    content = without_bom(content)
+    found = FRONTMATTER.match(content)
+    return content[found.end():] if found else content
+
+
+def for_tool(path: Path, content: bytes) -> bytes:
+    """A bootstrap as the tool whose file ``path`` is reads it: a Cursor rule, ``.mdc``, opens on the
+    frontmatter that has Cursor apply it in every conversation (#306). The digest covers it."""
+    return CURSOR_RULE + content if is_cursor_rule(path) else content
+
+
+def is_cursor_rule(path: Path) -> bool:
+    return path.suffix == ".mdc"
+
+
+def applies_always(content: bytes) -> bool:
+    """Whether a Cursor rule says, in its frontmatter, that Cursor applies it in every conversation."""
+    found = FRONTMATTER.match(without_bom(content))
+    # The form Cursor's documentation shows — the key, blanks, `true` — and no other: whether Cursor reads
+    # `True` or a comment after it as YAML would is not known (#137), and a note too many costs less than a rule
+    # left out unsaid.
+    return found is not None and re.search(rb"(?m)^alwaysApply:[ \t]+true[ \t]*\r?$", found.group()) is not None
+
+
 def bootstrap_of_cortex(content: bytes) -> bool:
     """A file the templates wrote: their heading, or their personality block."""
-    return without_bom(content).startswith(b"# Cortex AI Team") or PERSONALITY_BEGIN in content
+    return without_frontmatter(content).startswith(b"# Cortex AI Team") or PERSONALITY_BEGIN in content
 
 
 def reads_the_local_file(content: bytes) -> bool:
@@ -236,7 +270,7 @@ def kept_bootstrap(kept: bytes, template: bytes) -> Optional[Kept]:
         if not reads_the_local_file(kept):
             return Kept(f"is an older Cortex bootstrap: it does not read {config.LOCAL_FILE}, which names the spec now",
                         f"an older Cortex bootstrap, which does not read {config.LOCAL_FILE}")
-        if kept.split(b"\n", 1)[0] != template.split(b"\n", 1)[0]:
+        if without_frontmatter(kept).split(b"\n", 1)[0] != template.split(b"\n", 1)[0]:
             return _other_layout("workspace" if b"Workspace Mode" in template.split(b"\n", 1)[0] else "single")
         return None
     if len(found) > 1:
@@ -456,8 +490,11 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         elif (PERSONALITY_BEGIN in kept) != personality:
             err.write(f"note: {display(str(instructions_file))} was written {'without' if personality else 'with'} "
                       f"the personality block this theme needs removed or added — {again}\n")
+        elif is_cursor_rule(instructions_file) and not applies_always(kept):
+            err.write(f"note: {display(str(instructions_file))} has no `alwaysApply: true` line in a frontmatter, "
+                      f"as Cursor's documentation writes it: Cursor may not apply it in every conversation — {again}\n")
     else:
-        wanted = stamped(instructions(template, personality))
+        wanted = stamped(for_tool(instructions_file, instructions(template, personality)))
         replaced = instructions_file.exists()
         current = instructions_file.read_bytes() if replaced else None
         if current == wanted:

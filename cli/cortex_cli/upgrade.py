@@ -153,21 +153,26 @@ def _instructions_files(root: Path, named: Optional[str]) -> List[Path]:
     return [root / rel for rel in init.TOOLS.values() if (root / rel).is_file()]
 
 
-def written_by(kept: bytes, templates: Path, layouts: List[str], personality: bool) -> Optional[str]:
+def written_by(kept: bytes, templates: Path, layouts: List[str], personality: bool, path: Path) -> Optional[str]:
     """The layout ``kept`` — normalised — is exactly the file of, as the templates at ``templates``
     write it for this personality: the team's theme decides it, as for ``cortex init``. ``None``
-    when a team changed it, or another version wrote it."""
+    when a team changed it, or another version wrote it. A Cursor rule is that file with or without
+    the frontmatter a Cortex before 1.6.0 did not write (#306)."""
     for layout in layouts:
         template = templates / TEMPLATES[layout]
-        if template.is_file() and kept == init.instructions(template.read_bytes(), personality):
-            return layout
+        if template.is_file():
+            text = init.instructions(template.read_bytes(), personality)
+            if kept in (text, init.for_tool(path, text)):
+                return layout
     return None
 
 
-def _written(templates: Path, layout: str, personality: bool) -> Optional[bytes]:
-    """The bootstrap the templates at ``templates`` write for ``layout``, as Cortex writes it."""
+def _written(templates: Path, layout: str, personality: bool, path: Path) -> Optional[bytes]:
+    """The bootstrap the templates at ``templates`` write for ``layout``, as Cortex writes it at ``path``."""
     template = templates / TEMPLATES[layout]
-    return init.stamped(init.instructions(template.read_bytes(), personality)) if template.is_file() else None
+    if not template.is_file():
+        return None
+    return init.stamped(init.for_tool(path, init.instructions(template.read_bytes(), personality)))
 
 
 def _format(content: Optional[bytes]) -> int:
@@ -197,23 +202,32 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
                       f"templates would tell whether a team changed it, is not in the store. It is kept: {again}")
     layout = layouts[0] if intact else None
     if intact is None:
-        layout = written_by(content, current / "templates", layouts, personality)
+        layout = written_by(content, current / "templates", layouts, personality, path)
     if layout is None:
         # A team changed it: said when the target writes another file than the pinned version, or,
-        # without the pinned version, a later format.
+        # without the pinned version, a later format — and, of a Cursor rule, when it lacks the
+        # `alwaysApply: true` line Cursor documents. Both, when both hold.
+        cursor = init.is_cursor_rule(path) and not init.applies_always(content)
         if current is not None:
-            matters = any(_written(current / "templates", name, personality) !=
-                          _written(target / "templates", name, personality) for name in layouts)
+            matters = any(_written(current / "templates", name, personality, path) !=
+                          _written(target / "templates", name, personality, path) for name in layouts)
         else:
-            matters = _format(content) < max(_format(_written(target / "templates", name, personality))
+            matters = _format(content) < max(_format(_written(target / "templates", name, personality, path))
                                              for name in layouts)
         if not matters:
+            if cursor:
+                return None, (f"{display(str(path))} is not what Cortex wrote — a team changed it — and it has no "
+                              "`alwaysApply: true` line in a frontmatter, as Cursor's documentation writes it: Cursor "
+                              f"may not apply it in every conversation. It is kept: {again}")
             return None, None
         what = "not what Cortex wrote, by the digest in its marker — a team changed it" if intact is False else \
             (f"{f'format {found[0][1]}' if found else 'a bootstrap without the marker'}, not what Cortex {pinned} "
              "writes — a team changed it, or an older Cortex wrote it")
-        return None, f"{display(str(path))} is {what} — so it is kept, and the target's template is not written: {again}"
-    wanted = _written(target / "templates", layout, personality)
+        rule = ("; and with no `alwaysApply: true` line in a frontmatter, as Cursor's documentation writes it, "
+                "Cursor may not apply it in every conversation") if cursor else ""
+        return None, (f"{display(str(path))} is {what} — so it is kept, and the target's template is not written"
+                      f"{rule}: {again}")
+    wanted = _written(target / "templates", layout, personality, path)
     if wanted is None or wanted == content:
         return None, None
     if b"\r\n" in kept:
