@@ -23,8 +23,8 @@ This workflow activates when the prompt contains formulations such as:
 | 6 | `roles/security-compliance/regulatory-compliance-writer.md` | Statement and improvement plan |
 | 7 | `accessibility-specialist` | Recurring cadence |
 
-**Capabilities:** `practices/web-accessibility.md`, `testing/accessibility-testing.md`, the national
-standard the project declares (`compliance/accessibility-{country}.md`), the project's `frameworks/` card.
+**Capabilities:** `practices/web-accessibility.md`, `testing/accessibility-testing.md`, the standard a
+law imposes on the project (`compliance/accessibility-{jurisdiction}.md`), the project's `frameworks/` card.
 
 ## 📋 Steps
 
@@ -33,12 +33,12 @@ standard the project declares (`compliance/accessibility-{country}.md`), the pro
 **Objective:** Know what is audited, against what, and for whom — before anything is measured.
 
 **Checklist:**
-- [ ] Standard and version (WCAG 2.2, or the national standard and its version); level (AA by default)
+- [ ] Standard and version (WCAG 2.2, or the standard a law imposes and its version); level (AA by default)
 - [ ] Who carries the legal obligation (the operator, the vendor, both) and what the contract commits to
 - [ ] In-scope surface named explicitly; out-of-scope surface named too
 - [ ] Reference configuration: environment, tenant or brand, theme, locale, test accounts
-- [ ] Sample built with the standard's method: mandatory pages + representative pages + every step of
-      each complete process
+- [ ] Sample built with the standard's method when it has one — mandatory pages + representative pages +
+      every step of each complete process, for instance
 - [ ] Target level **not** promised before the baseline exists
 
 **Deliverable:** A one-page frame: standard, scope, sample, configuration, what is out of scope.
@@ -51,7 +51,7 @@ standard the project declares (`compliance/accessibility-{country}.md`), the pro
 **Checklist:**
 - [ ] Browser axe scan of every in-scope route, in its key states, at desktop and 320 px
 - [ ] Results grouped per rule, per component, per route
-- [ ] Run on demand or on a schedule — **not** added to the pull request pipeline
+- [ ] Run on demand or on a schedule — **not** a required check of pull requests
 - [ ] The result committed as the ratchet's baseline file
 
 **Deliverable:** The baseline report and file — the starting point of the burn-down.
@@ -110,7 +110,7 @@ standard the project declares (`compliance/accessibility-{country}.md`), the pro
 **Checklist:**
 - [ ] The statement in the standard's format, its status derived from the audited rate only
 - [ ] Non-conformities, exemptions and the contact mechanism listed
-- [ ] The multi-year plan and the yearly action plan the standard requires
+- [ ] The improvement plans — multi-year, yearly — when the standard or the law requires them
 - [ ] Who audited (internal or external), when, on which sample — said plainly
 
 **Deliverable:** A statement nobody can contest from the evidence, and a dated plan.

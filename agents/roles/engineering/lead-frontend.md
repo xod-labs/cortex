@@ -140,7 +140,7 @@ Storybook       : {Component}.stories.{ext}
 
 - **Architect** → Component architecture, design system structure
 - **Lead Backend** → API contracts, error formats, serialization groups
-- **QA Automation** → E2E tests, component tests, accessibility audits
+- **QA Automation** → E2E tests, component tests, automated accessibility checks
 - **Accessibility Specialist** → conformance audits, design reviews, third-party widget decisions
 - **Performance Engineer** → Bundle size, rendering performance, Core Web Vitals
 - **Tech Writer** → Component documentation, user guides
