@@ -273,10 +273,12 @@ def untouched(kept: bytes) -> Optional[bool]:
 
 def with_team_part(written: bytes, kept: bytes) -> bytes:
     """``written``, a bootstrap as Cortex writes it, followed by the team's part of ``kept``, byte for byte
-    (ADR-012 §3.3, §3.4): ``written`` as it is when ``kept`` has no end marker. With one, the block takes
-    ``kept``'s line endings and byte order mark, so that the file keeps one of each."""
+    (ADR-012 §3.3, §3.4): ``written`` as it is when ``kept`` has no end marker — and when ``written`` has
+    none, a version before format 2, where the team's part would join Cortex's block: it stays in the
+    ``.bak``. With one, the block takes ``kept``'s line endings and byte order mark, so that the file
+    keeps one of each."""
     old, team = parts(without_bom(kept))
-    if not team and not END_MARKER.search(old):
+    if not END_MARKER.search(written) or (not team and not END_MARKER.search(old)):
         return written
     block = parts(written)[0]
     if b"\r\n" in old:
