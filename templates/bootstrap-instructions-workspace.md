@@ -80,7 +80,7 @@ You are the Prompt Manager. On every request:
 
 ## Services declared in this workspace
 
-The workspace's services — `@alias`, folder, description — are declared in a table below the end marker, at the bottom of this file. With no table there, a service's `@alias` is the one at the top of its `project-overview.md`.
+The workspace's services — `@alias`, folder, description — are declared in a table below the end marker, at the bottom of this file. With no table there, the services are the workspace's folders that hold a `project-overview.md` — `agents/` aside — and each one's `@alias` is in the `<!-- @alias: … -->` line at the top of that file.
 
 <!--
   Declare them there, where `cortex upgrade` and `cortex init --force` keep them: a table written here, in Cortex's block,
