@@ -371,9 +371,12 @@ class DigestTests(UpgradeTestCase):
     def test_a_downgrade_writes_a_file_whose_part_below_the_end_marker_is_blank(self):
         self.marked()
         project = self.project(OWN)
-        (project / "CLAUDE.md").write_bytes(init.stamped(init.instructions(TEMPLATE, True)) + b"\n\n")
-        self.assert_ok(self.upgrade(project, "9.9.8"))
-        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(MARKED, True)) + b"\n\n")
+        for blank in (b"\n\n", b"\r\n\r\n", b"\r\r\n"):
+            with self.subTest(blank=blank):
+                (project / "CLAUDE.md").write_bytes(init.stamped(init.instructions(TEMPLATE, True)) + blank)
+                self.assert_ok(self.upgrade(project, "9.9.8"))
+                self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(MARKED, True)) + blank)
+                self.assert_ok(self.upgrade(project, OWN))                  # back up, for the next case
 
     def test_line_endings_the_digest_reads_as_one_write_a_file_with_no_team_s_part(self):
         # Nothing to lose: CR CR LF in a file of format 1 nobody changed, or of format 2 with no team's part.
@@ -414,6 +417,26 @@ class DigestTests(UpgradeTestCase):
                 self.assert_ok(proc)
                 self.assertEqual((project / "CLAUDE.md").read_bytes(),
                                  init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n") + team)
+
+    def test_crs_the_target_writes_alike_leave_the_file(self):
+        written = self.marked(template=TEMPLATE)
+        project = self.project("9.9.8")
+        kept = written.replace(b"\n", b"\r\r\n") + b"## Our own rules\r\r\n"
+        (project / "CLAUDE.md").write_bytes(kept)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
+        self.assertNotIn("CLAUDE.md", proc.out + proc.err)
+
+    def test_crs_without_a_digest_read_the_pinned_version_s_block(self):
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        self.marked(template=older)
+        team = b"## Our own rules\r\r\n"
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.instructions(older, True).replace(b"\n", b"\r\r\n") + team)
+        self.assert_ok(self.upgrade(project))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(),
+                         init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n") + team)
 
     def test_crs_on_the_marker_line_hide_no_layout(self):
         # The marker of a workspace read with its line break, however many CRs: written again in its own layout.

@@ -160,6 +160,15 @@ class OptionTests(InitTestCase):
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertEqual((self.project / "CLAUDE.md").read_bytes(), expected + ours)
 
+    def test_force_reads_a_run_of_crs_as_one_line_break(self):
+        expected = EXPECTED["single-claude"]["files"]["CLAUDE.md"].encode("utf-8")
+        ours = b"## Our own rules\r\r\n"
+        (self.project / "CLAUDE.md").write_bytes(expected.replace(b"Cortex AI Team", b"Cortex AI Team (Acme)", 1)
+                                                  .replace(b"\n", b"\r\r\n") + ours)
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertEqual((self.project / "CLAUDE.md").read_bytes(), expected.replace(b"\n", b"\r\n") + ours)
+
     def test_force_leaves_a_file_with_the_end_marker_that_only_git_or_an_editor_changed(self):
         # CRLF and a byte order mark are no change: with the end marker, the block takes them, nothing to replace.
         expected = EXPECTED["single-claude"]["files"]["CLAUDE.md"].encode("utf-8")
