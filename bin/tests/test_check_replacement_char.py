@@ -44,6 +44,24 @@ class CheckReplacementCharTests(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("r\u00f4le.md:1:", out)
 
+    def test_any_path_is_named_as_it_is(self):
+        for name in ("a\\b.md", 'say "hi".md', "a|b.md"):
+            with self.subTest(name=name):
+                self.track(name, LOST)
+                code, out = self.check()
+                self.assertEqual(code, 1, out)
+                self.assertIn(f"{name}:1:", out)
+                subprocess.run(["git", "rm", "-q", "--cached", "--", name], cwd=self.repo, check=True)
+
+    def test_it_reads_the_whole_repository_from_a_folder_of_it(self):
+        self.track("card.md", LOST)
+        (self.repo / "docs").mkdir()
+        self.track("docs/clean.md", "# Clean\n")
+        out = subprocess.run(["bash", str(self.repo / "bin" / "check-replacement-char.sh")], cwd=self.repo / "docs",
+                             capture_output=True, text=True, encoding="utf-8", env=dict(os.environ, LC_ALL="C.UTF-8"))
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("card.md:1:", out.stdout)
+
     def test_clean_text_a_binary_file_and_an_untracked_one_pass(self):
         self.track("card.md", "## \U0001f6ab Anti-patterns\n")
         self.track("image.bin", b"\x00\x01" + "\ufffd".encode("utf-8") + b"\x00")     # any bytes, in a binary file

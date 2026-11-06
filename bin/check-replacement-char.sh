@@ -5,8 +5,10 @@
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
-# core.quotePath off: a path out of ASCII is printed as it is, not quoted as "caf\303\251.md".
-hits=$(git -c core.quotePath=false grep -n -I -F -e $'\xef\xbf\xbd' -- .)
+# Every path printed as it is, as check-english.sh prints it: core.quotePath off leaves one out of ASCII
+# unquoted (not "caf\303\251.md"), and -z one that holds a \, a " or a control character. pipefail keeps
+# git grep's status: 0 on a hit, 1 on none.
+hits=$(git -c core.quotePath=false grep -z -n -I -F -e $'\xef\xbf\xbd' -- . | tr '\0' ':')
 case $? in
   0)
     printf '%s\n' "$hits"
