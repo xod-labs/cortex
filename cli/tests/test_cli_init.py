@@ -1227,8 +1227,9 @@ class OptionTests(InitTestCase):
         rule.write_bytes(init_command.without_frontmatter(written))              # an earlier cortex's
         proc = self.init("--tool", "cursor")
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn(f"note: {display(rule)} has no `alwaysApply: true` in a frontmatter: Cursor does not apply it "
-                      "in every conversation — cortex init --force writes it again, and keeps it as .bak\n", proc.err)
+        self.assertIn(f"note: {display(rule)} has no `alwaysApply: true` line in a frontmatter, as Cursor's "
+                      "documentation writes it: Cursor may not apply it in every conversation — cortex init --force writes "
+                      "it again, and keeps it as .bak\n", proc.err)
         self.assertEqual(rule.read_bytes(), init_command.without_frontmatter(written))
         rule.write_bytes(written + b"\n## Our own rules\n")                     # a team's, Cursor applies it always
         proc = self.init("--tool", "cursor")
@@ -1395,7 +1396,8 @@ class BootstrapMarkerTests(unittest.TestCase):
     def test_always_apply_is_read_as_cursor_documents_it(self):
         for line, always in ((b"alwaysApply: true", True), (b"alwaysApply: true ", True), (b"alwaysApply: True", False),
                              (b"alwaysApply: true  # every conversation", False), (b"alwaysApply: false", False),
-                             (b"alwaysApply: trueish", False), (b"description: alwaysApply: true", False)):
+                             (b"alwaysApply: trueish", False), (b"description: alwaysApply: true", False),
+                             (b"alwaysApply:true", False)):
             with self.subTest(line=line):
                 rule = b"---\r\n" + line + b"\r\n---\r\n# Cortex AI Team\r\n"
                 self.assertIs(init_command.applies_always(rule), always)
