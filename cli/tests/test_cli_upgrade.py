@@ -721,6 +721,15 @@ class DigestTests(UpgradeTestCase):
         self.assertIn("CLAUDE.md holds several bootstrap markers, so none is read, and it is kept: cortex init --force "
                       "writes it again", proc.err)
 
+    def test_several_markers_of_a_workspace_are_said_to_need_workspace(self):
+        marked = MARKED.replace(b"layout=single", b"layout=workspace")
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.instructions(marked, True) + b"\n" + marked)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn("CLAUDE.md holds several bootstrap markers, so none is read, and it is kept: cortex init --force "
+                      "--workspace writes it again", proc.err)
+
     def test_no_personality_is_compared_and_written_without_its_block(self):
         self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": PERSONAL})
         project = self.project("9.9.8", theme="none")
