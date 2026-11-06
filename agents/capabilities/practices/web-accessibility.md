@@ -70,7 +70,8 @@ a dialog moves focus into it; closing it returns focus to the element that opene
 
 - Text contrast ≥ **4.5:1**, large text (24 px, or 18.66 px bold) ≥ **3:1** (1.4.3)
 - Non-text contrast ≥ **3:1** for the visual information that identifies a UI component and its state — a
-  field's boundary, a checkbox's tick, a focus indicator — and for meaningful graphics (1.4.11)
+  field's boundary when nothing else shows the field, a checkbox's tick, a focus indicator — and for
+  meaningful graphics (1.4.11); a disabled control is exempt
 - A status, a chart series, a map marker or a required field is also distinguished by text, shape or icon
   (1.4.1)
 - Contrast is a property of a **pair** (foreground on its actual background), so the design system defines
@@ -80,7 +81,7 @@ a dialog moves focus into it; closing it returns focus to the element that opene
 
 - Pointer targets at least **24 × 24 CSS px**, or spaced so that a 24 px circle does not overlap a
   neighbor (2.5.8, new in 2.2). Exceptions: a target inline in text, one whose size the browser sets,
-  one with an equivalent control of that size on the page, one whose size is essential
+  one with an equivalent control of that size on the page, one whose size is essential or legally required
 - Content works at **320 CSS px** wide without horizontal scrolling (1.4.10) and at **200 %** zoom (1.4.4)
 - Text spacing can be increased without loss of content (1.4.12): no fixed heights on text containers
 
@@ -101,8 +102,9 @@ a dialog moves focus into it; closing it returns focus to the element that opene
 - Charts: a data table or a text summary next to the chart
 - Maps: the same information as a list (addresses, opening hours, distance), and a search that works
   without the map
-- Prerecorded video: captions (1.2.2) and audio description (1.2.5, AA); live video: captions (1.2.4);
-  audio only: a transcript (1.2.1)
+- Prerecorded video with sound: captions (1.2.2) and audio description (1.2.5, AA); video only: a text
+  alternative or an audio track (1.2.1); prerecorded audio only: a transcript (1.2.1); live: captions
+  (1.2.4)
 
 ### 9. Dynamic content reaches screen readers
 

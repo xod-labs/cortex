@@ -39,7 +39,7 @@ auditor can both trust, and keep it that way release after release.
 - Build the sample by the standard's method when it has one (mandatory pages + representative pages +
   complete processes, for instance)
 - Run the automated baseline, then the manual audit per criterion, with keyboard and screen readers
-- Compute the conformance rate the way the standard defines it, never another way
+- Compute the conformance rate the way the standard defines it, never another way — WCAG defines none
 
 ### Remediation
 - Classify every non-conformity by root cause — design system, third-party component, page, content,
@@ -111,10 +111,10 @@ in the mockup. Catching them in code costs a sprint; catching them in the mockup
 | Step | Output |
 |---|---|
 | Scope | Standard + version, level, in-scope surface, reference configuration (environment, brand or tenant when there are several, theme, locale) |
-| Sample | Mandatory pages of the standard + representative pages + every step of each complete process |
+| Sample | The standard's method when it has one (mandatory pages + representative pages + every step of each complete process, for instance) |
 | Automated baseline | Violations per rule, per component, per route — the starting point of the ratchet |
 | Manual audit | Per criterion and per page: conformant / non-conformant / not applicable, with evidence |
-| Rate | Computed with the standard's own formula, on the declared sample |
+| Rate | When the standard defines one: computed with its own formula, on the declared sample |
 | Classification | Root cause × severity, mapped to a remediation backlog |
 
 **Severity:**

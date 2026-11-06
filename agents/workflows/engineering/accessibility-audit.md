@@ -68,10 +68,12 @@ law imposes on the project (`compliance/accessibility-{jurisdiction}.md`), the p
       not applicable, with the element and the evidence
 - [ ] Keyboard-only and screen-reader passes on every complete process
 - [ ] Zoom 200 %, reflow at 320 px, contrast in every theme and state
-- [ ] The standard's audit tool used when it has one; the rate computed with the standard's formula
+- [ ] The standard's audit tool used when it has one; the rate computed with the standard's formula when
+      it defines one
 - [ ] What was not tested stated explicitly
 
-**Deliverable:** The audit grid and an internal conformance rate, labeled as internal.
+**Deliverable:** The audit grid, and an internal conformance rate labeled as internal when the standard
+defines one.
 
 ---
 
