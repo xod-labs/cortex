@@ -9,7 +9,10 @@
 This workflow activates when the prompt contains formulations such as:
 - "test the frontend", "cover this component/screen with tests", "component test", "front unit test"
 - "E2E front", "Playwright", "browser test", "critical journey"
-- "accessibility test", "a11y", "no coverage on the front", "frontend test pyramid / CI"
+- "accessibility test", "a11y tests", "automate accessibility checks", "a11y in CI"
+- "no coverage on the front", "frontend test pyramid / CI"
+
+> Not this workflow: an accessibility audit or a conformance statement → `accessibility-audit.md`.
 
 ## 👥 Agents involved
 

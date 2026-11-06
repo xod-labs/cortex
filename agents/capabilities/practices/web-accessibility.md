@@ -2,8 +2,9 @@
 
 > **Reference:** [WCAG 2.2](https://www.w3.org/TR/WCAG22/) (W3C Recommendation, level AA unless the project
 > declares otherwise) · [ARIA Authoring Practices Guide](https://www.w3.org/WAI/ARIA/apg/) ·
-> [WAI tutorials](https://www.w3.org/WAI/tutorials/). National standards (RGAA, EN 301 549, Section 508)
-> build on WCAG; the project's `compliance/` card carries the one that binds it.
+> [WAI tutorials](https://www.w3.org/WAI/tutorials/). The standards a law imposes — RGAA in France,
+> EN 301 549 in the European Union, Section 508 in the United States — build on WCAG; the project's
+> `compliance/` card carries the one that binds it.
 >
 > Framework-agnostic: the examples are plain HTML. The framework card (`frameworks/`) carries the idiom.
 
@@ -31,8 +32,10 @@ pattern **entirely** — roles, states, and the keyboard model.
 ### 2. Every task can be done with a keyboard
 
 - Tab order follows reading order; no positive `tabindex`
-- Focus is **always visible** (2.4.7) and **not hidden** behind sticky headers or banners (2.4.11, new in 2.2)
-- No keyboard trap, except a modal dialog that traps on purpose and gives focus back on close
+- Focus is **always visible** (2.4.7) and **not entirely hidden** behind sticky headers or banners (2.4.11,
+  AA, new in 2.2; fully visible is 2.4.12, AAA, the better target)
+- No keyboard trap (2.1.2). A modal dialog keeps focus inside on purpose, closes from the keyboard
+  (Escape, or its close button) and gives focus back on close
 - A dragging gesture (map, slider, reorder) has a single-pointer alternative (2.5.7, new in 2.2)
 
 ### 3. Manage focus when the screen changes without a page load
@@ -50,9 +53,11 @@ a dialog moves focus into it; closing it returns focus to the element that opene
   on submit, move focus to the first error or to an error summary
 - Do not ask twice for what the user already gave in the same process (3.3.7, new in 2.2)
 - Authentication without a cognitive function test (3.3.8, new in 2.2): allow paste and password
-  managers. A step that asks to remember, transcribe or solve something offers another method, or a
-  mechanism that does it for the user; recognizing objects, or content the user provided, is the only
-  test allowed as it stands. A CAPTCHA also needs an alternative in another modality (1.1.1)
+  managers. A step that asks to remember, transcribe or solve something offers another method that is not
+  a cognitive function test, or a mechanism that helps the user complete it (paste, a password manager).
+  The only tests allowed as they stand are recognizing objects, or identifying non-text content the user
+  provided (a photo they uploaded). A security question, or any text to recall, is not. A CAPTCHA also
+  needs an alternative in another modality (1.1.1)
 
 ```html
 <label for="postcode">Postcode (required)</label>
@@ -64,7 +69,8 @@ a dialog moves focus into it; closing it returns focus to the element that opene
 ### 5. Color carries no information on its own
 
 - Text contrast ≥ **4.5:1**, large text (24 px, or 18.66 px bold) ≥ **3:1** (1.4.3)
-- Non-text contrast ≥ **3:1** for UI component boundaries, focus indicators and meaningful graphics (1.4.11)
+- Non-text contrast ≥ **3:1** for the visual information that identifies a UI component and its state — a
+  field's boundary, a checkbox's tick, a focus indicator — and for meaningful graphics (1.4.11)
 - A status, a chart series, a map marker or a required field is also distinguished by text, shape or icon
   (1.4.1)
 - Contrast is a property of a **pair** (foreground on its actual background), so the design system defines
@@ -73,7 +79,8 @@ a dialog moves focus into it; closing it returns focus to the element that opene
 ### 6. Targets are big enough, content reflows
 
 - Pointer targets at least **24 × 24 CSS px**, or spaced so that a 24 px circle does not overlap a
-  neighbor (2.5.8, new in 2.2)
+  neighbor (2.5.8, new in 2.2). Exceptions: a target inline in text, one whose size the browser sets,
+  one with an equivalent control of that size on the page, one whose size is essential
 - Content works at **320 CSS px** wide without horizontal scrolling (1.4.10) and at **200 %** zoom (1.4.4)
 - Text spacing can be increased without loss of content (1.4.12): no fixed heights on text containers
 
@@ -81,7 +88,8 @@ a dialog moves focus into it; closing it returns focus to the element that opene
 
 - One `<h1>`, then headings that form an outline — never chosen for their size
 - Landmarks: `header`, `nav`, `main`, `footer`; several `nav` get distinct labels
-- A skip link to `<main>` as the first focusable element (2.4.1)
+- Repeated blocks can be bypassed (2.4.1): a skip link to `<main>` as the first focusable element is one
+  way — the one a keyboard user without a screen reader can use — landmarks and headings are others
 - `lang` on `<html>`, and on any passage in another language (3.1.1, 3.1.2)
 - A unique, descriptive `<title>` per page (2.4.2)
 - Help and contact mechanisms in the same place on every page (3.2.6, new in 2.2)
@@ -93,7 +101,8 @@ a dialog moves focus into it; closing it returns focus to the element that opene
 - Charts: a data table or a text summary next to the chart
 - Maps: the same information as a list (addresses, opening hours, distance), and a search that works
   without the map
-- Video: captions; audio: transcript
+- Prerecorded video: captions (1.2.2) and audio description (1.2.5, AA); live video: captions (1.2.4);
+  audio only: a transcript (1.2.1)
 
 ### 9. Dynamic content reaches screen readers
 
@@ -138,11 +147,11 @@ interface and of your audit. Before adopting one — and before an audit, for th
 
 ```
 - [ ] Native elements used; custom widgets follow their APG pattern, keyboard included
-- [ ] Whole task doable with the keyboard; focus visible, in order, never hidden
+- [ ] Whole task doable with the keyboard; focus visible, in order, never entirely hidden
 - [ ] Focus managed on route change and on dialogs (in, trapped, returned)
 - [ ] Every field labeled; errors in text, linked, announced, with a suggestion; autocomplete tokens set
 - [ ] Contrast pairs ≥ 4.5:1 text, ≥ 3:1 large text and non-text; nothing conveyed by color alone
-- [ ] Targets ≥ 24 × 24 CSS px; reflow at 320 px; 200 % zoom; text spacing
+- [ ] Targets ≥ 24 × 24 CSS px, or spaced (2.5.8); reflow at 320 px; 200 % zoom; text spacing
 - [ ] One h1, a heading outline, landmarks, skip link, lang, unique titles
 - [ ] Alternatives for images, icons, charts, maps, media
 - [ ] Live regions for dynamic messages; reduced motion respected
