@@ -31,7 +31,8 @@ pattern **entirely** — roles, states, and the keyboard model.
 ### 2. Every task can be done with a keyboard
 
 - Tab order follows reading order; no positive `tabindex`
-- Focus is **always visible** (2.4.7) and **not hidden** behind sticky headers or banners (2.4.11, new in 2.2)
+- Focus is **always visible** (2.4.7) and **not entirely hidden** behind sticky headers or banners (2.4.11,
+  AA, new in 2.2; fully visible is 2.4.12, AAA, the better target)
 - No keyboard trap, except a modal dialog that traps on purpose and gives focus back on close
 - A dragging gesture (map, slider, reorder) has a single-pointer alternative (2.5.7, new in 2.2)
 
@@ -50,9 +51,11 @@ a dialog moves focus into it; closing it returns focus to the element that opene
   on submit, move focus to the first error or to an error summary
 - Do not ask twice for what the user already gave in the same process (3.3.7, new in 2.2)
 - Authentication without a cognitive function test (3.3.8, new in 2.2): allow paste and password
-  managers. A step that asks to remember, transcribe or solve something offers another method, or a
-  mechanism that does it for the user; recognizing objects, or content the user provided, is the only
-  test allowed as it stands. A CAPTCHA also needs an alternative in another modality (1.1.1)
+  managers. A step that asks to remember, transcribe or solve something offers another method that is not
+  a cognitive function test, or a mechanism that helps the user complete it (paste, a password manager).
+  The only tests allowed as they stand are recognizing objects, or identifying non-text content the user
+  provided (a photo they uploaded). A security question, or any text to recall, is not. A CAPTCHA also
+  needs an alternative in another modality (1.1.1)
 
 ```html
 <label for="postcode">Postcode (required)</label>
@@ -138,7 +141,7 @@ interface and of your audit. Before adopting one — and before an audit, for th
 
 ```
 - [ ] Native elements used; custom widgets follow their APG pattern, keyboard included
-- [ ] Whole task doable with the keyboard; focus visible, in order, never hidden
+- [ ] Whole task doable with the keyboard; focus visible, in order, never entirely hidden
 - [ ] Focus managed on route change and on dialogs (in, trapped, returned)
 - [ ] Every field labeled; errors in text, linked, announced, with a suggestion; autocomplete tokens set
 - [ ] Contrast pairs ≥ 4.5:1 text, ≥ 3:1 large text and non-text; nothing conveyed by color alone
