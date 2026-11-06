@@ -22,7 +22,7 @@ sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).res
 from cortex_cli import init, self_update, store, sync, upgrade  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
-from test_cli_upgrade import DOWNLOADS, OLD_BOOTSTRAP, OVERLAY, OWN, UpgradeTestCase, snapshot  # noqa: E402
+from test_cli_upgrade import DOWNLOADS, MARKED, OLD_BOOTSTRAP, OVERLAY, OWN, UpgradeTestCase, snapshot  # noqa: E402
 
 GIT = shutil.which("git")
 NEEDS_GIT = unittest.skipIf(GIT is None, "needs git")
@@ -796,17 +796,42 @@ class CommitTests(GitTestCase):
 
     def test_a_bootstrap_outside_the_work_tree_is_written_and_left_out_of_the_commit(self):
         alpha = self.make("alpha")
-        shared = self.code / "shared.md"                                 # the team's, beside the repository
+        shared = self.code / "alpha-notes.md"         # the team's, beside the repository, its name starting as it
         shared.write_bytes(init.instructions(OLD_BOOTSTRAP, True))
         self.repository(alpha)
-        proc = self.upgrade(alpha, "--instructions-file", str(shared), "--commit", "--message", self.MESSAGE)
+        proc = self.upgrade(alpha, "--instructions-file", "../alpha-notes.md", "--commit", "--message", self.MESSAGE)
         self.assert_ok(proc)
         self.assert_moved(alpha)
         self.assertNotEqual(shared.read_bytes(), init.instructions(OLD_BOOTSTRAP, True))
         self.assertEqual(self.changed(alpha), ["cortex.lock", "cortex.toml"])
-        self.assertIn(f"note: {display(shared)} is outside the git work tree of {display(alpha)} — not committed with "
-                      "it\n", proc.err)
-        self.assertIn(f"\nCortex {OWN} is ready. Committed cortex.toml, cortex.lock on ", proc.out)
+        where = display(os.path.realpath(shared))
+        self.assertIn(f"note: {where} is outside the git work tree of {display(alpha)} — not committed with it: commit "
+                      "it where it is\n", proc.err)
+        self.assertIn(f"\nCortex {OWN} is ready. Committed cortex.toml, cortex.lock on {self.branch(alpha)}, "
+                      f"{self.git(alpha, 'rev-parse', '--short', 'HEAD')} — nothing was pushed; {where} — outside its git "
+                      "work tree: commit it where it is; teammates run `cortex sync` after they pull.\n", proc.out)
+
+    @unittest.skipIf(os.name == "nt", "a link to a file needs a privilege on Windows")
+    def test_a_bootstrap_linked_outside_the_work_tree_is_still_to_commit_where_it_is(self):
+        alpha, beta = self.make("alpha"), self.make("beta")
+        shared = self.code / "alpha-notes.md"         # beside the repository, its name starting as the repository's
+        shared.write_bytes(init.instructions(OLD_BOOTSTRAP, True))
+        (alpha / "CLAUDE.md").symlink_to(Path("..") / "alpha-notes.md")
+        for root in (alpha, beta):
+            self.repository(root)
+        self.register(alpha, beta)
+        proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        self.assertNotEqual(shared.read_bytes(), init.instructions(OLD_BOOTSTRAP, True))      # written all the same
+        self.assertEqual(self.changed(alpha), ["cortex.lock", "cortex.toml"])
+        where = display(os.path.realpath(shared))
+        self.assertIn(f"note: {where} (where CLAUDE.md leads) is outside the git work tree of {display(alpha)} — not "
+                      "committed with it: commit it where it is\n", proc.err)
+        commit = {root: f"{self.branch(root)}, {self.git(root, 'rev-parse', '--short', 'HEAD')}" for root in (alpha, beta)}
+        self.assertIn(f"\nWhat each project must commit:\n"
+                      f"  alpha  {display(alpha)}: cortex.toml and cortex.lock — committed on {commit[alpha]}; {where} — "
+                      "outside its git work tree: commit it where it is\n"
+                      f"  beta   {display(beta)}: cortex.toml and cortex.lock — committed on {commit[beta]}\n", proc.out)
 
     def test_run_again_it_names_what_a_commit_refused_left_to_commit(self):
         alpha, beta = self.make("alpha"), self.make("beta")
@@ -829,6 +854,60 @@ class CommitTests(GitTestCase):
             "`git status` there says what\n"), self.summary(proc))
         self.assertNotIn("beta   " + display(beta), self.summary(proc))
 
+    def test_what_a_run_before_left_is_said_beside_what_this_one_committed(self):
+        alpha, beta = self.make("alpha"), self.make("beta")
+        for root in (alpha, beta):
+            self.repository(root)
+        self.git(beta, "config", "commit.gpgsign", "true")
+        self.git(beta, "config", "gpg.program", sys.executable)         # takes none of gpg's options: it fails
+        self.register(beta)
+        self.assertEqual(self.upgrade_all("--commit", "--message", self.MESSAGE).returncode, 1)
+        self.git(beta, "config", "commit.gpgsign", "false")
+        self.register(alpha, beta)
+        proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        commit = f"{self.branch(alpha)}, {self.git(alpha, 'rev-parse', '--short', 'HEAD')}"
+        self.assertTrue(self.summary(proc).endswith(
+            "\nWhat each project must commit:\n"
+            f"  alpha  {display(alpha)}: cortex.toml and cortex.lock — committed on {commit}\n"
+            f"  beta   {display(beta)}: nothing written — cortex.toml and cortex.lock not committed, from before: "
+            "`git status` there says what\n"
+            "Nothing was pushed. Teammates run `cortex sync` after they pull.\n"), self.summary(proc))
+
+    @unittest.skipIf(os.name == "nt", "a link to a file needs a privilege on Windows")
+    def test_what_is_left_is_read_inside_the_work_tree_and_nothing_when_git_cannot_tell(self):
+        alpha = self.make("alpha")
+        (self.code / "alpha-notes.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))
+        (alpha / "CLAUDE.md").symlink_to(Path("..") / "alpha-notes.md")      # outside: git would refuse the path
+        self.repository(alpha)
+        (alpha / "cortex.toml").write_text(self.pinned(alpha) + "# left\n", encoding="utf-8")
+        top = self.git(alpha, "rev-parse", "--show-toplevel")
+        self.assertEqual(upgrade._left(str(alpha), top, None), [alpha / "cortex.toml"])
+        with mock.patch.object(upgrade, "_changed", side_effect=upgrade.UpgradeError("git status failed — fatal: x")):
+            self.assertEqual(upgrade._left(str(alpha), top, None), [])
+
+    def test_a_file_git_sees_deleted_is_named_by_its_path(self):
+        # Not there, it has no identity on disk to compare: its path from the top is compared instead.
+        # An upgrade writes a missing lock again before it looks — a caller of these sees it all the same.
+        alpha = self.make("alpha")
+        self.repository(alpha)
+        (alpha / "cortex.lock").unlink()
+        top = self.git(alpha, "rev-parse", "--show-toplevel")
+        self.assertEqual(upgrade._changed(str(alpha), top, [alpha / "cortex.toml", alpha / "cortex.lock"]),
+                         [alpha / "cortex.lock"])
+        self.assertEqual(upgrade._left(str(alpha), top, None), [alpha / "cortex.lock"])
+
+    def test_on_the_pinned_version_a_bootstrap_written_outside_the_work_tree_is_said_where_it_is(self):
+        alpha = self.make("alpha", OWN)
+        shared = self.code / "alpha-notes.md"         # beside the repository, as 9.9.8 wrote it: the only file written
+        shared.write_bytes(init.stamped(init.instructions(MARKED, True)))
+        self.repository(alpha)
+        proc = self.upgrade(alpha, "--instructions-file", "../alpha-notes.md", "--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        self.assertNotEqual(shared.read_bytes(), init.stamped(init.instructions(MARKED, True)))
+        where = display(os.path.realpath(shared))
+        self.assertTrue(proc.out.endswith(f"\n{where} — outside its git work tree: commit it where it is.\n"), proc.out)
+
     def test_a_git_that_cannot_tell_stops_the_commit_never_the_upgrade(self):
         alpha = self.make("alpha", synced=False)
         top, pin, lock, claude = str(alpha), alpha / "cortex.toml", alpha / "cortex.lock", alpha / "CLAUDE.md"
@@ -845,6 +924,37 @@ class CommitTests(GitTestCase):
         self.assertEqual(upgrade._theirs(top, pin, [claude, pin], None, [pin, lock, claude]),
                          "CLAUDE.md and cortex.toml held changes of yours before the upgrade — commit by hand what is "
                          "the team's")
+
+    @unittest.skipIf(os.name == "nt", "a link to a directory needs a privilege on Windows")
+    def test_the_top_of_the_work_tree_is_found_whatever_its_spelling(self):
+        # On a disk that ignores case — macOS's — realpath keeps the case a path was typed with, and
+        # git spells the top as the disk does. Here, a second name of the directory that realpath,
+        # made to resolve nothing, keeps as it is.
+        alpha = self.make("alpha", synced=False)
+        self.repository(alpha)
+        (alpha / "cortex.toml").write_text(self.pinned(alpha) + "# changed\n", encoding="utf-8")
+        spelt = self.code / "Alpha-as-git-spells-it"
+        spelt.symlink_to(alpha, target_is_directory=True)
+        files = [alpha / "cortex.toml", alpha / "cortex.lock", self.code / "alpha-notes.md"]
+        with mock.patch.object(os.path, "realpath", os.path.abspath):
+            self.assertEqual([upgrade._inside(str(spelt), path) for path in files], [True, True, False])
+            self.assertEqual(upgrade._changed(str(alpha), str(spelt), files[:2]), [alpha / "cortex.toml"])
+
+    @unittest.skipIf(os.name == "nt", "a link to a directory needs a privilege on Windows")
+    def test_a_change_below_the_top_is_seen_whatever_the_spelling_of_the_project(self):
+        # The project in a directory of a larger work tree, its path typed in another case: git spells
+        # that directory as the disk does, from the top. A change there is still a change of yours.
+        # Here, a second name of the directory — not a case variant, which a disk that ignores case,
+        # macOS's, takes for the first.
+        alpha = self.make("alpha", synced=False)
+        self.repository(self.code)
+        (alpha / "cortex.toml").write_text(self.pinned(alpha) + "# changed\n", encoding="utf-8")
+        spelt = self.code / "alpha-typed-otherwise"
+        spelt.symlink_to(alpha, target_is_directory=True)
+        top = self.git(alpha, "rev-parse", "--show-toplevel")
+        with mock.patch.object(os.path, "realpath", os.path.abspath):
+            self.assertEqual(upgrade._changed(str(spelt), top, [spelt / "cortex.toml", spelt / "cortex.lock"]),
+                             [spelt / "cortex.toml"])
 
     def test_a_commit_git_refuses_says_so_and_leaves_the_files_staged(self):
         alpha = self.make("alpha")
@@ -959,6 +1069,40 @@ class CommitTests(GitTestCase):
         self.assert_ok(self.upgrade_all("--commit", "--message", self.MESSAGE))
         self.assertEqual(self.changed(alpha), ["cortex.lock", "cortex.toml", "shared/assistant.md"])
         self.assertEqual(self.git(alpha, "status", "--porcelain"), "")
+
+
+@DOWNLOADS
+@NEEDS_GIT
+class CommitInProcessTests(GitTestCase):
+    """What a process cannot show: a git that fails at one step only."""
+
+    MESSAGE = CommitTests.MESSAGE
+
+    def test_a_git_that_cannot_tell_before_the_upgrade_commits_nothing(self):
+        alpha = self.make("alpha")
+        first = self.repository(alpha)
+        changed, calls = upgrade._changed, []
+
+        def blind_before(*args, **kwargs):            # the status read before anything is written, and it alone
+            calls.append(args)
+            if len(calls) == 1:
+                raise upgrade.UpgradeError("git status failed — fatal: index file corrupt")
+            return changed(*args, **kwargs)
+
+        environment = {"CORTEX_HOME": str(self.home), "CORTEX_RELEASES_URL": self.release.url,
+                       "CORTEX_NO_UPDATE_CHECK": "1", "GIT_CONFIG_NOSYSTEM": "1",
+                       "GIT_CONFIG_GLOBAL": self.env["GIT_CONFIG_GLOBAL"]}
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, environment), mock.patch.object(upgrade, "_changed", blind_before), \
+                mock.patch.object(store.Store, "__init__", functools.partialmethod(store.Store.__init__, own_version=OWN)):
+            code = upgrade.upgrade(str(alpha), None, False, False, None, out, err, message=self.MESSAGE)
+        self.assertEqual(code, 0, err.getvalue())
+        self.assert_moved(alpha)
+        self.assertEqual(self.head(alpha), first)
+        self.assertIn(f"note: nothing is committed in {display(alpha)} — git could not tell whether cortex.toml or a "
+                      "bootstrap file held changes of yours — git status failed — fatal: index file corrupt\n",
+                      err.getvalue())
+        self.assertIn(f"\nCortex {OWN} is ready. Commit cortex.toml, cortex.lock; teammates run", out.getvalue())
 
 
 @DOWNLOADS

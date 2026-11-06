@@ -9,7 +9,7 @@ In these instructions, `cortex/` is the directory that `spec` names in `cortex.l
 
 **No `cortex.local.toml`, or no `spec` in it** → Cortex is not synced on this machine. Run `cortex sync` at the project root, and go no further until it succeeded.
 
-**The directory `spec` names does not exist** → this machine no longer has the version the project reads: `cortex prune` removed it, or the store was emptied. Run `cortex sync` at the project root, and go no further until it succeeded. A `cortex/` that links to a checkout moved or deleted (`cortex sync --from`) is refused by the sync: remove the link, then ask the developer for the checkout's new path — `cortex sync --from` it — or sync the version `cortex.toml` pins.
+**The directory `spec` names does not exist** → this machine no longer has the version the project reads: `cortex prune` removed it, or the store was emptied. Run `cortex sync` at the project root, and go no further until it succeeded. A `cortex/` that links to a checkout moved or deleted (`cortex sync --link --from`) is refused by the sync: remove the link, then ask the developer for the checkout's new path — `cortex sync --link --from` it — or sync the version `cortex.toml` pins.
 
 **The spec is of a version other than `cortex.toml`'s** — `spec` ends in `…/versions/1.1.0`, or `cortex/` is a copy whose `cortex/.synced` says `"version": "1.1.0"`, where `version = "1.2.0"` → a teammate moved the project to another version, and this machine has not synced it yet. Run `cortex sync`, and go no further until it succeeded. There is nothing to compare when `cortex/` is a link, which names no version, nor when `.synced` says `"version": null`: that copy is of a checkout, on purpose.
 

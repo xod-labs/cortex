@@ -7,6 +7,24 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-06 — We Apologise for the Inconvenience _(Released)_
+[Full notes](changelog/1.6.0.md)
+
+### Added
+- **The accessibility specialist** (`engineering/accessibility-specialist`), cast as Prak in h2g2 and Flynn in breaking-bad. The role audits against WCAG 2.2 or the standard a law imposes on the project, reviews designs before they are built, and never states a conformance level from a tool's results.
+- **Two capabilities for accessible interfaces.** `practices/web-accessibility` is what accessible UI is made of, WCAG 2.2 AA included. `testing/accessibility-testing` is which check runs where: lint, HTML validation and component axe on the pull request, browser scans on a schedule, behind a baseline that only shrinks.
+- **`design/open-design`**, the first `design/` capability: mockups rendered from a versioned design system — a package of `manifest.json`, `DESIGN.md` and `tokens.css` — held to accessibility acceptance criteria, and handed off as a component map rather than as markup.
+- **Two workflows.** `engineering/accessibility-audit` runs an audit from its frame to the statement, the regression harness and the recurring cadence. `product/target-mockup` takes a redesign from the brief to a hand-off the team can build.
+
+### Changed
+- **The Lead Frontend aims at WCAG 2.2 AA**, WCAG 2.1 AA before. It loads `practices/web-accessibility`, and `testing/accessibility-testing` when a task wires accessibility checks; QA automation loads the latter for a project with a user interface. `frontend-testing` keeps browser accessibility scans off the required path of pull requests, and takes the requests to wire accessibility checks into tests or CI; an audit goes to `engineering/accessibility-audit`.
+
+### Fixed
+- **`cortex sync` names a link to a checkout that is gone for what it is** ([#303](https://github.com/xod-labs/cortex/issues/303)). A `cortex/` that `cortex sync --link --from` linked to a checkout since moved or deleted was refused as a link Cortex did not make, by every later sync. The refusal now says the checkout is gone, and what to do: remove the link, then `cortex sync --link --from` the checkout's new path, or `cortex sync` for the pinned version.
+- **`cortex upgrade --commit` and a file outside the project's git work tree** ([#304](https://github.com/xod-labs/cortex/issues/304)). A bootstrap file the upgrade writes outside the work tree — linked to a shared file, or named by `--instructions-file` — is named where it is, the link that leads there too, and stays in what the project must commit, to commit where it is: it used to drop out of the summary, and the note named the link, or a path such as `alpha/../x.md`. The work tree's top is found by what it is, not by how its path is spelt: on macOS, a project's path typed in another case put every file outside the work tree, and nothing was committed — or, for a project in a directory below the top, hid from `--commit` a change of yours to `cortex.toml`, which it could then commit.
+- **The bootstrap rule for a spec that is gone keeps link mode** ([#304](https://github.com/xod-labs/cortex/issues/304)): a `cortex/` linked to a checkout since moved is synced again with `cortex sync --link --from`: `--from` alone, unless `cortex.toml` sets `sync = "link"`, read the checkout in place, with no link.
+- **`cortex init --tool cursor` writes a rule Cursor applies in every conversation** ([#306](https://github.com/xod-labs/cortex/issues/306)). `.cursor/rules/cortex.mdc` had no frontmatter. Cursor's documentation applies a rule with `alwaysApply: false`, no `description` and no `globs` only where a chat @-mentions it, and one with no frontmatter is inferred to be read the same — a real conversation is to confirm it ([#137](https://github.com/xod-labs/cortex/issues/137)): a new conversation would not have read the bootstrap. The file now opens on `alwaysApply: true`, and the digest in its marker covers it. `cortex upgrade` writes it again in a rule nobody changed, and says so of one a team changed: `cortex init --force` writes it.
+
 ## [1.5.0] - 2026-11-05 — Mind-Bogglingly Big _(Released)_
 [Full notes](changelog/1.5.0.md)
 

@@ -47,10 +47,14 @@ capabilities/
 │   └── opensearch.md         # OpenSearch best practices
 ├── testing/
 │   ├── component-testing.md  # Component tests (middle rung)
-│   └── e2e-testing.md        # End-to-end tests (top rung)
+│   ├── e2e-testing.md        # End-to-end tests (top rung)
+│   └── accessibility-testing.md  # A11y checks per layer, CI budget, ratchet
 ├── practices/
 │   ├── code-comments.md      # Comment discipline (stack-agnostic craft)
-│   └── competitive-intelligence.md  # Sourcing, evidence grading, bias control
+│   ├── competitive-intelligence.md  # Sourcing, evidence grading, bias control
+│   └── web-accessibility.md  # Building accessible UI (WCAG 2.2 AA)
+├── design/
+│   └── open-design.md        # Open Design mockups from a design system package
 └── security/
     └── owasp.md              # OWASP Top 10 & best practices
 ```
@@ -71,7 +75,7 @@ Each technical role has a `## 🔌 Capabilities` section listing the categories 
 ```
 
 Two kinds of category coexist here: those resolved **against the project's stack** (`languages/`,
-`frameworks/`, `databases/`…) and those loaded **unconditionally** (`security/`, `practices/`, `release/`) because
+`frameworks/`, `databases/`, `design/`…) and those loaded **unconditionally** (`security/`, `practices/`, `release/`) because
 the craft they carry is true whatever the stack.
 
 ### 2. The Prompt Manager resolves the files

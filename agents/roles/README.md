@@ -36,6 +36,7 @@ A role does **NOT** contain:
 | `performance-engineer.md` | Performance Engineer | Optimization, scalability, monitoring |
 | `consultant-platform.md` | Consultant Platform | Audit, strategic advice, governance |
 | `qa-automation.md` | QA Automation Engineer | Unit, integration, E2E tests |
+| `accessibility-specialist.md` | Accessibility Specialist | Accessibility audits, design review, conformance |
 
 ### `product/` — Product vision & business
 
