@@ -10,8 +10,10 @@
 Open Design does not ship a model. It **delegates the agent loop to a coding-agent CLI** installed where
 its daemon runs (Claude Code, Codex, Cursor, GitHub Copilot CLI and others) or, with no CLI, to a model
 API through its BYOK proxy, on your own key; OpenDesign Cloud runs it on paid plans. Its MCP server
-(`od mcp install <agent>`) lets an agent working in another repository read an Open Design project —
-tokens, components, entry HTML — read-only by default. Every render reads the active design system. The output is an HTML artifact — PDF and other exports for decks:
+(`od mcp install <agent>`) gives an agent working in another repository the Open Design projects: it
+reads their files — tokens, components, entry HTML — and, in v0.27, also writes and deletes them and
+starts a generation run, whatever the README's "read-only by default" says. Install it as you would
+grant write access. Every render reads the active design system. The output is an HTML artifact — PDF and other exports for decks:
 a **target to build towards**, not code to merge.
 
 ## 🧩 Concepts

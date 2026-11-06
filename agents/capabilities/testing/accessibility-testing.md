@@ -19,7 +19,7 @@ automation has one job: **stop regressions cheaply**. Conformance is a manual au
 | Layer | Tool | Catches | Cannot catch | Cost |
 |---|---|---|---|---|
 | Static lint | `eslint-plugin-*-a11y` | missing `alt`, unlabeled controls, click without keyboard, bad `tabindex`, invalid ARIA in templates | anything decided at runtime | seconds |
-| HTML validation | html-validate (a11y rules on) | invalid nesting, missing required attributes and content, duplicate ids — a WCAG 2.2 failure only where they break a name, a role or a relationship (1.3.1, 4.1.2): 4.1.1 Parsing is gone | runtime state | seconds |
+| HTML validation | html-validate (a11y rules on) | invalid nesting, missing required attributes and content, duplicate ids — a WCAG 2.2 failure only where they break a name, a role or a relationship (1.3.1, 4.1.2): 4.1.1 Parsing is gone; RGAA still tests validity (criterion 8.2) | runtime state | seconds |
 | Component | axe on a mounted component (`jest-axe`, `vitest-axe`, Storybook test-runner) | names, roles, ARIA states, labels, per state of the component | **contrast, target size, reflow** under jsdom/happy-dom — no layout, no computed colors | seconds (DOM), minutes (Storybook in a browser) |
 | Page | axe in a real browser (`@axe-core/playwright`, `cypress-axe`, pa11y-ci with its axe runner — its default runner is HTML_CodeSniffer) | everything axe knows, contrast included, on real pages and real data | meaning, order, usability | minutes per route |
 | Trend | Lighthouse CI | a score over time | conformance — a 100 is not a statement | minutes |
@@ -32,7 +32,7 @@ they **never** sit on the required path of every pull request.
 
 | Tier | Runs | Layers | Budget | Blocking |
 |---|---|---|---|---|
-| **Pull request** | every push | static lint on changed files, HTML validation, component axe on changed components | the minute, no browser | ✅ yes — on **new** violations only |
+| **Pull request** | every push | static lint on changed files, HTML validation, component axe on changed components (jsdom/happy-dom — a Storybook test-runner in a browser runs on demand) | the minute, no browser | ✅ yes — on **new** violations only |
 | **On demand** | a label or a manual trigger on a UI-heavy pull request | page axe on the routes the change touches | minutes | ❌ advisory |
 | **Scheduled** | nightly, against a deployed environment | page axe on every in-scope route, in each key state; Lighthouse CI | as long as it needs | ❌ never blocks a PR — it opens an issue or alerts on a regression |
 | **Periodic** | per release, per quarter, on a new version of the standard | manual audit of the sample | days | — |
@@ -75,7 +75,8 @@ authenticate once and reuse the storage state; block service workers that interc
 2. **Screen reader:** NVDA with Firefox or Chrome, VoiceOver with Safari (and TalkBack on mobile):
    headings list, landmarks, form labels, error announcements, live regions
 3. **Zoom 200 %** and **320 px** width: nothing lost, no horizontal scroll
-4. **Contrast:** every text and UI pair, in every theme, including hover, focus and disabled states
+4. **Contrast:** every text and UI pair, in every theme, including hover and focus states — a disabled
+   control is exempt (1.4.3, 1.4.11)
 5. **Record** per criterion: conformant, non-conformant, not applicable — with the element and evidence
 
 Use the audit tool of the applicable standard when it has one: it computes the rate the way the
