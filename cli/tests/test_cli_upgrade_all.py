@@ -22,7 +22,7 @@ sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).res
 from cortex_cli import init, self_update, store, sync, upgrade  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
-from test_cli_upgrade import DOWNLOADS, OLD_BOOTSTRAP, OVERLAY, OWN, UpgradeTestCase, snapshot  # noqa: E402
+from test_cli_upgrade import DOWNLOADS, MARKED, OLD_BOOTSTRAP, OVERLAY, OWN, UpgradeTestCase, snapshot  # noqa: E402
 
 GIT = shutil.which("git")
 NEEDS_GIT = unittest.skipIf(GIT is None, "needs git")
@@ -885,6 +885,28 @@ class CommitTests(GitTestCase):
         self.assertEqual(upgrade._left(str(alpha), top, None), [alpha / "cortex.toml"])
         with mock.patch.object(upgrade, "_changed", side_effect=upgrade.UpgradeError("git status failed — fatal: x")):
             self.assertEqual(upgrade._left(str(alpha), top, None), [])
+
+    def test_a_file_git_sees_deleted_is_named_by_its_path(self):
+        # Not there, it has no identity on disk to compare: its path from the top is compared instead.
+        # An upgrade writes a missing lock again before it looks — a caller of these sees it all the same.
+        alpha = self.make("alpha")
+        self.repository(alpha)
+        (alpha / "cortex.lock").unlink()
+        top = self.git(alpha, "rev-parse", "--show-toplevel")
+        self.assertEqual(upgrade._changed(str(alpha), top, [alpha / "cortex.toml", alpha / "cortex.lock"]),
+                         [alpha / "cortex.lock"])
+        self.assertEqual(upgrade._left(str(alpha), top, None), [alpha / "cortex.lock"])
+
+    def test_on_the_pinned_version_a_bootstrap_written_outside_the_work_tree_is_said_where_it_is(self):
+        alpha = self.make("alpha", OWN)
+        shared = self.code / "alpha-notes.md"         # beside the repository, as 9.9.8 wrote it: the only file written
+        shared.write_bytes(init.stamped(init.instructions(MARKED, True)))
+        self.repository(alpha)
+        proc = self.upgrade(alpha, "--instructions-file", "../alpha-notes.md", "--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        self.assertNotEqual(shared.read_bytes(), init.stamped(init.instructions(MARKED, True)))
+        where = display(os.path.realpath(shared))
+        self.assertTrue(proc.out.endswith(f"\n{where} — outside its git work tree: commit it where it is.\n"), proc.out)
 
     def test_a_git_that_cannot_tell_stops_the_commit_never_the_upgrade(self):
         alpha = self.make("alpha", synced=False)

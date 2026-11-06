@@ -8,8 +8,9 @@
 
 This workflow activates when the prompt contains formulations such as:
 - "target mockup", "mockups for the redesign", "clickable prototype of the new …", "wireframe the new …"
-- "design the new site / screen / journey", "visual overhaul"
-- "Open Design", "design system refresh"
+- "redesign the site / journey", "visual overhaul", "design system refresh"
+
+> Not this workflow: one new screen or page → `engineering/feature-development.md`.
 
 ## 👥 Agents involved
 
@@ -72,7 +73,7 @@ This workflow activates when the prompt contains formulations such as:
 
 **Checklist:**
 - [ ] Contrast pairs in every theme and state; nothing conveyed by color alone
-- [ ] Focus visible and drawn; targets ≥ 24 × 24 CSS px; reflow at 320 px
+- [ ] Focus visible and drawn; targets ≥ 24 × 24 CSS px, or spaced (2.5.8); reflow at 320 px
 - [ ] Error presentation: in text, next to the field, with a suggestion, plus a summary on submit
 - [ ] Charts, maps and media have their text alternative in the design, not "to be added later"
 - [ ] axe run on the HTML of the mockups when the tool exports HTML
