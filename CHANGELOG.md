@@ -7,7 +7,7 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-11-07 — The Restaurant at the End of the Universe _(Released)_
+## [1.7.0] - 2026-11-06 — The Restaurant at the End of the Universe _(Released)_
 [Full notes](changelog/1.7.0.md)
 
 ### Changed
