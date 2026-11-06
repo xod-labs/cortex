@@ -109,7 +109,7 @@ Which option and why?
 - [ ] Solution is scalable for projected growth
 - [ ] Technical debt is documented if accepted
 
-## � Anti-patterns
+## 🚫 Anti-patterns
 
 ```
 ❌ Big Ball of Mud: no clear module boundaries, everything depends on everything
@@ -143,7 +143,7 @@ ADR files       : ADR-{NNN}-{kebab-case-title}.md (e.g. ADR-001-event-driven-mod
 - **Product Owner** → Business alignment, technical feasibility
 - **Consultant Platform** → Peer review, cross-project insights
 
-## �🔌 Capabilities
+## 🔌 Capabilities
 
 <!-- The Prompt Manager loads matching files from `cortex/agents/capabilities/`
      by cross-referencing with the stack declared in `project-context.md` -->

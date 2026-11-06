@@ -127,7 +127,7 @@ Three habits that close them:
 3. **Assert on the mechanism when the output is identical either way.** Where a broken filter and a working
    one return the same rows, assert on the generated query rather than on the rows.
 
-## � Anti-patterns
+## 🚫 Anti-patterns
 
 ```
 ❌ Flaky tests: tests that pass/fail randomly — fix or delete immediately
@@ -152,7 +152,7 @@ Test tags       : @unit, @integration, @e2e, @regression, @security
 Test dirs       : tests/Unit/, tests/Integration/, tests/E2E/
 ```
 
-## �🔌 Capabilities
+## 🔌 Capabilities
 
 <!-- The Prompt Manager loads matching files from `cortex/agents/capabilities/`
      by cross-referencing with the stack declared in `project-context.md` -->

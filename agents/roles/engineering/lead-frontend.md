@@ -108,7 +108,7 @@ Fewer deps = smaller attack surface, fewer upgrades, faster builds.
 - [ ] Performance verified (no unnecessary re-renders)
 - [ ] API integration tested (nominal + error cases)
 
-## � Anti-patterns
+## 🚫 Anti-patterns
 
 ```
 ❌ Prop drilling: passing props through 5+ component levels instead of state management
@@ -146,7 +146,7 @@ Storybook       : {Component}.stories.{ext}
 - **Tech Writer** → Component documentation, user guides
 - **Security Engineer** → XSS prevention, CSP headers, sanitization
 
-## �🔌 Capabilities
+## 🔌 Capabilities
 
 <!-- The Prompt Manager loads matching files from `cortex/agents/capabilities/`
      by cross-referencing with the stack declared in `project-context.md` -->

@@ -111,7 +111,7 @@ Small continuous improvements > massive transformation.
 Validate each step before moving to the next.
 ```
 
-## � Anti-patterns
+## 🚫 Anti-patterns
 
 ```
 ❌ Big bang migration: rewriting everything at once instead of incremental migration
@@ -124,7 +124,7 @@ Validate each step before moving to the next.
 ❌ Not measuring maturity: recommending improvements without knowing the starting point
 ```
 
-## �🔗 Interactions
+## 🔗 Interactions
 
 - **Platform Engineer** → Mentoring, strategic collaboration
 - **Architect** → Peer review, co-design cloud architecture
