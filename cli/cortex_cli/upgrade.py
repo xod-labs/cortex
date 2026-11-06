@@ -73,6 +73,7 @@ class Outcome:
     committed: Optional[str] = None                     # --commit: where — the branch, and the commit
     uncommitted: Optional[str] = None                   # --commit: why nothing was
     ignored: bool = False                               # git ignores every one of the files: nothing to commit
+    clean: bool = False                                 # --commit: the files are as committed already
     left: List[Path] = field(default_factory=list)      # --commit, nothing written: files git sees changed still
     outside: List[Path] = field(default_factory=list)   # --commit: of the files, those outside the git work tree
 
@@ -410,7 +411,7 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
 def _ending(outcome: Outcome, out: TextIO) -> None:
     """What the project must commit — or what ``--commit`` committed, and where; then what is to
     commit where it is, outside the project's git work tree."""
-    names, elsewhere = outcome.names(), outcome.elsewhere()
+    names, elsewhere = ([] if outcome.clean else outcome.names()), outcome.elsewhere()
     if outcome.ignored:
         ready = f"Cortex {outcome.target} is ready. " if outcome.target != outcome.pinned else ""
         out.write(f"\n{ready}Nothing to commit: git ignores {_and(names)}.\n")
@@ -418,7 +419,8 @@ def _ending(outcome: Outcome, out: TextIO) -> None:
         done = f"Committed {', '.join(names)} on {outcome.committed} — nothing was pushed" if outcome.committed else \
             f"Commit {', '.join(names)}" if names else ""
         done = "; ".join(part for part in (done, elsewhere) if part)
-        out.write(f"\nCortex {outcome.target} is ready. {done}; teammates run `cortex sync` after they pull.\n")
+        out.write(f"\nCortex {outcome.target} is ready. {done + '; ' if done else ''}teammates run `cortex sync` after "
+                  "they pull.\n")
     elif names or elsewhere:
         done = f"Committed {_and(names)} on {outcome.committed} — nothing was pushed" if outcome.committed else \
             f"Commit {_and(names)}" if names else ""
@@ -769,6 +771,9 @@ def _theirs(root: str, pin: Path, before: List[Path], error: Optional[str], writ
             "commit by hand what is the team's")
 
 
+AS_COMMITTED = "as committed already"      # why --commit committed nothing, when there was nothing to
+
+
 def _commit(root: str, top: str, files: List[Path], message: str,
             theirs: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     """Commit ``files`` in the work tree of ``root``, whose top is ``top``, with ``message``, and
@@ -784,12 +789,12 @@ def _commit(root: str, top: str, files: List[Path], message: str,
     if ignored:
         return None, f"git ignores {_and(ignored)}"
     if not _changed(root, top, files):
-        return None, f"{_and(paths)} {'are' if len(paths) > 1 else 'is'} as committed already"
+        return None, f"{_and(paths)} {'are' if len(paths) > 1 else 'is'} {AS_COMMITTED}"
     if theirs is not None:
         return None, theirs
     _git_ok(root, "add", "--", *_literal(paths), timeout=None)
     if _git(root, "diff", "--cached", "--quiet", "--", *_literal(paths)).returncode == 0:
-        return None, f"{_and(paths)} {'are' if len(paths) > 1 else 'is'} as committed already"
+        return None, f"{_and(paths)} {'are' if len(paths) > 1 else 'is'} {AS_COMMITTED}"
     proc = _git(root, "commit", "-q", "-m", message, "--", *_literal(paths), timeout=None)      # its hooks run
     if proc.returncode != 0:
         raise UpgradeError(f"git refused the commit — {(proc.stderr or proc.stdout).strip() or proc.returncode}\n"
@@ -942,6 +947,7 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
         err.write(f"cortex upgrade: {error} — the upgrade is done, and nothing was committed\n")
     else:
         if outcome.uncommitted is not None:
+            outcome.clean = outcome.uncommitted.endswith(AS_COMMITTED)
             err.write(f"note: nothing is committed in {display(root)} — {outcome.uncommitted}\n")
         else:
             superproject = _git(root, "rev-parse", "--show-superproject-working-tree").stdout.strip()

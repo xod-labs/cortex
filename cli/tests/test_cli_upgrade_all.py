@@ -1016,6 +1016,19 @@ class CommitTests(GitTestCase):
         self.assertIn(f"  alpha  {display(alpha)}: cortex.lock — not committed: cortex.lock is as committed already\n",
                       proc.out)
 
+    def test_files_as_committed_already_are_not_said_to_commit(self):
+        # #313: on its version, a lock out of step written back as committed — the ending asks to commit
+        # nothing that --commit found committed already.
+        alpha = self.make("alpha", OWN)
+        first = self.repository(alpha)
+        lock = (alpha / "cortex.lock").read_text(encoding="utf-8")
+        (alpha / "cortex.lock").write_text(lock.replace(f'"{OWN}"', '"9.9.8"', 1), encoding="utf-8")
+        proc = self.upgrade(alpha, "--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        self.assertEqual(self.head(alpha), first)
+        self.assertIn(f"note: nothing is committed in {display(alpha)} — cortex.lock is as committed already\n", proc.err)
+        self.assertNotIn("Commit cortex.lock", proc.out)
+
     def test_one_project_is_committed_and_said_so(self):
         alpha = self.make("alpha", bootstrap=True)
         self.repository(alpha)
