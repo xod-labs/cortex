@@ -39,8 +39,8 @@ law imposes on the project (`compliance/accessibility-{jurisdiction}.md`), the p
 - [ ] Who carries the legal obligation (the operator, the vendor, both) and what the contract commits to
 - [ ] In-scope surface named explicitly; out-of-scope surface named too
 - [ ] Reference configuration: environment, tenant or brand, theme, locale, test accounts
-- [ ] Sample built with the standard's method when it has one — mandatory pages + representative pages +
-      every step of each complete process, for instance
+- [ ] Sample built with the standard's method when it has one — mandatory pages + representative pages,
+      for instance — and every step of each complete process (WCAG 5.2.3)
 - [ ] Target level **not** promised before the baseline exists
 
 **Deliverable:** A one-page frame: standard, scope, sample, configuration, what is out of scope.
