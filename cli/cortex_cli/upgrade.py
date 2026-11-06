@@ -1050,7 +1050,7 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
         out.write(f"  {entry.name:<{width}}  {status}\n")
     written = [(entry, outcome) for entry, outcome, _ in done if outcome is not None and outcome.why is None
                and outcome.files]
-    commits = [(entry, outcome) for entry, outcome in written if not outcome.ignored]
+    commits = [(entry, outcome) for entry, outcome in written if not (outcome.ignored or outcome.clean)]
     left = [(entry, outcome) for entry, outcome, _ in done if outcome is not None and outcome.left]
 
     def from_before() -> None:
@@ -1062,14 +1062,16 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
     if not commits:
         out.write("\nNothing this run wrote is to commit.\n" if left else "\nNothing to commit, in any project.\n")
         for entry, outcome in written:
-            out.write(f"  {entry.name:<{width}}  {entry.path}: git ignores {_and(outcome.names())}\n")
+            why = outcome.uncommitted if outcome.clean else f"git ignores {_and(outcome.names())}"
+            out.write(f"  {entry.name:<{width}}  {entry.path}: {why}\n")
         from_before()
         return
     committing = options.message is not None and not options.dry_run
     out.write(f"\nWhat each project {'would have to' if options.dry_run else 'must'} commit:\n")
     for entry, outcome in written:
-        if outcome.ignored:
-            out.write(f"  {entry.name:<{width}}  {entry.path}: nothing — git ignores {_and(outcome.names())}\n")
+        if outcome.ignored or outcome.clean:     # #326: as committed already, as for a file git ignores
+            why = outcome.uncommitted if outcome.clean else f"git ignores {_and(outcome.names())}"
+            out.write(f"  {entry.name:<{width}}  {entry.path}: nothing — {why}\n")
             continue
         said = "" if not committing else f" — committed on {outcome.committed}" if outcome.committed else \
             f" — not committed: {_first(outcome.uncommitted)}"
