@@ -423,7 +423,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     except config.ConfigError as error:
         raise InitError(f"{error}\ncortex init keeps an existing {config.PROJECT_FILE}: fix it, or remove it to "
                         "start over")
-    sync.existing_entry(root / sync.LINK, the_store, project or _blank(root))
+    # As the sync's own check (#310, #325): a link sync from a checkout replaces a link that leads nowhere.
+    links = (mode or (project.sync if project else None)) == "link"
+    sync.existing_entry(root / sync.LINK, the_store, project or _blank(root), replaces=options.source is not None and links)
     # A project keeps the version it pins — never another, older or newer; a new one takes this
     # binary's. A version newer than this binary is refused here.
     version = project.version if project else the_store.own

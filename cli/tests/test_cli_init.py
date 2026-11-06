@@ -502,6 +502,32 @@ class OptionTests(InitTestCase):
         self.assertIn(str(checkout).replace(os.sep, "/"), self.read("cortex.local.toml"))
         self.assertIn("no version is checked (--from)", proc.err)
 
+    def test_a_link_init_from_a_checkout_replaces_a_link_to_one_that_is_gone(self):
+        # #325: as `cortex sync --link --from` does (#310) — a junction on Windows, no privilege needed.
+        checkout, moved = self.tmp / "checkout", self.tmp / "moved"
+        shutil.copytree(self.spec, checkout)
+        proc = self.init("--tool", "claude", "--link", "--from", str(checkout))
+        self.assertEqual(proc.returncode, 0, proc.err)
+        checkout.rename(moved)
+        pinned = self.read("cortex.toml")
+        proc = self.init("--tool", "claude", "--copy", "--from", str(moved))       # a copy: refused, as sync does,
+        self.assertEqual(proc.returncode, 1, proc.err)                               # before anything is written
+        self.assertIn("which leads nowhere", proc.err)
+        self.assertEqual(self.read("cortex.toml"), pinned)
+        proc = self.init("--tool", "claude", "--link", "--no-personality")         # no checkout named: refused,
+        self.assertEqual(proc.returncode, 1, proc.err)                               # the theme key left as it was
+        self.assertEqual(self.read("cortex.toml"), pinned)
+        proc = self.init("--tool", "claude", "--link", "--from", str(moved))
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("which led nowhere: replaced.", proc.out)
+        self.assertEqual(os.path.realpath(self.project / "cortex"), os.path.realpath(moved))
+        again = self.tmp / "moved-again"
+        moved.rename(again)
+        proc = self.init("--tool", "claude", "--from", str(again))                  # sync = "link" in cortex.toml
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("which led nowhere: replaced.", proc.out)
+        self.assertEqual(os.path.realpath(self.project / "cortex"), os.path.realpath(again))
+
     def test_a_directory_given(self):
         proc = self.init("sub/app", cwd=self.project)
         self.assertEqual(proc.returncode, 0, proc.err)
