@@ -102,9 +102,9 @@ a dialog moves focus into it; closing it returns focus to the element that opene
 - Charts: a data table or a text summary next to the chart
 - Maps: the same information as a list (addresses, opening hours, distance), and a search that works
   without the map
-- Prerecorded video with sound: captions (1.2.2) and audio description (1.2.5, AA); video only: a text
-  alternative or an audio track (1.2.1); prerecorded audio only: a transcript (1.2.1); live: captions
-  (1.2.4)
+- Prerecorded video with sound: captions (1.2.2) and audio description (1.2.5, AA); prerecorded video
+  only: a text alternative or an audio track (1.2.1); prerecorded audio only: a transcript (1.2.1); live
+  video with sound: captions (1.2.4)
 
 ### 9. Dynamic content reaches screen readers
 
