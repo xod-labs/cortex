@@ -158,7 +158,8 @@ Test dirs       : tests/Unit/, tests/Integration/, tests/E2E/
      by cross-referencing with the stack declared in `project-context.md` -->
 
 **Categories to load:**
-- `testing/` → Cross-cutting testing craft: `component-testing` (middle rung) + `e2e-testing` (top rung) of the pyramid
+- `testing/` → Cross-cutting testing craft: `component-testing` (middle rung) + `e2e-testing` (top rung) of the pyramid,
+  + `accessibility-testing` when the project has a user interface
 - `languages/` → Project language(s) (for associated testing tools)
 - `frameworks/` → Project framework(s) (for framework-specific test patterns)
 - `practices/` → always load `practices/code-comments.md` — the why, not the what; descriptive, not narrative
@@ -167,6 +168,7 @@ Test dirs       : tests/Unit/, tests/Integration/, tests/E2E/
 
 - **Lead Backend** → Code testability, backend coverage
 - **Lead Frontend** → Component tests, E2E, accessibility
+- **Accessibility Specialist** → The a11y baseline, the ratchet, the scheduled scans
 - **Security Engineer** → Automated security tests
 - **Performance Engineer** → Load tests
 - **Platform Engineer** → CI/CD and quality gates

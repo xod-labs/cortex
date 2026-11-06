@@ -9,7 +9,10 @@
 This workflow activates when the prompt contains formulations such as:
 - "test the frontend", "cover this component/screen with tests", "component test", "front unit test"
 - "E2E front", "Playwright", "browser test", "critical journey"
-- "accessibility test", "a11y", "no coverage on the front", "frontend test pyramid / CI"
+- "accessibility test", "a11y tests", "automate accessibility checks", "a11y in CI"
+- "no coverage on the front", "frontend test pyramid / CI"
+
+> Not this workflow: an accessibility audit or a conformance statement → `accessibility-audit.md`.
 
 ## 👥 Agents involved
 
@@ -21,7 +24,7 @@ This workflow activates when the prompt contains formulations such as:
 | 4 | `roles/engineering/platform-engineer.md` + `qa-automation` | CI wiring (dedicated jobs) |
 | 5 | `roles/engineering/qa-automation.md` | Verify the tests can fail for the right reason |
 
-**Capabilities:** `testing/component-testing.md`, `testing/e2e-testing.md`, `frameworks/{project vue/react/…}.md`, `languages/typescript.md`.
+**Capabilities:** `testing/component-testing.md`, `testing/e2e-testing.md`, `testing/accessibility-testing.md`, `frameworks/{project vue/react/…}.md`, `languages/typescript.md`.
 
 ## 📋 Steps
 
@@ -68,6 +71,8 @@ This workflow activates when the prompt contains formulations such as:
 **Checklist:**
 - [ ] Unit + component tests gate every PR (fast, deterministic)
 - [ ] Browser E2E in its **own** job (slower/flakier) — nightly or gating once stable, never silently disabled
+- [ ] Browser accessibility scans in a nightly run of the same journeys, scan flag on — never on the required path of pull requests, even once the E2E job gates them; the every-route nightly scan and the on-demand tier are in `accessibility-testing.md` §CI budget
+- [ ] A product that already has violations: the pull-request checks fail on new ones only, behind the ratchet's baseline (`accessibility-testing.md` §The ratchet)
 - [ ] Coverage reported; `--passWithNoTests`-style green-on-empty removed
 - [ ] The runner env is real (jsdom/happy-dom for components; built app for E2E)
 

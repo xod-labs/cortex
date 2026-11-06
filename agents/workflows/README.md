@@ -21,6 +21,7 @@ It is not a rigid script. It is a safety net to ensure nothing is forgotten.
 ```
 cortex/agents/workflows/                       ← priority 3 — Generic workflows (this folder)
     ├── engineering/                                 ← Development & technical
+    │   ├── accessibility-audit.md
     │   ├── adr-implementation.md
     │   ├── code-review.md
     │   ├── feature-development.md
@@ -32,7 +33,8 @@ cortex/agents/workflows/                       ← priority 3 — Generic workfl
     │   ├── market-study.md
     │   └── innovation-funding.md
     ├── ops/                                         ← Deployment & incident (future)
-    └── product/                                     ← Discovery & roadmap (future)
+    └── product/                                     ← Discovery, design & roadmap
+        └── target-mockup.md
 
 {workspace_root}/agents/workflows/             ← priority 2 — workspace-shared (workspace mode only)
 
@@ -57,6 +59,7 @@ The Prompt Manager is the **single entry point**. For every request it:
 
 | Category | File | Activation context |
 |---|---|---|
+| `engineering/` | `accessibility-audit.md` | Auditing accessibility and keeping it from regressing |
 | `engineering/` | `adr-implementation.md` | Implementing one phase of an accepted, multi-phase ADR |
 | `engineering/` | `code-review.md` | Reviewing a pull request, or handling the review of ours |
 | `engineering/` | `feature-development.md` | Developing a new feature |
@@ -66,6 +69,7 @@ The Prompt Manager is the **single entry point**. For every request it:
 | `intelligence/` | `tech-watch.md` | Technology watch on a subject or tool |
 | `intelligence/` | `market-study.md` | Market deep-dive, competitive landscape, diversification |
 | `intelligence/` | `innovation-funding.md` | R&D eligibility triage, tax credits, grant windows |
+| `product/` | `target-mockup.md` | Designing a target mockup before a redesign |
 
 ## 🗂️ Categories
 
@@ -74,7 +78,7 @@ The Prompt Manager is the **single entry point**. For every request it:
 | `engineering/` | Development & technical | `bug-fix`, `refactoring` |
 | `intelligence/` | Research & analysis | `security-audit`, `patent-landscape` |
 | `ops/` | Deployment & incident | `deployment`, `incident-response` |
-| `product/` | Discovery & roadmap | `backlog-grooming`, `user-story-mapping` |
+| `product/` | Discovery, design & roadmap | `backlog-grooming`, `user-story-mapping` |
 
 ## ➕ Creating a project workflow
 

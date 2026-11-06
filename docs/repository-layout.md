@@ -34,7 +34,7 @@ cortex/
 │   ├── roles/                         # Layer 1: Business roles (stack-agnostic)
 │   │   ├── prompt-manager.md          # Entry point (root, always active)
 │   │   ├── engineering/               # architect, lead-backend/frontend, dba, platform, qa-automation,
-│   │   │                              #   performance, support…
+│   │   │                              #   accessibility-specialist, performance, support…
 │   │   ├── product/                   # product-owner, business-analyst, market-analyst,
 │   │   │                              #   innovation-funding-advisor
 │   │   ├── security-compliance/       # security-engineer, compliance-officer, regulatory-compliance-writer
@@ -48,8 +48,9 @@ cortex/
 │   │   ├── databases/                 # mysql, postgresql, mongodb
 │   │   ├── release/                   # semver, changelog, conventional-commits, release-please
 │   │   ├── search/                    # opensearch
-│   │   ├── testing/                   # component-testing, e2e-testing
-│   │   ├── practices/                 # code-comments, competitive-intelligence
+│   │   ├── testing/                   # component-testing, e2e-testing, accessibility-testing
+│   │   ├── practices/                 # code-comments, competitive-intelligence, web-accessibility
+│   │   ├── design/                    # open-design
 │   │   └── security/                  # owasp
 │   │
 │   ├── personalities/                 # Layer 3: Personality themes
@@ -58,8 +59,10 @@ cortex/
 │   │
 │   └── workflows/                     # Layer 4: Multi-agent orchestration templates
 │       ├── engineering/               # feature-development, code-review, frontend-testing,
-│       │                              #   release-automation, support-triage, adr-implementation
-│       └── intelligence/              # tech-watch, market-study, innovation-funding
+│       │                              #   release-automation, support-triage, adr-implementation,
+│       │                              #   accessibility-audit
+│       ├── intelligence/              # tech-watch, market-study, innovation-funding
+│       └── product/                   # target-mockup
 │
 ├── core/                              # ── cortex-core — the cascade in code (ADR-007) ──
 │   ├── cortex_core/                   # resolution, merge semantics, capability catalog, prompt
