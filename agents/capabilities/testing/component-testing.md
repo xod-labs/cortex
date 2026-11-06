@@ -47,8 +47,10 @@ an E2E in disguise and will flake. Reset the DOM and any global store between te
 ### 5. Accessibility is an assertion, not an afterthought
 
 Querying by role already forces the component to be accessible (no role → no query → failing test). Go one
-step further: run an **a11y assertion** (axe or equivalent) on the mounted component so contrast, labels,
-and ARIA regress loudly. A11y tested at the component rung is cheap; tested only in E2E it's slow and late.
+step further: run an **a11y assertion** (axe or equivalent) on the mounted component so names, roles, labels
+and ARIA states regress loudly. A11y tested at the component rung is cheap; tested only in E2E it's slow and
+late. Contrast is not caught there: jsdom and happy-dom compute no colors, and jest-axe turns the rule off —
+it needs a real browser (`testing/accessibility-testing.md`).
 
 ### 6. Assert the mechanism when the output looks identical
 

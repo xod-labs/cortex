@@ -290,7 +290,7 @@ DatabaseMigrationStrategy.md
 ✅ Time: Drastic reduction in back-and-forth
 ```
 
-## � Anti-patterns
+## 🚫 Anti-patterns
 
 ```
 ❌ Forwarding ambiguous requests without reframing
@@ -304,7 +304,7 @@ DatabaseMigrationStrategy.md
 ❌ Answering in the Prompt Manager voice when dispatched as an expert
 ```
 
-## �🔗 Interactions
+## 🔗 Interactions
 
 - **Tech Writer** → Documentation of prompt standards
 - **Architect** → Complex architectural prompts
