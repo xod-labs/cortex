@@ -56,7 +56,7 @@ An ADR delivered in several steps adds:
 | [ADR-009](ADR-009-release-cycle.md) | The release cycle — every merge into `main` is a release, drafted by CI, published from GitHub | Implemented | 2026-10-31 |
 | [ADR-010](ADR-010-lock-and-upgrade.md) | `cortex.lock`, `cortex upgrade` and the bootstrap marker | Implemented | 2026-11-04 |
 | [ADR-011](ADR-011-project-registry.md) | The project registry — a machine's Cortex projects, for the CLI and the cockpit | Implemented | 2026-11-05 |
-| [ADR-012](ADR-012-bootstrap-block.md) | The bootstrap file: Cortex's block, then the team's | Accepted | 2026-11-06 |
+| [ADR-012](ADR-012-bootstrap-block.md) | The bootstrap file: Cortex's block, then the team's | Implemented | 2026-11-06 |
 
 ## Authoring an ADR
 
