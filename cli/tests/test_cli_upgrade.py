@@ -315,6 +315,18 @@ class DigestTests(UpgradeTestCase):
                       "true` in a frontmatter: Cursor applies it only where a chat mentions it. It is kept: cortex init "
                       "--force writes it again, and keeps yours as .bak\n", proc.err)
 
+    def test_a_cursor_rule_a_team_changed_says_both_when_the_target_writes_another(self):
+        ours = self.marked() + b"\n## Our own rules\n"          # 9.9.8's template is not the target's
+        project = self.project("9.9.8")
+        rule = self.cursor_rule(project, ours)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual(rule.read_bytes(), ours)
+        self.assertIn(".cursor/rules/cortex.mdc is not what Cortex wrote, by the digest in its marker — a team changed it "
+                      "— so it is kept, and the target's template is not written; it has no `alwaysApply: true` in a "
+                      "frontmatter either, so Cursor applies it only where a chat mentions it: cortex init --force "
+                      "writes it again, and keeps yours as .bak\n", proc.err)
+
     def test_a_downgrade_writes_an_untouched_bootstrap_again(self):
         self.marked()
         project = self.project(OWN)
