@@ -220,6 +220,9 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
                 return None, (f"{display(str(path))} is not what Cortex wrote — a team changed it — and it has no "
                               "`alwaysApply: true` line in a frontmatter, as Cursor's documentation writes it: Cursor "
                               f"may not apply it in every conversation. It is kept: {again}{below}")
+            if not found and intact is None:    # #313: no marker, and not the pinned version's file
+                return None, (f"{display(str(path))} is a bootstrap without the marker, not what Cortex {pinned} writes "
+                              f"— a team changed it, or an older Cortex wrote it — so it is kept: {again}{below}")
             return None, None
         what = "not what Cortex wrote, by the digest in its marker — a team changed it" if intact is False else \
             (f"{f'format {found[0][1]}' if found else 'a bootstrap without the marker'}, not what Cortex {pinned} "

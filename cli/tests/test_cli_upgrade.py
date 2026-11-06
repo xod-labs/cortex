@@ -531,6 +531,18 @@ class DigestTests(UpgradeTestCase):
                       "and the target's template is not written: cortex init --force writes it again, and keeps yours as "
                       ".bak — your own rules go below its end marker, where Cortex keeps them\n", proc.err)
 
+    def test_already_on_it_a_bootstrap_without_the_marker_of_another_version_is_said(self):
+        # #313: on the pinned version, a file of an older Cortex, or one a team changed, is said, not passed over.
+        older = b"# Cortex AI Team\n\nWritten by an older Cortex: read cortex.local.toml first.\n"
+        project = self.project(OWN)
+        (project / "CLAUDE.md").write_bytes(older)
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), older)
+        self.assertIn(f"CLAUDE.md is a bootstrap without the marker, not what Cortex {OWN} writes — a team changed it, "
+                      "or an older Cortex wrote it — so it is kept: cortex init --force writes it again, and keeps yours "
+                      "as .bak — your own rules go below its end marker, where Cortex keeps them\n", proc.err)
+
     def test_already_on_it_writes_again_what_an_interrupted_upgrade_left(self):
         # Cut short after the switch, or a pin moved by hand: 9.9.8's file under the pin of this cortex.
         written = self.marked()
