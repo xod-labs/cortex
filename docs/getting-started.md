@@ -87,7 +87,7 @@ Where a rule of yours goes:
 | What your tool must find in its entry file | Below the end marker |
 | A workspace's services — `@alias`, folder, description | A table below the end marker |
 
-A file written before 1.7.0 has no end marker. If your team changed it, `cortex upgrade` keeps it, with a note: `cortex init --force` writes the new one, and keeps yours as `.bak` — copy your rules from it below the end marker, and in a workspace your table of services.
+A file written before 1.7.0 has no end marker. If your team changed it, `cortex upgrade` keeps it, with a note: `cortex init --force` — with `--workspace` in a workspace — writes the new one, and keeps yours as `.bak` — copy your rules from it below the end marker, and in a workspace your table of services.
 
 ### Step 2 — Commit, then `cortex sync` after every clone
 
