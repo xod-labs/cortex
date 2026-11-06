@@ -13,6 +13,7 @@ release note under [`changelog/`](changelog/).
 
 ### Fixed
 - **`cortex upgrade` passed over two things in silence** ([#313](https://github.com/xod-labs/cortex/issues/313)). On the pinned version, a bootstrap with no marker that is not that version's file — an older Cortex's, or one a team changed — is now said, as it is when the version moves. And `--commit` no longer ends on "Commit cortex.lock." after finding the lock as committed already.
+- **`cortex upgrade --all` no longer lists a project as committed already under what to commit** ([#326](https://github.com/xod-labs/cortex/issues/326)). Its summary says *nothing — cortex.lock is as committed already*, as it says of files git ignores.
 
 ## [1.6.0] - 2026-11-06 — We Apologise for the Inconvenience _(Released)_
 [Full notes](changelog/1.6.0.md)
