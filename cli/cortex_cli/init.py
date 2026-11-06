@@ -194,9 +194,9 @@ def is_cursor_rule(path: Path) -> bool:
 def applies_always(content: bytes) -> bool:
     """Whether a Cursor rule says, in its frontmatter, that Cursor applies it in every conversation."""
     found = FRONTMATTER.match(without_bom(content))
-    # YAML's spellings of true, and a comment after it.
-    return found is not None and re.search(rb"(?m)^alwaysApply:[ \t]*(?:true|True|TRUE)[ \t]*(?:#[^\r\n]*)?\r?$",
-                                           found.group()) is not None
+    # The form Cursor's documentation shows, and no other: whether Cursor reads `True` or a comment after it
+    # as YAML would is not known (#137), and a note too many costs less than a rule left out unsaid.
+    return found is not None and re.search(rb"(?m)^alwaysApply:[ \t]*true[ \t]*\r?$", found.group()) is not None
 
 
 def bootstrap_of_cortex(content: bytes) -> bool:
