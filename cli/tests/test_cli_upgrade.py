@@ -313,8 +313,8 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertEqual(rule.read_bytes(), ours)
         self.assertIn(".cursor/rules/cortex.mdc is not what Cortex wrote — a team changed it — and it has no `alwaysApply: "
-                      "true` in a frontmatter: Cursor does not apply it in every conversation. It is kept: cortex init "
-                      "--force writes it again, and keeps yours as .bak\n", proc.err)
+                      "true` line in a frontmatter, as Cursor's documentation writes it: Cursor may not apply it in every "
+                      "conversation. It is kept: cortex init --force writes it again, and keeps yours as .bak\n", proc.err)
 
     def test_a_cursor_rule_a_team_changed_says_both_when_the_target_writes_another(self):
         ours = self.marked() + b"\n## Our own rules\n"          # 9.9.8's template is not the target's
@@ -324,9 +324,9 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertEqual(rule.read_bytes(), ours)
         self.assertIn(".cursor/rules/cortex.mdc is not what Cortex wrote, by the digest in its marker — a team changed it "
-                      "— so it is kept, and the target's template is not written; and with no `alwaysApply: true` in a "
-                      "frontmatter, Cursor does not apply it in every conversation: cortex init --force "
-                      "writes it again, and keeps yours as .bak\n", proc.err)
+                      "— so it is kept, and the target's template is not written; and with no `alwaysApply: true` line in a "
+                      "frontmatter, as Cursor's documentation writes it, Cursor may not apply it in every conversation: "
+                      "cortex init --force writes it again, and keeps yours as .bak\n", proc.err)
 
     def test_a_cursor_rule_a_team_changed_that_applies_always_is_kept_unsaid(self):
         ours = init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True)) + b"\n## Our own rules\n"

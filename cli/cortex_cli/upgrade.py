@@ -205,8 +205,8 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
         layout = written_by(content, current / "templates", layouts, personality, path)
     if layout is None:
         # A team changed it: said when the target writes another file than the pinned version, or,
-        # without the pinned version, a later format — and, of a Cursor rule, when Cursor does not apply
-        # it in every conversation. Both, when both hold.
+        # without the pinned version, a later format — and, of a Cursor rule, when it lacks the
+        # `alwaysApply: true` line Cursor documents. Both, when both hold.
         cursor = init.is_cursor_rule(path) and not init.applies_always(content)
         if current is not None:
             matters = any(_written(current / "templates", name, personality, path) !=
@@ -217,14 +217,14 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
         if not matters:
             if cursor:
                 return None, (f"{display(str(path))} is not what Cortex wrote — a team changed it — and it has no "
-                              "`alwaysApply: true` in a frontmatter: Cursor does not apply it in every conversation. "
-                              f"It is kept: {again}")
+                              "`alwaysApply: true` line in a frontmatter, as Cursor's documentation writes it: Cursor "
+                              f"may not apply it in every conversation. It is kept: {again}")
             return None, None
         what = "not what Cortex wrote, by the digest in its marker — a team changed it" if intact is False else \
             (f"{f'format {found[0][1]}' if found else 'a bootstrap without the marker'}, not what Cortex {pinned} "
              "writes — a team changed it, or an older Cortex wrote it")
-        rule = ("; and with no `alwaysApply: true` in a frontmatter, Cursor does not apply it in every "
-                "conversation") if cursor else ""
+        rule = ("; and with no `alwaysApply: true` line in a frontmatter, as Cursor's documentation writes it, "
+                "Cursor may not apply it in every conversation") if cursor else ""
         return None, (f"{display(str(path))} is {what} — so it is kept, and the target's template is not written"
                       f"{rule}: {again}")
     wanted = _written(target / "templates", layout, personality, path)
