@@ -8,9 +8,10 @@
 > for the version you pinned. That guide is the source of truth; this card is how a team uses the tool.
 
 Open Design does not ship a model. It **delegates the agent loop to a coding-agent CLI** installed where
-its daemon runs (Claude Code, Codex, Cursor, GitHub Copilot CLI and others), and it can also be driven
-from inside that agent through its MCP server (`od mcp install <agent>`, read-only by default). Every
-render reads the active design system. The output is an HTML artifact — PDF and other exports for decks:
+its daemon runs (Claude Code, Codex, Cursor, GitHub Copilot CLI and others) or, with no CLI, to a model
+API through its BYOK proxy, on your own key; OpenDesign Cloud runs it on paid plans. Its MCP server
+(`od mcp install <agent>`) lets an agent working in another repository read an Open Design project —
+tokens, components, entry HTML — read-only by default. Every render reads the active design system. The output is an HTML artifact — PDF and other exports for decks:
 a **target to build towards**, not code to merge.
 
 ## 🧩 Concepts
@@ -80,8 +81,9 @@ to a project the tool owns, and a code change goes through principle 2's pull re
 
 ### 6. Mind what the agent sees
 
-The agent runs on your model provider's account, like any coding agent: no production data, no
-personal data, no secrets in prompts or imported folders. Use anonymised fixtures.
+The agent runs on your model provider's account, like any coding agent — or on OpenDesign Cloud, on a
+paid plan: no production data, no personal data, no secrets in prompts or imported folders, wherever
+it runs. Use anonymised fixtures.
 
 ## 🚫 Anti-patterns
 
