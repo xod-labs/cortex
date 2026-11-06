@@ -29,6 +29,11 @@ jobs:
       - name: Check that tracked content is in English
         run: bash bin/check-english.sh
 
+      # An encoding round trip leaves U+FFFD where it lost a character, and every host project
+      # shows it (#314).
+      - name: Check that no tracked file holds a replacement character
+        run: bash bin/check-replacement-char.sh
+
       - name: Shell scripts must be executable in git
         run: |
           not_executable=$(git ls-files -s -- '*.sh' | awk '$1 != "100755" { print $4 }')
