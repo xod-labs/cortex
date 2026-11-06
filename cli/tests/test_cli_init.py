@@ -1432,6 +1432,14 @@ class BootstrapMarkerTests(unittest.TestCase):
             with self.subTest(content=content):
                 self.assertEqual(init_command.parts(content), expected)
 
+    def test_cortex_s_block_holds_no_table_a_team_fills(self):
+        # Every workspace fills its table of services: in Cortex's block, it would keep the file from following Cortex.
+        for name in ("bootstrap-instructions.md", "bootstrap-instructions-workspace.md"):
+            with self.subTest(name):
+                block = init_command.parts((harness.REPO / "templates" / name).read_bytes())[0]
+                self.assertIn(init_command.END_MARKER.search(block).group(), block)
+                self.assertNotRegex(block, rb"(?m)^\|")
+
     def test_a_marker_in_the_team_s_part_is_its_text(self):
         block = self.template(format=2) + b"<!-- cortex:bootstrap end -->\n"
         kept = block + b"<!-- cortex:bootstrap layout=single format=1 -->\n"
