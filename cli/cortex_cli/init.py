@@ -67,7 +67,7 @@ DIGEST_FIELD = b" digest="
 END_MARKER = re.compile(rb"(?m)^<!-- cortex:bootstrap end -->\r*$")
 # A line break as the digest and the markers read it: CR LF, or the CR CR LF a Windows script leaves when it
 # writes text over CR LF — any run of CRs before an LF. One reading for both, or they split a file apart.
-LINE_BREAK = re.compile(rb"\r+\n")
+LINE_BREAK = re.compile(rb"(?<!\r)\r+\n")      # from the first CR of a run: linear on a long one
 # What a Cursor rule opens on, that Cursor applies it in every conversation. Its documentation applies a
 # rule with `alwaysApply: false`, no `description` and no `globs` only where a chat @-mentions it; one with
 # no frontmatter, inferred to be read the same, is still to see in a real conversation (#306, #137).
@@ -236,8 +236,9 @@ def markers(content: bytes) -> List[Tuple[str, int]]:
 
 def normalised(content: bytes) -> bytes:
     """A bootstrap as its digest reads it: without a leading byte order mark, with LF line endings —
-    any run of CRs before an LF read as one (``LINE_BREAK``) — and one newline at the end, as ``instructions`` writes it — git may check it out with CRLF, an
-    editor may add the mark, or take the last newline away."""
+    any run of CRs before an LF read as one (``LINE_BREAK``) — and one newline at the end, as
+    ``instructions`` writes it: git may check it out with CRLF, an editor may add the mark, or take the
+    last newline away."""
     return LINE_BREAK.sub(b"\n", without_bom(content)).rstrip(b"\n") + b"\n"
 
 

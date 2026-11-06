@@ -231,7 +231,7 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     if wanted is None or wanted == init.parts(content)[0]:
         return None, None
     block, team = init.parts(init.without_bom(kept))    # ADR-012 §3.4: the team's part goes back as it was
-    if team.strip(b"\r\n") and init.END_MARKER.search(wanted) is None:
+    if init.LINE_BREAK.sub(b"\n", team).strip(b"\n") and init.END_MARKER.search(wanted) is None:
         # A target before format 2 has no end marker: the team's part would end up inside Cortex's block.
         return None, (f"{display(str(path))} has a part of its own below its end marker, and the target's template has "
                       "no end marker to keep it below — so it is kept as it is")
