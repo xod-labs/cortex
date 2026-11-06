@@ -1042,6 +1042,23 @@ class CommitTests(GitTestCase):
         self.assertIn(f"note: nothing is committed in {display(alpha)} — cortex.lock is as committed already\n", proc.err)
         self.assertNotIn("Commit cortex.lock", proc.out)
 
+    @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
+    def test_as_committed_already_a_file_written_outside_is_still_said_to_commit_there(self):
+        # #326: what is as committed is the work tree's; a file written outside it is still to commit where it is.
+        alpha = self.make("alpha", OWN)
+        shared = self.code / "alpha-notes.md"
+        shared.write_bytes(init.stamped(init.instructions(MARKED, True)))
+        os.symlink(os.path.join("..", "alpha-notes.md"), alpha / "CLAUDE.md")
+        self.repository(alpha)
+        lock = (alpha / "cortex.lock").read_text(encoding="utf-8")
+        (alpha / "cortex.lock").write_text(lock.replace(f'"{OWN}"', '"9.9.8"', 1), encoding="utf-8")
+        self.register(alpha)
+        proc = self.upgrade_all("--commit", "--message", self.MESSAGE)
+        self.assert_ok(proc)
+        where = display(os.path.realpath(shared))
+        self.assertIn(f"\nWhat each project must commit:\n  alpha  {display(alpha)}: nothing — cortex.lock is as committed "
+                      f"already; {where} — outside its git work tree: commit it where it is\n", proc.out)
+
     def test_one_project_is_committed_and_said_so(self):
         alpha = self.make("alpha", bootstrap=True)
         self.repository(alpha)
