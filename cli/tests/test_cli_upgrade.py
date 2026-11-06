@@ -356,8 +356,39 @@ class DigestTests(UpgradeTestCase):
         proc = self.upgrade(project, "9.9.8")
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
-        self.assertIn("CLAUDE.md has a part of its own below its end marker, and the target's template, of format 1, has "
-                      "no place for it — so it is kept as it is\n", proc.err)
+        self.assertIn("CLAUDE.md has a part of its own below its end marker, and the target's template has no end marker "
+                      "to keep it below — so it is kept as it is\n", proc.err)
+
+    def test_a_downgrade_writes_a_file_whose_part_below_the_end_marker_is_blank(self):
+        self.marked()
+        project = self.project(OWN)
+        (project / "CLAUDE.md").write_bytes(init.stamped(init.instructions(TEMPLATE, True)) + b"\n\n")
+        self.assert_ok(self.upgrade(project, "9.9.8"))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(MARKED, True)) + b"\n\n")
+
+    def test_line_endings_the_digest_reads_as_one_write_a_file_with_no_team_s_part(self):
+        # Nothing to lose: CR CR LF in a file of format 1 nobody changed, or of format 2 with no team's part.
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        for template in (MARKED, older):
+            with self.subTest(template=template[:40]):
+                kept = self.marked(template=template).replace(b"\n", b"\r\r\n")
+                shutil.rmtree(self.tmp / "app", ignore_errors=True)       # each case its own project
+                project = self.project("9.9.8")
+                (project / "CLAUDE.md").write_bytes(kept)
+                proc = self.upgrade(project)
+                self.assert_ok(proc)
+                self.assertEqual((project / "CLAUDE.md").read_bytes(),
+                                 init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n"))
+                self.assertNotIn("line endings", proc.err)
+
+    def test_without_a_digest_a_block_of_the_pinned_version_is_read_whatever_the_team_s_part(self):
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        self.marked(template=older)
+        team = b"## Our own rules\n"
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(init.instructions(older, True) + team)     # its marker, with no digest
+        self.assert_ok(self.upgrade(project))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)) + team)
 
     def test_line_endings_that_hide_the_end_marker_keep_the_file(self):
         # CR CR LF, as a Windows script that writes text over CRLF leaves it: the digest reads the file as
