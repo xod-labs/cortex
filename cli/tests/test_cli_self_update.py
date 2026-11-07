@@ -776,20 +776,26 @@ class BuiltBinaryTests(ReleaseTestCase):
 
     @POSIX
     def test_a_machine_file_that_does_not_read_warns_and_the_copy_updates_all_the_same(self):
-        # ADR-013 §3.7: `cortex self-update` runs whatever the machine's config.toml holds.
+        # ADR-013 §3.7: `cortex self-update` runs whatever the machine's config.toml holds. The variable is read
+        # before the file: emptied, it is unset, and the file names the host.
         home = self.tmp / "home"
         home.mkdir(exist_ok=True)
-        (home / "config.toml").write_text('endpoints = "later"\nregister = 3\nreleases_url = [\n', encoding="utf-8")
+        machine_file = home / "config.toml"
+        machine_file.write_text(f'releases_url = "{self.release.url}"\nendpoints = "later"\nregister = 3\n',
+                                encoding="utf-8")
+        self.env["CORTEX_RELEASES_URL"] = ""
         proc = self.run_copy("self-update", TARGET)
         self.assertEqual(proc.returncode, 0, proc.out + proc.err)
         self.assertIn(f"Installed cortex {TARGET} as {display(str(self.binary))}", proc.out)
-        self.assertIn(f"warning: {display(str(home / 'config.toml'))} is not read", proc.err)
-        (home / "config.toml").write_text('endpoints = "later"\nregister = 3\n', encoding="utf-8")
+        self.assertIn(f"set by {display(str(machine_file))}", proc.err)
+        self.assertIn('unknown key "endpoints", not read', proc.err)
+        self.assertIn('"register" must be true or false', proc.err)
+        machine_file.write_text("releases_url = [\n", encoding="utf-8")   # a file that does not read: with the
+        self.env["CORTEX_RELEASES_URL"] = self.release.url                # variable set, it is not read at all
         shutil.copy2(harness.BINARY, self.binary)                       # the copy again, replaced by the stand-in
         proc = self.run_copy("self-update", TARGET)
         self.assertEqual(proc.returncode, 0, proc.out + proc.err)
-        self.assertIn('unknown key "endpoints", not read', proc.err)
-        self.assertIn('"register" must be true or false', proc.err)
+        self.assertNotIn("warning", proc.err)
 
     @POSIX
     def test_through_a_link_the_file_it_names_is_replaced_and_the_link_kept(self):
