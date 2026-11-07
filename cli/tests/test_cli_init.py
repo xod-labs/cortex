@@ -336,6 +336,13 @@ class OptionTests(InitTestCase):
             self.assertNotIn("is in no git repository", proc.err)
             self.assertIn("cortex.local.toml", self.read(".gitignore").splitlines())
 
+    def test_a_root_inside_a_repository_is_not_said_to_be_in_none(self):
+        # The repository is a .git at the root or above it, git or not on the PATH — as cortex upgrade tells it.
+        (self.project.parent / ".git").mkdir(parents=True)
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("is in no git repository", proc.err)
+
     @unittest.skipUnless(HAS_GIT, "needs git")
     def test_a_copy_turned_into_a_link_is_ignored_as_a_link(self):
         # Asked before the sync, git saw cortex/ still a directory, which `cortex/` matches: the

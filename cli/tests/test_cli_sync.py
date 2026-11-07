@@ -23,7 +23,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
-from cortex_cli import store  # noqa: E402
+from cortex_cli import store, sync  # noqa: E402
 from cortex_cli.store import digest  # noqa: E402
 from cortex_cli.sync import link_target  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
@@ -937,8 +937,30 @@ class CortexLockTests(SyncTestCase):
         (project / "cortex.lock").write_text(f'format = 1\nversion = "{version}"\ndigest = "{digest_ or self.OTHER}"\n{extra}',
                                              encoding="utf-8")
 
+    def test_in_no_repository_the_lock_is_not_said_to_commit(self):
+        # A 2.B workspace root: cortex init says cortex.toml is committed nowhere, and so is the lock.
+        project = self.project()
+        proc = self.sync(project)
+        self.assert_ok(proc)
+        self.assertIn("cortex.lock: written\n", proc.out)
+        self.assertNotIn("commit", proc.out.lower())
+
+    def test_a_repository_is_a_git_at_the_root_or_above_it_as_written_or_resolved(self):
+        repo = self.tmp / "repo"
+        (repo / ".git").mkdir(parents=True)
+        (repo / "ws").mkdir()
+        (self.tmp / "alone").mkdir()
+        self.assertFalse(sync.in_no_repository(repo / "ws"))
+        self.assertTrue(sync.in_no_repository(self.tmp / "alone"))
+        if os.name != "nt":                                         # a link to a directory needs a privilege there
+            (self.tmp / "ws-link").symlink_to(repo / "ws", target_is_directory=True)
+            self.assertFalse(sync.in_no_repository(self.tmp / "ws-link"))   # resolved: inside repo/
+        (self.tmp / "alone" / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")   # a worktree's, or a submodule's
+        self.assertFalse(sync.in_no_repository(self.tmp / "alone"))
+
     def test_sync_writes_the_lock_of_the_pinned_version_then_leaves_it(self):
         project = self.project()
+        (project / ".git").mkdir()                                  # a repository, git or not on the PATH
         proc = self.sync(project)
         self.assert_ok(proc)
         self.assertIn("cortex.lock: written — commit it", proc.out)
@@ -976,6 +998,7 @@ class CortexLockTests(SyncTestCase):
     def test_a_lock_of_another_version_is_written_again(self):
         project = self.project()
         self.write_lock(project, version="9.9.8")
+        (project / ".git").mkdir()
         proc = self.sync(project)
         self.assert_ok(proc)
         self.assertIn(f"cortex.lock: Cortex {OWN}, where it named 9.9.8 — commit it", proc.out)

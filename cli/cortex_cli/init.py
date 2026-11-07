@@ -515,7 +515,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     ignored = sync.add_to_gitignore(root, entries)
     if ignored:
         out.write(f"✓ .gitignore: {', '.join(ignored)}\n")
-    if sync.ignored(root, config.LOCAL_FILE) is None:
+    if sync.in_no_repository(root):
         gitignore = ("its .gitignore keeps nothing out of a commit" if (root / ".gitignore").is_file()
                      else "no .gitignore is written")
         err.write(f"note: {display(str(root))} is in no git repository: {config.PROJECT_FILE} is committed nowhere, "

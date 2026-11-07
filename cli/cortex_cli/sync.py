@@ -880,7 +880,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if source is not None:
         out.write(f"{config.LOCK_FILE}: neither read nor written — a checkout has no version (--from)\n")
     elif lock is not None:
-        out.write(f"{config.LOCK_FILE}: {lock} — commit it\n")
+        out.write(f"{config.LOCK_FILE}: {lock}{'' if in_no_repository(root) else ' — commit it'}\n")
     if notes:
         _notes(Path(root), mode, err)
     _claude(Path(root), project, None if mode == "copy" else spec_source, out, err)
@@ -945,6 +945,14 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
             data += newline
         path.write_bytes(data + b"".join(line.encode("utf-8") + newline for line in missing))
     return missing
+
+
+def in_no_repository(root) -> bool:
+    """No ``.git`` at ``root`` or above it — as written or resolved, git or not on this machine: what Cortex
+    writes there is committed nowhere, the root being no work tree (ADR-008 §9)."""
+    return not any(os.path.lexists(os.path.join(directory, ".git"))
+                   for start in {str(root), os.path.realpath(root)}
+                   for directory in (start, *map(str, Path(start).parents)))
 
 
 def ignored(root: Path, name: str) -> Optional[bool]:
