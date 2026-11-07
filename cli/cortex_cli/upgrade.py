@@ -555,6 +555,14 @@ def _team_git(agents: str, branch: Optional[str], out: TextIO, err: TextIO) -> O
     return top
 
 
+def team_pin(project: config.Project) -> Optional[Version]:
+    """The version the team's file names — what ``--team`` moves, from a project that follows the file or
+    one that pins its own: the file is the team's either way (ADR-013 §3.11)."""
+    team = project.inputs[2] if project.inputs is not None else None
+    named = team.get("version") if isinstance(team, dict) else None
+    return Version(str(named)) if named is not None else None
+
+
 def team_target(pinned: Optional[Version], wanted: Optional[str], the_store: store.Store) -> Version:
     """The version ``--team`` moves the team's file to: ``wanted``, or this cortex's own — never down to it,
     nor to a source or development build's, which names no release a teammate can download."""
@@ -587,7 +595,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
         raise UpgradeError(f"{config.TEAM_NAME} is not read: this project pins Cortex {project.team_version}, before "
                            f"{grammar.FIRST_TEAM_VERSION}. Nothing was changed")
     the_store = store.Store()
-    pinned = project.team_version if project.team_origin == config.TEAM_NAME else None
+    pinned = team_pin(project)
     target = team_target(pinned, wanted, the_store)
     developer = project.developer_version
     if developer is not None and project.follows:
@@ -619,8 +627,8 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
             if target == pinned:
                 # At the version pinned, the lock is checked as sync checks it: a spec whose files differ
                 # from the ones the team locked is refused, not locked again.
-                digest, said = sync.check_lock(agents, target, the_store, out, name=config.TEAM_LOCK_FILE)
-                if said is not None:
+                digest, written = sync.check_lock(agents, target, the_store, out, name=config.TEAM_LOCK_FILE)
+                if written is not None:
                     config.write_lock(agents, target, digest, config.TEAM_LOCK_FILE)
             else:
                 config.write_lock(agents, target, the_store.digest(target), config.TEAM_LOCK_FILE)
@@ -1392,8 +1400,7 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
     # Every follower of this folder, checked against the target team_move will use, before it moves.
     the_store = store.Store()
     try:
-        target = team_target(project.team_version if project.team_origin == config.TEAM_NAME else None,
-                             options.wanted, the_store)
+        target = team_target(team_pin(project), options.wanted, the_store)
     except UpgradeError as error:
         moved[folder] = str(error)
         out.write(f"refused: {error}\n")
