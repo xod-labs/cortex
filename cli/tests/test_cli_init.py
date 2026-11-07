@@ -336,6 +336,13 @@ class OptionTests(InitTestCase):
             self.assertNotIn("is in no git repository", proc.err)
             self.assertIn("cortex.local.toml", self.read(".gitignore").splitlines())
 
+    def test_a_root_inside_a_repository_is_not_said_to_be_in_none(self):
+        # The repository is a .git at the root or above it, git or not on the PATH — as cortex upgrade tells it.
+        (self.project.parent / ".git").mkdir(parents=True)
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("is in no git repository", proc.err)
+
     @unittest.skipUnless(HAS_GIT, "needs git")
     def test_a_copy_turned_into_a_link_is_ignored_as_a_link(self):
         # Asked before the sync, git saw cortex/ still a directory, which `cortex/` matches: the
@@ -405,6 +412,70 @@ class OptionTests(InitTestCase):
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertEqual([line for line in proc.err.splitlines() if line.startswith("note:") and "CLAUDE.md" in line], [])
         self.assertEqual(self.read("CLAUDE.md"), retitled)
+
+    def test_force_without_workspace_keeps_a_workspace_s_layout(self):
+        # #329: --workspace alone chose the template, and --force wrote a single project's over a workspace's.
+        self.assertEqual(self.init("--tool", "claude", "--workspace", "--service", "svc").returncode, 0)
+        team = "\n## Workspace services\n\n| @alias | Folder | Description |\n|---|---|---|\n| `@svc` | svc/ | x |\n"
+        (self.project / "CLAUDE.md").write_text(self.read("CLAUDE.md") + team, encoding="utf-8")
+        proc = self.init("--tool", "claude")                                       # kept: no other layout said
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("was written for a workspace", proc.err)
+        before = self.read("CLAUDE.md").replace("<!-- cortex:bootstrap layout=workspace format=2",
+                                                "<!-- cortex:bootstrap layout=workspace format=1", 1)
+        (self.project / "CLAUDE.md").write_text(before, encoding="utf-8")          # an older format, to write again
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        written = self.read("CLAUDE.md")
+        self.assertTrue(written.startswith("# Cortex AI Team — Workspace Mode\n"), written[:80])
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", written)
+        self.assertTrue(written.endswith(team))
+        self.assertIn("CLAUDE.md was written for a workspace, and is written for one again — remove it first to write "
+                      "a single project's", proc.err)
+
+    def test_a_workspace_s_file_writes_no_team_pair_without_the_option(self):
+        # The layout read from the file chooses the template, and nothing else: the team's repository is the option's.
+        (self.project / "agents" / ".git").mkdir(parents=True)
+        self.assertEqual(self.init("--tool", "claude", "--workspace").returncode, 0)
+        (self.project / "agents" / "project-overview.md").unlink()
+        for args in (("--tool", "claude"), ("--tool", "claude", "--force")):
+            proc = self.init(*args)
+            self.assertEqual(proc.returncode, 0, proc.err)
+            self.assertFalse((self.project / "agents" / "project-overview.md").exists(), args)
+            self.assertNotIn("agents/project-overview.md", proc.out)
+        self.assertIn("✓ agents/project-overview.md", self.init("--tool", "claude", "--workspace").out)
+
+    def test_another_tool_s_file_of_the_other_layout_is_said_to_be_removed_first(self):
+        # --tool X --force keeps a file's own layout now (#329): the way out is to remove it.
+        self.assertEqual(self.init("--tool", "claude", "--workspace").returncode, 0)
+        self.assertEqual(self.init("--tool", "agents").returncode, 0)                   # a single project's AGENTS.md
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("note: CLAUDE.md is there and was kept: a bootstrap written for a workspace — remove it, then "
+                      "cortex init --tool claude writes a single project's", proc.err)
+        proc = self.init("--workspace")
+        self.assertIn("note: AGENTS.md is there and was kept: a bootstrap written for a single project — remove it, "
+                      "then cortex init --tool agents --workspace writes a workspace's", proc.err)
+
+    def test_force_without_workspace_knows_a_workspace_written_before_the_marker(self):
+        # The file of 1.3.0, which every workspace a team changed is sent to `cortex init --force` with.
+        old = "# Cortex AI Team — Workspace Mode\n\nRead cortex.local.toml first.\n"
+        (self.project / "CLAUDE.md").write_text(old, encoding="utf-8")
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("was written for a workspace, and is written for one again", proc.err)
+
+    def test_force_keeps_a_single_project_single_and_workspace_still_moves_it(self):
+        self.assertEqual(self.init("--tool", "claude").returncode, 0)
+        proc = self.init("--tool", "claude", "--force", "--no-personality")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=single format=2 digest=", self.read("CLAUDE.md"))
+        self.assertNotIn("written for a workspace", proc.err)
+        proc = self.init("--tool", "claude", "--force", "--workspace")             # the option says the layout
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertNotIn("written for a workspace", proc.err)
 
     def test_the_backup_is_said_to_be_left_to_git(self):
         (self.project / "CLAUDE.md").write_text("# mine\n", encoding="utf-8")
@@ -527,6 +598,34 @@ class OptionTests(InitTestCase):
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn("which led nowhere: replaced.", proc.out)
         self.assertEqual(os.path.realpath(self.project / "cortex"), os.path.realpath(again))
+
+    def test_a_link_cortex_made_is_its_own_once_cortex_toml_is_gone(self):
+        # #328: without cortex.toml, the link is judged by the spec cortex.local.toml still names.
+        checkout, moved = self.tmp / "checkout", self.tmp / "moved"
+        shutil.copytree(self.spec, checkout)
+        proc = self.init("--tool", "claude", "--link", "--from", str(checkout))
+        self.assertEqual(proc.returncode, 0, proc.err)
+        (self.project / "cortex.toml").unlink()
+        proc = self.init("--tool", "claude", "--link", "--from", str(checkout))
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("which Cortex did not make", proc.err)
+        self.assertTrue((self.project / "cortex.toml").is_file())
+        (self.project / "cortex.toml").unlink()
+        checkout.rename(moved)                                                       # a link that leads nowhere:
+        proc = self.init("--tool", "claude")                                         # no sync runs without the pin
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn("which leads nowhere", proc.err)
+        self.assertIn("`cortex init --link --from` the checkout it should follow", proc.err)
+        self.assertNotIn("cortex sync", proc.err)
+        proc = self.init("--tool", "claude", "--link", "--from", str(moved))        # replaced as #325 has it
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("which led nowhere: replaced.", proc.out)
+        self.assertEqual(os.path.realpath(self.project / "cortex"), os.path.realpath(moved))
+        (self.project / "cortex.toml").unlink()
+        (self.project / "cortex.local.toml").write_text("spec = [\n")             # unreadable: as before #328
+        proc = self.init("--tool", "claude", "--link", "--from", str(moved))
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn("which Cortex did not make", proc.err)
 
     def test_a_directory_given(self):
         proc = self.init("sub/app", cwd=self.project)
@@ -1573,6 +1672,28 @@ class BootstrapMarkerTests(unittest.TestCase):
                          "is an older Cortex bootstrap, written before the bootstrap marker")
         self.assertEqual(init_command.kept_bootstrap(b"# Our notes\n", self.template()).sentence,
                          "holds no Cortex bootstrap: the tool will not find Cortex")
+
+    def test_a_workspace_is_known_by_every_marker_or_else_by_the_title(self):
+        # #329, and the three mutants Bluspark's second counter-review of 1.7.0 left (WS2 to WS4).
+        workspace, single = self.template(), self.template("single")
+        self.assertTrue(init_command.written_for_workspace(workspace))
+        self.assertFalse(init_command.written_for_workspace(single))
+        two = workspace + workspace.split(b"\n\n", 1)[1]
+        self.assertTrue(init_command.written_for_workspace(two))                  # several markers, all a workspace's
+        mixed = workspace + single.split(b"\n\n", 1)[1]
+        self.assertEqual(init_command.markers(mixed), [("workspace", 1), ("single", 1)])
+        self.assertTrue(init_command.written_for_workspace(mixed))                # WS2: markers that disagree,
+        mixed = single + workspace.split(b"\n\n", 1)[1]                         # the title says it
+        self.assertEqual(init_command.markers(mixed), [("single", 1), ("workspace", 1)])
+        self.assertFalse(init_command.written_for_workspace(mixed))
+        old = "# Cortex AI Team — Workspace Mode\n\nRead cortex.local.toml first.\n".encode("utf-8")
+        self.assertTrue(init_command.written_for_workspace(old))
+        self.assertTrue(init_command.written_for_workspace(b"\xef\xbb\xbf" + old.replace(b"\n", b"\r\n")))
+        said = b"# Cortex AI Team\n\nNot the Workspace Mode: read cortex.local.toml first.\n"
+        self.assertFalse(init_command.written_for_workspace(said))                # WS3: the title, not the text
+        rule = b"---\nalwaysApply: true\n---\n" + old
+        self.assertTrue(init_command.written_for_workspace(rule))                 # WS4: after a frontmatter
+        self.assertFalse(init_command.written_for_workspace("# Workspace Mode notes\n".encode("utf-8")))
 
     def test_a_version_whose_templates_carry_no_marker_keeps_its_checks(self):
         # A project pinned to 1.3: its templates have no marker, and its bootstrap is not "older".

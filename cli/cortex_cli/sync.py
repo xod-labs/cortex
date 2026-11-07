@@ -438,11 +438,12 @@ def leaving(path: Path) -> str:
 
 
 def existing_entry(target: Path, the_store: store.Store, project: config.Project,
-                   replaces: bool = False) -> Optional[str]:
+                   replaces: bool = False, pinned: bool = True) -> Optional[str]:
     """What sync made at ``cortex/`` — ``"link"``, ``"copy"`` — or ``None`` when nothing is there.
     Anything else there is refused, and so is a copy holding a file sync did not write: removing
     it would lose that file. ``replaces`` — a link sync from a checkout, ``--link --from`` — a link
-    the project reads that leads nowhere is ``"gone"``: the sync names where it should lead (#310)."""
+    the project reads that leads nowhere is ``"gone"``: the sync names where it should lead (#310). ``pinned``
+    off — `cortex init` in a project without its ``cortex.toml`` (#328) — the advice is init's: no sync runs there."""
     if not os.path.lexists(target):
         return None
     if is_link(target):
@@ -454,10 +455,12 @@ def existing_entry(target: Path, the_store: store.Store, project: config.Project
             # deleted since, or into a store moved since — CORTEX_HOME changed. One message says both (#312).
             if replaces:
                 return "gone"
+            again = f"`cortex sync --link --from` the checkout it should follow, which replaces it, or remove it, then " \
+                f"`cortex sync` for the version {config.PROJECT_FILE} pins" if pinned else \
+                "`cortex init --link --from` the checkout it should follow, which replaces it, or remove it, then run " \
+                "the command again"
             raise SyncError(f"{LINK}/ is a link to {shown(display(pointed))}, which leads nowhere — a checkout or a "
-                            f"store moved or deleted since it was linked. `cortex sync --link --from` the checkout it "
-                            f"should follow, which replaces it, or remove it, then `cortex sync` for the version "
-                            f"{config.PROJECT_FILE} pins.")
+                            f"store moved or deleted since it was linked. {again}.")
         raise SyncError(f"{LINK}/ is a link to {shown(display(pointed))}, which Cortex did not make. Move or remove it, "
                         "then run the command again.")
     if target.is_dir() and not (target / ".git").exists() and (target / MARKER).is_file():
@@ -877,7 +880,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if source is not None:
         out.write(f"{config.LOCK_FILE}: neither read nor written — a checkout has no version (--from)\n")
     elif lock is not None:
-        out.write(f"{config.LOCK_FILE}: {lock} — commit it\n")
+        out.write(f"{config.LOCK_FILE}: {lock}{'' if in_no_repository(root) else ' — commit it'}\n")
     if notes:
         _notes(Path(root), mode, err)
     _claude(Path(root), project, None if mode == "copy" else spec_source, out, err)
@@ -942,6 +945,14 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
             data += newline
         path.write_bytes(data + b"".join(line.encode("utf-8") + newline for line in missing))
     return missing
+
+
+def in_no_repository(root) -> bool:
+    """No ``.git`` at ``root`` or above it — as written or resolved, git or not on this machine: what Cortex
+    writes there is committed nowhere, the root being no work tree (ADR-008 §9)."""
+    return not any(os.path.lexists(os.path.join(directory, ".git"))
+                   for start in {str(root), os.path.realpath(root)}
+                   for directory in (start, *map(str, Path(start).parents)))
 
 
 def ignored(root: Path, name: str) -> Optional[bool]:

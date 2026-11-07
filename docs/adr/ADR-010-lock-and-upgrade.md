@@ -402,3 +402,8 @@ Bluspark's last notes on the text, read after the release; none changes what was
 - **§5**: the asset self-update downloads is that of the binary's own build target (§3.7, step 3).
 - **The header**: `cli/build.py` is affected, since it stamps the build target in the binary.
 - **The planned records this one named by number** — the multi-project runtime, ADR-021 (§2), and the cockpit, ADR-019 (§7) — have no number since 2026-11-04: a planned record takes one only once its text is written. They are #48 and #46, and the text names them so. The project registry this record leaves to a record of its own (§7.4) is ADR-011.
+
+### 2026-11-07 — The layout without `--workspace`, and a root that is no work tree
+
+- **§3.1** ([#329](https://github.com/xod-labs/cortex/issues/329)). Without `--workspace`, `cortex init` takes the layout the instructions file was written for — by its markers when they agree, by its title otherwise — and writes that layout's template, saying so under `--force`: a workspace's file was written over with a single project's. Rule 3 is no longer said of that file; of another tool's file of the other layout, it says to remove the file first, `--tool X --force` keeping its layout. Markers that agree say the layout, though several are still none for the other rules.
+- **§3.3 and §3.5, step 7**. At a project root with no `.git` at it or above it — a 2.B workspace, committed nowhere (ADR-008 §9) — `cortex sync` writes the lock without *commit it*, and `cortex upgrade` ends with the files it wrote, committed nowhere; one linked into a repository is to commit where it is. `cortex upgrade --all` says *nothing — in no git work tree* of such a project.

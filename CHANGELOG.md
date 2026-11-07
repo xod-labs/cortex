@@ -7,6 +7,14 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+### Changed
+- **`cortex init --force` keeps a workspace's layout without `--workspace`** ([#329](https://github.com/xod-labs/cortex/issues/329)). The template was chosen by the option alone, and a workspace's bootstrap was written over with a single project's — no services, no `@alias`, no workspace tiers — in silence. Without the option, the template is the layout the file says it was written for — by its markers when they agree, by its title otherwise, as `cortex upgrade` reads it — and a note says so; the services and the team's pair in `agents/` stay the option's. `--workspace` still makes a single project's file a workspace's, and removing the file first writes a single project's. `cortex init` without `--force` no longer says a workspace's file was written for another layout, and of another tool's file of the other layout it says to remove it first.
+- **The workspace template's step 4.2 lists the `@alias` values where the services are declared** ([#329](https://github.com/xod-labs/cortex/issues/329)): the table below the end marker, or the services' `project-overview.md` without one — no longer those files alone. `cortex upgrade` writes the step again in every block nobody changed. ADR-001 §3.5 records where the Prompt Manager finds the table since ADR-012.
+
+### Fixed
+- **`cortex init` takes the link Cortex made for its own once `cortex.toml` is gone** ([#328](https://github.com/xod-labs/cortex/issues/328)). It judged `cortex/` against a project with no spec, and called a link `cortex sync --link --from` had made one Cortex did not make. It reads the `spec` `cortex.local.toml` still names, as `cortex sync` does; a link that leads nowhere is replaced by `--link --from`, as #325 has it, and refused otherwise naming `cortex init --link --from` — no sync runs without the pin.
+- **`cortex sync` and `cortex upgrade` no longer say to commit at a root in no git repository** — a 2.B workspace, where `cortex init` says the files are committed nowhere. The lock is *written*, without *commit it*; `cortex upgrade` names the files it wrote as committed nowhere, each developer moving their own (ADR-008 §9), and a file linked into a repository as to commit where it is; `cortex upgrade --all` says *nothing — in no git work tree* of such a project. A repository is a `.git` at the root or above it, the root as written or resolved — the same test for `cortex init`'s note, git or not on the machine.
+
 ## [1.7.0] - 2026-11-06 — The Restaurant at the End of the Universe _(Released)_
 [Full notes](changelog/1.7.0.md)
 

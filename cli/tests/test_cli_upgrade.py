@@ -107,7 +107,7 @@ class UpgradeTests(UpgradeTestCase):
         self.assertIn(f'version = "{OWN}"', lock)
         self.assertIn(f'digest = "{digest(self.home / "versions" / OWN)}"', lock)
         self.assertIn(f"versions/{OWN}", (project / "cortex.local.toml").read_text(encoding="utf-8"))
-        self.assertIn(f"Cortex {OWN} is ready. Commit cortex.toml, cortex.lock;", proc.out)
+        self.assertIn(f"Cortex {OWN} is ready. Written: cortex.toml and cortex.lock — in no git work tree", proc.out)
         self.assertEqual(proc.out.count("Project: "), 1)
 
     def test_to_an_older_version_is_a_downgrade(self):
@@ -170,6 +170,39 @@ class UpgradeTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertIn('version = "9.9.8"', self.pinned(project))
 
+    def test_the_ending_says_what_to_commit_in_a_repository_and_outside_one_that_nothing_is(self):
+        # At a root that is no work tree — a 2.B workspace — cortex init says the files are committed nowhere,
+        # and cortex upgrade said to commit them. A .git above the root makes it a work tree, git or not here.
+        project = self.project("9.9.8")
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn(f"\nCortex {OWN} is ready. Written: cortex.toml and cortex.lock — in no git work tree, so "
+                      "committed nowhere: each developer moves their own (ADR-008 §9).\n", proc.out)
+        self.assertNotIn("commit it", proc.out)                    # nor sync's line on the lock
+        self.assertNotIn("teammates", proc.out.lower())
+        shutil.rmtree(project)
+        (self.tmp / ".git").mkdir()
+        project = self.project("9.9.8")
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn(f"\nCortex {OWN} is ready. Commit cortex.toml, cortex.lock; teammates run `cortex sync` after "
+                      "they pull.\n", proc.out)
+
+    @unittest.skipIf(os.name == "nt", "a link to a file needs a privilege on Windows")
+    def test_outside_a_repository_a_bootstrap_linked_into_one_is_to_commit_where_it_is(self):
+        # A 2.B root whose CLAUDE.md links to the team's repository: that file is to commit there.
+        project = self.project("9.9.8")
+        team = self.tmp / "team"
+        (team / ".git").mkdir(parents=True)
+        (team / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))
+        (project / "CLAUDE.md").symlink_to(team / "CLAUDE.md")
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        where = os.path.realpath(team / "CLAUDE.md").replace(os.sep, "/")
+        self.assertIn(f"\nCortex {OWN} is ready. Written: cortex.toml and cortex.lock — in no git work tree, so committed "
+                      f"nowhere: each developer moves their own (ADR-008 §9); {where} — outside its git work tree: "
+                      "commit it where it is.\n", proc.out)
+
     def test_a_bootstrap_nobody_changed_is_written_again(self):
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))
@@ -177,7 +210,7 @@ class UpgradeTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s template — no one changed it", proc.out)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)))
-        self.assertIn("Commit cortex.toml, cortex.lock, CLAUDE.md;", proc.out)
+        self.assertIn("Written: cortex.toml, cortex.lock and CLAUDE.md — in no git work tree", proc.out)
 
     def test_a_bootstrap_checked_out_with_crlf_is_still_nobodys_change(self):
         # git's core.autocrlf, on Windows.
@@ -261,7 +294,7 @@ class DigestTests(UpgradeTestCase):
         proc = self.upgrade(project)
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)))
-        self.assertIn("Commit cortex.toml, cortex.lock, CLAUDE.md;", proc.out)
+        self.assertIn("Written: cortex.toml, cortex.lock and CLAUDE.md — in no git work tree", proc.out)
 
     def test_an_untouched_bootstrap_the_target_writes_alike_is_left_as_it_is(self):
         written = self.marked(template=TEMPLATE)
@@ -288,7 +321,7 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         wanted = init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True))
         self.assertEqual(rule.read_bytes(), wanted)
-        self.assertIn("Commit cortex.toml, cortex.lock, .cursor/rules/cortex.mdc;", proc.out)
+        self.assertIn("Written: cortex.toml, cortex.lock and .cursor/rules/cortex.mdc — in no git work tree", proc.out)
         proc = self.upgrade(project)
         self.assert_ok(proc)
         self.assertEqual(rule.read_bytes(), wanted)
@@ -489,7 +522,7 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(),
                          init.BOM + init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n") + team)
-        self.assertIn("Commit cortex.toml, cortex.lock, CLAUDE.md;", proc.out)
+        self.assertIn("Written: cortex.toml, cortex.lock and CLAUDE.md — in no git work tree", proc.out)
 
     def test_a_team_s_part_under_a_block_the_target_writes_alike_is_left_as_it_is(self):
         written = self.marked(template=TEMPLATE) + b"## Our own rules\n"
@@ -626,7 +659,7 @@ class DigestTests(UpgradeTestCase):
                       "--force --workspace writes it again, and keeps yours as .bak", proc.err)
 
     def test_a_workspace_bootstrap_a_team_changed_is_said_to_need_workspace(self):
-        # Without --workspace, cortex init --force writes a single project's bootstrap: the note names it.
+        # The note names --workspace for a workspace's file, which cortex init also reads without it (#329).
         name = "bootstrap-instructions-workspace.md"
         older = (harness.REPO / "templates" / name).read_bytes().replace(b"## Where the spec is",
                                                                         b"## Where the spec is, in 9.9.8", 1)
@@ -649,11 +682,12 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertIn(f"CLAUDE.md: would be written again from Cortex {OWN}'s template — no one changed it", proc.out)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), written)
+        (project / ".git").mkdir()                       # a repository: what is written is to commit
         proc = self.upgrade(project)
         self.assert_ok(proc)
         self.assertIn(f"Cortex {OWN}: already on it — nothing to move", proc.out)
         self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s template — no one changed it", proc.out)
-        self.assertIn("Commit CLAUDE.md.", proc.out)
+        self.assertIn("\nCommit CLAUDE.md.\n", proc.out)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)))
 
     def test_without_a_digest_and_the_pinned_version_it_is_not_checked_and_said_so(self):
@@ -946,7 +980,8 @@ class ResumeTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertIn(f"Cortex {OWN}: already on it — nothing to move", proc.out)
         self.assertIn(f'version = "{OWN}"', (project / "cortex.lock").read_text(encoding="utf-8"))
-        self.assertIn("\nCommit cortex.lock.\n", proc.out)
+        self.assertIn("\nWritten: cortex.lock — in no git work tree, so committed nowhere: each developer moves their own "
+                      "(ADR-008 §9).\n", proc.out)
         self.assert_ok(self.run_cortex(project, "sync", "--locked"))
 
     def test_a_lock_of_another_version_alone_is_synced(self):

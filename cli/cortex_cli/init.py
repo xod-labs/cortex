@@ -234,6 +234,17 @@ def markers(content: bytes) -> List[Tuple[str, int]]:
     return [(m.group(1).decode(), int(m.group(2))) for m in BOOTSTRAP_MARKER.finditer(parts(without_bom(content))[0])]
 
 
+def written_for_workspace(content: bytes) -> bool:
+    """Whether a bootstrap was written for a workspace: by its markers when they agree, or, written before the
+    marker or with markers that disagree, by its title — the first line once a frontmatter is set aside (ADR-010
+    §3.1). A file that is no bootstrap was written for none."""
+    content = normalised(content)
+    layouts = {layout for layout, _ in markers(content)}
+    if len(layouts) == 1:
+        return layouts == {"workspace"}
+    return bootstrap_of_cortex(content) and b"Workspace Mode" in without_frontmatter(content).split(b"\n", 1)[0]
+
+
 def normalised(content: bytes) -> bytes:
     """A bootstrap as its digest reads it: without a leading byte order mark, with LF line endings —
     any run of CRs before an LF read as one (``LINE_BREAK``) — and one newline at the end, as
@@ -292,6 +303,7 @@ class Kept(NamedTuple):
     sentence: str
     phrase: str
     force: bool = True
+    layout: bool = False    # written for the other layout, which --force without --workspace keeps (#329)
 
 
 def kept_bootstrap(kept: bytes, template: bytes) -> Optional[Kept]:
@@ -331,7 +343,7 @@ NO_BOOTSTRAP = Kept("holds no Cortex bootstrap: the tool will not find Cortex", 
 
 def _other_layout(wanted: str) -> Kept:
     other = "a workspace" if wanted == "single" else "a single project"
-    return Kept(f"was written for {other}", f"a bootstrap written for {other}")
+    return Kept(f"was written for {other}", f"a bootstrap written for {other}", layout=True)
 
 
 def _refuse_a_file_on_the_way(path: Path, what: str) -> None:
@@ -425,7 +437,8 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                         "start over")
     # As the sync's own check (#310, #325): a link sync from a checkout replaces a link that leads nowhere.
     links = (mode or (project.sync if project else None)) == "link"
-    sync.existing_entry(root / sync.LINK, the_store, project or _blank(root), replaces=options.source is not None and links)
+    sync.existing_entry(root / sync.LINK, the_store, project or _blank(root), replaces=options.source is not None and links,
+                        pinned=project is not None)
     # A project keeps the version it pins — never another, older or newer; a new one takes this
     # binary's. A version newer than this binary is refused here.
     version = project.version if project else the_store.own
@@ -502,7 +515,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     ignored = sync.add_to_gitignore(root, entries)
     if ignored:
         out.write(f"✓ .gitignore: {', '.join(ignored)}\n")
-    if sync.ignored(root, config.LOCAL_FILE) is None:
+    if sync.in_no_repository(root):
         gitignore = ("its .gitignore keeps nothing out of a commit" if (root / ".gitignore").is_file()
                      else "no .gitignore is written")
         err.write(f"note: {display(str(root))} is in no git repository: {config.PROJECT_FILE} is committed nowhere, "
@@ -512,7 +525,11 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         sync._notes(root, spec_mode, err)
 
     templates = spec / "templates"
-    workspace = options.workspace
+    # Without --workspace, a workspace's instructions file stays a workspace's (#329): no option names the other
+    # layout, and the marker says the one the file was written for, as `cortex upgrade` reads it.
+    kept_workspace = not options.workspace and instructions_file is not None and instructions_file.is_file() \
+        and written_for_workspace(instructions_file.read_bytes())
+    workspace = options.workspace or kept_workspace
     bootstrap = templates / ("bootstrap-instructions-workspace.md" if workspace else "bootstrap-instructions.md")
     template = bootstrap.read_bytes()
     if instructions_file is None:
@@ -551,6 +568,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                               "it: carry over what you wrote in it, then delete it\n")
             instructions_file.write_bytes(wanted)
             out.write(f"✓ {display(str(instructions_file))} {'replaced' if replaced else 'written'}\n")
+            if kept_workspace:
+                err.write(f"note: {display(str(instructions_file))} was written for a workspace, and is written for one "
+                          "again — remove it first to write a single project's\n")
     if not tool_named:
         # Found, not written: a file of another tool's, which a new project's default leaves alone.
         for name, rel in TOOLS.items():
@@ -560,8 +580,14 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             found = kept_bootstrap(other.read_bytes(), template)
             if found is None:
                 continue
-            err.write(f"note: {rel} is there and was kept: {found.phrase} — " + (
-                f"cortex init --tool {name} --force replaces it, and keeps it as .bak\n" if found.force else "kept as it is\n"))
+            if not found.force:
+                again = "kept as it is"
+            elif found.layout:
+                again = f"remove it, then cortex init --tool {name}{' --workspace' if workspace else ''} writes " \
+                        f"{'a workspace' if workspace else 'a single project'}'s"
+            else:
+                again = f"cortex init --tool {name} --force replaces it, and keeps it as .bak"
+            err.write(f"note: {rel} is there and was kept: {found.phrase} — {again}\n")
         if project is not None and not known_before and instructions_file is not None:
             err.write(f"note: no instructions file of a known tool was here, and {TOOLS['copilot']} is written: "
                       "a project of --tool custom names it again, with --instructions-file\n")
@@ -573,7 +599,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             (root / name).write_bytes(content)
             out.write(f"✓ {name} written — fill it in\n")
 
-    if workspace:
+    if options.workspace:                   # the services and the team's pair: the option's, never the file's
         for name in services:
             folder = root / name
             folder.mkdir(parents=True, exist_ok=True)
@@ -597,9 +623,10 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
 
 
 def _blank(root: Path) -> config.Project:
-    """A project not initialised yet: nothing sync made can be at cortex/."""
+    """A project without its ``cortex.toml``: what sync made at cortex/ is judged by the ``spec`` its
+    ``cortex.local.toml`` still names, as `cortex sync` judges it (#328) — nothing, when it names none."""
     return config.Project(root=str(root), version=store.Store().own, theme="none", sync=None,
-                          local_theme=None, spec=None)
+                          local_theme=None, spec=config.local_spec(str(root)))
 
 
 def run(args: List[str]) -> int:

@@ -73,6 +73,7 @@ class Outcome:
     committed: Optional[str] = None                     # --commit: where — the branch, and the commit
     uncommitted: Optional[str] = None                   # --commit: why nothing was
     ignored: bool = False                               # git ignores every one of the files: nothing to commit
+    nowhere: bool = False                               # in no git work tree: the files are committed nowhere
     clean: bool = False                                 # --commit: the files are as committed already
     left: List[Path] = field(default_factory=list)      # --commit, nothing written: files git sees changed still
     outside: List[Path] = field(default_factory=list)   # --commit: of the files, those outside the git work tree
@@ -191,10 +192,9 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     kept = path.read_bytes()
     content = init.normalised(kept)
     found = init.markers(content)
-    # Without --workspace, cortex init writes a single project's: a workspace's file says it is one by its
-    # markers, or, written before the marker, by its title — as cortex init reads it (ADR-010 §3.1).
-    title = init.without_frontmatter(content).split(b"\n", 1)[0]
-    workspace = all(layout == "workspace" for layout, _ in found) if found else b"Workspace Mode" in title
+    # A workspace's file — by its markers, or, written before the marker, by its title — is named with --workspace,
+    # which cortex init reads from it without the option too (#329).
+    workspace = init.written_for_workspace(content)
     again = f"cortex init --force{' --workspace' if workspace else ''} writes it again, and keeps yours as .bak"
     if len(found) > 1:
         return None, f"{display(str(path))} holds several bootstrap markers, so none is read, and it is kept: {again}"
@@ -418,7 +418,11 @@ def _ending(outcome: Outcome, out: TextIO) -> None:
     """What the project must commit — or what ``--commit`` committed, and where; then what is to
     commit where it is, outside the project's git work tree."""
     names, elsewhere = ([] if outcome.clean else outcome.names()), outcome.elsewhere()
-    if outcome.ignored:
+    if outcome.nowhere:
+        ready = f"Cortex {outcome.target} is ready. " if outcome.target != outcome.pinned else ""
+        out.write(f"\n{ready}Written: {_and(names)} — in no git work tree, so committed nowhere: each developer "
+                  f"moves their own (ADR-008 §9){'; ' + elsewhere if elsewhere else ''}.\n")
+    elif outcome.ignored:
         ready = f"Cortex {outcome.target} is ready. " if outcome.target != outcome.pinned else ""
         out.write(f"\n{ready}Nothing to commit: git ignores {_and(names)}.\n")
     elif outcome.target != outcome.pinned:
@@ -649,7 +653,7 @@ def _work_tree(root: str) -> Optional[str]:
     proc = _git(root, "rev-parse", "--show-toplevel")
     if proc.returncode == 0 and proc.stdout.strip():
         return proc.stdout.strip()
-    if any(os.path.lexists(os.path.join(directory, ".git")) for directory in (root, *map(str, Path(root).parents))):
+    if not sync.in_no_repository(root):
         raise _failed(proc)
     return None
 
@@ -918,6 +922,11 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
         out.write(f"git: no branch {options.branch} is made — nothing was written\n")
     if top is not None and outcome.why is None and outcome.files:
         outcome.ignored = len(_ignored(root, outcome.files)) == len(outcome.files)
+    if outcome.why is None and outcome.files and top is None and sync.in_no_repository(outcome.root):
+        # Committed nowhere (ADR-008 §9) — but a file linked into a repository, the team's say, is to commit there.
+        outcome.outside = [path for path in outcome.files
+                           if not sync.in_no_repository(os.path.dirname(os.path.realpath(path)))]
+        outcome.nowhere = bool(outcome.names())
     if options.message is None or options.dry_run or outcome.why is not None:
         return outcome
     if top is None:
@@ -1059,7 +1068,11 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
     def nothing(outcome: Outcome) -> bool:
         """Nothing to commit for it: git ignores its files, or they are as committed already — and none
         was written outside its work tree, to commit where it is (#326)."""
-        return outcome.ignored or (outcome.clean and not outcome.outside)
+        return outcome.ignored or ((outcome.nowhere or outcome.clean) and not outcome.outside)
+
+    def why_nothing(outcome: Outcome) -> str:
+        return "in no git work tree" if outcome.nowhere else outcome.uncommitted if outcome.clean else \
+            f"git ignores {_and(outcome.names())}"
 
     commits = [(entry, outcome) for entry, outcome in written if not nothing(outcome)]
     left = [(entry, outcome) for entry, outcome, _ in done if outcome is not None and outcome.left]
@@ -1073,7 +1086,7 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
     if not commits:
         out.write("\nNothing this run wrote is to commit.\n" if left else "\nNothing to commit, in any project.\n")
         for entry, outcome in written:
-            why = outcome.uncommitted if outcome.clean else f"git ignores {_and(outcome.names())}"
+            why = why_nothing(outcome)
             out.write(f"  {entry.name:<{width}}  {entry.path}: {why}\n")
         from_before()
         return
@@ -1081,12 +1094,13 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
     out.write(f"\nWhat each project {'would have to' if options.dry_run else 'must'} commit:\n")
     for entry, outcome in written:
         if nothing(outcome):
-            why = outcome.uncommitted if outcome.clean else f"git ignores {_and(outcome.names())}"
+            why = why_nothing(outcome)
             out.write(f"  {entry.name:<{width}}  {entry.path}: nothing — {why}\n")
             continue
         said = "" if not committing else f" — committed on {outcome.committed}" if outcome.committed else \
             f" — not committed: {_first(outcome.uncommitted)}"
-        here = f"nothing — {outcome.uncommitted}" if outcome.clean else f"{_and(outcome.names())}{said}" if outcome.names() else ""
+        here = f"nothing — {outcome.uncommitted}" if outcome.clean else f"{_and(outcome.names())} committed nowhere — in no git work tree" \
+            if outcome.nowhere else f"{_and(outcome.names())}{said}" if outcome.names() else ""
         line = "; ".join(part for part in (here, outcome.elsewhere()) if part)
         out.write(f"  {entry.name:<{width}}  {entry.path}: {line}\n")
     from_before()
