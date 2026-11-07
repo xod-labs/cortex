@@ -480,6 +480,12 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         the_store.ensure(version)
         spec = the_store.path(version)
         described = f"Cortex {version}"
+    # The bootstrap is committed: it follows the team's version, never a developer's try (ADR-013 §3.10).
+    pinned = project.team_version if project else version
+    templates_spec = spec
+    if not options.source and pinned != version:
+        the_store.ensure(pinned)
+        templates_spec = the_store.path(pinned)
     team_theme = team_data.get("theme") if team_data else None
     chosen = options.theme is not None or options.no_personality
     if project is None and theme is None:
@@ -535,9 +541,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                   + (f" — {' and '.join(given)} from {config.TEAM_NAME}" if given else "") + "\n")
     elif values:
         shown = ", ".join(f"{key} = {config.toml_value(value)}" for key, value in values.items())
-        out.write(f"✓ {config.PROJECT_FILE}: {shown} — the rest kept, at Cortex {version}\n")
+        out.write(f"✓ {config.PROJECT_FILE}: {shown} — the rest kept, at Cortex {pinned}\n")
     else:
-        out.write(f"✓ {config.PROJECT_FILE} kept, at Cortex {version}\n")
+        out.write(f"✓ {config.PROJECT_FILE} kept, at Cortex {pinned}\n")
 
     # The spec, where the project finds it — then what git must ignore, asked of git once
     # cortex/ has its final form: a copy turned into a link is a file to git.
@@ -561,7 +567,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     else:
         sync._notes(root, spec_mode, err)
 
-    templates = spec / "templates"
+    templates = templates_spec / "templates"
     # Without --workspace, a workspace's instructions file stays a workspace's (#329): no option names the other
     # layout, and the marker says the one the file was written for, as `cortex upgrade` reads it.
     kept_workspace = not options.workspace and instructions_file is not None and instructions_file.is_file() \
