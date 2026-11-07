@@ -414,10 +414,14 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
     if which == "team":
         outcome = team_move(cwd, wanted, dry_run, force, out, err, branch, message)
         if not dry_run and outcome.why is None and outcome.files:
-            out.write(f"\nCommit {_and([_shown_path(path, outcome.root) for path in outcome.files])} in "
-                      f"{config.TEAM_FOLDER}/; teammates run `cortex sync` after they pull.\n"
+            agents = os.path.join(outcome.root, config.TEAM_FOLDER)
+            team = [path for path in outcome.files if _inside(agents, path)]
+            own = [path for path in outcome.files if path not in team]
+            mine = f"; {_and([_shown_path(path, outcome.root) for path in own])} in the project" if own else ""
+            out.write(f"\nCommit {_and([_shown_path(path, outcome.root) for path in team])} in {config.TEAM_FOLDER}/"
+                      f"{mine}; teammates run `cortex sync` after they pull.\n"
                       if outcome.committed is None else f"\nCommitted in {config.TEAM_FOLDER}/ on {outcome.committed}"
-                      " — nothing was pushed; teammates run `cortex sync` after they pull.\n")
+                      f" — nothing was pushed{mine}; teammates run `cortex sync` after they pull.\n")
         return outcome.code
     newer = _asking(wanted)
     try:
@@ -503,8 +507,7 @@ def local_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out:
         out.write(f"{config.LOCAL_FILE}: version {tried.value} {'would be' if dry_run else 'is'} removed — the team's "
                   f"{team} ({project.team_origin}) is read\n")
         if not dry_run:
-            config.write_local(root, {"version": None})
-            sync.sync(root, None, None, out, err, announce=False)
+            _local_then_sync(root, {"version": None}, out, err)
         return Outcome(root, Version(str(tried.value)), team)
     the_store = store.Store()
     _served(the_store, target, f"cortex upgrade --local {target}")
@@ -516,9 +519,24 @@ def local_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out:
     if dry_run:
         out.write("--dry-run: nothing of the project was changed\n")
         return Outcome(root, project.version, target)
-    config.write_local(root, {"version": str(target)}, {"version": "your try — `cortex upgrade --local` writes it"})
-    sync.sync(root, None, None, out, err, announce=False)
+    _local_then_sync(root, {"version": str(target)}, out, err)
     return Outcome(root, project.version, target)
+
+
+def _local_then_sync(root: str, values: Dict[str, object], out: TextIO, err: TextIO) -> None:
+    """Write ``values`` in ``cortex.local.toml``, then sync — the file put back as it was when the sync fails."""
+    path = Path(root) / config.LOCAL_FILE
+    before = path.read_bytes() if path.is_file() else None
+    config.write_local(root, values, {"version": "your try — `cortex upgrade --local` writes it"})
+    try:
+        sync.sync(root, None, None, out, err, announce=False)
+    except BaseException:
+        if before is None:
+            path.unlink(missing_ok=True)
+        else:
+            _put(path, before)
+        err.write(f"note: {config.LOCAL_FILE} is as it was\n")
+        raise
 
 
 def _team_git(agents: str, branch: Optional[str], out: TextIO, err: TextIO) -> Optional[str]:
@@ -538,7 +556,7 @@ def _team_git(agents: str, branch: Optional[str], out: TextIO, err: TextIO) -> O
 
 
 def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: TextIO, err: TextIO,
-              branch: Optional[str] = None, message: Optional[str] = None) -> Outcome:
+              branch: Optional[str] = None, message: Optional[str] = None, checked: Optional[str] = None) -> Outcome:
     """``cortex upgrade --team [VERSION]`` (ADR-013 §3.11): the team's file's version and its lock, in the
     team's folder; the current project synced, and its untouched team's bootstrap written again, when it
     follows the file. ``--branch`` and ``--commit`` act in the team's repository."""
@@ -560,14 +578,21 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
         raise UpgradeError(f"{config.TEAM_NAME} reads Cortex {grammar.FIRST_TEAM_VERSION} or later, and {target} is "
                            "before it — nothing was changed")
     _served(the_store, target, f"cortex upgrade --team {target}")
+    developer = project.developer_version
+    if developer is not None and project.follows:
+        after = max(target, Version(str(developer.value)))
+        if store.too_old_for(after, the_store.own):
+            raise UpgradeError(f"after the move, this project would read Cortex {after}, {developer.origin}'s, newer "
+                               f"than this cortex, {the_store.own} — drop the try first: cortex upgrade --local "
+                               f"{target}. Nothing was changed")
     out.write(f"Project: {display(root)}\n")
     the_store.ensure(target)
     said = f"Cortex {pinned} → {target}" if pinned is not None else f"Cortex {target}, a version added"
     out.write(f"{config.TEAM_NAME}: {said}\n")
-    if project.follows:
+    if project.follows and checked is None:
         if _overlays(root, target, the_store.path(target), force, dry_run, out, err) and not dry_run:
             return Outcome(root, pinned, target, 1, f"the overlays fail against Cortex {target} — nothing was changed")
-    else:
+    elif not project.follows:
         out.write(f"This project pins its own version, Cortex {project.team_version}, in its committed "
                   f"{config.PROJECT_FILE}: it does not follow {config.TEAM_NAME}, and its overlays are not checked\n")
     if dry_run:
@@ -591,7 +616,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
                 _put(path, content)
         err.write(f"note: {config.TEAM_NAME} and its lock are as they were\n")
         raise
-    outcome = Outcome(root, pinned, target, files=files)
+    outcome = Outcome(root, pinned, target, files=list(files))
     if project.follows:
         rewrites = bootstraps(_instructions_files(Path(root), None), project.team_version, None, the_store.path(target),
                               project.team_theme != "none", err)
@@ -599,12 +624,21 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
             _put(path, content)
             out.write(f"{_shown_path(path, root)}: written again from Cortex {target}'s template — left uncommitted, "
                       "this project's\n")
+            outcome.files.append(path)
+        if developer is not None and Version(str(developer.value)) > target:
+            out.write(f"This machine reads Cortex {developer.value}, {developer.origin}'s — the try, above {target}.\n")
     if message is not None and top is not None:
         paths = [os.path.relpath(path, agents) for path in files]
-        _git_ok(agents, "add", "--", *paths)
-        if _git(agents, "diff", "--cached", "--quiet", "--", *paths).returncode != 0:
-            _git_ok(agents, "commit", "-q", "-m", message, "--", *paths)
-            outcome.committed = f"{_on_branch(agents) or 'HEAD'}, {_git_ok(agents, 'rev-parse', '--short', 'HEAD').stdout.strip()}"
+        try:
+            _git_ok(agents, "add", "--", *paths)
+            if _git(agents, "diff", "--cached", "--quiet", "--", *paths).returncode != 0:
+                _git_ok(agents, "commit", "-q", "-m", message, "--", *paths)
+                outcome.committed = f"{_on_branch(agents) or 'HEAD'}, " \
+                    f"{_git_ok(agents, 'rev-parse', '--short', 'HEAD').stdout.strip()}"
+        except UpgradeError as error:
+            outcome.code, outcome.uncommitted = 1, str(error)
+            out.flush()
+            err.write(f"cortex upgrade: {error} — the upgrade is done, and nothing was committed\n")
     return outcome
 
 
@@ -632,8 +666,12 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     the_store = store.Store()
     pinned = config.loose_pin(root)
     if wanted is None and pinned is not None and pinned[1] > the_store.own and pinned[0] != config.PROJECT_FILE:
-        # A try, or the team's pin, newer than this cortex: said with its own remedy (ADR-013 §3.8).
-        raise UpgradeError(f"{config.too_new(root, the_store.own) or ''} — nothing was changed")
+        # A try, or the team's pin, newer than this cortex: said with its own remedy (ADR-013 §3.8) — a
+        # source or development build, which the gate lets by, never moves the project down to itself.
+        name, newer = pinned
+        raise UpgradeError(f"this project reads Cortex {newer}, which its {name} pins, newer than this cortex, "
+                           f"{the_store.own} — nothing was changed. Name the version to move to: `cortex upgrade "
+                           f"--team VERSION` moves the team's pin, `cortex upgrade --local VERSION` the try")
     if wanted is None and pinned is not None and pinned[1] > the_store.own:
         # The default moves a project to this cortex's version, never down: a teammate's older binary
         # would otherwise undo the team's pin. Said from the version read before any key is checked,
@@ -751,9 +789,12 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
 
     def switch() -> None:
         config.write_text(os.path.join(root, config.PROJECT_FILE), config.render_project(root, {"version": str(target)}))
-        # The lock of the version moved, from the store, whatever this machine reads: during a try the
-        # sync leaves the committed lock alone (ADR-013 §3.4).
-        config.write_lock(root, target, the_store.digest(target))
+        if developer is not None and Version(str(developer.value)) > target:
+            # During a try above it, the sync reads the try and leaves the committed lock alone: the lock
+            # of the version moved is written here, from the store (ADR-013 §3.4). Otherwise the sync
+            # writes it, and says so, as before.
+            config.write_lock(root, target, the_store.digest(target))
+            out.write(f"{config.LOCK_FILE}: Cortex {target} — commit it\n")
         sync.sync(root, None, None, out, err, announce=False)
 
     _write(rewrites, committed, root, err, switch)
@@ -1240,7 +1281,8 @@ def _each(entries: List[registry.Entry], options: _Options, out: TextIO, err: Te
     """Each project's upgrade, in turn, added to ``done``: what it did — or, when it did nothing, why:
     the state it was skipped for, or its being interrupted."""
     made: Dict[str, Tuple[str, str]] = {}
-    moved: Dict[str, Version] = {}          # --all --team: each team's folder, once
+    moved: Dict[str, Optional[str]] = {}    # --all --team: each team's folder, once — None moved, or why refused
+    followers = _followers(entries) if options.which == "team" else []
     for entry in entries:
         out.write(("\n" if done else "") + f"{entry.name}: {entry.path}\n")
         try:
@@ -1251,7 +1293,7 @@ def _each(entries: List[registry.Entry], options: _Options, out: TextIO, err: Te
                 out.write(f"skipped: {found.state} — {why}\n")
                 done.append((entry, None, f"skipped: {found.state}"))
                 continue
-            outcome = _each_move(entry, options, out, err, made, moved)
+            outcome = _each_move(entry, options, out, err, made, moved, followers)
             if isinstance(outcome, str):
                 out.write(f"skipped: {outcome}\n")
                 done.append((entry, None, f"skipped: {outcome}"))
@@ -1270,8 +1312,26 @@ def _each(entries: List[registry.Entry], options: _Options, out: TextIO, err: Te
         out.flush()
 
 
+def folder_of(root: str) -> str:
+    return os.path.normcase(os.path.realpath(os.path.join(root, config.TEAM_FOLDER)))
+
+
+def _followers(entries: List[registry.Entry]) -> List[Tuple[str, str]]:
+    """``(path, team's folder)`` of each registered project that follows its team's file."""
+    found = []
+    for entry in entries:
+        try:
+            project = config.load(entry.path)
+        except (config.ConfigError, OSError):
+            continue
+        if project.follows:
+            found.append((entry.path, folder_of(entry.path)))
+    return found
+
+
 def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextIO,
-               made: Dict[str, Tuple[str, str]], moved: Dict[str, Version]):
+               made: Dict[str, Tuple[str, str]], moved: Dict[str, Optional[str]],
+               followers: List[Tuple[str, str]] = ()):
     """One project of ``--all``: its outcome, or why it is skipped (ADR-013 §3.11) — a project that
     follows its team's file, a developer's ``cortex.toml`` included, which ``--all`` does not move;
     under ``--team``, one with no team's file, or that does not follow it. ``--all --team`` moves each
@@ -1284,13 +1344,34 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
     if not project.follows:
         return "no team's file to move" if not project.team_file else \
             f"pins its own version, {project.team_version}, and does not follow its team's file"
-    folder = os.path.normcase(os.path.realpath(os.path.join(entry.path, config.TEAM_FOLDER)))
+    folder = folder_of(entry.path)
     if folder in moved:
+        why = moved[folder]
+        if why is not None:                 # refused once for every follower: never tried again
+            return Outcome(entry.path, project.team_version, None, 1, why)
         return _move(entry.path, _Options(None, options.dry_run, options.force), out, err, announce=False, made=made)
-    outcome = team_move(entry.path, options.wanted, options.dry_run, options.force, out, err, options.branch,
-                        options.message)
-    if outcome.why is None:
-        moved[folder] = outcome.target
+    # Every follower of this folder, checked against the target before the shared file moves.
+    the_store = store.Store()
+    target = Version(options.wanted) if options.wanted else the_store.own
+    _served(the_store, target, f"cortex upgrade --all --team {target}")
+    the_store.ensure(target)
+    failing = []
+    for other in [path for path, shared in followers if shared == folder]:
+        code, _ = check_overlays(other, the_store.path(target))
+        if code != 0:
+            failing.append(other)
+    if failing and not options.force:
+        why = (f"the overlays of {_and([display(path) for path in failing])} fail against Cortex {target} — "
+               f"{config.TEAM_NAME} was not moved, for any project that follows it")
+        moved[folder] = why
+        out.write(f"refused: {why}\n")
+        return Outcome(entry.path, project.team_version, target, 1, why)
+    if failing:
+        err.write("warning: the overlays of a follower fail against the target, and --force moves the team's file "
+                  "anyway\n")
+    outcome = team_move(entry.path, str(target), options.dry_run, options.force, out, err, options.branch,
+                        options.message, checked=folder)
+    moved[folder] = None if outcome.why is None else outcome.why
     return outcome
 
 
@@ -1409,6 +1490,9 @@ def run(args: List[str]) -> int:
                      "go with it")
     if options.local and options.version is None:
         parser.error("--local needs the VERSION to try")
+    if (options.team or options.local) and options.instructions_file is not None:
+        parser.error("--instructions-file names the bootstrap a plain upgrade writes: --team and --local write the "
+                     "bootstrap they write without it")
     if options.version is not None and not Version.valid(options.version):
         return sync.failed("cortex upgrade", f"{shown(options.version)} is no version — X.Y.Z, for instance 1.4.0", 2)
     if options.all and options.instructions_file is not None:
