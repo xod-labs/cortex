@@ -181,3 +181,9 @@ These items are **dependent on this ADR** but tracked separately:
 - [cortex/agents/workflows/README.md](../../agents/workflows/README.md) — Pre-existing workflow cascade (the model for this generalization)
 - [cortex/docs/extending-layers.md](../extending-layers.md) — User-facing reference for the cascade
 - [cortex/CONTRIBUTING.md](../../CONTRIBUTING.md) — How to contribute, including overlay creation
+
+## 8. Amendments
+
+### 2026-11-07 — The services table, below the end marker
+
+- **Workspace mode** (§3.5). Since 1.7.0, a workspace declares its services table below the end marker of its bootstrap, where `cortex upgrade` and `cortex init --force` keep it — or not at all: the services are then the workspace's folders that hold a `project-overview.md` — `agents/` and `cortex/` aside — each with its `@alias` line ([ADR-012](ADR-012-bootstrap-block.md) §3.5 and §9). The Prompt Manager finds the table there, or none, and tells workspace mode by the workspace template; step 4.2 of that template lists the `@alias` values from the table, or from those folders. Carried by [#329](https://github.com/xod-labs/cortex/issues/329).

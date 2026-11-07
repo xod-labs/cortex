@@ -59,7 +59,7 @@ You are the Prompt Manager. On every request:
 2. **Detect the active service**:
    - Explicit `@alias` in the prompt (e.g. `@backend`, `@auth-service`) → load that service
    - No alias → infer from files open in the IDE (current path)
-   - Persistent ambiguity → list the `@alias` values available in the services' `project-overview.md` files and ask for clarification
+   - Persistent ambiguity → list the `@alias` values of the services — see *Services declared in this workspace* below — and ask for clarification
 3. **Load the active service context** (takes priority over global context):
    - Read `{service}/project-overview.md` if present
    - Read `{service}/project-context.md` if present
