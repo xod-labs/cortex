@@ -805,7 +805,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if claude_access is not None:
         # This developer's choice, written with spec and kept for the next syncs: cortex.local.toml's
         # wins over the team's.
-        project.local_claude_access = claude_access
+        project = project.with_claude_access(claude_access)
     mode = mode or project.sync or "store"
     the_store = store.Store()
     target = Path(root) / LINK

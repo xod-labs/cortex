@@ -61,8 +61,8 @@ class Resolution:
         return self.settings[key].value
 
 
-def _environment(key: str, environ: Mapping[str, str]) -> Optional[object]:
-    name = VARIABLES.get(key)
+def _environment(key: str, environ: Mapping[str, str], variables: Mapping[str, str]) -> Optional[object]:
+    name = variables.get(key)
     raw = environ.get(name) if name else None
     if not raw:
         return None
@@ -71,19 +71,21 @@ def _environment(key: str, environ: Mapping[str, str]) -> Optional[object]:
 
 def resolve(project_data: Optional[Mapping], local_data: Optional[Mapping], machine_data: Mapping,
             environ: Mapping[str, str], *, machine_name: str = MACHINE_FILE, locked: bool = False,
-            committed: Optional[bool] = None, warnings: Tuple[str, ...] = ()) -> Resolution:
+            committed: Optional[bool] = None, warnings: Tuple[str, ...] = (), machine: bool = True,
+            variables: Mapping[str, str] = VARIABLES) -> Resolution:
     """The settings from the files read already — ``project_data`` and ``local_data`` checked by
     ``project``'s grammar, ``machine_data`` the keys of the machine's file that read. Without
-    ``project_data``, outside a project, only the machine's keys. ``locked`` gives the team's
-    resolution, without ``cortex.local.toml``. ``machine_name`` is how an origin names the machine's
-    file."""
-    keys = KEYS if project_data is not None else MACHINE_KEYS
+    ``project_data``, outside a project, only the machine's keys; ``machine`` off, the project's only.
+    ``locked`` gives the team's resolution, without ``cortex.local.toml``. ``machine_name`` is how an
+    origin names the machine's file. ``variables`` are the environment's keys, each reader's own: the
+    command's are ``VARIABLES``."""
+    keys = (KEYS if machine else PROJECT_SETTINGS) if project_data is not None else MACHINE_KEYS
     settings: Dict[str, Setting] = {}
     for key in keys:
         found: List[Tuple[str, object]] = []
-        from_environment = _environment(key, environ)
+        from_environment = _environment(key, environ, variables)
         if from_environment is not None:
-            found.append((VARIABLES[key], from_environment))
+            found.append((variables[key], from_environment))
         if local_data is not None and not locked and key in project.LOCAL_KEYS and key in local_data:
             found.append((LOCAL_FILE, local_data[key]))
         if project_data is not None and key in project.PROJECT_KEYS and key in project_data:
@@ -104,22 +106,26 @@ def _toml(path: str) -> Dict:
         return tomllib.loads(fh.read().decode("utf-8-sig"))    # a byte order mark, as Notepad writes one
 
 
+def _checked_toml(path: str, name: str) -> Dict:
+    try:
+        return _toml(path)
+    except UnicodeDecodeError:
+        raise project.ProjectFileError(f"{name}: not UTF-8 text")
+    except tomllib.TOMLDecodeError as error:
+        raise project.ProjectFileError(f"{name}: {error}")
+
+
 def read_project(root: str, local: bool = True) -> Tuple[Mapping, Optional[Mapping]]:
     """``cortex.toml`` at ``root``, and ``cortex.local.toml`` unless ``local`` is off — or ``None``
     when it is not there — each checked with the grammar. Raises ``project.ProjectFileError`` naming
-    the file; ``OSError`` for a file that cannot be opened."""
-    try:
-        data = _toml(os.path.join(root, PROJECT_FILE))
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
-        raise project.ProjectFileError(f"{PROJECT_FILE}: {error}")
+    the file; ``OSError`` for a file that cannot be opened. The one reader of the two files, the
+    command's and ``cortex config``'s."""
+    data = _checked_toml(os.path.join(root, PROJECT_FILE), PROJECT_FILE)
     project.check_project(data)
     local_data = None
     path = os.path.join(root, LOCAL_FILE)
     if local and os.path.isfile(path):
-        try:
-            local_data = _toml(path)
-        except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
-            raise project.ProjectFileError(f"{LOCAL_FILE}: {error}")
+        local_data = _checked_toml(path, LOCAL_FILE)
         project.check_local(local_data)
     return data, local_data
 

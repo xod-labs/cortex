@@ -60,6 +60,20 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual(list(found.settings), list(project.MACHINE_KEYS))
         self.assertIsNone(found.committed)
 
+    def test_the_version_is_cortex_toml_s_and_no_other_tier_s(self):
+        # A local "version" is not a setting yet: it cannot win, low or high, until it is made one.
+        found = cascade.resolve(PROJECT, {"version": "0.1.0"}, {"version": "9.0.0"}, {"CORTEX_VERSION": "9.0.0"})
+        self.assertEqual((found.value("version"), found["version"].origin), ("1.7.0", project.PROJECT_FILE))
+        self.assertEqual(found["version"].overridden, ())
+
+    def test_the_variables_are_the_reader_s_own(self):
+        found = cascade.resolve(PROJECT, None, {}, {"CORTEX_NO_REGISTER": "1", "OURS": "1"}, variables={"register": "OURS"})
+        self.assertEqual((found.value("register"), found["register"].origin), (False, "OURS"))
+        self.assertEqual(cascade.resolve(PROJECT, None, {}, {"CORTEX_NO_REGISTER": "1"}, variables={})["register"].origin,
+                         cascade.DEFAULT)
+        self.assertEqual(list(cascade.resolve(PROJECT, None, {}, {}, machine=False).settings),
+                         list(cascade.PROJECT_SETTINGS))
+
     def test_committed_is_the_caller_s_answer(self):
         self.assertIs(cascade.resolve(PROJECT, None, {}, {}, committed=False).committed, False)
         self.assertIsNone(cascade.resolve(PROJECT, None, {}, {}).committed)
@@ -105,6 +119,9 @@ class ProjectFileTests(unittest.TestCase):
         self.assertIsNone(cascade.read_project(str(self.root), local=False)[1])
         (self.root / "cortex.local.toml").write_text('verison = "x"\n', encoding="utf-8")
         with self.assertRaisesRegex(project.ProjectFileError, 'cortex.local.toml: unknown key "verison"'):
+            cascade.read_project(str(self.root))
+        (self.root / "cortex.local.toml").write_bytes(b"theme = \"\xff\"\n")
+        with self.assertRaisesRegex(project.ProjectFileError, "cortex.local.toml: not UTF-8 text"):
             cascade.read_project(str(self.root))
 
     def test_the_version_is_read_before_any_key(self):
