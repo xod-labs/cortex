@@ -514,7 +514,7 @@ def local_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out:
     the_store.ensure(target)
     out.write(f"Cortex {target}: a try, above the team's {team} ({project.team_origin}) — nothing committed is "
               "written\n")
-    if _overlays(root, target, the_store.path(target), force, dry_run, out, err) and not dry_run:
+    if _overlays(root, target, the_store.path(target), force, dry_run, out, err):
         return Outcome(root, project.version, target, 1, f"the overlays fail against Cortex {target} — nothing was changed")
     if dry_run:
         out.write("--dry-run: nothing of the project was changed\n")
@@ -555,6 +555,24 @@ def _team_git(agents: str, branch: Optional[str], out: TextIO, err: TextIO) -> O
     return top
 
 
+def team_target(pinned: Optional[Version], wanted: Optional[str], the_store: store.Store) -> Version:
+    """The version ``--team`` moves the team's file to: ``wanted``, or this cortex's own — never down to it,
+    nor to a source or development build's, which names no release a teammate can download."""
+    if wanted is None and store.development(the_store.own):
+        raise UpgradeError(f"this cortex is a development build, {the_store.own}, which no teammate can download — "
+                           "name the version to move the team's pin to: cortex upgrade --team VERSION. Nothing was "
+                           "changed")
+    if wanted is None and pinned is not None and pinned > the_store.own:
+        raise UpgradeError(f"{config.TEAM_NAME} pins Cortex {pinned}, newer than this cortex, {the_store.own} — nothing "
+                           f"was changed. Update this cortex:\n    {store.update_command(pinned)}")
+    target = Version(wanted) if wanted else the_store.own
+    if grammar.before_team(str(target)):
+        raise UpgradeError(f"{config.TEAM_NAME} reads Cortex {grammar.FIRST_TEAM_VERSION} or later, and {target} is "
+                           "before it — nothing was changed")
+    _served(the_store, target, f"cortex upgrade --team {target}")
+    return target
+
+
 def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: TextIO, err: TextIO,
               branch: Optional[str] = None, message: Optional[str] = None, checked: Optional[str] = None) -> Outcome:
     """``cortex upgrade --team [VERSION]`` (ADR-013 §3.11): the team's file's version and its lock, in the
@@ -570,14 +588,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
                            f"{grammar.FIRST_TEAM_VERSION}. Nothing was changed")
     the_store = store.Store()
     pinned = project.team_version if project.team_origin == config.TEAM_NAME else None
-    if wanted is None and pinned is not None and pinned > the_store.own:
-        raise UpgradeError(f"{config.TEAM_NAME} pins Cortex {pinned}, newer than this cortex, {the_store.own} — nothing "
-                           f"was changed. Update this cortex:\n    {store.update_command(pinned)}")
-    target = Version(wanted) if wanted else the_store.own
-    if grammar.before_team(str(target)):
-        raise UpgradeError(f"{config.TEAM_NAME} reads Cortex {grammar.FIRST_TEAM_VERSION} or later, and {target} is "
-                           "before it — nothing was changed")
-    _served(the_store, target, f"cortex upgrade --team {target}")
+    target = team_target(pinned, wanted, the_store)
     developer = project.developer_version
     if developer is not None and project.follows:
         after = max(target, Version(str(developer.value)))
@@ -590,7 +601,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     said = f"Cortex {pinned} → {target}" if pinned is not None else f"Cortex {target}, a version added"
     out.write(f"{config.TEAM_NAME}: {said}\n")
     if project.follows and checked is None:
-        if _overlays(root, target, the_store.path(target), force, dry_run, out, err) and not dry_run:
+        if _overlays(root, target, the_store.path(target), force, dry_run, out, err):
             return Outcome(root, pinned, target, 1, f"the overlays fail against Cortex {target} — nothing was changed")
     elif not project.follows:
         out.write(f"This project pins its own version, Cortex {project.team_version}, in its committed "
@@ -605,7 +616,14 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     try:
         with sync.project_lock(Path(agents), err):
             config.write_text(str(team_file), config.render_team(root, {"version": str(target)}))
-            config.write_lock(agents, target, the_store.digest(target), config.TEAM_LOCK_FILE)
+            if target == pinned:
+                # At the version pinned, the lock is checked as sync checks it: a spec whose files differ
+                # from the ones the team locked is refused, not locked again.
+                digest, said = sync.check_lock(agents, target, the_store, out, name=config.TEAM_LOCK_FILE)
+                if said is not None:
+                    config.write_lock(agents, target, digest, config.TEAM_LOCK_FILE)
+            else:
+                config.write_lock(agents, target, the_store.digest(target), config.TEAM_LOCK_FILE)
         if project.follows:
             sync.sync(root, None, None, out, err, announce=False)
     except BaseException:
@@ -618,8 +636,14 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
         raise
     outcome = Outcome(root, pinned, target, files=list(files))
     if project.follows:
-        rewrites = bootstraps(_instructions_files(Path(root), None), project.team_version, None, the_store.path(target),
-                              project.team_theme != "none", err)
+        current_path = None
+        try:
+            the_store.ensure(project.team_version)
+            current_path = the_store.path(project.team_version)
+        except store.StoreError:
+            pass
+        rewrites = bootstraps(_instructions_files(Path(root), None), project.team_version, current_path,
+                              the_store.path(target), project.team_theme != "none", err)
         for path, content in rewrites:
             _put(path, content)
             out.write(f"{_shown_path(path, root)}: written again from Cortex {target}'s template — left uncommitted, "
@@ -669,9 +693,11 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         # A try, or the team's pin, newer than this cortex: said with its own remedy (ADR-013 §3.8) — a
         # source or development build, which the gate lets by, never moves the project down to itself.
         name, newer = pinned
+        team = os.path.isfile(os.path.join(root, config.TEAM_FOLDER, config.TEAM_FILE))
         raise UpgradeError(f"this project reads Cortex {newer}, which its {name} pins, newer than this cortex, "
-                           f"{the_store.own} — nothing was changed. Name the version to move to: `cortex upgrade "
-                           f"--team VERSION` moves the team's pin, `cortex upgrade --local VERSION` the try")
+                           f"{the_store.own} — nothing was changed. Name the version to move to: "
+                           + ("`cortex upgrade --team VERSION` moves the team's pin, " if team else "")
+                           + "`cortex upgrade --local VERSION` the try")
     if wanted is None and pinned is not None and pinned[1] > the_store.own:
         # The default moves a project to this cortex's version, never down: a teammate's older binary
         # would otherwise undo the team's pin. Said from the version read before any key is checked,
@@ -794,7 +820,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
             # of the version moved is written here, from the store (ADR-013 §3.4). Otherwise the sync
             # writes it, and says so, as before.
             config.write_lock(root, target, the_store.digest(target))
-            out.write(f"{config.LOCK_FILE}: Cortex {target} — commit it\n")
+            out.write(f"{config.LOCK_FILE}: Cortex {target}{'' if sync.in_no_repository(root) else ' — commit it'}\n")
         sync.sync(root, None, None, out, err, announce=False)
 
     _write(rewrites, committed, root, err, switch)
@@ -962,6 +988,18 @@ def _within(top: str, path: Path) -> Optional[str]:
             return None
         below.append(os.path.basename(here))
         here = parent
+
+
+def _other_tree(top: str, path: Path) -> bool:
+    """Whether ``path`` lies in a work tree of its own inside ``top`` — a ``.git`` between them: the team's
+    folder, a submodule, whose files are committed in its repository (ADR-013 §3.11)."""
+    stop = os.path.normcase(os.path.realpath(top))
+    here = os.path.dirname(os.path.realpath(path))
+    while os.path.normcase(here) != stop and os.path.dirname(here) != here:
+        if os.path.lexists(os.path.join(here, ".git")):
+            return True
+        here = os.path.dirname(here)
+    return False
 
 
 def _inside(top: str, path: Path) -> bool:
@@ -1203,7 +1241,8 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
     if outcome.ignored:
         err.write(f"note: nothing to commit in {display(root)} — git ignores {_and(outcome.names())}\n")
         return outcome
-    outcome.outside = [path for path in outcome.files if not _inside(top, path)]
+    # A file of another work tree inside this one — the team's folder, a submodule — is that repository's.
+    outcome.outside = [path for path in outcome.files if not _inside(top, path) or _other_tree(top, path)]
     if outcome.outside:
         names = [_where(path, root) for path in outcome.outside]
         them = "them where they are" if len(names) > 1 else "it where it is"
@@ -1350,16 +1389,22 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
         if why is not None:                 # refused once for every follower: never tried again
             return Outcome(entry.path, project.team_version, None, 1, why)
         return _move(entry.path, _Options(None, options.dry_run, options.force), out, err, announce=False, made=made)
-    # Every follower of this folder, checked against the target before the shared file moves.
+    # Every follower of this folder, checked against the target team_move will use, before it moves.
     the_store = store.Store()
-    target = Version(options.wanted) if options.wanted else the_store.own
-    _served(the_store, target, f"cortex upgrade --all --team {target}")
+    try:
+        target = team_target(project.team_version if project.team_origin == config.TEAM_NAME else None,
+                             options.wanted, the_store)
+    except UpgradeError as error:
+        moved[folder] = str(error)
+        out.write(f"refused: {error}\n")
+        return Outcome(entry.path, project.team_version, None, 1, str(error))
     the_store.ensure(target)
     failing = []
     for other in [path for path, shared in followers if shared == folder]:
-        code, _ = check_overlays(other, the_store.path(target))
+        code, report = check_overlays(other, the_store.path(target))
         if code != 0:
             failing.append(other)
+            out.write(f"The overlays of {display(other)}, checked against Cortex {target}:\n{report}")
     if failing and not options.force:
         why = (f"the overlays of {_and([display(path) for path in failing])} fail against Cortex {target} — "
                f"{config.TEAM_NAME} was not moved, for any project that follows it")
@@ -1369,7 +1414,7 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
     if failing:
         err.write("warning: the overlays of a follower fail against the target, and --force moves the team's file "
                   "anyway\n")
-    outcome = team_move(entry.path, str(target), options.dry_run, options.force, out, err, options.branch,
+    outcome = team_move(entry.path, options.wanted, options.dry_run, options.force, out, err, options.branch,
                         options.message, checked=folder)
     moved[folder] = None if outcome.why is None else outcome.why
     return outcome
