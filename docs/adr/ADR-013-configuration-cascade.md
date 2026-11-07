@@ -36,7 +36,7 @@ Decided with the maintainer, numbered as the arbitrations of #98 were. On 2026-1
 On 2026-11-07, answering this record's draft:
 
 - **21** — the team's file and its lock are `cortex.team.toml` and `cortex.team.lock`;
-- **22** — `cortex upgrade` moves `cortex.toml` by default; `--team` and `--local` move the others;
+- **22** — `cortex upgrade` moves `cortex.toml` by default; `--team` and `--local` move the others — narrowed on 2026-11-07, after the counter-review: in a project that follows a team's file, an uncommitted `cortex.toml` included, a plain move is refused (§3.11);
 - **23** — the templates compare each file's `version`, and the spec's, with `synced` by plain equality;
 - **24** — in a committed project, a committed `cortex.toml`'s version wins over the team's file;
 - **25** — `claude_access` is lockable to `false` only: a team may forbid a permission, never grant one on a developer's machine;
@@ -44,7 +44,7 @@ On 2026-11-07, answering this record's draft:
 - **27** — the key that names the team's folder is `agents`;
 - **28** — `cortex upgrade --local` at or below the team's version removes the local key, with no new option;
 - **29** — `cortex sync` records `synced` in `cortex.local.toml`;
-- **30** — the same configuration everywhere: `agents` is set in `cortex.toml` only, and names a folder inside the workspace root — it renames the team's folder, nothing more. A shared repository elsewhere stays #327's.
+- **30** — the same configuration everywhere: `agents` is set in a committed `cortex.toml` only, and names a folder inside the workspace root — it renames the team's folder, nothing more. A shared repository elsewhere stays #327's.
 
 Out of scope: the IDE modes (#98, its second record); a team's repository outside the workspace (#327); the endpoints of local models (#40); the runtime's own variables but `CORTEX_THEME` (§3.12).
 
@@ -127,8 +127,9 @@ locked = ["claude_access"]
 agents = "team-agents"    # cortex.toml — the team's folder, renamed
 ```
 
-- **Set in `cortex.toml` only** (decision 30) — never in `cortex.local.toml`, the team's file or the machine's: every developer reads the same folder. Its value is a relative path, with `/`, naming a folder inside the workspace root. **Default:** `agents`.
-- **Refused:** a `..` component, a `\`, an absolute path of any platform — `/x`, `C:\x`, `\\server\x`; the project root itself; `cortex/` or a folder inside it; a service's `{service}/agents/` or a folder inside a service; a folder holding a project's `cortex.toml`; a component starting with `.`. Folders compare as the file system compares them. **The default `agents/` is never refused**: a project of 1.7.0 reads as before.
+- **Set in a committed `cortex.toml` only** (decision 30) — never in an uncommitted one, as at a 2.B root, nor in `cortex.local.toml`, the team's file or the machine's: every developer reads the same folder. Its value is a relative path, with `/`, naming a folder inside the workspace root. **Default:** `agents`.
+- **Refused:** `agents` in an uncommitted `cortex.toml` — the team's folder is then `agents/`; a `..` component, a `\`, an absolute path of any platform — `/x`, `C:\x`, `\\server\x`; the project root itself; `cortex/` or a folder inside it; a service's `{service}/agents/` or a folder inside a service; a folder holding a project's `cortex.toml`; a component starting with `.`. Paths compare as written, with the file system's rules for names — in any case on macOS and Windows.
+- **A symbolic link:** a team's folder, the default `agents/` included, may be a link leading outside the workspace. Cortex checks its path as written, inside the workspace, and resolves no link: the link is the developer's own choice, as in 1.7.0 — #327's simple form — and Cortex names no path outside the workspace. **The default `agents/` is never refused**: a project of 1.7.0 reads as before.
 - **What follows the folder:** the workspace tier of the cascade (ADR-001 §3.1, ADR-007 §3.1), whose layer directories the folder holds itself; the team's context files (ADR-006 §3.2); the overlay roots `cortex validate` checks; the team's file and lock; the project's own themes; the runtime. The service scan leaves out `{root}/agents/` and the renamed folder. A service's `{service}/agents/` and the `Base:` headers stay. **Missing**, a folder the key names is a warning at every sync, and an error under `--locked`. **Left behind**: the root's `agents/` still holding overlays or context files while the key names another folder is warned.
 
 ### 3.7 The machine's file and the environment
@@ -141,7 +142,7 @@ agents = "team-agents"    # cortex.toml — the team's folder, renamed
 
 What this record adds — the team's file, a local `version`, `agents`, a `cortex.toml` without `version` or `theme` — is read only once the team's version is **1.8.0 or later**: an earlier version's templates know none of it.
 
-1. **Every file's `version`, and `agents`, are read loosely first**, with §3.6's refusals of the text, and the version resolved.
+1. **Every file's `version`, and a committed `cortex.toml`'s `agents`, are read loosely first**, with §3.6's refusals of the text, and the version resolved.
 2. **A resolved version newer than the binary** stops the commands that use the spec — `sync`, `init`, `validate`, `upgrade` without `VERSION` — before any other key is checked. The refusal names the file that holds it and the remedy: `cortex self-update`; `cortex upgrade --local VERSION` for a try; `cortex upgrade --team VERSION` for the team's pin. `cortex upgrade [--team | --local] VERSION` may still move down (ADR-010 §3.5), and refuses before writing when the version resolved after the move is still too new. `cortex config` prints the version and says the binary is too old for it; `prune` and `project list` read loosely. `--from`, which checks no version as in 1.7.0, and `validate` of a spec that names none, pass the gate. **A source checkout**, whose version is `0.0.0-dev`, counts as newer than every release for the gate, so that CONTRIBUTING's loop exercises 1.8's keys; `CORTEX_SOURCE_VERSION` still names a release where a test needs one. This rule is the record's own choice, not the maintainer's: phase 1 revisits it if it proves wrong.
 3. **Then the keys are checked, against the team's version.** While it is before 1.8.0, a local `version` is refused, naming the team's move to 1.8.0; `agents` and a version-less `cortex.toml` are refused, naming 1.8.0; a team's file is a warning — *not read: the team's version is 1.7.0* — and so is a key of the team's file that a version after the team's version adds. A move below 1.8.0 refuses a project that uses them or has no `theme` in `cortex.toml`, naming them; `--team VERSION` below 1.8.0 is refused before anything is written.
 4. **`cortex init`** writes `version` and `theme` when the team's version predates 1.8.0, and otherwise not those the team's file sets — a `version` from the binary would put a developer ahead of the team — and writes each bootstrap from the resolution it follows (§3.10).
@@ -165,7 +166,7 @@ Each key, its value and its origin — a file as the project root names it, a va
 
 The templates ask the assistant to read a file it did not read, which raises the format (ADR-010 §3.1) to **3**; ADR-012's end marker and two parts carry over. Their first rules become:
 
-- **`cortex sync` says this cortex is too old** → run the command it names — `cortex self-update`, or the install script's from a binary before 1.4.0 — then `cortex sync`, as in format 2. **It refuses `cortex.toml` or `cortex.local.toml` for a key, or a missing `version` or `theme`** → run `cortex --version`; below 1.8.0, `cortex self-update`, then `cortex sync`. **It names a missing team's folder** → tell the user the command it names, and go no further.
+- **`cortex sync` says this cortex is too old** → run the command it names — `cortex self-update`, or the install script's from a binary before 1.4.0 — then `cortex sync`, as in format 2. **It refuses `cortex.toml` or `cortex.local.toml` for a key, or a missing `version` or `theme`** → run `cortex --version`; below 1.8.0, `cortex self-update`, then `cortex sync`; otherwise tell the user what it refuses, and go no further. **It names a missing team's folder** → tell the user the command it names, and go no further.
 - **The team's folder** is `agents` in `cortex.toml`, else `agents/`; the team's file is `cortex.team.toml` there. The cascade's steps name the team's folder where they said `agents/`. The block names no folder, so a rename rewrites no bootstrap.
 - **The version** (decision 23): a file's `version`, or the spec's, that differs from what `synced` records → run `cortex sync`, once: a spec still of another version afterwards is told to the user, and the assistant goes no further. **No `synced`**, and a spec that names a version → the same; still none after it — a team's version below 1.8.0 — compare as format 2 does, the spec's version with `cortex.toml`'s, and run `cortex --version`; below 1.8.0, `cortex self-update`, then `cortex sync`. Plain equality: no ordering, no git; nothing runs while the machine is in step. **A spec with no version** — `cortex/` a link, a copy whose `.synced` says `"version": null`, or `reads` is `""`, a checkout — has nothing to compare: the assistant tells the user rather than run a sync that would leave the checkout. A copy's `.synced` version is compared, as in format 2.
 - **The theme** is `theme` in `cortex.local.toml`, else `cortex.toml`, else the team's file — the team's file's own when it locks `theme`.
@@ -180,7 +181,7 @@ Which template writes the block:
 ### 3.11 The commands
 
 - **`cortex sync`** puts the resolved version in the store, checks its lock (§3.4), records `synced`, writes the developer's own bootstrap (§3.10), and gives the notes.
-- **`cortex upgrade`** moves `cortex.toml`'s `version`, as in 1.7.0 (decision 22). On a `cortex.toml` without one while the team's file pins, a move is refused, exit 1, naming `--team` and `--local`; without `VERSION`, or with the team's version or the full resolution's, it resumes — sync, lock, untouched blocks — as ADR-010 §3.5 does on a pinned version, comparing the machine with the full resolution, so that a try is not taken for an upgrade cut short. The overlays and changes are checked against the resolution the moved version belongs to — the full one for a developer's version, `--local`'s or an uncommitted `cortex.toml`'s while the team's file pins; the team's otherwise — and the full resolution reported when it differs. `--all` (ADR-011 §3.5) moves the projects that pin their own version; one that follows the team's file, a developer's `cortex.toml` included, is skipped — *follows the team's 1.8.0* — exit 0.
+- **`cortex upgrade`** moves `cortex.toml`'s `version`, as in 1.7.0 (decision 22). In a project that follows a team's file (§3.1) — an uncommitted `cortex.toml` included, at a 2.B root — a move is refused, exit 1, naming `--team` and `--local`, as `--all` skips it; without `VERSION`, or with the team's version or the full resolution's, it resumes — sync, lock, untouched blocks — as ADR-010 §3.5 does on a pinned version, comparing the machine with the full resolution, so that a try is not taken for an upgrade cut short. The overlays and changes are checked against the resolution the moved version belongs to — the full one for `--local`'s, the team's otherwise — and the full resolution reported when it differs. `--all` (ADR-011 §3.5) moves the projects that pin their own version; one that follows the team's file, a developer's `cortex.toml` included, is skipped — *follows the team's 1.8.0* — exit 0.
 - **`--team`** writes the team's file — adding `version` to one that has none, for the projects that follow it — its lock, and, when the current project follows it, its untouched team's bootstrap, named as left uncommitted; without a team's file it is refused — the team creates one by a commit in its repository. It checks the overlays of the projects that follow the team's file, and says when the current one does not. `--branch` and `--commit` act in the team's repository. **`--all --team`** moves each distinct team's file once — a follower whose overlays fail stops it for all, `--force` overriding (ADR-010 §3.5, step 4) — then runs step 5 in each follower; a project with no team's file, or that does not follow its own, is skipped and said, exit 0; with `--commit`, the team's file and lock are committed there, the followers' blocks left uncommitted and named.
 - **`--local`** writes `cortex.local.toml`'s `version` and syncs, writing no committed file (§3.10); at or below the team's version it removes that key, and says so. It refuses `--branch`, `--commit`, `--all` and `--team`, exit 2. No upgrade writes a committed file from the try's version.
 - **`cortex validate`** first applies the template's test — each file's `version` against `synced`'s `team`, `project` and `local`; a difference refuses as 1.7.0 does, *run `cortex sync`*, with its exit code — then compares the spec with `reads`, or, without `synced`, with the resolved version. It checks the lock, and warns on a locked key overridden, a missing or left-behind folder, and the team's bootstrap behind.
@@ -189,7 +190,7 @@ Which template writes the block:
 
 ### 3.12 The runtime
 
-- **It asks no git**: its version is the team's. It first compares each file's `version` now with `synced`'s candidates — any difference is a `422` naming `cortex sync` — then takes `pinned`. Without `synced`, `cortex.toml`'s when it pins one, else the team's file's. Of `cortex.local.toml` it reads `version` and `synced`, never `spec`, a host's path (ADR-008 §3.6): a `422`, naming the key, only when the version this machine's CLI reads differs from its own. It reads the team's folder `cortex.toml` names, inside the project root it mounts.
+- **It asks no git**: its version is the team's. It first compares each file's `version` now with `synced`'s candidates — any difference is a `422` naming `cortex sync` — then takes `pinned`. Without `synced`, `cortex.toml`'s when it pins one, else the team's file's; a team's file whose `version` differs from `cortex.toml`'s is then a `422` naming `cortex sync`. Of `cortex.local.toml` it reads `version` and `synced`, never `spec`, a host's path (ADR-008 §3.6): a `422`, naming the key, only when the version this machine's CLI reads differs from its own. It reads the team's folder `cortex.toml` names, inside the project root it mounts.
 - **Its `CORTEX_THEME`** is the environment tier of `theme`, under a lock: the only key where the environment meets a lock in 1.8.0 (decision 13).
 
 ### 3.13 Continuous integration
@@ -202,7 +203,7 @@ Once this record is implemented, each of these records it in its amendments: ADR
 
 ## 4. Phases
 
-Execution order **1 → 2 → 3**, in one release, 1.8.0, which ships with #331 (#328, #329, `cortex upgrade`'s ending outside git, the workspace template's step 4.2).
+Execution order **1 → 2a → 2b → 3**, in one release, 1.8.0, which ships with #331 (#328, #329, `cortex upgrade`'s ending outside git, the workspace template's step 4.2).
 
 ### Phase 1 — The resolution, the machine's file and `cortex config`
 
@@ -214,19 +215,25 @@ Execution order **1 → 2 → 3**, in one release, 1.8.0, which ships with #331 
 - the machine's file's `releases_url`, `update_check` and `register` take effect, and each variable overrides its key; an unknown key or a wrong type warns, and `cortex self-update` still runs; an invalid `releases_url` is refused naming the file; an empty `CORTEX_RELEASES_URL` is unset
 - a resolved version newer than the binary stops `sync`, `init`, `validate` and `upgrade` without `VERSION`, whatever key a file holds; `cortex upgrade VERSION` still moves down; `config` and `config --locked` print that version and say so; `cortex config KEY` with an unknown key exits 2, and outside a project knows the machine's keys only; a source checkout passes the gate, or the rule is revised
 
-### Phase 2 — The team's file, the version, the lock and format 3
+### Phase 2a — The team's file, the version and the lock
 
-§3.3 to §3.5, §3.8 steps 3–4, §3.10 to §3.13, but for the team's folder.
+§3.3 to §3.5, §3.8 steps 3–4 and §3.11, but for the team's folder.
 
-- a local `1.9.0-rc.1` over a team's `1.8.0` is read, with the note; at `1.8.0` it is said to change nothing; a committed `cortex.toml` at `1.7.0` beside a team's file at `1.8.0` reads `1.7.0`, with the team's file warned of as not read; at a 2.B root, an uncommitted `cortex.toml` at `1.7.0` beside a team's file at `1.8.0` reads `1.8.0`, the CLI and the runtime alike, with `synced` fresh and stale; the team's file moved, then `cortex.toml` edited to its old value, the runtime returns a `422` naming `cortex sync`; a pulled bump of a project on 1.8.0, not synced, makes `validate` refuse — *run `cortex sync`*
+- a local `1.9.0-rc.1` over a team's `1.8.0` is read, with the note; at `1.8.0` it is said to change nothing; a committed `cortex.toml` at `1.7.0` beside a team's file at `1.8.0` reads `1.7.0`, with the team's file warned of as not read; at a 2.B root, an uncommitted `cortex.toml` at `1.7.0` beside a team's file at `1.8.0` reads `1.8.0`; a pulled bump of a project on 1.8.0, not synced, makes `validate` refuse — *run `cortex sync`*
 - the refusal of a version too new names the file and the remedy, `--local` and `--team` included; `cortex upgrade VERSION` refuses when the version resolved after the move is still too new
 - a local version writes no lock, warns of none, passes `--strict`; during a try, `cortex upgrade` writes the committed lock from the version it moves, and `sync --locked && validate --strict` passes; `--locked` keeps the local `claude_access`; the team's lock is written under a lock of its folder, and unwritable there warns; the default `agents/` empty warns
 - `synced` is written where the team's version is 1.8.0 or later, removed by a move below it, with `reads = ""` after `--from`; a 1.7.0 binary reads the `cortex.local.toml` of a project kept on 1.7.0; a local `version` over a team's 1.7.0 is refused; `cortex init` leaves out of `cortex.toml` the `version` and `theme` the team's file sets; `cortex prune` keeps the team's file's version and a local one
 - a team's file whose `version` is below 1.8.0 is refused; `locked` with `version`, `locked`, a key it does not set or twice, or `claude_access = true` is refused; a locked key overridden warns at sync and fails `validate --strict`; `cortex sync --link` against a locked `sync` exits 1; `README.md` and `docs/getting-started.md` say that `claude_access` locks to `false` only, and why
 - `--team` without a team's file is refused, and adds `version` to one without; `--all` and `--all --team` skip, exit 0, a project they do not move; `--team` and `--all --team` move a team's file once and step-5 its followers only, a follower's failing overlays stopping all but under `--force`; `--team 1.7.0` is refused before writing; `--all --local` and `--team --local` exit 2; with a local try, `cortex upgrade` and `--all --commit` write no bootstrap from the try's version; `--local` at the team's version removes the local key; a plain upgrade on a version-less `cortex.toml` resumes and refuses a move
+- at a 2.B root, a team's file at `1.8.0` and an uncommitted `cortex.toml` at `1.7.0`: `cortex upgrade 1.9.0` is refused, exit 1, naming `--team` and `--local`, as `--all` skips the project
+
+### Phase 2b — Format 3, the runtime and continuous integration
+
+§3.10, §3.12 and §3.13.
+
 - both templates are format 3 with §3.10's rules, the init matrix differing by those lines only; 1.7.0's `cortex upgrade` on an untouched format 3 file writes its own format 2 block and puts the team's part back; a 1.8 sync writes format 3 back over the developer's own file only; a move below 1.8.0 writes an untouched developer's own format 3 bootstrap from the resolved version's template
-- the runtime reads the team's version, `CORTEX_THEME` under a lock, and a local `version` above it is a `422`
-- the README's CI recipe passes on a project whose version is the team's file's, and on one of 1.7.0; the docs' adoption path — the team's move announced in `agents/project-context.md` — brings a teammate on 1.7.0 to the team's version
+- the runtime reads the team's version, `CORTEX_THEME` under a lock, and a local `version` above it is a `422`; at a 2.B root, an uncommitted `cortex.toml` at `1.7.0` beside a team's file at `1.8.0` reads `1.8.0` as the CLI does, with `synced` absent, fresh and stale; the team's file moved, then `cortex.toml` edited to its old value, is a `422` naming `cortex sync`; without `synced`, a team's file whose `version` differs from `cortex.toml`'s is a `422` naming `cortex sync`
+- the README's CI recipe passes on a project whose version is the team's file's, and on one of 1.7.0; the docs' adoption path — the team's move announced in `agents/project-context.md`, and at a 2.B root `version` and `theme` removed from `cortex.toml` — brings a teammate on 1.7.0 to the team's version
 - in real Claude Code conversations on a 2.B workspace: with a 1.7.0 binary, the assistant runs `cortex self-update`, then `cortex sync`; with a team's file pinning a version the spec is not of, it runs `cortex sync`, then reaches the Prompt Manager's card with the theme the team's file locks; with a 1.8.0 binary and a team's file at a later version, it runs `cortex self-update` as the refusal names it, and syncs once, without a loop; in step, it runs nothing, and after `cortex init --from` too — CONTRIBUTING's loop, run with a source checkout, passes the gate and leaves the checkout in place; with a format 3 block and no `synced`, it compares as format 2 does. The other tools are #137's, for 1.9.0
 
 ### Phase 3 — The team's folder
@@ -235,7 +242,7 @@ Execution order **1 → 2 → 3**, in one release, 1.8.0, which ships with #331 
 
 - `agents = "team-agents"` moves the workspace tier, the team's context files, the overlay roots, the team's file and lock, the themes and the runtime's reading; the core's golden outputs are unchanged without it
 - `agents` in `cortex.local.toml`, the team's file or the machine's file is refused; in `cortex.toml`, `../x`, `a/../b`, `/x`, `C:\x`, `\\server\x` and `a\b` are refused, and so are the root, `cortex/` and what it holds, a service's folder or one inside a service, a folder holding a project's `cortex.toml`, and `.team`; the default `agents/` never is
-- a missing folder the key names warns at sync and fails `--locked`; a root `agents/` left behind warns; a linked bootstrap is asked of git in its own repository; in a real Claude Code conversation with `agents = "team-agents"`, the assistant reads a role overlay from it
+- `agents` in an uncommitted `cortex.toml` is refused, the team's folder then `agents/`; a team's folder that is a link leading outside the workspace is read through it, its path checked as written; a missing folder the key names warns at sync and fails `--locked`; a root `agents/` left behind warns; a linked bootstrap is asked of git in its own repository; in a real Claude Code conversation with `agents = "team-agents"`, the assistant reads a role overlay from it
 
 ## 5. Consequences
 
@@ -245,7 +252,7 @@ Execution order **1 → 2 → 3**, in one release, 1.8.0, which ships with #331 
 - The machine's settings have a file, `cortex config` says why a command reads what it reads, and a team may rename its folder.
 
 ### Negative
-- **The first move reaches no teammate alone.** A format 2 bootstrap does not read the team's file: each teammate runs `cortex self-update` once, when their binary is before 1.8.0, and `cortex sync` once, by hand. The docs suggest announcing it in `agents/project-context.md`, which format 2's workspace step 2 reads.
+- **The first move reaches no teammate alone.** A format 2 bootstrap does not read the team's file: each teammate runs `cortex self-update` once, when their binary is before 1.8.0, and `cortex sync` once, by hand. The docs suggest announcing it in `agents/project-context.md`, which format 2's workspace step 2 reads. At a 2.B root, the adoption path also removes `version` and `theme` from each `cortex.toml` once the team's file sets them: the version would be said to *remove it*, and the theme would silently beat the team's, unless locked.
 - **The assistant reads one more file**, the team's — the kind of reading ADR-012 §6 declined for a team's rules, which #137 has not measured outside Claude Code. The IDE modes remove it. A format 3 block kept in a project below 1.8.0 costs each conversation a sync and `cortex --version`, until `cortex upgrade` writes it again.
 - **A cortex before 1.8.0** ignores the team's file, and refuses a `cortex.toml` using a key of 1.8.0, or lacking `version` or `theme`, as such, not as a binary too old. 1.7.0's `cortex upgrade` writes an untouched format 3 file again in format 2, the team's part kept; a 1.8 sync puts format 3 back in the developer's own file only. Older runtime images refuse such a `cortex.toml`, `422`, and ignore the rest.
 - **A team's folder serves one workspace**: a repository shared by several, outside each, waits for #327.
@@ -278,4 +285,13 @@ Execution order **1 → 2 → 3**, in one release, 1.8.0, which ships with #331 
 
 ## 9. Amendments
 
-None yet.
+The record was *Accepted*, not yet implemented, when these were made: the body above already says each. They are listed against the text Bluspark's counter-review read, at a0227a1.
+
+### The counter-review of 2026-11-07
+
+- **A plain move is refused in a project that follows a team's file** (§3.11, decision 22). At a 2.B root with a team's file at 1.8.0 and an uncommitted `cortex.toml` at 1.7.0, `--all` said *follows the team's 1.8.0*, while `cortex upgrade 1.9.0` moved the uncommitted `cortex.toml` — a try not called one, with a lock of its own. Such a move is now refused, exit 1, naming `--team` and `--local`, as `--all` skips the project; the resume is unchanged. The maintainer's call narrows decision 22 at a 2.B root with a team's file only.
+- **`agents` is read from a committed `cortex.toml` only** (§3.6, §3.8 step 1, decision 30). At a 2.B root, `cortex.toml` is committed nowhere, so `agents` there was one machine's; it is refused, and the team's folder is `agents/`.
+- **A team's folder may be a symbolic link leading outside the workspace** (§3.6), the default `agents/` included: Cortex checks the path as written, resolves no link, and names no path outside; paths compare as written.
+- **The runtime without `synced`** (§3.12): a team's file whose `version` differs from `cortex.toml`'s is a `422` naming `cortex sync`.
+- **The adoption path at a 2.B root** (§5) removes `version` and `theme` from `cortex.toml` once the team's file sets them: a theme left there would silently beat the team's.
+- **Phase 2 is split** into 2a — the team's file, the version, the lock and the upgrade rules — and 2b — format 3, the runtime and continuous integration; the contract is unchanged, the order 1 → 2a → 2b → 3.
