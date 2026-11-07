@@ -197,7 +197,7 @@ A workspace root that is no git repository — a folder holding the services' re
 
 `cortex --help` lists the commands, and `cortex <command> --help` the options of one. `cortex --version` (`-V`) prints the version — with `--verbose`, the spec archives it knows the checksums of. A command that works on a project finds it from the current directory up: the nearest `cortex.toml`, the workspace root in workspace mode.
 
-> `cortex upgrade`, `cortex self-update`, `cortex prune` and `cortex.lock` are from 1.4.0. **1.5.0 adds the project registry**: `cortex project`, the registration by `cortex init` and `cortex sync`, `cortex prune` with no `DIR`, and `cortex upgrade --all`, `--branch` and `--commit`.
+> `cortex upgrade`, `cortex self-update`, `cortex prune` and `cortex.lock` are from 1.4.0. **1.5.0 adds the project registry**: `cortex project`, the registration by `cortex init` and `cortex sync`, `cortex prune` with no `DIR`, and `cortex upgrade --all`, `--branch` and `--commit`. **1.8.0 adds `cortex config`** and the machine's `config.toml` ([ADR-013](docs/adr/ADR-013-configuration-cascade.md)).
 
 ### `cortex init`
 
@@ -257,7 +257,7 @@ cortex upgrade --all [VERSION] [--dry-run] [--force] [--branch NAME] [--commit -
 
 Moves the project to `VERSION`, or to the binary's own version — never down to it: a project pinned to a newer version moves down only when `VERSION` names it. It puts the target in the store, then says what changes — the roles, capabilities, personalities and workflows added, removed and changed, the templates, and where the release notes are — and checks the project's overlays against the target: an overlay that fails stops it, having changed nothing. Then it writes the bootstrap file again when nobody changed it and the target's template differs — one your team adapted is kept, and the command names `cortex init --force` — writes `version` in `cortex.toml`, and syncs, which rewrites `cortex.lock`. If anything fails, `cortex.toml`, `cortex.lock` and the bootstrap file are put back as they were. It ends with what to commit — at a root in no git repository, that its files are committed nowhere. Run on the version already pinned, it finishes what an upgrade cut short left.
 
-With no `VERSION`, it also says when a release newer than the binary is out — `CORTEX_NO_UPDATE_CHECK` turns that question off. It never moves the binary.
+With no `VERSION`, it also says when a release newer than the binary is out — `CORTEX_NO_UPDATE_CHECK`, or `update_check = false` in the machine's `config.toml`, turns that question off. It never moves the binary.
 
 | Option | What it does |
 |---|---|
@@ -322,6 +322,32 @@ Manages the registry, `projects.toml` in the Cortex home — `~/.cortex/projects
 
 No registry is an empty list: `list` says so, and `check` exits 0. A project moved on disk is registered again at its new path, under a free name, by its next sync; its old entry is then `missing`, and the next `cortex prune` or `cortex project remove` drops it.
 
+### `cortex config`
+
+```text
+cortex config [KEY] [--locked] [--json]
+```
+
+Prints each setting of the project, its value and where it comes from — a file, as the project root names it, a variable, or `default` ([ADR-013](docs/adr/ADR-013-configuration-cascade.md) §3.9). It reads, and writes nothing:
+
+```text
+version        1.7.0                                          cortex.toml
+theme          none                                           cortex.local.toml
+sync           store                                          default
+claude_access  true                                           cortex.toml
+releases_url   https://github.com/xod-labs/cortex/releases    default
+update_check   false                                          CORTEX_NO_UPDATE_CHECK
+register       true                                           default
+```
+
+| Option | What it does |
+|---|---|
+| `KEY` | prints that setting's value alone — `cortex config version`, in a CI script. An unknown key exits 2 |
+| `--locked` | the team's resolution, without `cortex.local.toml`: what `cortex sync --locked` checks, and what the runtime reads |
+| `--json` | one JSON object, with a `format` field: each setting's value, its origin, the values it overrode — and whether `cortex.toml` is committed |
+
+Outside a project, it knows the machine's keys only. A project pinned to a version newer than the binary is printed all the same, with the `cortex self-update` that serves it. A file it refuses exits 1, naming it.
+
 ### `cortex validate`
 
 ```text
@@ -348,6 +374,14 @@ It exits `0` when clean, `1` on errors — or on warnings under `--strict` — a
 | `CORTEX_NO_MODIFY_PATH` | `install.ps1` | `1` leaves your user `PATH` as it is, as `-NoModifyPath` does |
 | `SSL_CERT_FILE`, `SSL_CERT_DIR` | the binary | the certificates a download is checked with, as OpenSSL reads them. Unset, the binary looks where the common systems keep theirs |
 | `CORTEX_SOURCE_VERSION` | a source checkout | the version a checkout's tests stand for — for contributors; a built binary never reads it |
+
+**The machine's file.** `config.toml` in the Cortex home — `~/.cortex/config.toml` by default — holds the same three settings, for every project of this user ([ADR-013](docs/adr/ADR-013-configuration-cascade.md) §3.7): `releases_url`, `update_check` and `register`. Each variable goes over its key, as it always did — an empty `CORTEX_RELEASES_URL` counts as unset — and no variable turns a key back on. The file is optional, and no command writes it. It never stops one: an unknown key, a value of the wrong type, or a file that cannot be read is a warning, and the rest is read — `cortex self-update` above all. A `releases_url` that is no https address is refused as the variable is, naming the file. `cortex config` says which one a setting comes from.
+
+```toml
+# ~/.cortex/config.toml
+releases_url = "https://mirror.example.com/cortex/releases"
+update_check = false
+```
 
 The runtime has its own — `CORTEX_BACKEND`, `CORTEX_DB`, `CORTEX_AUTH`… — in [runtime/README.md](runtime/README.md).
 
