@@ -112,6 +112,20 @@ def load(root: str) -> Project:
                    claude_entry=local.get("claude_entry"))
 
 
+def local_spec(root: str) -> Optional[str]:
+    """The ``spec`` of ``cortex.local.toml`` at ``root``, read alone: a project whose ``cortex.toml``
+    is gone keeps it (#328). ``None`` when the file is not there, names none, or cannot be read."""
+    path = os.path.join(root, LOCAL_FILE)
+    if not os.path.isfile(path):
+        return None
+    try:
+        local = _read(path)
+        project.check_local(local)
+    except (OSError, ConfigError, project.ProjectFileError):
+        return None
+    return local.get("spec")
+
+
 def toml_string(value: str) -> str:
     """``value`` as a TOML basic string — JSON's escapes are TOML's."""
     return json.dumps(value, ensure_ascii=False)

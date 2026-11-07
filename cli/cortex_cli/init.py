@@ -425,7 +425,8 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                         "start over")
     # As the sync's own check (#310, #325): a link sync from a checkout replaces a link that leads nowhere.
     links = (mode or (project.sync if project else None)) == "link"
-    sync.existing_entry(root / sync.LINK, the_store, project or _blank(root), replaces=options.source is not None and links)
+    sync.existing_entry(root / sync.LINK, the_store, project or _blank(root), replaces=options.source is not None and links,
+                        pinned=project is not None)
     # A project keeps the version it pins — never another, older or newer; a new one takes this
     # binary's. A version newer than this binary is refused here.
     version = project.version if project else the_store.own
@@ -597,9 +598,10 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
 
 
 def _blank(root: Path) -> config.Project:
-    """A project not initialised yet: nothing sync made can be at cortex/."""
+    """A project without its ``cortex.toml``: what sync made at cortex/ is judged by the ``spec`` its
+    ``cortex.local.toml`` still names, as `cortex sync` judges it (#328) — nothing, when it names none."""
     return config.Project(root=str(root), version=store.Store().own, theme="none", sync=None,
-                          local_theme=None, spec=None)
+                          local_theme=None, spec=config.local_spec(str(root)))
 
 
 def run(args: List[str]) -> int:

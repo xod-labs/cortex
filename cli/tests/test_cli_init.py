@@ -528,6 +528,34 @@ class OptionTests(InitTestCase):
         self.assertIn("which led nowhere: replaced.", proc.out)
         self.assertEqual(os.path.realpath(self.project / "cortex"), os.path.realpath(again))
 
+    def test_a_link_cortex_made_is_its_own_once_cortex_toml_is_gone(self):
+        # #328: without cortex.toml, the link is judged by the spec cortex.local.toml still names.
+        checkout, moved = self.tmp / "checkout", self.tmp / "moved"
+        shutil.copytree(self.spec, checkout)
+        proc = self.init("--tool", "claude", "--link", "--from", str(checkout))
+        self.assertEqual(proc.returncode, 0, proc.err)
+        (self.project / "cortex.toml").unlink()
+        proc = self.init("--tool", "claude", "--link", "--from", str(checkout))
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("which Cortex did not make", proc.err)
+        self.assertTrue((self.project / "cortex.toml").is_file())
+        (self.project / "cortex.toml").unlink()
+        checkout.rename(moved)                                                       # a link that leads nowhere:
+        proc = self.init("--tool", "claude")                                         # no sync runs without the pin
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn("which leads nowhere", proc.err)
+        self.assertIn("`cortex init --link --from` the checkout it should follow", proc.err)
+        self.assertNotIn("cortex sync", proc.err)
+        proc = self.init("--tool", "claude", "--link", "--from", str(moved))        # replaced as #325 has it
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("which led nowhere: replaced.", proc.out)
+        self.assertEqual(os.path.realpath(self.project / "cortex"), os.path.realpath(moved))
+        (self.project / "cortex.toml").unlink()
+        (self.project / "cortex.local.toml").write_text("spec = [\n")             # unreadable: as before #328
+        proc = self.init("--tool", "claude", "--link", "--from", str(moved))
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn("which Cortex did not make", proc.err)
+
     def test_a_directory_given(self):
         proc = self.init("sub/app", cwd=self.project)
         self.assertEqual(proc.returncode, 0, proc.err)
