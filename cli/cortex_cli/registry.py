@@ -71,15 +71,16 @@ class State:
     entry: Entry
     state: str                      # OK, MISSING, NO_PROJECT or UNREADABLE
     why: Optional[str] = None       # what cannot be read, when UNREADABLE
-    pinned: Optional[str] = None    # the version its cortex.toml pins
+    pinned: Optional[str] = None    # the team's version: its cortex.toml's, or its team's file's (ADR-013 §3.1)
     reads: Optional[str] = None     # the version this machine reads now: the spec of its cortex.local.toml
     layout: Optional[str] = None    # "single" or "workspace", by the marker of its bootstrap
+    pinned_origin: Optional[str] = None     # the file the team's version comes from
 
     def as_json(self) -> dict:
         """The object ``cortex project list --json`` gives for it — its keys only grow within
         ``LIST_FORMAT``."""
         return {"name": self.entry.name, "path": self.entry.path, "state": self.state, "pinned": self.pinned,
-                "reads": self.reads, "layout": self.layout, "why": self.why}
+                "pinned_origin": self.pinned_origin, "reads": self.reads, "layout": self.layout, "why": self.why}
 
 
 def registry_path() -> Path:
@@ -384,7 +385,8 @@ def state(entry: Entry) -> State:
         why, read = sync.os_error(error), prune._loosely(root)
     # PINNED is the team's version (ADR-013 §3.11): what the team commits, whatever a try reads here.
     return State(entry, OK if why is None else UNREADABLE, why, str(read.team_version) if read else None,
-                 _reads(read) if read else None, _layout(root))
+                 _reads(read) if read else None, _layout(root),
+                 (read.team_origin if read.settings is not None else config.PROJECT_FILE) if read else None)
 
 
 # --------------------------------------------------------------------------- #

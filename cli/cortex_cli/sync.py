@@ -760,7 +760,7 @@ def register(root: str, out: TextIO, err: TextIO) -> None:
 
 
 def check_lock(root: str, version: store.Version, the_store: store.Store, out: TextIO,
-               locked: bool = False, name: str = config.LOCK_FILE) -> Tuple[str, Optional[str]]:
+               locked: bool = False, name: str = config.LOCK_FILE, writer: str = "`cortex sync`") -> Tuple[str, Optional[str]]:
     """``cortex.lock`` — or the lock ``name`` names in ``root``, the team's in its folder — against
     ``version`` in the store (ADR-010 §3.3), before anything of the project changes: the digest of the
     spec, and what to say of the lock to write — ``None`` when it stays as it is. A spec whose files
@@ -787,7 +787,7 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
     if locked:
         why = (f"no {config.LOCK_FILE}" if lock is None else
                f"{config.LOCK_FILE} names Cortex {lock.version}, and {config.PROJECT_FILE} pins {version}")
-        raise SyncError(f"--locked: {why} — `cortex sync` writes it, then commit it. Nothing of the project was changed")
+        raise SyncError(f"--locked: {why} — {writer} writes it, then commit it. Nothing of the project was changed")
     return digest, ("written" if lock is None else f"Cortex {version}, where it named {lock.version}")
 
 
@@ -863,7 +863,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         old = config.too_new(root, store.own_version())
         if old is not None:
             raise SyncError(old)
-    project = config.load(root)
+    project = config.load(root, lenient=True)          # a synced it cannot read is its own to write again
     against_locks(project, {"sync": mode, "claude_access": claude_access})
     if announce:
         out.write(f"Project: {display(root)}\n")
@@ -903,7 +903,10 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if source is None and where is None:
         digest = the_store.digest(version)      # a local try: no lock, nor checked again (ADR-013 §3.4)
     elif source is None:
-        digest, lock = check_lock(where[0], version, the_store, out, locked, where[1])
+        # During a try, a plain sync reads the try and leaves the committed lock: `cortex upgrade` writes it.
+        ahead = project.version != project.team_version
+        digest, lock = check_lock(where[0], version, the_store, out, locked, where[1],
+                                  "`cortex upgrade`, which a try leaves to it," if locked and ahead else "`cortex sync`")
     folder_note = _team_folder_note(project)
     if folder_note is not None:
         err.write(f"warning: {folder_note}\n")
@@ -916,7 +919,8 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
                                                              if claude_access is not None else {}),
                                             "synced": recorded},
                                      {"spec": "written by `cortex sync`",
-                                      "synced": "written by `cortex sync` — the versions it read"})
+                                      "synced": "written by `cortex sync` — the versions it read"},
+                                     drop_synced=project.synced_unread)
     keep, new = False, None
     if mode == "link":
         keep = existing == "link" and os.path.normcase(link_target(target)) == os.path.normcase(str(spec_source))
@@ -944,8 +948,8 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
             try:
                 with project_lock(Path(where[0]), err):
                     config.write_lock(where[0], version, digest, where[1])
-            except PermissionError as error:
-                if locked:
+            except OSError as error:
+                if locked or error.errno not in (errno.EACCES, errno.EPERM, errno.EROFS):
                     raise
                 err.write(f"warning: {where[2]} cannot be written — {os_error(error)}: the team's lock is not "
                           "updated here\n")

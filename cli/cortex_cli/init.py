@@ -451,6 +451,8 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     if project is None:
         try:
             team_data = cascade.read_team(str(root))
+            if isinstance(team_data, cascade.Unreadable):
+                raise grammar.ProjectFileError(team_data.error)
             if team_data is not None:
                 grammar.check_team(team_data, config.TEAM_NAME)
         except grammar.ProjectFileError as error:

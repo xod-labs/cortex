@@ -64,6 +64,8 @@ class Project:
     settings: Optional[cascade.Resolution] = None   # the project's keys, each with its origin, as load resolved them
     team_settings: Optional[cascade.Resolution] = None  # the team's resolution: what the team commits follows
     synced: Optional[Dict[str, str]] = None     # what `cortex sync` recorded (ADR-013 §3.1)
+    synced_unread: bool = False                 # a synced that does not read, which the sync rewrites
+    inputs: Optional[Tuple] = None              # what load resolved from: the files' data, and committed
 
     def _settings(self) -> cascade.Resolution:
         """The resolution ``load`` made — or, of a project another reader built, the one its fields make."""
@@ -104,10 +106,16 @@ class Project:
         return str((self.team_settings or self._settings()).value("theme"))
 
     @property
+    def pins_its_own(self) -> bool:
+        """``cortex.toml`` holds a committed ``version``: the project pins its own (decision 24)."""
+        found = self._settings()
+        return bool(found.committed) and "project" in found.candidates
+
+    @property
     def follows(self) -> bool:
         """The project follows the team's file (ADR-013 §3.1): there is one, and ``cortex.toml`` holds no
         committed ``version`` — an uncommitted one, at a 2.B root, included."""
-        return self.team_file and self.team_origin == TEAM_NAME
+        return self.team_file and not self.pins_its_own
 
     def lock_dir(self, origin: Optional[str] = None) -> Optional[str]:
         """Where the lock of the version from ``origin`` — the version read, by default — is
@@ -124,9 +132,16 @@ class Project:
 
     def with_claude_access(self, value: bool) -> "Project":
         """This project with this developer's ``claude_access`` — ``cortex sync --claude-access``, written
-        with ``spec`` — over ``cortex.toml``'s."""
-        changed = dataclasses.replace(self, local_claude_access=value, settings=None)
-        return dataclasses.replace(changed, settings=_resolved(changed))
+        with ``spec`` — over ``cortex.toml``'s: resolved again from the files ``load`` read, the team's
+        file and its lock with them."""
+        if self.inputs is None:
+            changed = dataclasses.replace(self, local_claude_access=value, settings=None)
+            return dataclasses.replace(changed, settings=_resolved(changed))
+        data, local, team, known = self.inputs
+        local = {**local, "claude_access": value}
+        settings, team_settings = _resolve_both(data, local, team, known)
+        return dataclasses.replace(self, local_claude_access=value, settings=settings, team_settings=team_settings,
+                                   inputs=(data, local, team, known))
 
     def spec_directory(self) -> Optional[str]:
         """The directory ``spec`` names: absolute as written, or relative to the project root."""
@@ -214,34 +229,41 @@ def team_folder_state(root: str) -> Optional[str]:
     return None
 
 
-def load(root: str) -> Project:
+def _resolve_both(data, local, team, known) -> Tuple[cascade.Resolution, cascade.Resolution]:
+    settings = cascade.resolve(data, local, {}, {}, machine=False, team_data=team, committed=known)
+    team_settings = cascade.resolve(data, local, {}, {}, machine=False, team_data=team, committed=known, locked=True)
+    return settings, team_settings
+
+
+def load(root: str, lenient: bool = False) -> Project:
     """Read and validate the files of the project at ``root`` — with the core's reader and grammar,
     which the runtime reads them with too — and resolve its keys once, and the team's resolution.
     Whether ``cortex.toml`` is committed is asked of git only where a team's file is there: without
-    one, the answer changes nothing (ADR-013 §3.1)."""
+    one, the answer changes nothing (ADR-013 §3.1). ``lenient`` — the sync, which rewrites it — reads
+    a ``synced`` that does not check as none, instead of refusing it."""
     try:
-        data, found = cascade.read_project(root)
+        data, found = cascade.read_project(root, lenient=lenient)
         team = cascade.read_team(root)
         known = committed(root) if team is not None else None
         local = found or {}
         try:
-            settings = cascade.resolve(data, local, {}, {}, machine=False, team_data=team, committed=known)
+            settings, team_settings = _resolve_both(data, local, team, known)
         except project.ProjectFileError:
             missing = team_folder_state(root) if "version" not in data and team is None else None
             if missing is not None:
                 raise ConfigError(f'{PROJECT_FILE}: "version" is required, or in {TEAM_NAME} — {missing}: check it out, '
                                   "a submodule with `git submodule update --init`")
             raise
-        team_settings = cascade.resolve(data, local, {}, {}, machine=False, team_data=team, committed=known,
-                                        locked=True)
     except project.ProjectFileError as error:
         raise ConfigError(str(error))
     synced = local.get("synced")
+    unread = synced is cascade.UNREADABLE_SYNCED
     return Project(root=root, version=Version(str(settings.value("version"))), theme=data.get("theme"),
                    sync=data.get("sync"), local_theme=local.get("theme"), spec=local.get("spec"),
                    claude_access=data.get("claude_access"), local_claude_access=local.get("claude_access"),
                    claude_entry=local.get("claude_entry"), settings=settings, team_settings=team_settings,
-                   synced=dict(synced) if synced is not None else None)
+                   synced=dict(synced) if synced is not None and not unread else None, synced_unread=unread,
+                   inputs=(data, local, team, known))
 
 
 def loose_pin(root: str) -> Optional[Tuple[str, Version]]:
@@ -271,7 +293,10 @@ def too_new(root: str, own: Version) -> Optional[str]:
     if found is None or not store.too_old_for(found[1], own):
         return None
     name, version = found
-    other = (f"\nor drop the try: cortex upgrade --local {own}" if name == LOCAL_FILE else
+    versions = cascade.loose_versions(root)
+    pin, team = versions.get("project"), versions.get("team")
+    teams = pin if pin is not None and (team is None or committed(root)) else team or pin
+    other = (f"\nor drop the try: cortex upgrade --local {teams[1] if teams else own}" if name == LOCAL_FILE else
              f"\nor move the team's pin: cortex upgrade --team {own}" if name == TEAM_NAME else "")
     return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
             f"    {store.update_command(version)}{other}")
@@ -382,9 +407,30 @@ def render_spec(root: str, spec: str) -> str:
                     {"spec": "written by `cortex sync`"})
 
 
-def render_local(root: str, values: Dict[str, object], comments: Optional[Dict[str, str]] = None) -> str:
-    """``cortex.local.toml`` with each key of ``values`` set, or removed — see ``set_keys``."""
-    return set_keys(_read_text(os.path.join(root, LOCAL_FILE)), values, LOCAL_FILE, LOCAL_HEADER, comments)
+def render_local(root: str, values: Dict[str, object], comments: Optional[Dict[str, str]] = None,
+                 drop_synced: bool = False) -> str:
+    """``cortex.local.toml`` with each key of ``values`` set, or removed — see ``set_keys``. ``drop_synced``,
+    a ``synced`` that does not read is taken out first — a line, or a ``[synced]`` table with what it
+    holds: the sync's own cache, which it writes again (ADR-013 §3.1)."""
+    text = _read_text(os.path.join(root, LOCAL_FILE))
+    if drop_synced and text is not None:
+        text = _without_synced(text)
+    return set_keys(text, values, LOCAL_FILE, LOCAL_HEADER, comments)
+
+
+def _without_synced(text: str) -> str:
+    kept, inside = [], False
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if re.match(r"^\[\s*synced\s*[.\]]", stripped):
+            inside = True
+            continue
+        if inside and stripped.startswith("["):
+            inside = False
+        if inside or re.match(r"""^(?:synced|"synced"|'synced')\s*=""", stripped):
+            continue
+        kept.append(line)
+    return "".join(kept)
 
 
 def render_project(root: str, values: Dict[str, object]) -> str:
