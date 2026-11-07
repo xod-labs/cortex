@@ -73,6 +73,8 @@ class ResolveTests(unittest.TestCase):
                          cascade.DEFAULT)
         self.assertEqual(list(cascade.resolve(PROJECT, None, {}, {}, machine=False).settings),
                          list(cascade.PROJECT_SETTINGS))
+        found = cascade.resolve(PROJECT, None, {}, {"CORTEX_THEME": "none"}, variables={"theme": "CORTEX_THEME"})
+        self.assertEqual((found.value("theme"), found["theme"].origin), ("none", "CORTEX_THEME"))   # its value
 
     def test_committed_is_the_caller_s_answer(self):
         self.assertIs(cascade.resolve(PROJECT, None, {}, {}, committed=False).committed, False)

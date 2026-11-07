@@ -30,9 +30,10 @@ DEFAULTS: Mapping[str, object] = {"sync": "store", "claude_access": None,
                                   "releases_url": project.DEFAULT_RELEASES_URL, "update_check": True, "register": True}
 # The environment's keys (§3.7), as they behave since they were variables only: CORTEX_RELEASES_URL
 # names the host, an empty one counting as unset; the two others, set and not empty, turn their key
-# off — no variable turns one back on.
+# off — no variable turns one back on. A variable of another key is its value, as written.
 VARIABLES: Mapping[str, str] = {"releases_url": "CORTEX_RELEASES_URL", "update_check": "CORTEX_NO_UPDATE_CHECK",
                                 "register": "CORTEX_NO_REGISTER"}
+NEGATING: Tuple[str, ...] = ("update_check", "register")
 
 
 @dataclass(frozen=True)
@@ -67,7 +68,7 @@ def _environment(key: str, environ: Mapping[str, str], variables: Mapping[str, s
     raw = environ.get(name) if name else None
     if not raw:
         return None
-    return raw if key == "releases_url" else False
+    return False if key in NEGATING else raw
 
 
 def resolve(project_data: Optional[Mapping], local_data: Optional[Mapping], machine_data: Mapping,
