@@ -359,6 +359,36 @@ class NoHomeTests(unittest.TestCase):
         self.assertIn("no Cortex home to read config.toml from", warned.getvalue())
 
 
+class NoHomeCommandTests(SettingsTestCase):
+    """cortex validate and cortex config build no store: with no home to find, they run (1.7.0's validate
+    never needed one)."""
+
+    def test_validate_and_config_run_with_no_home(self):
+        from cortex_cli import settings, validate
+
+        project = self.project()
+        self.assert_ok(self.cortex(project, "sync", "--copy"))
+
+        def no_home():
+            raise RuntimeError("Could not determine home directory.")
+        before = os.getcwd()
+        self.addCleanup(os.chdir, before)
+        os.chdir(project)
+        environ = {key: value for key, value in os.environ.items() if key != "CORTEX_HOME"}
+        with mock.patch.dict(os.environ, {**environ, "PWD": str(project)}, clear=True), \
+                mock.patch.object(Path, "home", side_effect=no_home), \
+                mock.patch("sys.stderr", io.TextIOWrapper(io.BytesIO(), encoding="utf-8")), \
+                mock.patch("sys.stdout", io.TextIOWrapper(io.BytesIO(), encoding="utf-8")):        # validate writes bytes
+            self.assertEqual(validate.run([]), 0)
+            for args in ((None, False, True), (None, False, False), ("theme", False, False), (None, True, True)):
+                out = io.StringIO()
+                self.assertEqual(settings.show(str(project), *args, out), 0, args)
+            out = io.StringIO()
+            self.assertEqual(settings.show(str(self.tmp), None, False, True, out), 0)
+        self.assertEqual(list(json.loads(out.getvalue())["settings"]), ["releases_url", "update_check", "register"])
+        self.assertIn("no Cortex home to read config.toml from", json.loads(out.getvalue())["warnings"][0])
+
+
 class SameAsBeforeTests(SettingsTestCase):
     def test_a_second_sync_leaves_the_files_byte_for_byte(self):
         project = self.project(extra="claude_access = false\n")

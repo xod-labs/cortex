@@ -60,7 +60,7 @@ def _origin(setting: cascade.Setting, newer: Optional[str]) -> str:
 
 def _too_new(found: cascade.Resolution) -> Optional[str]:
     """This cortex's version, when the project's is newer — ``None`` otherwise."""
-    own = store.Store().own
+    own = store.own_version()
     if "version" in found and store.too_old_for(Version(str(found.value("version"))), own):
         return str(own)
     return None
@@ -71,7 +71,7 @@ def _loosely(root: str, error: config.ConfigError) -> cascade.Resolution:
     read before any key is checked (§3.8), and the machine's keys — what a later version's keys are,
     this cortex does not know. Any other refusal stands."""
     pinned = config.loose_pin(root)
-    if pinned is None or not store.too_old_for(pinned[1], store.Store().own):
+    if pinned is None or not store.too_old_for(pinned[1], store.own_version()):
         raise error
     found = machine.resolution(store.cortex_home)
     version = cascade.Setting("version", str(pinned[1]), pinned[0])
@@ -90,7 +90,7 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
         found, loose = _loosely(root, error), True
     if key is not None and key not in found and loose and key in cascade.KEYS:
         # A key this cortex knows, of a project it cannot read: the reason is the version.
-        raise config.ConfigError(str(config.too_new(root, store.Store().own)))
+        raise config.ConfigError(str(config.too_new(root, store.own_version())))
     if key is not None and key not in found:
         known = project.listed(tuple(found.settings))
         raise SettingsError(f"no setting {json.dumps(key)} — {'cortex config knows ' if root else 'outside a project, cortex config knows '}"
@@ -103,7 +103,7 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
             "project": display(root) if root is not None else None,
             "committed": found.committed,
             "locked": locked,
-            "cortex": str(store.Store().own),
+            "cortex": str(store.own_version()),
             "too_new": newer is not None,
             "warnings": list(found.warnings),
             "settings": {name: {"value": found[name].value, "origin": found[name].origin,

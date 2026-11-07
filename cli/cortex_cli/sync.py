@@ -796,7 +796,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if source is None:
         # A version newer than this cortex, said before any key is checked (ADR-013 §3.8) — `--from`
         # checks no version, as before.
-        old = config.too_new(root, store.Store().own)
+        old = config.too_new(root, store.own_version())
         if old is not None:
             raise SyncError(old)
     project = config.load(root)

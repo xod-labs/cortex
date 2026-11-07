@@ -85,7 +85,7 @@ def roots(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]]]:
     if root is not None:
         # A version newer than this cortex, said before any key is checked (ADR-013 §3.8) — but of a
         # spec that names no version, a checkout's, there is nothing to compare.
-        old = config.too_new(root, store.Store().own)
+        old = config.too_new(root, store.own_version())
         spec = config.local_spec(root)
         if old is not None and (spec is None or _synced_version(root, spec, _spec_path(root, spec)) != ""):
             raise RootsError(old)

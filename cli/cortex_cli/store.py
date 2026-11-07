@@ -106,6 +106,12 @@ def listed_checksum(sums: str, name: str) -> Optional[str]:
     return None
 
 
+def own_version() -> Version:
+    """This binary's version — what the version gate compares a project's with (ADR-013 §3.8): no
+    store to build, so no home to find, for a command that never needed one."""
+    return Version(VERSION)
+
+
 def development(version: Version) -> bool:
     """A source checkout's version, ``0.0.0-dev``, or a development build's, ``0.0.0-dev.N`` — a
     dispatch of the binary workflow builds one: no release, and no project pins it."""
