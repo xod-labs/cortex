@@ -28,15 +28,18 @@ from release_fixture import FakeRelease  # noqa: E402
 
 OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
 DOWNLOADS = unittest.skipIf(harness.BINARY, "a build of no release downloads no version")
-SOURCE = unittest.skipIf(harness.BINARY, "the refusal of a source checkout")
 GIT = shutil.which("git")
 NEEDS_GIT = unittest.skipIf(GIT is None, "needs git")
 POSIX = unittest.skipIf(os.name == "nt", "a git stand-in written as a shell script")
 # A development build — a dispatch of the binary workflow, 0.0.0-dev.N — passes the version gate, as a
-# source checkout does: what the gate refuses is tested from source, or with a release's build.
-DEVELOPMENT = unittest.skipIf(harness.BINARY is not None and re.fullmatch(r"0\.0\.0-dev(\.[0-9]+)?",
-                                                                          harness.EXPECTED_VERSION or "0.0.0-dev"),
+# source checkout does: what the gate refuses is tested from source, or with a release's build; that a
+# development build passes, from source with no CORTEX_SOURCE_VERSION, or with such a build.
+DEV_BUILD = re.compile(r"0\.0\.0-dev(\.[0-9]+)?")
+DEVELOPMENT = unittest.skipIf(harness.BINARY is not None and DEV_BUILD.fullmatch(harness.EXPECTED_VERSION or "0.0.0-dev"),
                               "a development build passes the version gate")
+OWN_DEV = harness.EXPECTED_VERSION if harness.BINARY else "0.0.0-dev"
+RELEASE_BUILD = unittest.skipIf(harness.BINARY is not None and not DEV_BUILD.fullmatch(harness.EXPECTED_VERSION or ""),
+                                "a release's build, which is no development build")
 
 
 def display(path):
@@ -240,24 +243,16 @@ class MachineFileTests(SettingsTestCase):
         self.assert_ok(proc)
         self.assertIn(f"warning: {where} is not read", proc.err)
 
-    @SOURCE
-    def test_self_update_reaches_its_own_refusal_whatever_the_file_holds(self):
-        # From source, its refusal comes first; the file read through, test_cli_self_update says.
-        self.machine('endpoints = "later"\nregister = 3\nreleases_url = [\n')
-        proc = self.cortex(self.tmp, "self-update", "9.9.9")
-        self.assertEqual(proc.returncode, 1, proc.err)
-        self.assertIn("cortex self-update: this cortex runs from a source checkout", proc.err)
 
-
-@DEVELOPMENT
 class TooNewTests(SettingsTestCase):
     """A version newer than the binary is said before any key is checked (§3.8, steps 1–2)."""
 
     WHY = f"this project uses Cortex 99.0.0, which its cortex.toml pins, newer than this cortex, {OWN}"
 
-    def test_sync_init_validate_and_upgrade_say_the_version_not_the_key(self):
+    @DEVELOPMENT
+    def test_sync_init_and_validate_say_the_version_not_the_key(self):
         project = self.project("99.0.0", extra='agents = "team"\n')      # a key this cortex does not know
-        for args, code in ((("sync",), 1), (("init", "--tool", "claude"), 1), (("validate",), 2), (("upgrade",), 1)):
+        for args, code in ((("sync",), 1), (("init", "--tool", "claude"), 1), (("validate",), 2)):
             with self.subTest(args=args):
                 proc = self.cortex(project, *args)
                 self.assertEqual(proc.returncode, code, proc.err)
@@ -265,6 +260,15 @@ class TooNewTests(SettingsTestCase):
                 self.assertIn("cortex self-update 99.0.0", proc.err)
                 self.assertNotIn("unknown key", proc.err)
 
+    def test_upgrade_says_the_version_not_the_key(self):
+        # Never down to this cortex's version without naming it — a development build's too, as in 1.7.0.
+        proc = self.cortex(self.project("99.0.0", extra='agents = "team"\n'), "upgrade")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn(self.WHY, proc.err)
+        self.assertIn("cortex self-update 99.0.0", proc.err)
+        self.assertNotIn("unknown key", proc.err)
+
+    @DEVELOPMENT
     def test_config_prints_the_version_and_says_so(self):
         known = self.project("99.0.0", name="known")                      # every key known to this cortex
         project = self.project("99.0.0", extra='agents = "team"\n')      # one it does not know
@@ -277,6 +281,7 @@ class TooNewTests(SettingsTestCase):
                               proc.out.splitlines()[0])
                 self.assertIn("register", proc.out)
 
+    @DEVELOPMENT
     def test_a_known_key_of_a_project_too_new_says_the_version_and_an_unknown_one_is_unknown(self):
         project = self.project("99.0.0", extra='agents = "team"\n')
         proc = self.cortex(project, "config", "theme")
@@ -284,6 +289,7 @@ class TooNewTests(SettingsTestCase):
         self.assertIn(self.WHY, proc.err)
         proc = self.cortex(project, "config", "verison")
         self.assertEqual(proc.returncode, 2, proc.err)
+        self.assertIn("cortex config knows version, theme, sync, claude_access, releases_url", proc.err)
         found = self.settings(project)
         self.assertIs(found["too_new"], True)
 
@@ -303,17 +309,21 @@ class TooNewTests(SettingsTestCase):
         proc = self.cortex(project, "validate")
         self.assertNotIn("newer than this cortex", proc.err)
         self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+        proc = self.cortex(project, "init", "--tool", "claude", "--from", str(checkout))
+        self.assertNotIn("newer than this cortex", proc.err)
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
 
 
-@unittest.skipIf(harness.BINARY, "a source checkout's version")
+@RELEASE_BUILD
 class DevelopmentBuildTests(SettingsTestCase):
-    """A source checkout, 0.0.0-dev, passes the version gate — or it would refuse what 1.7.0 accepted."""
+    """A source checkout, 0.0.0-dev, or a development build, 0.0.0-dev.N, passes the version gate — or it
+    would refuse what 1.7.0 accepted."""
 
     def setUp(self):
         super().setUp()
         del self.env["CORTEX_SOURCE_VERSION"]
 
-    def test_validate_from_source_checks_a_project_pinned_to_a_release(self):
+    def test_validate_from_a_development_build_checks_a_project_pinned_to_a_release(self):
         project = self.project("1.7.0")
         stored = self.home / "versions" / "1.7.0"
         for tree in ("agents", "templates", "docs"):
@@ -324,7 +334,7 @@ class DevelopmentBuildTests(SettingsTestCase):
         self.assertNotIn("newer than this cortex", proc.err)
         found = self.settings(project)
         self.assertIs(found["too_new"], False)
-        self.assertEqual(found["cortex"], "0.0.0-dev")
+        self.assertEqual(found["cortex"], OWN_DEV)
         proc = self.cortex(project, "upgrade")                            # never down to 0.0.0-dev, as 1.7.0
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn("move the project down to this cortex's version by naming it", proc.err)

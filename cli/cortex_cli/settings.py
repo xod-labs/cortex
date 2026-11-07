@@ -92,7 +92,7 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
         # A key this cortex knows, of a project it cannot read: the reason is the version.
         raise config.ConfigError(str(config.too_new(root, store.own_version())))
     if key is not None and key not in found:
-        known = project.listed(tuple(found.settings))
+        known = project.listed(cascade.KEYS if loose else tuple(found.settings))
         raise SettingsError(f"no setting {json.dumps(key)} — {'cortex config knows ' if root else 'outside a project, cortex config knows '}"
                             f"{known}")
     newer = _too_new(found) if root is not None else None
