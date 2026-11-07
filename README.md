@@ -216,7 +216,7 @@ Makes a directory a Cortex project — see [A first project](#a-first-project).
 | `--instructions-file PATH` | the bootstrap file of `--tool custom` |
 | `--theme THEME` | the team's personality theme — `h2g2` by default, or the one `cortex.toml` names: one the pinned version ships, or one of your own in `agents/personalities/` |
 | `--no-personality` | no personality layer, `theme = "none"` — wins over `--theme` |
-| `--workspace` | workspace mode: several services under one root |
+| `--workspace` | workspace mode: several services under one root — without it, `--force` keeps the layout of the file it replaces |
 | `--service NAME` | a service of the workspace, a folder — repeatable; asked for on a terminal when omitted |
 | `--link`, `--copy` | the team's sync mode: `sync = "link"` or `sync = "copy"` in `cortex.toml`, with `/cortex` added to `.gitignore` |
 | `--claude-access` | let Claude Code read the spec without asking: `claude_access = true` in `cortex.toml` — asked on a terminal with `--tool claude` |
@@ -255,7 +255,7 @@ cortex upgrade [VERSION] [--dry-run] [--force] [--instructions-file PATH] [--bra
 cortex upgrade --all [VERSION] [--dry-run] [--force] [--branch NAME] [--commit --message MESSAGE]
 ```
 
-Moves the project to `VERSION`, or to the binary's own version — never down to it: a project pinned to a newer version moves down only when `VERSION` names it. It puts the target in the store, then says what changes — the roles, capabilities, personalities and workflows added, removed and changed, the templates, and where the release notes are — and checks the project's overlays against the target: an overlay that fails stops it, having changed nothing. Then it writes the bootstrap file again when nobody changed it and the target's template differs — one your team adapted is kept, and the command names `cortex init --force` — writes `version` in `cortex.toml`, and syncs, which rewrites `cortex.lock`. If anything fails, `cortex.toml`, `cortex.lock` and the bootstrap file are put back as they were. It ends with what to commit. Run on the version already pinned, it finishes what an upgrade cut short left.
+Moves the project to `VERSION`, or to the binary's own version — never down to it: a project pinned to a newer version moves down only when `VERSION` names it. It puts the target in the store, then says what changes — the roles, capabilities, personalities and workflows added, removed and changed, the templates, and where the release notes are — and checks the project's overlays against the target: an overlay that fails stops it, having changed nothing. Then it writes the bootstrap file again when nobody changed it and the target's template differs — one your team adapted is kept, and the command names `cortex init --force` — writes `version` in `cortex.toml`, and syncs, which rewrites `cortex.lock`. If anything fails, `cortex.toml`, `cortex.lock` and the bootstrap file are put back as they were. It ends with what to commit — at a root in no git repository, that its files are committed nowhere. Run on the version already pinned, it finishes what an upgrade cut short left.
 
 With no `VERSION`, it also says when a release newer than the binary is out — `CORTEX_NO_UPDATE_CHECK` turns that question off. It never moves the binary.
 
