@@ -15,6 +15,7 @@ may refuse. The caller says it — the command from git, the runtime not at all 
 from __future__ import annotations
 
 import os
+import stat
 import tomllib
 from dataclasses import dataclass, field
 from typing import Dict, List, Mapping, Optional, Tuple
@@ -134,11 +135,13 @@ def read_machine(path: str, name: Optional[str] = None) -> Tuple[Dict[str, objec
     """The keys of the machine's file at ``path`` that read, and the warnings: a file that cannot be
     read is one, never an error (§3.7). No file, no keys."""
     name = name or path
-    if not os.path.isfile(path):
-        return {}, []
     try:
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return {}, [f"{name} is not a file, and is not read"]
         data = _toml(path)
-    except OSError as error:
+    except FileNotFoundError:
+        return {}, []
+    except OSError as error:                # a home this user cannot search, say
         return {}, [f"{name} cannot be read, and is not: {error.strerror or error}"]
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         return {}, [f"{name} is not read: {error}"]

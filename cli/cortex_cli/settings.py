@@ -31,7 +31,7 @@ class SettingsError(Exception):
 def resolution(root: Optional[str], locked: bool = False) -> cascade.Resolution:
     """The settings of the project at ``root`` — the machine's alone without one. ``ConfigError``
     for a file refused, naming it; the machine's file only warns."""
-    values, warnings, name = machine.read(store.cortex_home())
+    values, warnings, name = machine.read(store.cortex_home)
     if root is None:
         return cascade.resolve(None, None, values, os.environ, machine_name=name, warnings=warnings)
     try:
@@ -72,7 +72,7 @@ def _loosely(root: str, error: config.ConfigError) -> cascade.Resolution:
     pinned = config.loose_pin(root)
     if pinned is None or not store.too_old_for(pinned[1], store.Store().own):
         raise error
-    found = machine.resolution(store.cortex_home())
+    found = machine.resolution(store.cortex_home)
     version = cascade.Setting("version", str(pinned[1]), pinned[0])
     return cascade.Resolution({"version": version, **found.settings}, committed=sync.committed(root),
                               warnings=found.warnings)

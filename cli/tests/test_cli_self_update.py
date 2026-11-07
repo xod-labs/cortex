@@ -30,7 +30,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
-from cortex_cli import binary, net, self_update, store, version  # noqa: E402
+from cortex_cli import binary, machine, net, self_update, store, version  # noqa: E402
 from cortex_cli.paths import display  # noqa: E402
 from cortex_cli.self_update import SelfUpdateError  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
@@ -165,6 +165,29 @@ class SelfUpdateTests(ReleaseTestCase):
         self.assertEqual(code, 0, err)
         self.assertIn(f"note: downloading from {self.release.url}, set by {display(str(machine_file))} — ", err)
         self.assertIn('unknown key "self_update_later", not read', warned.getvalue())
+
+    def test_a_releases_url_that_does_not_read_warns_and_the_download_goes_to_github(self):
+        machine_file = Path(os.environ["CORTEX_HOME"]) / "config.toml"
+        machine_file.parent.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: machine_file.exists() and machine_file.unlink())
+        for text, said in (("releases_url = [\n", "is not read"), ("releases_url = 3\n", '"releases_url" must be a string')):
+            with self.subTest(text=text):
+                machine_file.write_text(text, encoding="utf-8")
+                asked = []
+
+                def fetch(url, *args, **kwargs):
+                    asked.append(url)
+                    raise net.DownloadError("offline, in this test")
+
+                warned = io.StringIO()
+                machine._warned.clear()
+                with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": ""}), mock.patch("sys.stderr", warned), \
+                        self.assertRaisesRegex(SelfUpdateError, "offline, in this test"):
+                    self_update.self_update("9.9.9", True, io.StringIO(), io.StringIO(), binary=self.binary,
+                                            own=Version("9.9.8"), fetch=fetch, run=answer_of, system="Linux",
+                                            machine="x86_64")
+                self.assertTrue(asked and asked[0].startswith(store.DEFAULT_RELEASES_URL + "/"), asked)
+                self.assertIn(said, warned.getvalue())
 
     def test_the_host_is_said_before_the_first_request_to_it(self):
         for wanted in ("9.9.9", None):

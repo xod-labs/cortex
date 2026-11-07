@@ -63,7 +63,7 @@ def releases_url() -> str:
     ``$CORTEX_RELEASES_URL``, as for the install scripts, else ``config.toml`` in the Cortex home,
     else GitHub's. https, or http to this machine for tests: refused otherwise, naming where it is
     set."""
-    found = machine.setting(cortex_home(), "releases_url")
+    found = machine.setting(cortex_home, "releases_url")
     url = str(found.value).rstrip("/")
     try:
         net.check_url(url)
@@ -74,7 +74,7 @@ def releases_url() -> str:
 
 def releases_origin() -> str:
     """Where ``releases_url`` is set: the variable, the machine's file, or ``default``."""
-    return machine.setting(cortex_home(), "releases_url").origin
+    return machine.setting(cortex_home, "releases_url").origin
 
 
 def known_specs() -> Dict[str, str]:

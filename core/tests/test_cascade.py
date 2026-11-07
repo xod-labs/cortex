@@ -100,6 +100,19 @@ class MachineFileTests(unittest.TestCase):
         self.assertIn("config.toml is not read", warnings[0])
         self.assertEqual(cascade.read_machine(str(self.tmp / "none.toml")), ({}, []))
 
+    def test_a_directory_or_a_home_that_cannot_be_searched_warns(self):
+        self.path.mkdir()
+        self.assertEqual(cascade.read_machine(str(self.path), "config.toml"), ({}, ["config.toml is not a file, and is not read"]))
+        if hasattr(os, "geteuid") and os.geteuid() != 0 and os.name != "nt":   # root searches any directory
+            home = self.tmp / "locked"
+            home.mkdir()
+            (home / "config.toml").write_text("update_check = false\n", encoding="utf-8")
+            home.chmod(0)
+            self.addCleanup(home.chmod, 0o700)
+            values, warnings = cascade.read_machine(str(home / "config.toml"), "config.toml")
+            self.assertEqual(values, {})
+            self.assertIn("config.toml cannot be read", warnings[0])
+
     def test_a_byte_order_mark_and_an_empty_url(self):
         self.path.write_bytes('﻿releases_url = ""\n'.encode("utf-8"))
         values, warnings = cascade.read_machine(str(self.path), "config.toml")

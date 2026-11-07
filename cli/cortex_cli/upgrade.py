@@ -381,7 +381,7 @@ class _NewerRelease(threading.Thread):
 def _asking(wanted: Optional[str]) -> Optional[_NewerRelease]:
     """The question of a release newer than this binary: asked with no ``VERSION``, once per command,
     unless the machine's ``update_check`` is off — ``CORTEX_NO_UPDATE_CHECK`` set, or ``config.toml``."""
-    if wanted is not None or not machine.setting(store.cortex_home(), "update_check").value:
+    if wanted is not None or not machine.setting(store.cortex_home, "update_check").value:
         return None
     return _NewerRelease(Version(VERSION))
 

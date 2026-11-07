@@ -746,7 +746,7 @@ def register(root: str, out: TextIO, err: TextIO) -> None:
     other entries' directories: nothing is written, and nothing waits for another command's write.
     The machine's ``register`` off — ``CORTEX_NO_REGISTER`` set to anything but an empty value, or
     ``register = false`` in ``config.toml`` — leaves the registry alone, neither read nor written."""
-    if not machine.setting(store.cortex_home(), "register").value:
+    if not machine.setting(store.cortex_home, "register").value:
         return
     root = os.path.abspath(root)
     try:

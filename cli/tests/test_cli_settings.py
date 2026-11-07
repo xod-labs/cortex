@@ -6,6 +6,7 @@ before any key is checked (§3.8). From source the command stands for Cortex 9.9
 download the fake releases 9.9.7 and 9.9.8.
 """
 
+import io
 import json
 import os
 import re
@@ -15,12 +16,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 
 import cli_harness as harness  # noqa: E402
-from cortex_cli import store  # noqa: E402
+from cortex_cli import machine, store  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
@@ -214,18 +216,27 @@ class MachineFileTests(SettingsTestCase):
         proc = self.cortex(project, "sync", CORTEX_NO_REGISTER="")
         self.assertIn("registered as app", proc.out)
 
+    def test_a_warning_is_said_once_by_a_command_that_reads_the_file_more_than_once(self):
+        # cortex upgrade reads it for the release check, the registry, and its sync.
+        self.machine('endpoints = "later"\n')
+        project = self.project()
+        proc = self.cortex(project, "upgrade", CORTEX_NO_UPDATE_CHECK="", CORTEX_NO_REGISTER="")
+        self.assert_ok(proc)
+        self.assertEqual(proc.err.count('unknown key "endpoints"'), 1, proc.err)
+
     def test_an_unknown_key_or_a_wrong_type_warns_and_the_rest_is_read(self):
         self.machine('register = "no"\nendpoints = "later"\nupdate_check = false\n')
         project = self.project()
-        proc = self.cortex(project, "sync")
+        proc = self.cortex(project, "sync", CORTEX_NO_REGISTER="")      # the variable unset: the file is read
         self.assert_ok(proc)
+        self.assertIn("registered as app", proc.out)                    # register = "no" not read: the default
         where = display(self.home / "config.toml")
         self.assertEqual(proc.err.count(f'warning: {where}: "register" must be true or false'), 1, proc.err)
         self.assertIn(f'warning: {where}: unknown key "endpoints", not read', proc.err)
         found = self.settings(project, CORTEX_NO_UPDATE_CHECK="")
         self.assertEqual(found["settings"]["update_check"]["origin"], where)
         self.machine("register = [\n")
-        proc = self.cortex(project, "sync")
+        proc = self.cortex(project, "sync", CORTEX_NO_REGISTER="")
         self.assert_ok(proc)
         self.assertIn(f"warning: {where} is not read", proc.err)
 
@@ -315,6 +326,26 @@ class DevelopmentBuildTests(SettingsTestCase):
             self.assertFalse(store.development(Version(text)), text)
         self.assertTrue(store.too_old_for(Version("1.7.0"), Version("1.6.0")))
         self.assertFalse(store.too_old_for(Version("1.7.0"), Version("1.7.0")))
+
+
+class NoHomeTests(unittest.TestCase):
+    """A machine with no home to find — no CORTEX_HOME, no HOME, no account — reads no machine file."""
+
+    def test_the_variable_is_read_first_and_no_home_only_warns(self):
+        def no_home():
+            raise RuntimeError("Could not determine home directory.")
+        with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": "https://mirror.example/r"}), \
+                mock.patch.object(Path, "home", side_effect=no_home) as home:
+            os.environ.pop("CORTEX_HOME", None)
+            self.assertEqual(store.releases_url(), "https://mirror.example/r")
+            home.assert_not_called()
+        warned = io.StringIO()
+        with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": ""}), mock.patch.object(Path, "home", side_effect=no_home), \
+                mock.patch("sys.stderr", warned):
+            os.environ.pop("CORTEX_HOME", None)
+            machine._warned.clear()
+            self.assertEqual(store.releases_url(), store.DEFAULT_RELEASES_URL)
+        self.assertIn("no Cortex home to read config.toml from", warned.getvalue())
 
 
 class SameAsBeforeTests(SettingsTestCase):
