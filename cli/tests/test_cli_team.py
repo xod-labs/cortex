@@ -638,6 +638,18 @@ class SharedTeamFolderTests(TeamTestCase):
                 self.assertEqual(proc.out.count(f"fail against Cortex {OWN} — {TEAM} was not moved"), 3)  # 2 + summary
                 self.assertIn(f"The overlays of {harness_path(self.tmp / failing)}, checked against Cortex {OWN}:", proc.out)
 
+    def test_a_pin_newer_than_this_cortex_is_refused_before_any_overlay_is_checked(self):
+        team, _ = self.shared("beta")
+        if upgrade.check_overlays(str(self.tmp / "beta"), Path(harness.REPO))[0] == 0:
+            self.skipTest("the validator reads no service overlay here")
+        (team / "cortex.team.toml").write_text('version = "99.0.0"\n', encoding="utf-8")
+        before = (team / "cortex.team.toml").read_bytes()
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertEqual((team / "cortex.team.toml").read_bytes(), before)
+        self.assertNotIn("The overlays of", proc.out)
+        self.assertEqual(proc.out.count(f"{TEAM} pins Cortex 99.0.0, newer than this cortex, {OWN}"), 3)  # once + summary
+
     def test_the_shared_file_moves_once_and_each_follower_resumes(self):
         team, roots = self.shared(None)
         proc = self.cortex(self.tmp, "upgrade", "--all", "--team", OWN)
@@ -728,15 +740,34 @@ class SecondReviewTests(TeamTestCase):
         self.assertEqual([(name, code) for name, code, _ in found], [("agents/cortex.team.lock", "LOCK_DIGEST")])
 
     def test_team_at_the_version_pinned_never_locks_another_spec(self):
-        root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n')
-        self.assert_ok(self.cortex(root, "sync"))
-        lock = root / "agents" / "cortex.team.lock"
-        lock.write_text(lock.read_text(encoding="utf-8").replace("sha256:", "sha256:0", 1)[:-2] + '"\n',
-                        encoding="utf-8")
-        before = lock.read_bytes()
-        proc = self.cortex(root, "upgrade", "--team", OWN)
+        for text in ('theme = "h2g2"\n', f'version = "{OWN}"\ntheme = "h2g2"\n'):     # follows, pins its own
+            with self.subTest(text=text):
+                root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n', name=f"t{len(text)}")
+                self.assert_ok(self.cortex(root, "sync"))
+                (root / "cortex.toml").write_text(text, encoding="utf-8")
+                lock = root / "agents" / "cortex.team.lock"
+                lock.write_text(lock.read_text(encoding="utf-8").replace("sha256:", "sha256:0", 1)[:-2] + '"\n',
+                                encoding="utf-8")
+                before = lock.read_bytes()
+                proc = self.cortex(root, "upgrade", "--team", OWN)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertEqual(lock.read_bytes(), before)
+
+    def test_team_never_moves_a_newer_pin_down_from_a_project_that_pins_its_own(self):
+        root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', team='version = "99.0.0"\n')
+        before = (root / TEAM).read_bytes()
+        proc = self.cortex(root, "upgrade", "--team")
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-        self.assertEqual(lock.read_bytes(), before)
+        self.assertIn(f"{TEAM} pins Cortex 99.0.0, newer than this cortex, {OWN}", proc.err)
+        self.assertEqual((root / TEAM).read_bytes(), before)
+
+    def test_team_at_the_version_pinned_writes_a_missing_lock(self):
+        for text in ('theme = "h2g2"\n', f'version = "{OWN}"\ntheme = "h2g2"\n'):     # follows, pins its own
+            with self.subTest(text=text):
+                root = self.project(text, team=f'version = "{OWN}"\n', name=f"t{len(text)}")
+                proc = self.cortex(root, "upgrade", "--team", OWN)
+                self.assert_ok(proc)
+                self.assertEqual(str(config.load_lock(str(root / "agents"), config.TEAM_LOCK_FILE).version), OWN)
 
     @NEEDS_GIT
     def test_a_resume_commits_nothing_of_the_team_s_own_repository(self):
