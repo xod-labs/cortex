@@ -1,6 +1,6 @@
 """The grammar of ``cortex.toml`` and ``cortex.local.toml`` — ADR-008 §3.4 — of
-``cortex.lock`` — ADR-010 §3.2 — of the machine's ``projects.toml`` — ADR-011 §3.1 — and of its
-``config.toml`` — ADR-013 §3.7.
+``cortex.lock`` — ADR-010 §3.2 — of the machine's ``projects.toml`` — ADR-011 §3.1 — of its
+``config.toml`` — ADR-013 §3.7 — and of the team's ``cortex.team.toml`` — ADR-013 §3.5.
 
 One definition for the readers, the ``cortex`` command, the runtime and the cockpit, so that none
 accepts a file another refuses. It checks what a TOML parser returned: each reader parses the file
@@ -22,8 +22,20 @@ LOCAL_FILE = "cortex.local.toml"
 MODES = ("store", "link", "copy")
 PROJECT_KEYS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access")
 PROJECT_REQUIRED: Tuple[str, ...] = ("version", "theme")
-LOCAL_KEYS: Tuple[str, ...] = ("theme", "spec", "claude_access", "claude_entry")
+LOCAL_KEYS: Tuple[str, ...] = ("version", "theme", "spec", "claude_access", "claude_entry", "synced")
 BOOLEAN_KEYS: Tuple[str, ...] = ("claude_access",)
+# The team's settings, in the team's folder, committed in the team's repository (ADR-013 §3.5): read
+# only once the team's version is 1.8.0 or later — an earlier version's templates know none of it.
+TEAM_FOLDER = "agents"
+TEAM_FILE = "cortex.team.toml"
+TEAM_LOCK_FILE = "cortex.team.lock"
+TEAM_KEYS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access", "locked")
+TEAM_LOCKABLE: Tuple[str, ...] = ("theme", "sync", "claude_access")
+FIRST_TEAM_VERSION = "1.8.0"
+# What `cortex sync` records in cortex.local.toml (ADR-013 §3.1): the version read from each file, the
+# team's, and the one synced — "" for a checkout.
+SYNCED_KEYS: Tuple[str, ...] = ("team", "project", "local", "pinned", "reads")
+SYNCED_REQUIRED: Tuple[str, ...] = ("pinned", "reads")
 LOCK_FILE = "cortex.lock"
 LOCK_KEYS: Tuple[str, ...] = ("format", "version", "digest")
 LOCK_FORMAT = 1
@@ -66,6 +78,29 @@ def is_version(value: object) -> bool:
     return isinstance(value, str) and VERSION.fullmatch(value) is not None
 
 
+def version_key(text: str) -> Tuple:
+    """The order of two versions, as Semantic Versioning orders them: a pre-release before its release,
+    its identifiers compared numerically when they are numbers, lexically otherwise, a number before a
+    word (semver.org §11). The command's ``Version`` orders them alike."""
+    match = VERSION.fullmatch(text)
+    if match is None:
+        raise ValueError(f"not a version: {text!r}")
+    pre = tuple((0, int(i), "") if i.isdigit() else (1, 0, i) for i in match.group(4).split(".")) \
+        if match.group(4) else ()
+    return tuple(int(part) for part in match.group(1, 2, 3)), (0, pre) if pre else (1, ())
+
+
+# A source checkout's version, or a development build's — a dispatch of the binary workflow.
+DEVELOPMENT = re.compile(r"0\.0\.0-dev(?:\.[0-9]+)?", re.ASCII)
+
+
+def before_team(text: str) -> bool:
+    """Whether a version predates the team's file — 1.8.0, which first reads it. A source checkout's
+    or a development build's, ``0.0.0-dev`` or ``0.0.0-dev.N``, does not: built from a checkout of
+    1.8.0 or later, it reads what the checkout reads — as it passes the version gate (ADR-013 §3.8)."""
+    return DEVELOPMENT.fullmatch(text) is None and version_key(text) < version_key(FIRST_TEAM_VERSION)
+
+
 def is_theme(value: object) -> bool:
     return isinstance(value, str) and THEME.fullmatch(value) is not None
 
@@ -92,7 +127,10 @@ def listed(keys: Tuple[str, ...]) -> str:
     return ", ".join(keys[:-1]) + f" and {keys[-1]}" if len(keys) > 1 else keys[0]
 
 
-def _check_keys(name: str, data: Mapping, allowed: Tuple[str, ...], required: Tuple[str, ...]) -> None:
+def _check_keys(name: str, data: Mapping, allowed: Tuple[str, ...], required: Tuple[str, ...],
+                others: Tuple[str, ...] = ()) -> None:
+    """Every key allowed, the required ones there, each a string or a boolean — but ``others``,
+    which their reader checks."""
     for key in data:
         if key not in allowed:
             raise ProjectFileError(f'{name}: unknown key {shown(key)} — {name} takes {listed(allowed)}'
@@ -101,6 +139,8 @@ def _check_keys(name: str, data: Mapping, allowed: Tuple[str, ...], required: Tu
         if key not in data:
             raise ProjectFileError(f'{name}: "{key}" is required')
     for key, value in data.items():
+        if key in others:
+            continue
         if key in BOOLEAN_KEYS:
             if not isinstance(value, bool):
                 raise ProjectFileError(f'{name}: "{key}" must be true or false, without quotes')
@@ -116,21 +156,85 @@ def _check_theme(name: str, theme: str) -> None:
         raise ProjectFileError(f'{name}: theme {shown(theme)} is no theme name — letters, digits, ".", "_" and "-"')
 
 
-def check_project(data: Mapping) -> None:
-    """Refuse a ``cortex.toml`` that is not one — ``ProjectFileError`` names the file and the key."""
-    _check_keys(PROJECT_FILE, data, PROJECT_KEYS, PROJECT_REQUIRED)
-    if not is_version(data["version"]):
-        raise ProjectFileError(f'{PROJECT_FILE}: version {shown(data["version"])} is no version — X.Y.Z, for instance 1.0.0')
-    _check_theme(PROJECT_FILE, data["theme"])
+def _check_version(name: str, value: object) -> None:
+    if not is_version(value):
+        raise ProjectFileError(f'{name}: version {shown(value)} is no version — X.Y.Z, for instance 1.0.0')
+
+
+def check_project(data: Mapping, optional: Tuple[str, ...] = ()) -> None:
+    """Refuse a ``cortex.toml`` that is not one — ``ProjectFileError`` names the file and the key.
+    ``optional``, of the required keys, those a team's file may give instead (ADR-013 §3.2): whether it
+    does is its reader's to check."""
+    _check_keys(PROJECT_FILE, data, PROJECT_KEYS, tuple(key for key in PROJECT_REQUIRED if key not in optional))
+    if "version" in data:
+        _check_version(PROJECT_FILE, data["version"])
+    if "theme" in data:
+        _check_theme(PROJECT_FILE, data["theme"])
     if "sync" in data and data["sync"] not in MODES:
         raise ProjectFileError(f'{PROJECT_FILE}: sync {shown(data["sync"])} is none of {listed(MODES)}')
 
 
 def check_local(data: Mapping) -> None:
     """Refuse a ``cortex.local.toml`` that is not one."""
-    _check_keys(LOCAL_FILE, data, LOCAL_KEYS, ())
+    _check_keys(LOCAL_FILE, data, LOCAL_KEYS, (), ("synced",))
+    if "version" in data:
+        _check_version(LOCAL_FILE, data["version"])
     if "theme" in data:
         _check_theme(LOCAL_FILE, data["theme"])
+    if "synced" in data:
+        check_synced(data["synced"])
+
+
+def check_synced(value: object) -> None:
+    """Refuse a ``synced`` that is not one: a table of ``SYNCED_KEYS``, each a version — ``reads``
+    ``""`` too, a checkout's — ``pinned`` and ``reads`` required."""
+    name = f'{LOCAL_FILE}: "synced"'
+    if not isinstance(value, dict):
+        raise ProjectFileError(f"{name} must be a table, as `cortex sync` writes it")
+    for key in value:
+        if key not in SYNCED_KEYS:
+            raise ProjectFileError(f"{name}: unknown key {shown(key)} — it takes {listed(SYNCED_KEYS)} only")
+    for key in SYNCED_REQUIRED:
+        if key not in value:
+            raise ProjectFileError(f'{name}: "{key}" is required')
+    for key, version in value.items():
+        if not (is_version(version) or (key == "reads" and version == "")):
+            raise ProjectFileError(f"{name}: {key} {shown(version)} is no version")
+
+
+def check_team(data: Mapping, name: str = f"{TEAM_FOLDER}/{TEAM_FILE}") -> None:
+    """Refuse a team's ``cortex.team.toml`` that is not one (ADR-013 §3.5): its keys, none required;
+    a ``version`` of 1.8.0 or later — an earlier one would not read the file; ``locked``, keys the file
+    sets, each once, never ``version`` nor ``locked``, and ``claude_access`` only at ``false``: a team
+    may forbid a permission, never grant one on a developer's machine (decision 25). ``name`` is how
+    the messages name the file."""
+    _check_keys(name, data, TEAM_KEYS, (), ("locked",))
+    if "version" in data:
+        _check_version(name, data["version"])
+        if before_team(data["version"]):
+            raise ProjectFileError(f"{name}: version {shown(data['version'])} is before {FIRST_TEAM_VERSION}, "
+                                   f"which first reads {TEAM_FILE} — pin {FIRST_TEAM_VERSION} or later")
+    if "theme" in data:
+        _check_theme(name, data["theme"])
+    if "sync" in data and data["sync"] not in MODES:
+        raise ProjectFileError(f'{name}: sync {shown(data["sync"])} is none of {listed(MODES)}')
+    locked = data.get("locked", [])
+    if not isinstance(locked, list) or not all(isinstance(key, str) for key in locked):
+        raise ProjectFileError(f'{name}: "locked" must be a list of keys, in quotes')
+    for number, key in enumerate(locked):
+        if key in locked[:number]:
+            raise ProjectFileError(f"{name}: locked names {shown(key)} twice")
+        if key == "version":
+            raise ProjectFileError(f'{name}: "version" is never locked — moving it is the team\'s matter, and a '
+                                   "developer may try a later one (ADR-013, decision 19)")
+        if key not in TEAM_LOCKABLE:
+            raise ProjectFileError(f"{name}: locked names {shown(key)}, which no lock takes — "
+                                   f"{listed(TEAM_LOCKABLE)} do")
+        if key not in data:
+            raise ProjectFileError(f"{name}: locked names {shown(key)}, which the file does not set")
+        if key == "claude_access" and data[key] is True:
+            raise ProjectFileError(f"{name}: claude_access is locked to false only — a team may forbid a "
+                                   "permission, never grant one on a developer's machine (ADR-013, decision 25)")
 
 
 def check_lock(data: Mapping) -> None:

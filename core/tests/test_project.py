@@ -64,8 +64,61 @@ class FileTests(unittest.TestCase):
                     project.check_local(data)
         with self.assertRaisesRegex(project.ProjectFileError, 'unknown key "claude_entry"'):
             project.check_project({"version": "1.0.0", "theme": "h2g2", "claude_entry": "/x"})
-        with self.assertRaisesRegex(project.ProjectFileError, 'unknown key "version"'):
-            project.check_local({"version": "1.0.0"})
+        project.check_local({"version": "1.9.0-rc.1"})                # a developer's try (ADR-013 §3.3)
+        with self.assertRaisesRegex(project.ProjectFileError, 'version "9" is no version'):
+            project.check_local({"version": "9"})
+        with self.assertRaisesRegex(project.ProjectFileError, 'unknown key "pinned"'):
+            project.check_local({"pinned": "1.0.0"})
+
+    def test_synced(self):
+        # ADR-013 §3.1: what `cortex sync` records — each file's version, the team's, the one synced.
+        project.check_local({"synced": {"team": "1.8.0", "project": "1.7.0", "pinned": "1.8.0", "reads": "1.8.0"}})
+        project.check_local({"synced": {"pinned": "1.8.0", "reads": ""}})           # a checkout's
+        for synced, fragment in (("1.8.0", "must be a table"), ({"pinned": "1.8.0"}, '"reads" is required'),
+                                 ({"reads": "1.8.0"}, '"pinned" is required'),
+                                 ({"pinned": "1.8.0", "reads": "1.8.0", "when": "now"}, 'unknown key "when"'),
+                                 ({"pinned": "", "reads": "1.8.0"}, 'pinned "" is no version'),
+                                 ({"pinned": "1.8.0", "reads": "1.8.0", "local": "x"}, 'local "x" is no version')):
+            with self.subTest(synced=synced):
+                with self.assertRaisesRegex(project.ProjectFileError, fragment):
+                    project.check_local({"synced": synced})
+
+
+class TeamFileTests(unittest.TestCase):
+    NAME = "agents/cortex.team.toml"
+
+    def test_a_team_s_file(self):
+        project.check_team({"version": "1.8.0", "theme": "h2g2", "sync": "link", "claude_access": False,
+                            "locked": ["claude_access", "theme"]})
+        project.check_team({})                                       # none required
+        project.check_team({"version": "2.0.0-rc.1"})
+
+    def test_what_it_refuses(self):
+        for data, fragment in (
+                ({"spec": "/x"}, 'unknown key "spec"'),
+                ({"version": "1.7.0"}, 'version "1.7.0" is before 1.8.0'),
+                ({"version": "1.8.0-rc.1"}, 'before 1.8.0'),                 # a pre-release sorts below its release
+                ({"theme": "a b"}, "is no theme name"),
+                ({"sync": "rsync"}, "is none of"),
+                ({"locked": "theme", "theme": "h2g2"}, '"locked" must be a list'),
+                ({"locked": ["version"], "version": "1.8.0"}, '"version" is never locked'),
+                ({"locked": ["locked"]}, 'locked names "locked", which no lock takes'),
+                ({"locked": ["theme"]}, 'locked names "theme", which the file does not set'),
+                ({"locked": ["theme", "theme"], "theme": "h2g2"}, 'locked names "theme" twice'),
+                ({"locked": ["claude_access"], "claude_access": True}, "claude_access is locked to false only")):
+            with self.subTest(data=data):
+                with self.assertRaisesRegex(project.ProjectFileError, fragment):
+                    project.check_team(data, self.NAME)
+
+    def test_versions_in_semantic_versioning_s_order(self):
+        order = ["1.7.0", "1.8.0-alpha", "1.8.0-alpha.1", "1.8.0-alpha.beta", "1.8.0-rc.1", "1.8.0-rc.10", "1.8.0",
+                 "1.8.1", "1.10.0"]
+        self.assertEqual(sorted(reversed(order), key=project.version_key), order)
+        self.assertTrue(project.before_team("1.8.0-rc.1"))
+        self.assertFalse(project.before_team("1.8.0"))
+        for development in ("0.0.0-dev", "0.0.0-dev.7"):           # a checkout's, a development build's
+            self.assertFalse(project.before_team(development))
+        self.assertTrue(project.before_team("0.0.0-devx"))
 
 
 class LockTests(unittest.TestCase):

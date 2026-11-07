@@ -839,11 +839,11 @@ class ProjectFileTests(SyncTestCase):
 
     def test_a_bad_cortex_local_toml_is_refused(self):
         project = self.project()
-        (project / "cortex.local.toml").write_text('version = "1.0.0"\n', encoding="utf-8")
+        (project / "cortex.local.toml").write_text('pinned = "1.0.0"\n', encoding="utf-8")
         proc = self.sync(project)
         self.assertEqual(proc.returncode, 1)
-        self.assertIn('unknown key "version"', proc.err)
-        self.assertIn("theme, spec, claude_access and claude_entry only", proc.err)
+        self.assertIn('unknown key "pinned"', proc.err)
+        self.assertIn("version, theme, spec, claude_access, claude_entry and synced only", proc.err)
 
     def test_two_modes_at_once_are_a_bad_argument(self):
         proc = self.sync(self.project(), "--link", "--copy")

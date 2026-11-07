@@ -1,11 +1,13 @@
 """The configuration cascade — ADR-013 §3.1: each setting, its value, and where it comes from.
 
 The tiers, the most specific first: the environment, the developer's ``cortex.local.toml``, the
-project's ``cortex.toml``, and the machine's ``config.toml`` in the Cortex home. For each key the
-first tier that sets it wins, else its default (§3.2). One resolution for the ``cortex`` command
-and the runtime, so that the two never read a project apart. The team's resolution — what CI
-checks with ``--locked``, and what the runtime reads — leaves the developer's ``cortex.local.toml``
-out.
+project's ``cortex.toml``, the team's ``cortex.team.toml`` in the team's folder, and the machine's
+``config.toml`` in the Cortex home. For each key the first tier that sets it wins, else its default
+(§3.2) — but a key the team's file locks, which takes the team's value (§3.5), and ``version``:
+between the developer's version and the team's, the highest wins (§3.1, §3.3). One resolution for
+the ``cortex`` command and the runtime, so that the two never read a project apart. The team's
+resolution — what CI checks with ``--locked``, and what the runtime reads — leaves the developer's
+``cortex.local.toml`` out, and the keys of an uncommitted ``cortex.toml`` the team's file sets.
 
 It reads the files of a project and the machine's file, with ``project``'s grammar. Whether
 ``cortex.toml`` is committed is not asked here: that takes git, which the runtime's container
@@ -21,7 +23,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Mapping, Optional, Tuple
 
 from . import project
-from .project import LOCAL_FILE, MACHINE_FILE, MACHINE_KEYS, PROJECT_FILE
+from .project import LOCAL_FILE, MACHINE_FILE, MACHINE_KEYS, PROJECT_FILE, TEAM_FILE, TEAM_FOLDER, version_key
 
 PROJECT_SETTINGS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access")
 KEYS: Tuple[str, ...] = PROJECT_SETTINGS + MACHINE_KEYS
@@ -36,12 +38,16 @@ VARIABLES: Mapping[str, str] = {"releases_url": "CORTEX_RELEASES_URL", "update_c
 NEGATING: Tuple[str, ...] = ("update_check", "register")
 
 
+TEAM_NAME = f"{TEAM_FOLDER}/{TEAM_FILE}"
+
+
 @dataclass(frozen=True)
 class Setting:
     key: str
     value: object                     # None: unset, as claude_access may be
     origin: str                       # a file, as the project root names it; a variable; or "default"
     overridden: Tuple[Tuple[str, object], ...] = ()     # (origin, value) of the tiers it won over
+    locked: bool = False              # the team's file locks it: its value is the team's
 
 
 @dataclass(frozen=True)
@@ -52,6 +58,11 @@ class Resolution:
     committed: Optional[bool] = None      # whether cortex.toml is committed: the caller's answer, None when unasked
     locked: bool = False                  # the team's resolution: cortex.local.toml left out
     warnings: Tuple[str, ...] = field(default=())       # the machine's file's, which never stop a read
+    team_version: Optional[Setting] = None     # the team's version, and the file it comes from (§3.1)
+    developer_version: Optional[Setting] = None     # cortex.local.toml's, or an uncommitted cortex.toml's
+    candidates: Mapping[str, str] = field(default_factory=dict)     # the version of each file: team, project, local
+    team: bool = False                    # the team's file is read
+    notes: Tuple[str, ...] = field(default=())      # what is said of the team's file, and of a locked key overridden
 
     def __getitem__(self, key: str) -> Setting:
         return self.settings[key]
@@ -71,36 +82,120 @@ def _environment(key: str, environ: Mapping[str, str], variables: Mapping[str, s
     return False if key in NEGATING else raw
 
 
+def _higher(first: Tuple[str, str], second: Tuple[str, str]) -> Tuple[str, str]:
+    """The higher of two ``(origin, version)`` — the first on a tie."""
+    return second if version_key(second[1]) > version_key(first[1]) else first
+
+
+def _versions(project_data: Mapping, local_data: Optional[Mapping], team_data: Optional[Mapping],
+              committed: Optional[bool], team_name: str
+              ) -> Tuple[Tuple[str, str], Optional[Tuple[str, str]], Optional[Mapping], List[str]]:
+    """The team's version, the developer's, the team's file as read — ``None`` when it is not — and
+    what is said of it (§3.1, §3.3, §3.8 step 3). The team's version is a committed ``cortex.toml``'s
+    (decision 24), else the team's file's, else an uncommitted ``cortex.toml``'s, as 1.7.0 reads it;
+    the developer's, ``cortex.local.toml``'s and an uncommitted ``cortex.toml``'s while the team's
+    file pins one. A team's version before 1.8.0 reads neither the team's file nor a local version."""
+    notes: List[str] = []
+    pin = project_data.get("version")
+    own = bool(committed) and pin is not None              # the project pins its own version, committed
+    if team_data is not None and own and project.before_team(pin):
+        notes.append(f"{team_name} is not read: the team's version is {pin}, before {project.FIRST_TEAM_VERSION}")
+        team_data = None
+    if team_data is not None:
+        project.check_team(team_data, team_name)
+    team_pin = team_data.get("version") if team_data is not None else None
+    if own:
+        team = (PROJECT_FILE, pin)
+    elif team_pin is not None:
+        team = (team_name, team_pin)
+    elif pin is not None:
+        team = (PROJECT_FILE, pin)
+    else:
+        raise project.ProjectFileError(f'{PROJECT_FILE}: "version" is required'
+                                       + (f" — or in {team_name}" if team_data is not None else ""))
+    developer: Optional[Tuple[str, str]] = None
+    local = local_data.get("version") if local_data is not None else None
+    if local is not None:
+        if project.before_team(team[1]):
+            raise project.ProjectFileError(
+                f'{LOCAL_FILE}: "version" is read once the team\'s version is {project.FIRST_TEAM_VERSION} or later — '
+                f"the team's is {team[1]}: the team moves to {project.FIRST_TEAM_VERSION} first, or remove it")
+        developer = (LOCAL_FILE, local)
+    if not own and pin is not None and team_pin is not None:
+        developer = _higher(developer, (PROJECT_FILE, pin)) if developer else (PROJECT_FILE, pin)
+    return team, developer, team_data, notes
+
+
 def resolve(project_data: Optional[Mapping], local_data: Optional[Mapping], machine_data: Mapping,
             environ: Mapping[str, str], *, machine_name: str = MACHINE_FILE, locked: bool = False,
             committed: Optional[bool] = None, warnings: Tuple[str, ...] = (), machine: bool = True,
-            variables: Mapping[str, str] = VARIABLES) -> Resolution:
+            variables: Mapping[str, str] = VARIABLES, team_data: Optional[Mapping] = None,
+            team_name: str = TEAM_NAME) -> Resolution:
     """The settings from the files read already — ``project_data`` and ``local_data`` checked by
-    ``project``'s grammar, ``machine_data`` the keys of the machine's file that read. Without
+    ``project``'s grammar, ``machine_data`` the keys of the machine's file that read, ``team_data``
+    the team's file as parsed, which is checked here once the team's version says it is read. Without
     ``project_data``, outside a project, only the machine's keys; ``machine`` off, the project's only.
-    ``locked`` gives the team's resolution, without ``cortex.local.toml``. ``machine_name`` is how an
-    origin names the machine's file. ``variables`` are the environment's keys, each reader's own: the
-    command's are ``VARIABLES``."""
+    ``locked`` gives the team's resolution, without ``cortex.local.toml``, and without the keys of an
+    uncommitted ``cortex.toml`` the team's file sets. ``committed``, whether ``cortex.toml`` is, is the
+    caller's answer: asked only where a team's file is there. ``machine_name`` and ``team_name`` are how
+    an origin names those files. ``variables`` are the environment's keys, each reader's own: the
+    command's are ``VARIABLES``. ``ProjectFileError`` for what the team's version refuses (§3.8)."""
     keys = (KEYS if machine else PROJECT_SETTINGS) if project_data is not None else MACHINE_KEYS
     settings: Dict[str, Setting] = {}
+    notes: List[str] = []
+    team_version = developer_version = None
+    candidates: Dict[str, str] = {}
+    if project_data is not None:
+        team, developer, team_data, notes = _versions(project_data, local_data, team_data, committed, team_name)
+        team_version = Setting("version", team[1], team[0])
+        developer_version = Setting("version", developer[1], developer[0]) if developer else None
+        candidates = {name: data["version"] for name, data in
+                      (("team", team_data), ("project", project_data), ("local", local_data))
+                      if data is not None and "version" in data}
+    else:
+        team_data = None
+    lock_keys = tuple(team_data.get("locked", ())) if team_data is not None else ()
     for key in keys:
+        if key == "version" and project_data is not None:
+            read = team if locked or developer is None else _higher(team, developer)
+            others = [(origin, value) for origin, value in ((team_version.origin, team_version.value),
+                      *(((developer_version.origin, developer_version.value),) if developer_version else ()))
+                      if (origin, value) != read]
+            settings[key] = Setting(key, read[1], read[0], tuple(others))
+            continue
         found: List[Tuple[str, object]] = []
         from_environment = _environment(key, environ, variables)
         if from_environment is not None:
             found.append((variables[key], from_environment))
         if local_data is not None and not locked and key in project.LOCAL_KEYS and key in local_data:
             found.append((LOCAL_FILE, local_data[key]))
-        if project_data is not None and key in project.PROJECT_KEYS and key in project_data:
+        if project_data is not None and key in project.PROJECT_KEYS and key in project_data \
+                and not (locked and committed is False and team_data is not None and key in team_data):
             found.append((PROJECT_FILE, project_data[key]))
+        if team_data is not None and key in project.TEAM_KEYS and key in team_data:
+            found.append((team_name, team_data[key]))
         if key in MACHINE_KEYS and key in machine_data:
             found.append((machine_name, machine_data[key]))
+        if key in lock_keys:
+            value = team_data[key]
+            overridden = tuple(item for item in found if item[0] != team_name)
+            for origin, other in overridden:
+                if other != value:
+                    notes.append(f"{key} is locked by {team_name} to {project.shown(value)}: {origin}'s "
+                                 f"{project.shown(other)} is not read")
+            settings[key] = Setting(key, value, team_name, overridden, locked=True)
+            continue
         if found:
             (origin, value), overridden = found[0], tuple(found[1:])
         else:
             origin, value, overridden = DEFAULT, DEFAULTS.get(key), ()
+        if key == "theme" and origin == DEFAULT:
+            raise project.ProjectFileError(f'{PROJECT_FILE}: "theme" is required'
+                                           + (f" — or in {team_name}" if team_data is not None else ""))
         settings[key] = Setting(key, value, origin, overridden)
     return Resolution(settings, committed=committed if project_data is not None else None, locked=locked,
-                      warnings=warnings)
+                      warnings=warnings, team_version=team_version, developer_version=developer_version,
+                      candidates=candidates, team=team_data is not None, notes=tuple(notes))
 
 
 def _toml(path: str) -> Dict:
@@ -117,13 +212,25 @@ def _checked_toml(path: str, name: str) -> Dict:
         raise project.ProjectFileError(f"{name}: {error}")
 
 
+def read_team(root: str, folder: str = TEAM_FOLDER) -> Optional[Dict]:
+    """The team's file in the team's folder of the project at ``root``, as parsed — ``None`` when it
+    is not there. Its grammar is checked by ``resolve``, once the team's version says it is read.
+    Raises ``project.ProjectFileError`` for a file that does not parse, naming it."""
+    path = os.path.join(root, folder, TEAM_FILE)
+    if not os.path.isfile(path):
+        return None
+    return _checked_toml(path, f"{folder}/{TEAM_FILE}")
+
+
 def read_project(root: str, local: bool = True) -> Tuple[Mapping, Optional[Mapping]]:
     """``cortex.toml`` at ``root``, and ``cortex.local.toml`` unless ``local`` is off — or ``None``
     when it is not there — each checked with the grammar. Raises ``project.ProjectFileError`` naming
     the file; ``OSError`` for a file that cannot be opened. The one reader of the two files, the
-    command's and ``cortex config``'s."""
+    command's and ``cortex config``'s. Beside a team's file, ``cortex.toml``'s ``version`` and
+    ``theme`` may be the file's: ``resolve`` says whether they are."""
     data = _checked_toml(os.path.join(root, PROJECT_FILE), PROJECT_FILE)
-    project.check_project(data)
+    team = os.path.isfile(os.path.join(root, TEAM_FOLDER, TEAM_FILE))
+    project.check_project(data, project.PROJECT_REQUIRED if team else ())
     local_data = None
     path = os.path.join(root, LOCAL_FILE)
     if local and os.path.isfile(path):
@@ -159,3 +266,18 @@ def loose_version(root: str) -> Optional[Tuple[str, str]]:
         return None
     version = data.get("version")
     return (PROJECT_FILE, version) if project.is_version(version) else None
+
+
+def loose_versions(root: str) -> Dict[str, Tuple[str, str]]:
+    """Each file's ``version`` that reads, by its role — ``project``, ``team``, ``local`` — as
+    ``(name, version)``, read before any other key is checked (§3.8, step 1): what a too-new version
+    is said from, and what ``cortex prune`` keeps."""
+    found: Dict[str, Tuple[str, str]] = {}
+    for role, name in (("project", PROJECT_FILE), ("team", TEAM_NAME), ("local", LOCAL_FILE)):
+        try:
+            version = _toml(os.path.join(root, name)).get("version")
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, AttributeError):
+            continue
+        if project.is_version(version):
+            found[role] = (name, version)
+    return found
