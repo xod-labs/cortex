@@ -1,0 +1,292 @@
+"""``cortex config``, the machine's ``config.toml`` and the version read first — ADR-013 phase 1.
+
+The settings of a project, each with its origin (§3.9); the machine's file and the variables over
+it (§3.7); whether ``cortex.toml`` is committed (§3.1); and a version newer than the binary, said
+before any key is checked (§3.8). From source the command stands for Cortex 9.9.9, so that it may
+download the fake releases 9.9.7 and 9.9.8.
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
+sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
+
+import cli_harness as harness  # noqa: E402
+from release_fixture import FakeRelease  # noqa: E402
+
+OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
+DOWNLOADS = unittest.skipIf(harness.BINARY, "a build of no release downloads no version")
+SOURCE = unittest.skipIf(harness.BINARY, "the refusal of a source checkout")
+GIT = shutil.which("git")
+NEEDS_GIT = unittest.skipIf(GIT is None, "needs git")
+POSIX = unittest.skipIf(os.name == "nt", "a git stand-in written as a shell script")
+
+
+def display(path):
+    return str(path).replace(os.sep, "/")
+
+
+def snapshot(root):
+    return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+class SettingsTestCase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="cortex-settings-")).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.home = self.tmp / "cortex-home"
+        self.home.mkdir()
+        self.release = FakeRelease(("9.9.7", "9.9.8"))
+        self.addCleanup(self.release.close)
+        self.env = harness.environment(CORTEX_HOME=str(self.home), CORTEX_RELEASES_URL=self.release.url,
+                                       CORTEX_SOURCE_VERSION=OWN, CORTEX_NO_REGISTER="1", CORTEX_NO_UPDATE_CHECK="1")
+
+    def project(self, version=OWN, extra="", name="app"):
+        root = self.tmp / name
+        root.mkdir(parents=True)
+        (root / "cortex.toml").write_text(f'version = "{version}"\ntheme = "h2g2"\n{extra}', encoding="utf-8")
+        return root
+
+    def machine(self, text):
+        (self.home / "config.toml").write_text(text, encoding="utf-8")
+
+    def cortex(self, cwd, *args, **env):
+        proc = harness.run(*args, cwd=cwd, env={**self.env, **env})
+        proc.out, proc.err = proc.stdout.decode(), proc.stderr.decode()
+        return proc
+
+    def settings(self, cwd, *args, **env):
+        proc = self.cortex(cwd, "config", "--json", *args, **env)
+        self.assertEqual(proc.returncode, 0, proc.err)
+        return json.loads(proc.out)
+
+    def assert_ok(self, proc):
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+
+
+class ConfigCommandTests(SettingsTestCase):
+    def test_each_setting_its_value_and_its_origin(self):
+        project = self.project(extra="claude_access = true\n")
+        (project / "cortex.local.toml").write_text('theme = "none"\n', encoding="utf-8")
+        before = snapshot(self.tmp)
+        proc = self.cortex(project, "config")
+        self.assert_ok(proc)
+        lines = {line.split()[0]: line.split(None, 2)[1:] for line in proc.out.splitlines()}
+        self.assertEqual(list(lines), ["version", "theme", "sync", "claude_access", "releases_url", "update_check",
+                                       "register"])
+        self.assertEqual(lines["version"], [OWN, "cortex.toml"])
+        self.assertEqual(lines["theme"], ["none", "cortex.local.toml"])
+        self.assertEqual(lines["sync"], ["store", "default"])
+        self.assertEqual(lines["claude_access"], ["true", "cortex.toml"])
+        self.assertEqual(lines["register"], ["false", "CORTEX_NO_REGISTER"])
+        self.assertEqual(snapshot(self.tmp), before)                     # it writes nothing
+
+    def test_locked_is_the_team_s_resolution_without_the_local_file(self):
+        project = self.project()
+        (project / "cortex.local.toml").write_text('theme = "none"\nclaude_access = true\n', encoding="utf-8")
+        found = self.settings(project, "--locked")
+        self.assertEqual((found["format"], found["locked"]), (1, True))
+        self.assertEqual(found["settings"]["theme"], {"value": "h2g2", "origin": "cortex.toml", "overridden": [],
+                                                      "locked": False})
+        self.assertEqual(found["settings"]["claude_access"]["value"], None)
+        found = self.settings(project)
+        self.assertEqual(found["settings"]["theme"]["overridden"], [{"origin": "cortex.toml", "value": "h2g2"}])
+
+    def test_a_key_alone_and_a_key_unknown(self):
+        project = self.project()
+        proc = self.cortex(project, "config", "version", "--locked")
+        self.assert_ok(proc)
+        self.assertEqual(proc.out, f"{OWN}\n")
+        proc = self.cortex(project, "config", "claude_access")
+        self.assertEqual(proc.out, "\n")                                  # unset
+        proc = self.cortex(project, "config", "verison")
+        self.assertEqual(proc.returncode, 2, proc.err)
+        self.assertIn('cortex config: no setting "verison" — cortex config knows version, theme', proc.err)
+
+    def test_outside_a_project_the_machine_s_keys_only(self):
+        found = self.settings(self.tmp)
+        self.assertEqual(list(found["settings"]), ["releases_url", "update_check", "register"])
+        self.assertIsNone(found["project"])
+        proc = self.cortex(self.tmp, "config", "version")
+        self.assertEqual(proc.returncode, 2, proc.err)
+        self.assertIn("outside a project, cortex config knows releases_url, update_check and register", proc.err)
+
+    def test_a_refused_file_exits_1_naming_it(self):
+        project = self.project()
+        (project / "cortex.local.toml").write_text('verison = "x"\n', encoding="utf-8")
+        proc = self.cortex(project, "config")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn('cortex.local.toml: unknown key "verison"', proc.err)
+
+    def test_a_root_that_is_no_repository_reads_cortex_toml_s_version_locked_too(self):
+        # A 2.B root, with no team's file: the version is cortex.toml's, whoever reads it (§3.1).
+        project = self.project("9.9.8")
+        self.assert_ok(self.cortex(project, "sync"))
+        found = self.settings(project, "--locked")
+        self.assertEqual((found["committed"], found["settings"]["version"]["value"]), (False, "9.9.8"))
+        self.assert_ok(self.cortex(project, "sync", "--locked"))
+
+
+class CommittedTests(SettingsTestCase):
+    def refusing_git(self):
+        """A git that refuses every repository, as one does a repository another user owns."""
+        bin_dir = self.tmp / "refusing-git"
+        bin_dir.mkdir()
+        script = bin_dir / "git"
+        script.write_text("#!/bin/sh\necho 'fatal: detected dubious ownership in repository' >&2\nexit 128\n",
+                          encoding="utf-8")
+        script.chmod(0o755)
+        return str(bin_dir)
+
+    @POSIX
+    def test_a_git_that_refuses_counts_as_no_git(self):
+        project = self.project()
+        path = self.refusing_git()
+        self.assertIs(self.settings(project, PATH=path)["committed"], False)
+        (self.tmp / ".git").mkdir()                                      # a .git above the root counts
+        self.assertIs(self.settings(project, PATH=path)["committed"], True)
+        self.assertIs(self.settings(project)["committed"], True)         # no git at all: the same rule
+
+    @NEEDS_GIT
+    def test_tracked_in_a_subdirectory_of_its_repository_and_untracked(self):
+        repo = self.tmp / "repo"
+        project = repo / "projects" / "foo"
+        project.mkdir(parents=True)
+        (project / "cortex.toml").write_text(f'version = "{OWN}"\ntheme = "h2g2"\n', encoding="utf-8")
+        subprocess.run([GIT, "init", "-q", str(repo)], check=True)
+        path = os.path.dirname(GIT)
+        self.assertIs(self.settings(project, PATH=path)["committed"], False)      # in a repository, untracked
+        subprocess.run([GIT, "-C", str(repo), "add", "projects/foo/cortex.toml"], check=True)
+        self.assertIs(self.settings(project, PATH=path)["committed"], True)
+
+
+class MachineFileTests(SettingsTestCase):
+    @DOWNLOADS
+    def test_the_file_s_releases_url_downloads_and_the_variable_goes_over_it(self):
+        self.machine(f'releases_url = "{self.release.url}"\n')
+        project = self.project("9.9.8")
+        proc = self.cortex(project, "sync", CORTEX_RELEASES_URL="")       # empty: unset, the file's
+        self.assert_ok(proc)
+        self.assertTrue((self.home / "versions" / "9.9.8").is_dir())
+        found = self.settings(project, CORTEX_RELEASES_URL="")
+        self.assertEqual(found["settings"]["releases_url"]["origin"], display(self.home / "config.toml"))
+        self.machine('releases_url = "http://example.com/releases"\n')   # refused, if it were read
+        shutil.rmtree(self.home / "versions")
+        self.assert_ok(self.cortex(project, "sync"))                     # the variable's
+        self.assertEqual(self.settings(project)["settings"]["releases_url"]["origin"], "CORTEX_RELEASES_URL")
+
+    @DOWNLOADS
+    def test_an_invalid_releases_url_is_refused_naming_the_file(self):
+        self.machine('releases_url = "http://example.com/releases"\n')
+        proc = self.cortex(self.project("9.9.8"), "sync", CORTEX_RELEASES_URL="")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn(f"{display(self.home / 'config.toml')}: ", proc.err)
+        self.assertIn("https", proc.err)
+
+    def test_register_and_update_check_off_in_the_file(self):
+        self.machine("register = false\nupdate_check = false\n")
+        project = self.project()
+        proc = self.cortex(project, "sync", CORTEX_NO_REGISTER="")
+        self.assert_ok(proc)
+        self.assertNotIn("registered as", proc.out)
+        self.assertFalse((self.home / "projects.toml").exists())
+        found = self.settings(project, CORTEX_NO_REGISTER="", CORTEX_NO_UPDATE_CHECK="")
+        self.assertEqual((found["settings"]["register"]["value"], found["settings"]["update_check"]["value"]),
+                         (False, False))
+        self.machine("register = true\n")
+        proc = self.cortex(project, "sync", CORTEX_NO_REGISTER="1")     # the variable over the file
+        self.assertFalse((self.home / "projects.toml").exists())
+        proc = self.cortex(project, "sync", CORTEX_NO_REGISTER="")
+        self.assertIn("registered as app", proc.out)
+
+    def test_an_unknown_key_or_a_wrong_type_warns_and_the_rest_is_read(self):
+        self.machine('register = "no"\nendpoints = "later"\nupdate_check = false\n')
+        project = self.project()
+        proc = self.cortex(project, "sync")
+        self.assert_ok(proc)
+        where = display(self.home / "config.toml")
+        self.assertEqual(proc.err.count(f'warning: {where}: "register" must be true or false'), 1, proc.err)
+        self.assertIn(f'warning: {where}: unknown key "endpoints", not read', proc.err)
+        found = self.settings(project, CORTEX_NO_UPDATE_CHECK="")
+        self.assertEqual(found["settings"]["update_check"]["origin"], where)
+        self.machine("register = [\n")
+        proc = self.cortex(project, "sync")
+        self.assert_ok(proc)
+        self.assertIn(f"warning: {where} is not read", proc.err)
+
+    @SOURCE
+    def test_self_update_reaches_its_own_refusal_whatever_the_file_holds(self):
+        # From source, its refusal comes first; the file read through, test_cli_self_update says.
+        self.machine('endpoints = "later"\nregister = 3\nreleases_url = [\n')
+        proc = self.cortex(self.tmp, "self-update", "9.9.9")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn("cortex self-update: this cortex runs from a source checkout", proc.err)
+
+
+class TooNewTests(SettingsTestCase):
+    """A version newer than the binary is said before any key is checked (§3.8, steps 1–2)."""
+
+    WHY = f"this project uses Cortex 99.0.0, which its cortex.toml pins, newer than this cortex, {OWN}"
+
+    def test_sync_init_validate_and_upgrade_say_the_version_not_the_key(self):
+        project = self.project("99.0.0", extra='agents = "team"\n')      # a key this cortex does not know
+        for args, code in ((("sync",), 1), (("init", "--tool", "claude"), 1), (("validate",), 2), (("upgrade",), 1)):
+            with self.subTest(args=args):
+                proc = self.cortex(project, *args)
+                self.assertEqual(proc.returncode, code, proc.err)
+                self.assertIn(self.WHY, proc.err)
+                self.assertIn("cortex self-update 99.0.0", proc.err)
+                self.assertNotIn("unknown key", proc.err)
+
+    def test_config_prints_the_version_and_says_so(self):
+        known = self.project("99.0.0", name="known")                      # every key known to this cortex
+        project = self.project("99.0.0", extra='agents = "team"\n')      # one it does not know
+        for project, args in ((known, ()), (project, ()), (project, ("--locked",))):
+            with self.subTest(project=project.name, args=args):
+                proc = self.cortex(project, "config", *args)
+                self.assert_ok(proc)
+                self.assertIn(f"99.0.0", proc.out.splitlines()[0])
+                self.assertIn(f"cortex.toml — newer than this cortex, {OWN}: cortex self-update 99.0.0",
+                              proc.out.splitlines()[0])
+                self.assertIn("register", proc.out)
+
+    def test_upgrade_naming_a_version_still_moves_down(self):
+        project = self.project("99.0.0")
+        proc = self.cortex(project, "upgrade", OWN)
+        self.assert_ok(proc)
+        self.assertIn(f'version = "{OWN}"', (project / "cortex.toml").read_text(encoding="utf-8"))
+
+    def test_a_checkout_passes(self):
+        # --from checks no version, as in 1.7.0; nor does validate of a spec that names none.
+        checkout = self.tmp / "checkout"
+        for tree in ("agents", "templates", "docs"):
+            shutil.copytree(harness.REPO / tree, checkout / tree)
+        project = self.project("99.0.0")
+        self.assert_ok(self.cortex(project, "sync", "--link", "--from", str(checkout)))
+        proc = self.cortex(project, "validate")
+        self.assertNotIn("newer than this cortex", proc.err)
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+
+
+class SameAsBeforeTests(SettingsTestCase):
+    def test_a_project_of_1_7_0_syncs_byte_for_byte(self):
+        project = self.project(extra="claude_access = false\n")
+        (project / "cortex.local.toml").write_text('# mine\ntheme = "none"\n', encoding="utf-8")
+        self.assert_ok(self.cortex(project, "sync"))
+        before = snapshot(project)
+        self.assert_ok(self.cortex(project, "sync"))
+        self.assertEqual(snapshot(project), before)
+        self.assertEqual(set(before), {"cortex.toml", "cortex.local.toml", "cortex.lock"})
+        local = before["cortex.local.toml"].decode()
+        self.assertEqual([line.split(" =")[0] for line in local.splitlines() if " = " in line], ["theme", "spec"])
+
+
+if __name__ == "__main__":
+    unittest.main()

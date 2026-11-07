@@ -960,6 +960,23 @@ def in_no_repository(root) -> bool:
                    for directory in (start, *map(str, Path(start).parents)))
 
 
+def committed(root) -> bool:
+    """Whether ``cortex.toml`` at ``root`` is committed (ADR-013 §3.1): git tracks it — ADR-011 §3.5's
+    test. Without git on ``PATH``, or with a git that refuses — a repository another user owns, say —
+    a ``.git`` at or above the root counts. A ``cortex.toml`` git does not track, in a repository, is
+    not committed: the developer's own."""
+    git = shutil.which("git")
+    if git is not None:
+        try:
+            proc = subprocess.run([git, "-C", str(root), "ls-files", "--error-unmatch", "--", config.PROJECT_FILE],
+                                  capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            proc = None
+        if proc is not None and proc.returncode in (0, 1):
+            return proc.returncode == 0                     # 1: a pathspec git does not know — untracked
+    return not in_no_repository(root)
+
+
 def ignored(root: Path, name: str) -> Optional[bool]:
     """Whether git ignores ``name`` in the project: asked of git when the project is a repository
     of it; ``None`` when there is no repository to ask about."""
