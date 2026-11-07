@@ -238,24 +238,25 @@ def check_team(data: Mapping, name: str = f"{TEAM_FOLDER}/{TEAM_FILE}") -> None:
                                    "permission, never grant one on a developer's machine (ADR-013, decision 25)")
 
 
-def check_lock(data: Mapping) -> None:
-    """Refuse a ``cortex.lock`` that is not one: every key required, none other, ``format`` an
-    integer this Cortex reads — ``LaterFormatError`` for a later one."""
+def check_lock(data: Mapping, name: str = LOCK_FILE) -> None:
+    """Refuse a ``cortex.lock`` that is not one — or the lock ``name`` names, the team's beside its file
+    (ADR-013 §3.4): every key required, none other, ``format`` an integer this Cortex reads —
+    ``LaterFormatError`` for a later one."""
     for key in data:
         if key not in LOCK_KEYS:
-            raise ProjectFileError(f"{LOCK_FILE}: unknown key {shown(key)} — {LOCK_FILE} takes {listed(LOCK_KEYS)} only")
+            raise ProjectFileError(f"{name}: unknown key {shown(key)} — {name} takes {listed(LOCK_KEYS)} only")
     for key in LOCK_KEYS:
         if key not in data:
-            raise ProjectFileError(f'{LOCK_FILE}: "{key}" is required')
+            raise ProjectFileError(f'{name}: "{key}" is required')
     form = data["format"]
     if isinstance(form, bool) or not isinstance(form, int) or form < 1:
-        raise ProjectFileError(f'{LOCK_FILE}: "format" must be a positive integer, without quotes')
+        raise ProjectFileError(f'{name}: "format" must be a positive integer, without quotes')
     if form > LOCK_FORMAT:
-        raise LaterFormatError(f"{LOCK_FILE}: format {form} is written by a later Cortex — this one reads format {LOCK_FORMAT}")
+        raise LaterFormatError(f"{name}: format {form} is written by a later Cortex — this one reads format {LOCK_FORMAT}")
     if not is_version(data["version"]):
-        raise ProjectFileError(f'{LOCK_FILE}: version {shown(data["version"])} is no version — X.Y.Z, for instance 1.0.0')
+        raise ProjectFileError(f'{name}: version {shown(data["version"])} is no version — X.Y.Z, for instance 1.0.0')
     if not isinstance(data["digest"], str) or DIGEST.fullmatch(data["digest"]) is None:
-        raise ProjectFileError(f'{LOCK_FILE}: digest {shown(data["digest"])} is no digest — "sha256:" and 64 lowercase '
+        raise ProjectFileError(f'{name}: digest {shown(data["digest"])} is no digest — "sha256:" and 64 lowercase '
                                "hexadecimal digits")
 
 
