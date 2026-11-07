@@ -754,6 +754,15 @@ class SecondReviewTests(TeamTestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertIn("--locked: no agents/cortex.team.lock", proc.err)
 
+    def test_a_team_s_lock_that_is_no_lock_is_named(self):
+        root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        lock = root / "agents" / "cortex.team.lock"
+        lock.write_text(lock.read_text(encoding="utf-8").replace("sha256:", "sha256:0", 1), encoding="utf-8")
+        proc = self.cortex(root, "sync")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn('agents/cortex.team.lock: digest "sha256:0', proc.err)
+
     def test_validate_names_the_team_s_lock_when_its_spec_left_the_store(self):
         root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n')
         self.assert_ok(self.cortex(root, "sync"))
@@ -874,7 +883,8 @@ class SecondReviewTests(TeamTestCase):
         self.assertEqual((found["state"], found["pinned"], found["pinned_origin"]), ("unreadable", "9.9.8", TEAM))
 
     def test_every_form_of_synced_is_written_again_in_its_line(self):
-        for text in (f'[synced]\npinned = "{OWN}"\nreads = "{OWN}"\n', f'synced.pinned = "{OWN}"\nsynced.reads = "{OWN}"\n'):
+        for text in (f'[synced]\npinned = "{OWN}"\n# mine\nreads = "{OWN}"\n',
+                     f'synced.pinned = "{OWN}"\nsynced.reads = "{OWN}"\n'):
             with self.subTest(text=text):
                 root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', local=text, name=f"t{abs(hash(text))}")
                 self.assert_ok(self.cortex(root, "sync"))
@@ -882,6 +892,7 @@ class SecondReviewTests(TeamTestCase):
                 self.assertIn("synced = {", written)
                 self.assertNotIn("[synced]", written)
                 self.assertNotIn("synced.", written)
+                self.assertEqual("# mine" in written, "# mine" in text)
                 self.assert_ok(self.cortex(root, "validate"))
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', local='synced = "garbage"\n', name="garbage")
         proc = self.cortex(root, "validate")
