@@ -40,7 +40,7 @@ class ConfigError(Exception):
     """A configuration file cortex refuses — the message names the file and the key."""
 
 
-@dataclass
+@dataclass(frozen=True)
 class Project:
     root: str                  # the directory holding cortex.toml, as the shell names it
     version: Version
