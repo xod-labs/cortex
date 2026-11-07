@@ -775,6 +775,10 @@ class SecondReviewTests(TeamTestCase):
         proc = self.cortex(root, "sync")
         self.assertEqual(proc.returncode, 1)
         self.assertIn('agents/cortex.team.lock: digest "sha256:0', proc.err)
+        lock.write_text("<<<<<<< HEAD\n" + lock.read_text(encoding="utf-8") + "=======\n>>>>>>> other\n", encoding="utf-8")
+        proc = self.cortex(root, "sync")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("cortex sync: agents/cortex.team.lock: ", proc.err)
 
     def test_validate_names_the_team_s_lock_when_its_spec_left_the_store(self):
         root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n')

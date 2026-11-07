@@ -178,16 +178,18 @@ def find_project(start: str) -> Optional[str]:
         current = parent
 
 
-def _read(path: str) -> Dict:
+def _read(path: str, name: Optional[str] = None) -> Dict:
+    """The TOML file at ``path``, named ``name`` — its file name, by default — in what it refuses."""
+    name = name or os.path.basename(path)
     try:
         with open(path, "rb") as fh:
             text = fh.read().decode("utf-8-sig")    # a byte order mark, as Notepad writes one
     except UnicodeDecodeError:
-        raise ConfigError(f"{os.path.basename(path)}: not UTF-8 text")
+        raise ConfigError(f"{name}: not UTF-8 text")
     try:
         return tomllib.loads(text)
     except tomllib.TOMLDecodeError as error:
-        raise ConfigError(f"{os.path.basename(path)}: {error}")
+        raise ConfigError(f"{name}: {error}")
 
 
 def in_no_repository(root) -> bool:
@@ -511,9 +513,10 @@ def load_lock(root: str, name: str = LOCK_FILE) -> Optional[Lock]:
     if not os.path.isfile(path):
         return None
     again = "delete it, and `cortex sync` writes it again"     # a merge left conflict markers in it, say
+    shown_name = TEAM_LOCK_NAME if name == TEAM_LOCK_FILE else name
     try:
-        data = _read(path)
-        project.check_lock(data, TEAM_LOCK_NAME if name == TEAM_LOCK_FILE else name)
+        data = _read(path, shown_name)
+        project.check_lock(data, shown_name)
     except ConfigError as error:
         raise ConfigError(f"{error} — {again}")
     except project.LaterFormatError as error:
