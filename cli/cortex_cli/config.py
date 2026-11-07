@@ -238,6 +238,10 @@ def _missing_team_folder(root: str) -> None:
         return
     if "version" in written or os.path.isfile(os.path.join(root, TEAM_FOLDER, TEAM_FILE)):
         return
+    try:
+        project.check_project(written, ("version", "theme"))
+    except project.ProjectFileError:
+        return                          # another fault of the file, which its own error says
     missing = team_folder_state(root)
     if missing is not None:
         raise ConfigError(f'{PROJECT_FILE}: "version" is required, or in {TEAM_NAME} — {missing}: check it out, a '
@@ -265,12 +269,7 @@ def load(root: str, lenient: bool = False) -> Project:
         team = cascade.read_team(root)
         known = committed(root) if team is not None else None
         local = found or {}
-        try:
-            settings, team_settings = _resolve_both(data, local, team, known)
-        except project.ProjectFileError:
-            if "version" not in data:
-                _missing_team_folder(root)
-            raise
+        settings, team_settings = _resolve_both(data, local, team, known)
     except project.ProjectFileError as error:
         raise ConfigError(str(error))
     synced = local.get("synced")
@@ -444,9 +443,9 @@ def render_local(root: str, values: Dict[str, object], comments: Optional[Dict[s
 
 
 def _without_synced(text: str, line: bool = False) -> str:
-    """``text`` without the forms of ``synced`` a line cannot rewrite — a ``[synced]`` table and what it
-    holds, a dotted ``synced.x`` key — and, ``line``, without its line too: the sync writes it again,
-    in its one-line form, where ``set_keys`` keeps it in place from then on."""
+    """``text`` without the forms of ``synced`` a line cannot rewrite — a ``[synced]`` table and the keys
+    it holds, its comments kept, a dotted ``synced.x`` key — and, ``line``, without its line too: the
+    sync writes it again, in its one-line form, where ``set_keys`` keeps it in place from then on."""
     kept, inside = [], False
     for row in text.splitlines(keepends=True):
         stripped = row.strip()
@@ -455,6 +454,9 @@ def _without_synced(text: str, line: bool = False) -> str:
             continue
         if inside and stripped.startswith("["):
             inside = False
+        if inside and (not stripped or stripped.startswith("#")):
+            kept.append(row)
+            continue
         if inside or re.match(r"""^(?:synced|"synced"|'synced')\s*\.""", stripped) \
                 or (line and re.match(r"""^(?:synced|"synced"|'synced')\s*=""", stripped)):
             continue
@@ -511,7 +513,7 @@ def load_lock(root: str, name: str = LOCK_FILE) -> Optional[Lock]:
     again = "delete it, and `cortex sync` writes it again"     # a merge left conflict markers in it, say
     try:
         data = _read(path)
-        project.check_lock(data)
+        project.check_lock(data, TEAM_LOCK_NAME if name == TEAM_LOCK_FILE else name)
     except ConfigError as error:
         raise ConfigError(f"{error} — {again}")
     except project.LaterFormatError as error:
