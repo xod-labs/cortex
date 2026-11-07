@@ -38,6 +38,8 @@ DEVELOPMENT = unittest.skipIf(harness.BINARY is not None and DEV_BUILD.fullmatch
 # The suite's own versions — 9.9.7 and 9.9.8 served, 9.9.9 this cortex's — which a build's version, 1.8.0 or a
 # development one, does not order as the source does.
 SOURCE = unittest.skipIf(harness.BINARY, "the suite's versions, ordered against this cortex's")
+# --team with no VERSION from a development build names a version first, whatever the pin (ADR-013 §3.11).
+DEV_OWN = DEV_BUILD.fullmatch(OWN) is not None
 GIT = shutil.which("git")
 NEEDS_GIT = unittest.skipIf(GIT is None or os.name == "nt", "needs git")
 AS_ROOT = unittest.skipIf(os.name == "nt" or os.geteuid() == 0, "root writes where its permissions say it may not")
@@ -350,7 +352,7 @@ class UpgradeTests(TeamTestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertIn(f"no {TEAM} — the team creates it, by a commit in its repository", proc.err)
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', team='theme = "h2g2"\n', committed=False, name="b")
-        proc = self.cortex(root, "upgrade", "--team")
+        proc = self.cortex(root, "upgrade", "--team", *((OWN,) if DEV_OWN else ()))
         self.assert_ok(proc)
         self.assertEqual(tomllib.loads((root / TEAM).read_text(encoding="utf-8"))["version"], OWN)
         self.assertIn(f'version = "{OWN}"', (root / "agents" / "cortex.team.lock").read_text(encoding="utf-8"))
@@ -648,7 +650,7 @@ class SharedTeamFolderTests(TeamTestCase):
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertEqual((team / "cortex.team.toml").read_bytes(), before)
         self.assertNotIn("The overlays of", proc.out)
-        self.assertEqual(proc.out.count(f"{TEAM} pins Cortex 99.0.0, newer than this cortex, {OWN}"), 3)  # once + summary
+        self.assertEqual(proc.out.count(newer_refused("99.0.0")), 3)  # once + summary
 
     def test_the_shared_file_moves_once_and_each_follower_resumes(self):
         team, roots = self.shared(None)
@@ -673,7 +675,7 @@ class SecondReviewTests(TeamTestCase):
         before = (root / TEAM).read_bytes()
         proc = self.cortex(self.tmp, "upgrade", "--all", "--team")
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-        self.assertIn("nothing was changed", proc.out + proc.err)
+        self.assertIn(newer_refused("99.0.0"), proc.out)
         self.assertEqual((root / TEAM).read_bytes(), before)
 
     @SOURCE
@@ -715,14 +717,21 @@ class SecondReviewTests(TeamTestCase):
         self.assertIn(f"Cortex {OWN} is read — cortex.local.toml's, above the team's 9.9.8", proc.err)
         self.assertNotIn("AGENTS.md is there and was kept", proc.err)
 
-    def test_team_and_local_dry_runs_exit_as_the_run_would(self):
-        root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n')
+    def failing_overlay(self, team):
+        root = self.project('theme = "h2g2"\n', team=team)
         overlay = root / "agents" / "roles" / "engineering" / "architect.md"
         overlay.parent.mkdir(parents=True)
         overlay.write_text("<!-- OVERLAY\n     Base: cortex/agents/roles/engineering/nowhere.md\n     Scope: workspace\n"
                            "-->\n\n# x\n", encoding="utf-8")
+        return root
+
+    def test_a_team_dry_run_exits_as_the_run_would(self):
+        root = self.failing_overlay(f'version = "{OWN}"\n')
         self.assertEqual(self.cortex(root, "upgrade", "--team", OWN, "--dry-run").returncode, 1)
-        (root / TEAM).write_text('version = "1.8.0"\n', encoding="utf-8")
+
+    @SOURCE
+    def test_a_local_dry_run_exits_as_the_run_would(self):
+        root = self.failing_overlay('version = "1.8.0"\n')
         self.assertEqual(self.cortex(root, "upgrade", "--local", OWN, "--dry-run").returncode, 1)
         self.assertFalse((root / "cortex.local.toml").exists())
 
@@ -758,7 +767,7 @@ class SecondReviewTests(TeamTestCase):
         before = (root / TEAM).read_bytes()
         proc = self.cortex(root, "upgrade", "--team")
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-        self.assertIn(f"{TEAM} pins Cortex 99.0.0, newer than this cortex, {OWN}", proc.err)
+        self.assertIn(newer_refused("99.0.0"), proc.err)
         self.assertEqual((root / TEAM).read_bytes(), before)
 
     def test_team_at_the_version_pinned_writes_a_missing_lock(self):
@@ -823,10 +832,10 @@ class SecondReviewTests(TeamTestCase):
         self.assertIn("cortex.lock: Cortex 9.9.8\n", proc.out)
 
     def test_a_try_at_or_below_the_team_s_in_cortex_toml_says_its_remedy_once(self):
-        root = self.project('version = "1.8.0"\ntheme = "h2g2"\n', team=f'version = "{OWN}"\n', committed=False)
+        root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', team=f'version = "{OWN}"\n', committed=False)
         proc = self.cortex(root, "sync")
         self.assert_ok(proc)
-        self.assertIn(f"cortex.toml's version, 1.8.0, is at or below the team's {OWN} ({TEAM}) and changes nothing — "
+        self.assertIn(f"cortex.toml's version, {OWN}, is at or below the team's {OWN} ({TEAM}) and changes nothing — "
                       "remove `version` from cortex.toml", proc.err)
 
     @DOWNLOADS
@@ -845,6 +854,12 @@ class SecondReviewTests(TeamTestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertIn("`cortex upgrade --local VERSION` the try", proc.err)
         self.assertNotIn("--team", proc.err)
+
+
+def newer_refused(pin):
+    """What --team with no VERSION says of a team's pin newer than this cortex."""
+    return (f"this cortex is a development build, {OWN}, which no teammate can download" if DEV_OWN else
+            f"{TEAM} pins Cortex {pin}, newer than this cortex, {OWN}")
 
 
 def harness_path(root):
