@@ -413,9 +413,9 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
         return outcome.code
     if which == "team":
         outcome = team_move(cwd, wanted, dry_run, force, out, err, branch, message)
-        if not dry_run and outcome.why is None and outcome.files:
-            agents = os.path.join(outcome.root, config.TEAM_FOLDER)
-            team = [path for path in outcome.files if _inside(agents, path)]
+        agents = os.path.join(outcome.root, config.TEAM_FOLDER)
+        team = [path for path in outcome.files if _inside(agents, path)]
+        if not dry_run and outcome.why is None and team:
             own = [path for path in outcome.files if path not in team]
             mine = f"; {_and([_shown_path(path, outcome.root) for path in own])} in the project" if own else ""
             out.write(f"\nCommit {_and([_shown_path(path, outcome.root) for path in team])} in {config.TEAM_FOLDER}/"
@@ -563,13 +563,19 @@ def team_pin(project: config.Project) -> Optional[Version]:
     return Version(str(named)) if named is not None else None
 
 
+def _no_release(the_store: store.Store) -> UpgradeError:
+    """``--team`` with no VERSION from a source checkout or a development build: its own version is no
+    release a teammate can download, and it serves none, every release being newer than it."""
+    kind = "a development build" if store.embedded_archive() is not None else "a source checkout"
+    return UpgradeError(f"this cortex is {kind}, {the_store.own}, which serves no release — the team's pin is moved "
+                        "from a released cortex: `cortex upgrade --team [VERSION]` there. Nothing was changed")
+
+
 def team_target(pinned: Optional[Version], wanted: Optional[str], the_store: store.Store) -> Version:
     """The version ``--team`` moves the team's file to: ``wanted``, or this cortex's own — never down to it,
     nor to a source or development build's, which names no release a teammate can download."""
     if wanted is None and store.development(the_store.own):
-        raise UpgradeError(f"this cortex is a development build, {the_store.own}, which no teammate can download — "
-                           "name the version to move the team's pin to: cortex upgrade --team VERSION. Nothing was "
-                           "changed")
+        raise _no_release(the_store)
     if wanted is None and pinned is not None and pinned > the_store.own:
         raise UpgradeError(f"{config.TEAM_NAME} pins Cortex {pinned}, newer than this cortex, {the_store.own} — nothing "
                            f"was changed. Update this cortex:\n    {store.update_command(pinned)}")
@@ -606,9 +612,16 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
                                f"{target}. Nothing was changed")
     out.write(f"Project: {display(root)}\n")
     the_store.ensure(target)
-    said = f"Cortex {pinned} → {target}" if pinned is not None else f"Cortex {target}, a version added"
+    agents = str(Path(root) / config.TEAM_FOLDER)
+    # At the version pinned, the lock is checked as sync checks it, by the dry run too: a spec whose files
+    # differ from the ones the team locked is refused, not locked again; a lock that names it leaves
+    # nothing to move.
+    unchanged = target == pinned and \
+        sync.check_lock(agents, target, the_store, out, name=config.TEAM_LOCK_FILE)[1] is None
+    said = f"Cortex {target}, pinned and locked already — nothing to move" if unchanged else \
+        f"Cortex {pinned} → {target}" if pinned is not None else f"Cortex {target}, a version added"
     out.write(f"{config.TEAM_NAME}: {said}\n")
-    if project.follows and checked is None:
+    if project.follows and checked is None and not unchanged:
         if _overlays(root, target, the_store.path(target), force, dry_run, out, err):
             return Outcome(root, pinned, target, 1, f"the overlays fail against Cortex {target} — nothing was changed")
     elif not project.follows:
@@ -617,21 +630,21 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     if dry_run:
         out.write("--dry-run: nothing of the project was changed\n")
         return Outcome(root, pinned, target)
-    agents = str(Path(root) / config.TEAM_FOLDER)
-    top = _team_git(agents, branch, out, err) if branch is not None or message is not None else None
-    files = [team_file, team_file.with_name(config.TEAM_LOCK_FILE)]
+    # Nothing to move, no branch made and nothing committed, as an upgrade already on its target.
+    asked = (branch is not None or message is not None) and not unchanged
+    top = _team_git(agents, branch, out, err) if asked else None
+    files = [] if unchanged else [team_file, team_file.with_name(config.TEAM_LOCK_FILE)]
     before = {path: path.read_bytes() if path.is_file() else None for path in files}
     try:
-        with sync.project_lock(Path(agents), err):
-            config.write_text(str(team_file), config.render_team(root, {"version": str(target)}))
-            if target == pinned:
-                # At the version pinned, the lock is checked as sync checks it: a spec whose files differ
-                # from the ones the team locked is refused, not locked again.
-                digest, written = sync.check_lock(agents, target, the_store, out, name=config.TEAM_LOCK_FILE)
-                if written is not None:
-                    config.write_lock(agents, target, digest, config.TEAM_LOCK_FILE)
-            else:
-                config.write_lock(agents, target, the_store.digest(target), config.TEAM_LOCK_FILE)
+        if files:
+            with sync.project_lock(Path(agents), err):
+                config.write_text(str(team_file), config.render_team(root, {"version": str(target)}))
+                if target == pinned:        # checked again, under the folder's lock
+                    digest, written = sync.check_lock(agents, target, the_store, out, name=config.TEAM_LOCK_FILE)
+                    if written is not None:
+                        config.write_lock(agents, target, digest, config.TEAM_LOCK_FILE)
+                else:
+                    config.write_lock(agents, target, the_store.digest(target), config.TEAM_LOCK_FILE)
         if project.follows:
             sync.sync(root, None, None, out, err, announce=False)
     except BaseException:
@@ -1305,6 +1318,8 @@ def upgrade_all(options: _Options, out: TextIO, err: TextIO) -> int:
     target = Version(options.wanted) if options.wanted else the_store.own
     if options.wanted:
         _served(the_store, target, f"cortex upgrade --all {target}")       # every project would refuse it
+    elif options.which == "team" and store.development(the_store.own):
+        raise _no_release(the_store)                                        # every team's file would refuse it
     newer = _asking(options.wanted)
     done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]] = []
     try:

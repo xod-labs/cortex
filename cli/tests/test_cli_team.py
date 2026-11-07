@@ -451,11 +451,11 @@ class UpgradeTests(TeamTestCase):
         overlay.parent.mkdir(parents=True)
         overlay.write_text("<!-- OVERLAY\n     Base: cortex/agents/roles/engineering/nowhere.md\n     Scope: workspace\n"
                            "-->\n\n# x\n", encoding="utf-8")
-        self.assert_ok(self.cortex(root, "sync"))
         before = (root / TEAM).read_bytes()
-        proc = self.cortex(root, "upgrade", "--team", OWN)
+        proc = self.cortex(root, "upgrade", "--team", OWN)       # no lock yet: one to write, the overlays checked
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertEqual((root / TEAM).read_bytes(), before)
+        self.assertFalse((root / "agents" / "cortex.team.lock").exists())
         self.assert_ok(self.cortex(root, "upgrade", "--team", OWN, "--force"))
 
 
@@ -650,7 +650,8 @@ class SharedTeamFolderTests(TeamTestCase):
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertEqual((team / "cortex.team.toml").read_bytes(), before)
         self.assertNotIn("The overlays of", proc.out)
-        self.assertEqual(proc.out.count(newer_refused("99.0.0")), 3)  # once + summary
+        # Once and in the summary; a development build refuses --all --team once, before any project.
+        self.assertEqual((proc.out + proc.err).count(newer_refused("99.0.0")), 1 if DEV_OWN else 3)
 
     def test_the_shared_file_moves_once_and_each_follower_resumes(self):
         team, roots = self.shared(None)
@@ -675,7 +676,7 @@ class SecondReviewTests(TeamTestCase):
         before = (root / TEAM).read_bytes()
         proc = self.cortex(self.tmp, "upgrade", "--all", "--team")
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-        self.assertIn(newer_refused("99.0.0"), proc.out)
+        self.assertIn(newer_refused("99.0.0"), proc.out + proc.err)
         self.assertEqual((root / TEAM).read_bytes(), before)
 
     @SOURCE
@@ -687,9 +688,21 @@ class SecondReviewTests(TeamTestCase):
             with self.subTest(args=args):
                 proc = self.cortex(self.tmp if "--all" in args else root, *args, CORTEX_SOURCE_VERSION="0.0.0-dev.7")
                 self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-                self.assertIn("this cortex is a development build, 0.0.0-dev.7, which no teammate can download — name "
-                              "the version", proc.out + proc.err)
+                self.assertIn("this cortex is a source checkout, 0.0.0-dev.7, which serves no release — the team's pin "
+                              "is moved from a released cortex: `cortex upgrade --team [VERSION]` there", proc.err)
+                self.assertNotIn("in each registered project", proc.out)
                 self.assertEqual((root / TEAM).read_bytes(), before)
+
+    def test_another_fault_of_a_version_less_cortex_toml_is_said_as_it_is(self):
+        for text, said in (('theme = "h2g2"\nbogus = 1\n', 'cortex.toml: unknown key "bogus"'),
+                           ('Version = "1.8.0"\ntheme = "h2g2"\n', 'cortex.toml: unknown key "Version"'),
+                           ('theme = 1\n', 'cortex.toml: "version" is required')):     # as 1.7.0 says it
+            with self.subTest(text=text):
+                root = self.project(text, name=f"t{abs(hash(text))}")
+                proc = self.cortex(root, "sync")
+                self.assertEqual(proc.returncode, 1)
+                self.assertIn(said, proc.err)
+                self.assertNotIn("git submodule update --init", proc.err)
 
     def test_a_version_less_cortex_toml_names_its_missing_team_s_folder(self):
         root = self.project('theme = "h2g2"\n')
@@ -755,12 +768,42 @@ class SecondReviewTests(TeamTestCase):
                 self.assert_ok(self.cortex(root, "sync"))
                 (root / "cortex.toml").write_text(text, encoding="utf-8")
                 lock = root / "agents" / "cortex.team.lock"
-                lock.write_text(lock.read_text(encoding="utf-8").replace("sha256:", "sha256:0", 1)[:-2] + '"\n',
+                lock.write_text(re.sub(r'(digest = "sha256:)[0-9a-f]{8}', r"\g<1>00000000", lock.read_text(encoding="utf-8")),
                                 encoding="utf-8")
                 before = lock.read_bytes()
-                proc = self.cortex(root, "upgrade", "--team", OWN)
-                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-                self.assertEqual(lock.read_bytes(), before)
+                for dry in ((), ("--dry-run",)):
+                    proc = self.cortex(root, "upgrade", "--team", OWN, *dry)
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertIn("this is not the release the project locked", proc.err)
+                    self.assertEqual(lock.read_bytes(), before)
+
+    def test_team_at_the_version_pinned_and_locked_moves_nothing(self):
+        root = self.failing_overlay(f'version = "{OWN}"\n')        # what moves nothing, its overlays stop not
+        self.assert_ok(self.cortex(root, "sync"))
+        files = [root / TEAM, root / "agents" / "cortex.team.lock"]
+        before = [path.read_bytes() for path in files]
+        proc = self.cortex(root, "upgrade", "--team", OWN)
+        self.assert_ok(proc)
+        self.assertIn(f"{TEAM}: Cortex {OWN}, pinned and locked already — nothing to move", proc.out)
+        self.assertNotIn("→", proc.out)
+        self.assertNotIn("Commit", proc.out)
+        self.assertEqual([path.read_bytes() for path in files], before)
+
+    @NEEDS_GIT
+    def test_team_at_the_version_pinned_and_locked_makes_no_branch(self):
+        env = {"PATH": os.path.dirname(GIT), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n')
+        self.assert_ok(self.cortex(root, "sync", **env))
+        for args in (("init", "-q"), ("add", "-A"), ("commit", "-q", "-m", "x")):
+            subprocess.run([GIT, "-C", str(root / "agents"), *args], check=True, capture_output=True,
+                           env={**os.environ, **env})
+        proc = self.cortex(root, "upgrade", "--team", OWN, "--branch", "move", "--commit", "--message", "m", **env)
+        self.assert_ok(proc)
+        branches = subprocess.run([GIT, "-C", str(root / "agents"), "branch", "--list", "move"], capture_output=True,
+                                  text=True, env={**os.environ, **env}).stdout
+        self.assertEqual(branches.strip(), "")
+        self.assertNotIn("Committed", proc.out)
 
     def test_team_never_moves_a_newer_pin_down_from_a_project_that_pins_its_own(self):
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', team='version = "99.0.0"\n')
@@ -879,7 +922,7 @@ class SecondReviewTests(TeamTestCase):
 
 def newer_refused(pin):
     """What --team with no VERSION says of a team's pin newer than this cortex."""
-    return (f"this cortex is a development build, {OWN}, which no teammate can download" if DEV_OWN else
+    return (f"this cortex is a development build, {OWN}, which serves no release" if DEV_OWN else
             f"{TEAM} pins Cortex {pin}, newer than this cortex, {OWN}")
 
 
