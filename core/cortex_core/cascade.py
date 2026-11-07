@@ -42,6 +42,13 @@ TEAM_NAME = f"{TEAM_FOLDER}/{TEAM_FILE}"
 
 
 @dataclass(frozen=True)
+class Unreadable:
+    """A team's file that does not parse: refused only once the team's version says it is read —
+    beside a committed pin before 1.8.0, it is not read, and said so."""
+    error: str
+
+
+@dataclass(frozen=True)
 class Setting:
     key: str
     value: object                     # None: unset, as claude_access may be
@@ -98,9 +105,15 @@ def _versions(project_data: Mapping, local_data: Optional[Mapping], team_data: O
     notes: List[str] = []
     pin = project_data.get("version")
     own = bool(committed) and pin is not None              # the project pins its own version, committed
-    if team_data is not None and own and project.before_team(pin):
-        notes.append(f"{team_name} is not read: the team's version is {pin}, before {project.FIRST_TEAM_VERSION}")
+    pinless = isinstance(team_data, Unreadable) or (team_data is not None and "version" not in team_data)
+    # The team's version, before the file is read: a committed pin's, else the team's file's, else an
+    # uncommitted pin's. Before 1.8.0, the team's file is not read — said, never refused.
+    unread = pin if own else pin if pinless and pin is not None else None
+    if team_data is not None and unread is not None and project.before_team(unread):
+        notes.append(f"{team_name} is not read: the team's version is {unread}, before {project.FIRST_TEAM_VERSION}")
         team_data = None
+    if isinstance(team_data, Unreadable):
+        raise project.ProjectFileError(team_data.error)
     if team_data is not None:
         project.check_team(team_data, team_name)
     team_pin = team_data.get("version") if team_data is not None else None
@@ -212,17 +225,25 @@ def _checked_toml(path: str, name: str) -> Dict:
         raise project.ProjectFileError(f"{name}: {error}")
 
 
-def read_team(root: str, folder: str = TEAM_FOLDER) -> Optional[Dict]:
+# A synced cortex sync cannot read — its own cache — which ``read_project(lenient=True)`` puts in its place:
+# never blocking the sync that rewrites it (§3.1).
+UNREADABLE_SYNCED = Unreadable("synced")
+
+
+def read_team(root: str, folder: str = TEAM_FOLDER):
     """The team's file in the team's folder of the project at ``root``, as parsed — ``None`` when it
-    is not there. Its grammar is checked by ``resolve``, once the team's version says it is read.
-    Raises ``project.ProjectFileError`` for a file that does not parse, naming it."""
+    is not there, ``Unreadable`` when it does not parse. Its grammar is checked by ``resolve``, and a
+    parse error refused, once the team's version says it is read."""
     path = os.path.join(root, folder, TEAM_FILE)
     if not os.path.isfile(path):
         return None
-    return _checked_toml(path, f"{folder}/{TEAM_FILE}")
+    try:
+        return _checked_toml(path, f"{folder}/{TEAM_FILE}")
+    except project.ProjectFileError as error:
+        return Unreadable(str(error))
 
 
-def read_project(root: str, local: bool = True) -> Tuple[Mapping, Optional[Mapping]]:
+def read_project(root: str, local: bool = True, lenient: bool = False) -> Tuple[Mapping, Optional[Mapping]]:
     """``cortex.toml`` at ``root``, and ``cortex.local.toml`` unless ``local`` is off — or ``None``
     when it is not there — each checked with the grammar. Raises ``project.ProjectFileError`` naming
     the file; ``OSError`` for a file that cannot be opened. The one reader of the two files, the
@@ -235,7 +256,13 @@ def read_project(root: str, local: bool = True) -> Tuple[Mapping, Optional[Mappi
     path = os.path.join(root, LOCAL_FILE)
     if local and os.path.isfile(path):
         local_data = _checked_toml(path, LOCAL_FILE)
-        project.check_local(local_data)
+        if lenient and "synced" in local_data:
+            try:
+                project.check_synced(local_data["synced"])
+            except project.ProjectFileError:
+                local_data = {key: value for key, value in local_data.items() if key != "synced"}
+                local_data["synced"] = UNREADABLE_SYNCED
+        project.check_local({key: value for key, value in local_data.items() if value is not UNREADABLE_SYNCED})
     return data, local_data
 
 

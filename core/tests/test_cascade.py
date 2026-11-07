@@ -236,6 +236,37 @@ class TeamTests(unittest.TestCase):
         with self.assertRaisesRegex(project.ProjectFileError, "before 1.8.0"):
             cascade.resolve({"theme": "x"}, None, {}, {}, team_data={"version": "1.7.0"}, committed=True)
 
+    def test_a_pinless_team_s_file_beside_an_uncommitted_pin_before_1_8_0_is_not_read(self):
+        # A 2.B root at 1.7.0: the team's version is cortex.toml's, before the file — whatever it sets.
+        team = {"theme": "team-theme", "claude_access": False, "locked": ["claude_access"]}
+        found = cascade.resolve(PROJECT, {"claude_access": True}, {}, {}, team_data=team, committed=False)
+        self.assertEqual((found.value("theme"), found.value("claude_access")), ("h2g2", True))
+        self.assertFalse(found.team)
+        self.assertEqual(found.notes, (f"{NAME} is not read: the team's version is 1.7.0, before 1.8.0",))
+
+    def test_a_team_s_file_that_does_not_parse_is_refused_only_where_it_is_read(self):
+        broken = cascade.Unreadable(f"{NAME}: Expected '=' after a key (at line 1, column 5)")
+        found = cascade.resolve(PROJECT, None, {}, {}, team_data=broken, committed=True)
+        self.assertEqual(found.notes, (f"{NAME} is not read: the team's version is 1.7.0, before 1.8.0",))
+        with self.assertRaisesRegex(project.ProjectFileError, "Expected '=' after a key"):
+            cascade.resolve({**PROJECT, "version": "1.8.0"}, None, {}, {}, team_data=broken, committed=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "agents").mkdir()
+            (Path(tmp) / "agents" / "cortex.team.toml").write_text("oops =\n", encoding="utf-8")
+            self.assertIsInstance(cascade.read_team(tmp), cascade.Unreadable)
+
+    def test_a_synced_that_does_not_read_is_dropped_on_the_lenient_read(self):
+        for text in ('synced = "garbage"\n', 'synced = { pinned = "1.8.0", reads = "1.8.0", when = "now" }\n',
+                     'synced = { pinned = "1.8.0" }\n', 'synced = { pinned = "x", reads = "1.8.0" }\n',
+                     '[synced]\nspec = "/x"\n'):
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as tmp:
+                (Path(tmp) / "cortex.toml").write_text('version = "1.8.0"\ntheme = "h2g2"\n', encoding="utf-8")
+                (Path(tmp) / "cortex.local.toml").write_text(text, encoding="utf-8")
+                with self.assertRaises(project.ProjectFileError):
+                    cascade.read_project(tmp)
+                _, local = cascade.read_project(tmp, lenient=True)
+                self.assertIs(local["synced"], cascade.UNREADABLE_SYNCED)
+
     def test_the_files_read_before_any_key(self):
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "agents").mkdir()
