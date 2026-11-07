@@ -34,21 +34,26 @@ class RootsError(Exception):
     pass
 
 
-def _synced_version(project: config.Project, base: str) -> str:
+def _synced_version(root: str, spec: Optional[str], base: str) -> str:
     """The version the spec at ``base`` is, when that is known — ``""`` for a checkout.
 
     A copy's marker says it. Otherwise the spec is the store's, read in place or through a link:
     a directory of some ``versions/``, whichever ``CORTEX_HOME`` it was synced with — a sync made
     with another home is still checked against the version pinned.
     """
-    link = Path(project.root) / sync.LINK
-    if project.spec == sync.LINK and sync.is_link(link):
+    link = Path(root) / sync.LINK
+    if spec == sync.LINK and sync.is_link(link):
         base = sync.link_target(link)
-    elif project.spec == sync.LINK and (link / sync.MARKER).is_file():
+    elif spec == sync.LINK and (link / sync.MARKER).is_file():
         marker = sync.read_marker(link)
         return (marker.get("version") or "") if marker else ""
     resolved = Path(os.path.realpath(base))
     return resolved.name if resolved.parent.name == "versions" and store.Version.valid(resolved.name) else ""
+
+
+def _spec_path(root: str, spec: str) -> str:
+    """The directory ``spec`` names, as ``config.Project.spec_directory`` reads it."""
+    return spec if os.path.isabs(spec) else f"{root}/{spec}"
 
 
 def lock_warnings(project: config.Project, base: str, files: Optional[Dict[str, str]] = None) -> List[Tuple[str, str, str]]:
@@ -78,6 +83,12 @@ def roots(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]]]:
     project itself."""
     root = config.find_project(cwd)
     if root is not None:
+        # A version newer than this cortex, said before any key is checked (ADR-013 §3.8) — but of a
+        # spec that names no version, a checkout's, there is nothing to compare.
+        old = config.too_new(root, store.Store().own)
+        spec = config.local_spec(root)
+        if old is not None and (spec is None or _synced_version(root, spec, _spec_path(root, spec)) != ""):
+            raise RootsError(old)
         try:
             project = config.load(root)
         except config.ConfigError as error:
@@ -87,7 +98,7 @@ def roots(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]]]:
             raise RootsError(f"{config.LOCAL_FILE} names no spec yet — run `cortex sync`")
         if not os.path.isdir(base):
             raise RootsError(f"the spec {config.LOCAL_FILE} names, {shown(display(base))}, is not there — run `cortex sync`")
-        synced = _synced_version(project, base)
+        synced = _synced_version(project.root, project.spec, base)
         if synced and synced != str(project.version):
             raise RootsError(f"{config.PROJECT_FILE} pins Cortex {project.version}, and the spec synced is {shown(synced)} "
                              "— run `cortex sync`")

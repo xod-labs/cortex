@@ -9,6 +9,9 @@ ADR extends, and a typo that silently does nothing is the failure they must not 
 
 ``cortex.lock``, next to ``cortex.toml`` and committed, is the spec the project resolved: its
 version and its digest (ADR-010 §3.2). ``cortex sync`` writes it whole; nobody edits it.
+
+What a project reads of each key — the local file's over ``cortex.toml``'s — is the core's
+resolution (``cortex_core.cascade``, ADR-013 §3.1), the one the runtime reads with too.
 """
 
 from __future__ import annotations
@@ -18,11 +21,12 @@ import os
 import re
 import tomllib
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
-from cortex_core import project
+from cortex_core import cascade, project
 from cortex_core.project import LOCAL_FILE, LOCK_FILE, MODES, PROJECT_FILE  # noqa: F401 — part of this module's API
 
+from . import store
 from .semver import Version
 
 PROJECT_HEADER = "# Written by `cortex init`. Committed: the Cortex version this project uses, and the team's theme.\n"
@@ -47,14 +51,23 @@ class Project:
     local_claude_access: Optional[bool] = None  # cortex.local.toml's, which wins
     claude_entry: Optional[str] = None          # the entry sync keeps in Claude Code's settings
 
+    def settings(self) -> cascade.Resolution:
+        """Each key's value and origin, from what the files hold — ``cortex sync --claude-access``
+        sets this developer's ``claude_access`` before it is read."""
+        data = {"theme": self.theme, **({"sync": self.sync} if self.sync else {}),
+                **({"claude_access": self.claude_access} if self.claude_access is not None else {})}
+        local = {**({"theme": self.local_theme} if self.local_theme else {}),
+                 **({"claude_access": self.local_claude_access} if self.local_claude_access is not None else {})}
+        return cascade.resolve(data, local, {}, {})
+
     @property
     def active_theme(self) -> str:
-        return self.local_theme or self.theme
+        return str(self.settings().value("theme"))
 
     @property
     def active_claude_access(self) -> Optional[bool]:
         """``None`` while neither file sets it: Claude Code's settings are then left alone."""
-        return self.claude_access if self.local_claude_access is None else self.local_claude_access
+        return self.settings().value("claude_access")     # type: ignore[return-value]
 
     def spec_directory(self) -> Optional[str]:
         """The directory ``spec`` names: absolute as written, or relative to the project root."""
@@ -106,10 +119,31 @@ def load(root: str) -> Project:
             project.check_local(local)
     except project.ProjectFileError as error:
         raise ConfigError(str(error))
-    return Project(root=root, version=Version(data["version"]), theme=data["theme"], sync=data.get("sync"),
+    version = cascade.resolve(data, local, {}, {}).value("version")
+    return Project(root=root, version=Version(str(version)), theme=data["theme"], sync=data.get("sync"),
                    local_theme=local.get("theme"), spec=local.get("spec"),
                    claude_access=data.get("claude_access"), local_claude_access=local.get("claude_access"),
                    claude_entry=local.get("claude_entry"))
+
+
+def loose_pin(root: str) -> Optional[Tuple[str, Version]]:
+    """The file that pins the project's version and that version, read before any other key is
+    checked (ADR-013 §3.8, step 1) — ``None`` when none reads."""
+    found = cascade.loose_version(root)
+    return None if found is None else (found[0], Version(found[1]))
+
+
+def too_new(root: str, own: Version) -> Optional[str]:
+    """Why this cortex is too old for the project at ``root`` — or ``None`` — from the version read
+    before any other key (ADR-013 §3.8, steps 1–2): a key of a later version is then said as the
+    version it comes with, which ``cortex self-update`` brings, not as a key this cortex does not
+    know. Said as the store says it, which the bootstrap's rule acts on."""
+    found = loose_pin(root)
+    if found is None or found[1] <= own:
+        return None
+    name, version = found
+    return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
+            f"    {store.update_command(version)}")
 
 
 def local_spec(root: str) -> Optional[str]:

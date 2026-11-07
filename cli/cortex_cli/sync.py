@@ -793,6 +793,12 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
 
 def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
           claude_access: Optional[bool], notes: bool, locked: bool = False, announce: bool = True) -> None:
+    if source is None:
+        # A version newer than this cortex, said before any key is checked (ADR-013 §3.8) — `--from`
+        # checks no version, as before.
+        old = config.too_new(root, store.Store().own)
+        if old is not None:
+            raise SyncError(old)
     project = config.load(root)
     if announce:
         out.write(f"Project: {display(root)}\n")

@@ -458,15 +458,19 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     if root is None:
         raise UpgradeError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
                            "a Cortex project")
-    project = config.load(root)
     the_store = store.Store()
-    current, target = project.version, Version(wanted) if wanted else the_store.own
-    if wanted is None and current > the_store.own:
+    pinned = config.loose_pin(root)
+    if wanted is None and pinned is not None and pinned[1] > the_store.own:
         # The default moves a project to this cortex's version, never down: a teammate's older binary
-        # would otherwise undo the team's pin.
-        raise UpgradeError(f"this project uses Cortex {current}, newer than this cortex, {the_store.own} — nothing was "
-                           f"changed. Update this cortex to serve it:\n    {store.update_command(current)}\nor move the "
-                           f"project down to this cortex's version by naming it: cortex upgrade {the_store.own}")
+        # would otherwise undo the team's pin. Said from the version read before any key is checked,
+        # whatever key of a later version the file holds (ADR-013 §3.8).
+        name, newer = pinned
+        raise UpgradeError(f"this project uses Cortex {newer}, which its {name} pins, newer than this cortex, "
+                           f"{the_store.own} — nothing was changed. Update this cortex to serve it:\n"
+                           f"    {store.update_command(newer)}\nor move the project down to this cortex's version by "
+                           f"naming it: cortex upgrade {the_store.own}")
+    project = config.load(root)
+    current, target = project.version, Version(wanted) if wanted else the_store.own
     _served(the_store, target, f"cortex upgrade {target}")
     if announce:
         out.write(f"Project: {display(root)}\n")

@@ -1012,8 +1012,8 @@ class PinAfterThisCortexTests(UpgradeTestCase):
         before = snapshot(project)
         proc = self.upgrade(project)
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-        self.assertIn(f"this project uses Cortex 9.10.0, newer than this cortex, {OWN} — nothing was changed. Update "
-                      "this cortex to serve it:\n    cortex self-update 9.10.0\n", proc.err)
+        self.assertIn(f"this project uses Cortex 9.10.0, which its cortex.toml pins, newer than this cortex, {OWN} — "
+                      "nothing was changed. Update this cortex to serve it:\n    cortex self-update 9.10.0\n", proc.err)
         self.assertIn(f"cortex upgrade {OWN}", proc.err)
         self.assertEqual(snapshot(project), before)
 

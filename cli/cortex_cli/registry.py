@@ -328,7 +328,7 @@ def _reads(read: config.Project) -> Optional[str]:
     try:
         if spec is None or not os.path.isdir(spec):
             return None
-        return validate._synced_version(read, spec) or None
+        return validate._synced_version(read.root, read.spec, spec) or None
     except OSError:
         return None
 
