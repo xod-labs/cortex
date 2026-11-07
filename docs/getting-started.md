@@ -375,12 +375,12 @@ register = false                                              # a throwaway mach
 
 The variables `CORTEX_RELEASES_URL`, `CORTEX_NO_UPDATE_CHECK` and `CORTEX_NO_REGISTER` go over the file, as they always did. A key the file does not know, or a value of the wrong type, is a warning — the rest is read, and no command stops on it.
 
-`cortex config` prints each setting of the project and of the machine, and where it comes from — a file, a variable, or `default`; `cortex config --locked` leaves your `cortex.local.toml` out, as `cortex sync --locked` does in CI:
+`cortex config` prints each setting of the project and of the machine, and where it comes from — a file, a variable, or `default`. `cortex config --locked` leaves your `cortex.local.toml` out: it gives the version and the lock `cortex sync --locked` checks in CI, and what the runtime reads — your own `theme` and `claude_access` still apply to your machine:
 
 ```bash
 cortex config                   # each setting, its value and its origin
 cortex config theme             # one value alone
-cortex config --locked --json   # what CI checks, as JSON
+cortex config --locked --json   # the team's resolution, as JSON
 ```
 
 ### Add a capability (contributing to cortex)

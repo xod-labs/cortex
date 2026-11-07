@@ -343,8 +343,8 @@ register       true                                           default
 | Option | What it does |
 |---|---|
 | `KEY` | prints that setting's value alone — `cortex config version`, in a CI script. An unknown key exits 2 |
-| `--locked` | the team's resolution, without `cortex.local.toml`: what `cortex sync --locked` checks, and what the runtime reads |
-| `--json` | one JSON object, with a `format` field: each setting's value, its origin, the values it overrode — and whether `cortex.toml` is committed |
+| `--locked` | the team's resolution, without `cortex.local.toml`: the version and the lock `cortex sync --locked` checks, and what the runtime reads. `cortex sync --locked` still applies your own `theme` and `claude_access` to your machine |
+| `--json` | one JSON object, with a `format` field: each setting's value, its origin, the values it overrode — whether `cortex.toml` is committed, whether the project's version is newer than this cortex, and the machine file's warnings |
 
 Outside a project, it knows the machine's keys only. A project pinned to a version newer than the binary is printed all the same, with the `cortex self-update` that serves it. A file it refuses exits 1, naming it.
 

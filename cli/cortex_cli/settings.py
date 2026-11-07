@@ -2,9 +2,10 @@
 
 The files of the project, the machine's ``config.toml`` and the variables, resolved as every command
 resolves them (``cortex_core.cascade``): a value, then its origin — a file as the project root names
-it, a variable, or *default* — and what it won over. ``--locked`` gives the team's resolution, the one
-``cortex sync --locked`` checks and the runtime reads, without the developer's ``cortex.local.toml``.
-Outside a project, the machine's keys only. It reads, and writes nothing.
+it, a variable, or *default* — and what it won over. ``--locked`` gives the team's resolution, without
+the developer's ``cortex.local.toml``: the version and the lock ``cortex sync --locked`` checks, and
+what the runtime reads — ``cortex sync --locked`` still applies the developer's own ``theme`` and
+``claude_access`` to their machine. Outside a project, the machine's keys only. It writes nothing.
 """
 
 from __future__ import annotations
@@ -80,12 +81,16 @@ def _loosely(root: str, error: config.ConfigError) -> cascade.Resolution:
 
 def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO) -> int:
     root = config.find_project(cwd)
+    loose = False
     try:
         found = resolution(root, locked)
     except config.ConfigError as error:
         if root is None:
             raise
-        found = _loosely(root, error)
+        found, loose = _loosely(root, error), True
+    if key is not None and key not in found and loose and key in cascade.KEYS:
+        # A key this cortex knows, of a project it cannot read: the reason is the version.
+        raise config.ConfigError(str(config.too_new(root, store.Store().own)))
     if key is not None and key not in found:
         known = project.listed(tuple(found.settings))
         raise SettingsError(f"no setting {json.dumps(key)} — {'cortex config knows ' if root else 'outside a project, cortex config knows '}"
@@ -99,6 +104,8 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
             "committed": found.committed,
             "locked": locked,
             "cortex": str(store.Store().own),
+            "too_new": newer is not None,
+            "warnings": list(found.warnings),
             "settings": {name: {"value": found[name].value, "origin": found[name].origin,
                                 "overridden": [{"origin": origin, "value": value} for origin, value in found[name].overridden],
                                 "locked": False}
@@ -127,7 +134,8 @@ def run(args: List[str]) -> int:
                     "its value and where it comes from. Writes nothing. ADR-013 §3.9.")
     parser.add_argument("key", nargs="?", metavar="KEY", help="print this setting's value alone")
     parser.add_argument("--locked", action="store_true",
-                        help="the team's resolution, without cortex.local.toml — what `cortex sync --locked` checks")
+                        help="the team's resolution, without cortex.local.toml — the version `cortex sync --locked` "
+                             "checks, and what the runtime reads")
     parser.add_argument("--json", action="store_true",
                         help="print one JSON object: each setting's value, origin, what it overrode")
     options = parser.parse_args(args)

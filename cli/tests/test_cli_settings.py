@@ -137,10 +137,10 @@ class ConfigCommandTests(SettingsTestCase):
 
     def test_a_root_that_is_no_repository_reads_cortex_toml_s_version_locked_too(self):
         # A 2.B root, with no team's file: the version is cortex.toml's, whoever reads it (§3.1).
-        project = self.project("9.9.8")
+        project = self.project()
         self.assert_ok(self.cortex(project, "sync"))
         found = self.settings(project, "--locked")
-        self.assertEqual((found["committed"], found["settings"]["version"]["value"]), (False, "9.9.8"))
+        self.assertEqual((found["committed"], found["settings"]["version"]["value"]), (False, OWN))
         self.assert_ok(self.cortex(project, "sync", "--locked"))
 
 
@@ -277,6 +277,16 @@ class TooNewTests(SettingsTestCase):
                               proc.out.splitlines()[0])
                 self.assertIn("register", proc.out)
 
+    def test_a_known_key_of_a_project_too_new_says_the_version_and_an_unknown_one_is_unknown(self):
+        project = self.project("99.0.0", extra='agents = "team"\n')
+        proc = self.cortex(project, "config", "theme")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn(self.WHY, proc.err)
+        proc = self.cortex(project, "config", "verison")
+        self.assertEqual(proc.returncode, 2, proc.err)
+        found = self.settings(project)
+        self.assertIs(found["too_new"], True)
+
     def test_upgrade_naming_a_version_still_moves_down(self):
         project = self.project("99.0.0")
         proc = self.cortex(project, "upgrade", OWN)
@@ -313,6 +323,7 @@ class DevelopmentBuildTests(SettingsTestCase):
         self.assertEqual(proc.returncode, 0, proc.out + proc.err)
         self.assertNotIn("newer than this cortex", proc.err)
         found = self.settings(project)
+        self.assertIs(found["too_new"], False)
         self.assertEqual(found["cortex"], "0.0.0-dev")
         proc = self.cortex(project, "upgrade")                            # never down to 0.0.0-dev, as 1.7.0
         self.assertEqual(proc.returncode, 1, proc.err)
@@ -349,7 +360,7 @@ class NoHomeTests(unittest.TestCase):
 
 
 class SameAsBeforeTests(SettingsTestCase):
-    def test_a_project_of_1_7_0_syncs_byte_for_byte(self):
+    def test_a_second_sync_leaves_the_files_byte_for_byte(self):
         project = self.project(extra="claude_access = false\n")
         (project / "cortex.local.toml").write_text('# mine\ntheme = "none"\n', encoding="utf-8")
         self.assert_ok(self.cortex(project, "sync"))
