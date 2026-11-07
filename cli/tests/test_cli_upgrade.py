@@ -626,7 +626,7 @@ class DigestTests(UpgradeTestCase):
                       "--force --workspace writes it again, and keeps yours as .bak", proc.err)
 
     def test_a_workspace_bootstrap_a_team_changed_is_said_to_need_workspace(self):
-        # Without --workspace, cortex init --force writes a single project's bootstrap: the note names it.
+        # The note names --workspace for a workspace's file, which cortex init also reads without it (#329).
         name = "bootstrap-instructions-workspace.md"
         older = (harness.REPO / "templates" / name).read_bytes().replace(b"## Where the spec is",
                                                                         b"## Where the spec is, in 9.9.8", 1)

@@ -191,10 +191,9 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     kept = path.read_bytes()
     content = init.normalised(kept)
     found = init.markers(content)
-    # Without --workspace, cortex init writes a single project's: a workspace's file says it is one by its
-    # markers, or, written before the marker, by its title — as cortex init reads it (ADR-010 §3.1).
-    title = init.without_frontmatter(content).split(b"\n", 1)[0]
-    workspace = all(layout == "workspace" for layout, _ in found) if found else b"Workspace Mode" in title
+    # A workspace's file — by its markers, or, written before the marker, by its title — is named with --workspace,
+    # which cortex init reads from it without the option too (#329).
+    workspace = init.written_for_workspace(content)
     again = f"cortex init --force{' --workspace' if workspace else ''} writes it again, and keeps yours as .bak"
     if len(found) > 1:
         return None, f"{display(str(path))} holds several bootstrap markers, so none is read, and it is kept: {again}"
