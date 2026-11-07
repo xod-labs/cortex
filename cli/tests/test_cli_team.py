@@ -7,6 +7,8 @@ version, over the team's file. ``cortex sync`` records the versions it read in `
 team's, ``--local`` the try.
 """
 
+import errno
+import io
 import json
 import os
 import re
@@ -16,13 +18,14 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "core"))
 
 import cli_harness as harness  # noqa: E402
-from cortex_cli import init  # noqa: E402
+from cortex_cli import config, init, store, sync, upgrade  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
 OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
@@ -150,11 +153,11 @@ class VersionTests(TeamTestCase):
 @DEVELOPMENT
 class TooNewTests(TeamTestCase):
     def test_the_refusal_names_the_file_and_its_remedy(self):
-        root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', local='version = "99.0.0"\n')
+        root = self.project('version = "1.8.0"\ntheme = "h2g2"\n', local='version = "99.0.0"\n')
         proc = self.cortex(root, "sync")
         self.assertEqual(proc.returncode, 1)
         self.assertIn("Cortex 99.0.0, which its cortex.local.toml pins, newer than this cortex", proc.err)
-        self.assertIn(f"or drop the try: cortex upgrade --local {OWN}", proc.err)
+        self.assertIn("or drop the try: cortex upgrade --local 1.8.0", proc.err)          # the team's version
         root = self.project('theme = "h2g2"\n', team='version = "99.0.0"\n', name="team")
         proc = self.cortex(root, "sync")
         self.assertEqual(proc.returncode, 1)
@@ -348,6 +351,10 @@ class UpgradeTests(TeamTestCase):
         self.assertIn(f'version = "{OWN}"', (root / "agents" / "cortex.team.lock").read_text(encoding="utf-8"))
         self.assertIn(f"{TEAM}: Cortex {OWN}, a version added", proc.out)
         self.assertIn("Commit agents/cortex.team.toml and agents/cortex.team.lock in agents/", proc.out)
+        # An uncommitted cortex.toml follows the team's file (ADR-013 §3.1): checked, and synced.
+        self.assertNotIn("pins its own version", proc.out)
+        self.assertIn(f"The project's overlays pass against Cortex {OWN}", proc.out)
+        self.assertEqual(self.local(root)["synced"]["pinned"], OWN)
 
     def test_team_before_1_8_0_is_refused_before_writing(self):
         root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n')
@@ -359,9 +366,15 @@ class UpgradeTests(TeamTestCase):
 
     def test_local_with_all_or_team_is_a_bad_argument(self):
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n')
-        for args in (("--all", "--local", OWN), ("--team", "--local", OWN), ("--local", OWN, "--commit", "--message", "m")):
+        for args, said in ((("--all", "--local", OWN), "--all, --branch and --commit do not go with it"),
+                           (("--team", "--local", OWN), "not allowed with argument --team"),
+                           (("--local", OWN, "--commit", "--message", "m"), "--all, --branch and --commit do not go"),
+                           (("--team", "--instructions-file", "X.md"), "--team and --local write the bootstrap"),
+                           (("--local", OWN, "--instructions-file", "X.md"), "--team and --local write the bootstrap")):
             with self.subTest(args=args):
-                self.assertEqual(self.cortex(root, "upgrade", *args).returncode, 2)
+                proc = self.cortex(root, "upgrade", *args)
+                self.assertEqual(proc.returncode, 2)
+                self.assertIn(said, proc.err)
 
     def test_local_at_the_team_s_version_removes_the_try(self):
         root = self.project(team=f'version = "{OWN}"\n', local='version = "99.0.0"\n')
@@ -452,6 +465,181 @@ class AllTeamTests(TeamTestCase):
         self.assertIn(f"{TEAM}: Cortex 9.9.8 → {OWN}", proc.out)
         self.assertIn(f"skipped: pins its own version, {OWN}, and does not follow its team's file", proc.out)
         self.assertIn("skipped: no team's file to move", proc.out)
+
+
+class ReviewTests(TeamTestCase):
+    """What the counter-review of phase 2a found."""
+
+    @SOURCE
+    @DOWNLOADS
+    def test_claude_access_flags_keep_the_team_s_file(self):
+        # sync --claude-access re-resolved without the team's file: a try's lock, the try under --locked.
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n', local=f'version = "{OWN}"\n')
+        self.assert_ok(self.cortex(root, "upgrade", "--team", "9.9.8"))      # the team's lock, 9.9.8
+        proc = self.cortex(root, "sync", "--no-claude-access")
+        self.assert_ok(proc)
+        self.assertFalse((root / "cortex.lock").exists())
+        self.assertEqual(self.local(root)["synced"], {"team": "9.9.8", "local": OWN, "pinned": "9.9.8", "reads": OWN})
+        self.assert_ok(self.cortex(root, "validate"))
+        proc = self.cortex(root, "sync", "--locked", "--claude-access")
+        self.assert_ok(proc)
+        self.assertEqual(self.local(root)["synced"]["reads"], "9.9.8")
+        self.assertFalse((root / "cortex.lock").exists())
+
+    @DOWNLOADS
+    def test_upgrade_still_says_the_lock_it_writes(self):
+        root = self.project('version = "9.9.8"\ntheme = "h2g2"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        proc = self.cortex(root, "upgrade", OWN)
+        self.assert_ok(proc)
+        self.assertIn(f"cortex.lock: Cortex {OWN}, where it named 9.9.8 — commit it\n", proc.out)
+        self.assertEqual(proc.out.count("cortex.lock:"), 1)
+
+    def test_a_synced_that_does_not_read_never_blocks_the_sync(self):
+        for text in ('synced = "garbage"\n', 'synced = { pinned = "1.8.0", reads = "1.8.0", when = "now" }\n',
+                     'synced = { pinned = "1.8.0" }\n', 'synced = { pinned = "x", reads = "1.8.0" }\n',
+                     '[synced]\nspec = "/x"\n'):
+            with self.subTest(text=text):
+                root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', local=text, name=f"s{abs(hash(text))}")
+                self.assertEqual(self.cortex(root, "validate").returncode, 2)       # validate refuses it
+                proc = self.cortex(root, "sync")
+                self.assert_ok(proc)
+                self.assertEqual(self.local(root)["synced"]["reads"], OWN)        # written again
+                self.assert_ok(self.cortex(root, "validate"))
+
+    def test_a_pinless_team_s_file_at_a_2b_root_before_1_8_0_is_not_read(self):
+        root = self.project('version = "1.7.0"\ntheme = "h2g2"\n', team='theme = "team"\nlocked = ["theme"]\n',
+                            committed=False)
+        proc = self.cortex(root, "config", "theme")
+        self.assert_ok(proc)
+        self.assertEqual(proc.out, "h2g2\n")
+        self.assertIn(f"{TEAM} is not read: the team's version is 1.7.0", proc.err)
+
+    def test_an_unparseable_team_s_file_beside_a_pin_before_1_8_0_is_only_said(self):
+        root = self.project('version = "1.7.0"\ntheme = "h2g2"\n', team="oops =\n")
+        proc = self.cortex(root, "config", "version")
+        self.assert_ok(proc)
+        self.assertIn(f"{TEAM} is not read", proc.err)
+        (root / "cortex.toml").write_text('version = "1.8.0"\ntheme = "h2g2"\n', encoding="utf-8")
+        proc = self.cortex(root, "config", "version")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(TEAM, proc.err)
+
+    def test_a_version_newer_than_this_cortex_names_what_moves_it(self):
+        root = self.project('theme = "h2g2"\n', team='version = "99.0.0"\n')
+        proc = self.cortex(root, "upgrade")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(f"this project reads Cortex 99.0.0, which its {TEAM} pins, newer than this cortex", proc.err)
+        self.assertIn("`cortex upgrade --team VERSION` moves the team's pin", proc.err)
+
+    def test_a_read_only_team_s_folder_warns(self):
+        own = str(store.own_version())
+        root = self.project('theme = "h2g2"\n', team=f'version = "{own}"\n')
+        real = config.write_lock
+
+        def refused(directory, version, digest, name=config.LOCK_FILE):
+            if name == config.TEAM_LOCK_FILE:
+                raise OSError(errno.EROFS, "Read-only file system", str(Path(directory) / name))
+            return real(directory, version, digest, name)
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home), "CORTEX_NO_REGISTER": "1"}), \
+                mock.patch.object(config, "write_lock", side_effect=refused):
+            sync.sync(str(root), None, None, out, err, registers=False)
+        self.assertIn("warning: agents/cortex.team.lock cannot be written — Read-only file system", err.getvalue())
+        self.assertFalse((root / "agents" / "cortex.team.lock").exists())
+
+    def test_local_puts_cortex_local_toml_back_when_its_sync_fails(self):
+        own = str(store.own_version())
+        root = self.project('theme = "h2g2"\n', team=f'version = "{own}"\n', local='theme = "mine"\n')
+        before = (root / "cortex.local.toml").read_bytes()
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}), \
+                mock.patch.object(sync, "sync", side_effect=sync.SyncError("refused")), \
+                mock.patch.object(upgrade, "_overlays", return_value=False), \
+                mock.patch.object(store.Store, "ensure", return_value="stored"), \
+                mock.patch.object(upgrade, "_served"), \
+                mock.patch.object(store.Store, "path", return_value=root):
+            with self.assertRaises(sync.SyncError):
+                upgrade.local_move(str(root), "99.0.0", False, False, out, err)
+        self.assertEqual((root / "cortex.local.toml").read_bytes(), before)
+        self.assertIn("cortex.local.toml is as it was", err.getvalue())
+
+    @DEVELOPMENT
+    def test_team_refuses_a_move_that_still_reads_a_try_too_new(self):
+        root = self.project('theme = "h2g2"\n', team='version = "1.8.0"\n', local='version = "99.0.0"\n')
+        before = (root / TEAM).read_bytes()
+        proc = self.cortex(root, "upgrade", "--team", "1.8.0")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("after the move, this project would read Cortex 99.0.0", proc.err)
+        self.assertEqual((root / TEAM).read_bytes(), before)
+
+    def test_project_list_gives_pinned_s_origin(self):
+        root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n')
+        (self.home / "projects.toml").write_text(f'format = 1\n\n[[project]]\nname = "app"\npath = "{harness_path(root)}"\n',
+                                                 encoding="utf-8")
+        proc = self.cortex(self.tmp, "project", "list", "--json")
+        self.assert_ok(proc)
+        found = json.loads(proc.out)["projects"][0]
+        self.assertEqual((found["pinned"], found["pinned_origin"]), (OWN, TEAM))
+
+    @SOURCE
+    def test_locked_during_a_try_names_what_writes_the_lock(self):
+        root = self.project('version = "9.9.8"\ntheme = "h2g2"\n', local=f'version = "{OWN}"\n')
+        proc = self.cortex(root, "sync", "--locked")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("`cortex upgrade`, which a try leaves to it, writes it", proc.err)
+
+
+@unittest.skipIf(os.name == "nt", "a link to a directory needs a privilege on Windows")
+class SharedTeamFolderTests(TeamTestCase):
+    """--all --team: the followers of one team's folder checked before it moves, once."""
+
+    def shared(self, failing):
+        team = self.tmp / "team"
+        team.mkdir()
+        (team / "cortex.team.toml").write_text('version = "9.9.8"\n', encoding="utf-8")
+        roots = []
+        for name in ("alpha", "beta"):
+            root = self.project('theme = "h2g2"\n', name=name)
+            (root / "agents").symlink_to(team, target_is_directory=True)
+            if name == failing:
+                service = root / "svc"
+                (service / "agents" / "roles" / "engineering").mkdir(parents=True)
+                (service / "project-overview.md").write_text("@alias: svc\n", encoding="utf-8")
+                (service / "agents" / "roles" / "engineering" / "architect.md").write_text(
+                    "<!-- OVERLAY\n     Base: cortex/agents/roles/engineering/nowhere.md\n     Scope: service\n-->\n\n# x\n",
+                    encoding="utf-8")
+            roots.append(root)
+        (self.home / "projects.toml").write_text("format = 1\n" + "".join(
+            f'\n[[project]]\nname = "{root.name}"\npath = "{harness_path(root)}"\n' for root in roots), encoding="utf-8")
+        return team, roots
+
+    def test_a_failing_follower_stops_the_shared_file_in_either_order(self):
+        for failing in ("alpha", "beta"):
+            with self.subTest(failing=failing):
+                if (self.tmp / "team").exists():
+                    shutil.rmtree(self.tmp / "team")
+                    for name in ("alpha", "beta"):
+                        shutil.rmtree(self.tmp / name)
+                team, _ = self.shared(failing)
+                code, _ = upgrade.check_overlays(str(self.tmp / failing), Path(harness.REPO))
+                if code == 0:
+                    self.skipTest("the validator reads no service overlay here")
+                before = (team / "cortex.team.toml").read_bytes()
+                proc = self.cortex(self.tmp, "upgrade", "--all", "--team", OWN)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertEqual((team / "cortex.team.toml").read_bytes(), before)
+                self.assertEqual(proc.out.count(f"fail against Cortex {OWN} — {TEAM} was not moved"), 3)  # 2 + summary
+
+    def test_the_shared_file_moves_once_and_each_follower_resumes(self):
+        team, roots = self.shared(None)
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team", OWN)
+        self.assert_ok(proc)
+        self.assertEqual(tomllib.loads((team / "cortex.team.toml").read_text(encoding="utf-8"))["version"], OWN)
+        self.assertEqual(proc.out.count(f"{TEAM}: Cortex 9.9.8 → {OWN}"), 1)
+        for root in roots:
+            self.assertEqual(self.local(root)["synced"]["reads"], OWN)
 
 
 def harness_path(root):
