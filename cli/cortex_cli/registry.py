@@ -383,10 +383,13 @@ def state(entry: Entry) -> State:
         why, read = str(error), prune._loosely(root)
     except OSError as error:
         why, read = sync.os_error(error), prune._loosely(root)
-    # PINNED is the team's version (ADR-013 §3.11): what the team commits, whatever a try reads here.
-    return State(entry, OK if why is None else UNREADABLE, why, str(read.team_version) if read else None,
-                 _reads(read) if read else None, _layout(root),
-                 (read.team_origin if read.settings is not None else config.PROJECT_FILE) if read else None)
+    # PINNED is the team's version; of a project this cortex cannot read whole, read loosely (ADR-013 §3.1).
+    team = (str(read.team_version), read.team_origin) if read is not None and why is None else None
+    if read is not None and why is not None:
+        loose = config.loose_team(str(root))
+        team = (str(loose[1]), loose[0]) if loose else None
+    return State(entry, OK if why is None else UNREADABLE, why, team[0] if team else None,
+                 _reads(read) if read else None, _layout(root), team[1] if team else None)
 
 
 # --------------------------------------------------------------------------- #

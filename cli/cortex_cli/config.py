@@ -229,6 +229,21 @@ def team_folder_state(root: str) -> Optional[str]:
     return None
 
 
+def _missing_team_folder(root: str) -> None:
+    """Refuse a ``cortex.toml`` without ``version`` whose team's folder is missing or empty — a submodule
+    not checked out — naming the folder (ADR-013 §3.4), which the bootstrap's rule has the assistant say."""
+    try:
+        written = _read(os.path.join(root, PROJECT_FILE))
+    except (OSError, ConfigError):
+        return
+    if "version" in written or os.path.isfile(os.path.join(root, TEAM_FOLDER, TEAM_FILE)):
+        return
+    missing = team_folder_state(root)
+    if missing is not None:
+        raise ConfigError(f'{PROJECT_FILE}: "version" is required, or in {TEAM_NAME} — {missing}: check it out, a '
+                          "submodule with `git submodule update --init`")
+
+
 def _resolve_both(data, local, team, known) -> Tuple[cascade.Resolution, cascade.Resolution]:
     settings = cascade.resolve(data, local, {}, {}, machine=False, team_data=team, committed=known)
     team_settings = cascade.resolve(data, local, {}, {}, machine=False, team_data=team, committed=known, locked=True)
@@ -242,17 +257,19 @@ def load(root: str, lenient: bool = False) -> Project:
     one, the answer changes nothing (ADR-013 §3.1). ``lenient`` — the sync, which rewrites it — reads
     a ``synced`` that does not check as none, instead of refusing it."""
     try:
-        data, found = cascade.read_project(root, lenient=lenient)
+        try:
+            data, found = cascade.read_project(root, lenient=lenient)
+        except project.ProjectFileError:
+            _missing_team_folder(root)
+            raise
         team = cascade.read_team(root)
         known = committed(root) if team is not None else None
         local = found or {}
         try:
             settings, team_settings = _resolve_both(data, local, team, known)
         except project.ProjectFileError:
-            missing = team_folder_state(root) if "version" not in data and team is None else None
-            if missing is not None:
-                raise ConfigError(f'{PROJECT_FILE}: "version" is required, or in {TEAM_NAME} — {missing}: check it out, '
-                                  "a submodule with `git submodule update --init`")
+            if "version" not in data:
+                _missing_team_folder(root)
             raise
     except project.ProjectFileError as error:
         raise ConfigError(str(error))
@@ -283,6 +300,16 @@ def loose_pin(root: str) -> Optional[Tuple[str, Version]]:
     return None if chosen is None else (chosen[0], Version(chosen[1]))
 
 
+def loose_team(root: str) -> Optional[Tuple[str, Version]]:
+    """The team's version read loosely, with the file it comes from (ADR-013 §3.1): a committed
+    ``cortex.toml``'s, else the team's file's, else an uncommitted ``cortex.toml``'s — what
+    ``cortex project list`` gives as ``PINNED`` of a project it cannot read whole."""
+    found = cascade.loose_versions(root)
+    pin, team = found.get("project"), found.get("team")
+    chosen = pin if pin is not None and (team is None or committed(root)) else team or pin
+    return None if chosen is None else (chosen[0], Version(chosen[1]))
+
+
 def too_new(root: str, own: Version) -> Optional[str]:
     """Why this cortex is too old for the project at ``root`` — or ``None`` — from the versions read
     before any other key (ADR-013 §3.8, steps 1–2): a key of a later version is then said as the
@@ -293,9 +320,7 @@ def too_new(root: str, own: Version) -> Optional[str]:
     if found is None or not store.too_old_for(found[1], own):
         return None
     name, version = found
-    versions = cascade.loose_versions(root)
-    pin, team = versions.get("project"), versions.get("team")
-    teams = pin if pin is not None and (team is None or committed(root)) else team or pin
+    teams = loose_team(root)
     other = (f"\nor drop the try: cortex upgrade --local {teams[1] if teams else own}" if name == LOCAL_FILE else
              f"\nor move the team's pin: cortex upgrade --team {own}" if name == TEAM_NAME else "")
     return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
@@ -413,23 +438,27 @@ def render_local(root: str, values: Dict[str, object], comments: Optional[Dict[s
     a ``synced`` that does not read is taken out first — a line, or a ``[synced]`` table with what it
     holds: the sync's own cache, which it writes again (ADR-013 §3.1)."""
     text = _read_text(os.path.join(root, LOCAL_FILE))
-    if drop_synced and text is not None:
-        text = _without_synced(text)
+    if "synced" in values and text is not None:
+        text = _without_synced(text, line=drop_synced)
     return set_keys(text, values, LOCAL_FILE, LOCAL_HEADER, comments)
 
 
-def _without_synced(text: str) -> str:
+def _without_synced(text: str, line: bool = False) -> str:
+    """``text`` without the forms of ``synced`` a line cannot rewrite — a ``[synced]`` table and what it
+    holds, a dotted ``synced.x`` key — and, ``line``, without its line too: the sync writes it again,
+    in its one-line form, where ``set_keys`` keeps it in place from then on."""
     kept, inside = [], False
-    for line in text.splitlines(keepends=True):
-        stripped = line.strip()
-        if re.match(r"^\[\s*synced\s*[.\]]", stripped):
+    for row in text.splitlines(keepends=True):
+        stripped = row.strip()
+        if re.match(r"""^\[\s*(?:synced|"synced"|'synced')\s*[.\]]""", stripped):
             inside = True
             continue
         if inside and stripped.startswith("["):
             inside = False
-        if inside or re.match(r"""^(?:synced|"synced"|'synced')\s*=""", stripped):
+        if inside or re.match(r"""^(?:synced|"synced"|'synced')\s*\.""", stripped) \
+                or (line and re.match(r"""^(?:synced|"synced"|'synced')\s*=""", stripped)):
             continue
-        kept.append(line)
+        kept.append(row)
     return "".join(kept)
 
 

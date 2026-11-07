@@ -767,6 +767,8 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
     are not those the project locked is put in the store again, once: still different, the release is
     not the one the team locked, and it is refused. ``locked`` — ``cortex sync --locked``, in a
     project's CI — a lock to write is refused instead: the one committed must already be the pin's."""
+    shown_name = config.TEAM_LOCK_NAME if name == config.TEAM_LOCK_FILE else name
+    pins = config.TEAM_NAME if name == config.TEAM_LOCK_FILE else config.PROJECT_FILE
     lock = config.load_lock(root, name)
     digest = the_store.digest(version)
     if lock is not None and lock.version == version:
@@ -775,18 +777,18 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
         try:
             the_store.replace(version)
         except store.StoreError as error:
-            raise SyncError(f"Cortex {version} in the store is not what {config.LOCK_FILE} names — its spec is {digest}, "
+            raise SyncError(f"Cortex {version} in the store is not what {shown_name} names — its spec is {digest}, "
                             f"and the lock's {lock.digest} — and it could not be put in the store again: {error}. "
                             "Nothing of the project was changed")
         digest = the_store.digest(version)
         if digest != lock.digest:
-            raise SyncError(f"Cortex {version}: its spec is {digest}, and {config.LOCK_FILE} names {lock.digest} — "
+            raise SyncError(f"Cortex {version}: its spec is {digest}, and {shown_name} names {lock.digest} — "
                             "this is not the release the project locked. Nothing of the project was changed")
-        out.write(f"Cortex {version}: put in the store again — its files were not those {config.LOCK_FILE} names\n")
+        out.write(f"Cortex {version}: put in the store again — its files were not those {shown_name} names\n")
         return digest, None
     if locked:
-        why = (f"no {config.LOCK_FILE}" if lock is None else
-               f"{config.LOCK_FILE} names Cortex {lock.version}, and {config.PROJECT_FILE} pins {version}")
+        why = (f"no {shown_name}" if lock is None else
+               f"{shown_name} names Cortex {lock.version}, and {pins} pins {version}")
         raise SyncError(f"--locked: {why} — {writer} writes it, then commit it. Nothing of the project was changed")
     return digest, ("written" if lock is None else f"Cortex {version}, where it named {lock.version}")
 
@@ -815,9 +817,10 @@ def version_notes(project: config.Project) -> List[str]:
                         + (": it is not locked, its release checked against its SHA256SUMS when downloaded"
                            if found.origin == config.LOCAL_FILE else ""))
         else:
-            remedy = f"cortex upgrade --local {team}" if found.origin == config.LOCAL_FILE else f"remove it from {found.origin}"
+            remedy = f"remove it: cortex upgrade --local {team}" if found.origin == config.LOCAL_FILE else \
+                f"remove `version` from {found.origin}"
             said.append(f"{found.origin}'s version, {mine}, is at or below the team's {team} ({origin}) and changes "
-                        f"nothing — remove it: {remedy}")
+                        f"nothing — {remedy}")
     said.extend(project.settings.notes if project.settings is not None else ())
     if project.follows and project.settings.committed \
             and os.path.isfile(os.path.join(project.root, config.LOCK_FILE)):
@@ -868,7 +871,8 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if announce:
         out.write(f"Project: {display(root)}\n")
     for note in version_notes(project):
-        err.write(f"note: {note}\n")
+        # A locked key set otherwise is a warning (ADR-013 §3.5): its value is not read.
+        err.write(f"{'warning' if ' is locked by ' in note else 'note'}: {note}\n")
     if claude_access is not None:
         # This developer's choice, written with spec and kept for the next syncs: cortex.local.toml's
         # wins over the team's — unless the team's file locks it.
