@@ -181,6 +181,21 @@ class QueuedRunTests(SyncedProjectTestCase):
         self.assertIn("Cortex 9.9.9", record.error)
 
 
+class CascadeTests(SyncedProjectTestCase):
+    """The pin is the core's resolution, the team's (ADR-013 §3.1, §3.12): cortex.local.toml left out,
+    and no git asked — the container's read-only mount of the host's files may make git refuse."""
+
+    def test_the_developer_s_local_file_and_git_are_not_read(self):
+        from cortex_runtime.base import read_pin
+
+        (self.project / "cortex.local.toml").write_text('theme = "none"\nspec = "/host/path"\n', encoding="utf-8")
+        refused = mock.Mock(side_effect=AssertionError("the runtime asked git"))
+        with mock.patch("subprocess.run", refused), mock.patch("subprocess.Popen", refused), \
+                mock.patch("shutil.which", refused):
+            pin = read_pin(self.project)
+        self.assertEqual((pin.version, pin.theme), ("9.9.9", "h2g2"))
+
+
 class WithoutCortexTomlTests(unittest.TestCase):
     def test_the_base_stays_under_the_project(self):
         self.assertIsNone(base_root_for(FIXTURE))

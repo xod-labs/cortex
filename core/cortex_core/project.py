@@ -1,5 +1,6 @@
 """The grammar of ``cortex.toml`` and ``cortex.local.toml`` — ADR-008 §3.4 — of
-``cortex.lock`` — ADR-010 §3.2 — and of the machine's ``projects.toml`` — ADR-011 §3.1.
+``cortex.lock`` — ADR-010 §3.2 — of the machine's ``projects.toml`` — ADR-011 §3.1 — and of its
+``config.toml`` — ADR-013 §3.7.
 
 One definition for the readers, the ``cortex`` command, the runtime and the cockpit, so that none
 accepts a file another refuses. It checks what a TOML parser returned: each reader parses the file
@@ -14,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Mapping, Tuple
+from typing import Dict, List, Mapping, Tuple
 
 PROJECT_FILE = "cortex.toml"
 LOCAL_FILE = "cortex.local.toml"
@@ -32,6 +33,11 @@ REGISTRY_FILE = "projects.toml"
 REGISTRY_KEYS: Tuple[str, ...] = ("format", "project")
 REGISTRY_ENTRY_KEYS: Tuple[str, ...] = ("name", "path")
 REGISTRY_FORMAT = 1
+# The machine's settings, in the Cortex home (ADR-013 §3.7): read whatever version a project pins.
+MACHINE_FILE = "config.toml"
+MACHINE_KEYS: Tuple[str, ...] = ("releases_url", "update_check", "register")
+MACHINE_BOOLEAN_KEYS: Tuple[str, ...] = ("update_check", "register")
+DEFAULT_RELEASES_URL = "https://github.com/xod-labs/cortex/releases"
 # What a path of projects.toml never holds: the C0 controls and DEL — NUL, which no system takes in a
 # file name, and the others a terminal reads as commands, which a message would print. The C1 controls
 # and the bidirectional marks are not refused: a file name may hold them.
@@ -199,3 +205,23 @@ def check_registry(data: Mapping, name: str = REGISTRY_FILE) -> None:
                                    f"{shown(first)} — two projects never name the same directory")
         names[entry["name"]] = number
         paths[key] = (entry["path"], number)
+
+
+def machine_values(data: Mapping, name: str = MACHINE_FILE) -> Tuple[Dict[str, object], List[str]]:
+    """The keys of the machine's ``config.toml`` that read, and a warning for each that does not —
+    an unknown key, or a value of the wrong type — never an error (ADR-013 §3.7): the file is the
+    machine's, read by every command and every version, and a key a later Cortex adds must not stop
+    an older one, ``cortex self-update`` above all. ``name`` is how the warnings name the file.
+    Whether ``releases_url`` is a place to download from is its reader's to check."""
+    values: Dict[str, object] = {}
+    warnings: List[str] = []
+    for key, value in data.items():
+        if key not in MACHINE_KEYS:
+            warnings.append(f"{name}: unknown key {shown(key)}, not read — {MACHINE_FILE} takes {listed(MACHINE_KEYS)}")
+        elif key in MACHINE_BOOLEAN_KEYS and not isinstance(value, bool):
+            warnings.append(f'{name}: "{key}" must be true or false, without quotes — not read')
+        elif key not in MACHINE_BOOLEAN_KEYS and (not isinstance(value, str) or not value):
+            warnings.append(f'{name}: "{key}" must be a string, in quotes, not empty — not read')
+        else:
+            values[key] = value
+    return values, warnings
