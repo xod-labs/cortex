@@ -891,6 +891,14 @@ class ValidateTests(SyncTestCase):
                                                      encoding="utf-8")
                 proc = self.validate(project)
                 self.assertEqual(proc.returncode, 2)
+                # ADR-013 §3.11: the bump pulled, said against what sync recorded — first.
+                self.assertIn("cortex.toml pins Cortex 9.9.8, and `cortex sync` recorded 9.9.7 — run `cortex sync`",
+                              proc.err)
+                local = project / "cortex.local.toml"                      # without the record, as 1.7.0 said it
+                local.write_text("".join(line for line in local.read_text(encoding="utf-8").splitlines(True)
+                                         if not line.startswith("synced")), encoding="utf-8")
+                proc = self.validate(project)
+                self.assertEqual(proc.returncode, 2)
                 self.assertIn('pins Cortex 9.9.8, and the spec synced is "9.9.7"', proc.err)
 
     @unittest.skipIf(os.name == "nt", "a Windows file name holds no control character")

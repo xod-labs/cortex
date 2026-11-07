@@ -382,7 +382,8 @@ def state(entry: Entry) -> State:
         why, read = str(error), prune._loosely(root)
     except OSError as error:
         why, read = sync.os_error(error), prune._loosely(root)
-    return State(entry, OK if why is None else UNREADABLE, why, str(read.version) if read else None,
+    # PINNED is the team's version (ADR-013 §3.11): what the team commits, whatever a try reads here.
+    return State(entry, OK if why is None else UNREADABLE, why, str(read.team_version) if read else None,
                  _reads(read) if read else None, _layout(root))
 
 

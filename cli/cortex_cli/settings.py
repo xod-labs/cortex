@@ -37,10 +37,10 @@ def resolution(root: Optional[str], locked: bool = False) -> cascade.Resolution:
         return cascade.resolve(None, None, values, os.environ, machine_name=name, warnings=warnings)
     try:
         data, local = cascade.read_project(root, local=not locked)
+        return cascade.resolve(data, local, values, os.environ, machine_name=name, locked=locked,
+                               committed=sync.committed(root), warnings=warnings, team_data=cascade.read_team(root))
     except project.ProjectFileError as error:
         raise config.ConfigError(str(error))
-    return cascade.resolve(data, local, values, os.environ, machine_name=name, locked=locked,
-                           committed=sync.committed(root), warnings=warnings)
 
 
 def _shown(value: object) -> str:
@@ -51,8 +51,13 @@ def _shown(value: object) -> str:
     return str(value)
 
 
-def _origin(setting: cascade.Setting, newer: Optional[str]) -> str:
+def _origin(setting: cascade.Setting, newer: Optional[str], found: Optional[cascade.Resolution] = None) -> str:
     said = setting.origin
+    if setting.key == "version" and found is not None and found.team_version is not None \
+            and found.team_version.origin != setting.origin:
+        said += f" — above the team's {found.team_version.value} ({found.team_version.origin})"
+    if setting.locked:
+        said += " — locked"
     if setting.key == "version" and newer is not None:
         said += f" — newer than this cortex, {newer}: {store.update_command(Version(str(setting.value)))}"
     return said
@@ -96,6 +101,9 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
         raise SettingsError(f"no setting {json.dumps(key)} — {'cortex config knows ' if root else 'outside a project, cortex config knows '}"
                             f"{known}")
     newer = _too_new(found) if root is not None else None
+    if not as_json:
+        for note in found.notes:
+            sys.stderr.write(f"note: {note}\n")
     if as_json:
         keys = [key] if key is not None else list(found.settings)
         out.write(json.dumps({
@@ -108,8 +116,11 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
             "warnings": list(found.warnings),
             "settings": {name: {"value": found[name].value, "origin": found[name].origin,
                                 "overridden": [{"origin": origin, "value": value} for origin, value in found[name].overridden],
-                                "locked": False}
+                                "locked": found[name].locked}
                          for name in keys},
+            "team_version": ({"value": found.team_version.value, "origin": found.team_version.origin}
+                             if found.team_version is not None else None),
+            "notes": list(found.notes),
         }, indent=2) + "\n")
         return 0
     if key is not None:
@@ -123,7 +134,7 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
     values = {name: _shown(setting.value) for name, setting in found.settings.items()}
     column = max(len(text) for text in values.values()) + 4
     for name, setting in found.settings.items():
-        out.write(f"{name:<{width}}{values[name]:<{column}}{_origin(setting, newer)}\n")
+        out.write(f"{name:<{width}}{values[name]:<{column}}{_origin(setting, newer, found)}\n")
     return 0
 
 
