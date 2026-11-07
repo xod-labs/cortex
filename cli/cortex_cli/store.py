@@ -106,6 +106,21 @@ def listed_checksum(sums: str, name: str) -> Optional[str]:
     return None
 
 
+def development(version: Version) -> bool:
+    """A source checkout's version, ``0.0.0-dev``, or a development build's, ``0.0.0-dev.N`` — a
+    dispatch of the binary workflow builds one: no release, and no project pins it."""
+    return version.core == (0, 0, 0) and version.pre[:1] == ("dev",) and len(version.pre) <= 2 \
+        and all(part.isdigit() for part in version.pre[1:])
+
+
+def too_old_for(version: Version, own: Version) -> bool:
+    """Whether a binary of version ``own`` is too old for a project of ``version``, as the commands say
+    it before any key is checked (ADR-013 §3.8): ``version`` newer than ``own`` — but a source checkout
+    or a development build passes, its commands then going as 1.7.0's went: the store serves it what it
+    can, ``Store.check_served`` refusing the rest."""
+    return version > own and not development(own)
+
+
 def update_command(version: Version) -> str:
     """The command that moves this binary to ``version`` (ADR-010 §3.7)."""
     return f"cortex self-update {version}"

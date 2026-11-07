@@ -8,6 +8,7 @@ download the fake releases 9.9.7 and 9.9.8.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a p
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 
 import cli_harness as harness  # noqa: E402
+from cortex_cli import store  # noqa: E402
+from cortex_cli.semver import Version  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
 OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
@@ -27,6 +30,11 @@ SOURCE = unittest.skipIf(harness.BINARY, "the refusal of a source checkout")
 GIT = shutil.which("git")
 NEEDS_GIT = unittest.skipIf(GIT is None, "needs git")
 POSIX = unittest.skipIf(os.name == "nt", "a git stand-in written as a shell script")
+# A development build — a dispatch of the binary workflow, 0.0.0-dev.N — passes the version gate, as a
+# source checkout does: what the gate refuses is tested from source, or with a release's build.
+DEVELOPMENT = unittest.skipIf(harness.BINARY is not None and re.fullmatch(r"0\.0\.0-dev(\.[0-9]+)?",
+                                                                          harness.EXPECTED_VERSION or "0.0.0-dev"),
+                              "a development build passes the version gate")
 
 
 def display(path):
@@ -230,6 +238,7 @@ class MachineFileTests(SettingsTestCase):
         self.assertIn("cortex self-update: this cortex runs from a source checkout", proc.err)
 
 
+@DEVELOPMENT
 class TooNewTests(SettingsTestCase):
     """A version newer than the binary is said before any key is checked (§3.8, steps 1–2)."""
 
@@ -273,6 +282,39 @@ class TooNewTests(SettingsTestCase):
         proc = self.cortex(project, "validate")
         self.assertNotIn("newer than this cortex", proc.err)
         self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+
+
+@unittest.skipIf(harness.BINARY, "a source checkout's version")
+class DevelopmentBuildTests(SettingsTestCase):
+    """A source checkout, 0.0.0-dev, passes the version gate — or it would refuse what 1.7.0 accepted."""
+
+    def setUp(self):
+        super().setUp()
+        del self.env["CORTEX_SOURCE_VERSION"]
+
+    def test_validate_from_source_checks_a_project_pinned_to_a_release(self):
+        project = self.project("1.7.0")
+        stored = self.home / "versions" / "1.7.0"
+        for tree in ("agents", "templates", "docs"):
+            shutil.copytree(harness.REPO / tree, stored / tree)
+        (project / "cortex.local.toml").write_text(f'spec = "{display(stored)}"\n', encoding="utf-8")
+        proc = self.cortex(project, "validate")
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+        self.assertNotIn("newer than this cortex", proc.err)
+        found = self.settings(project)
+        self.assertEqual(found["cortex"], "0.0.0-dev")
+        proc = self.cortex(project, "upgrade")                            # never down to 0.0.0-dev, as 1.7.0
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn("move the project down to this cortex's version by naming it", proc.err)
+
+    def test_what_a_development_build_is(self):
+        for text in ("0.0.0-dev", "0.0.0-dev.7"):
+            self.assertTrue(store.development(Version(text)), text)
+            self.assertFalse(store.too_old_for(Version("1.7.0"), Version(text)), text)
+        for text in ("0.0.0-dev.x", "0.0.0-dev.1.2", "0.0.1-dev", "1.0.0-dev", "0.0.0-rc.1"):
+            self.assertFalse(store.development(Version(text)), text)
+        self.assertTrue(store.too_old_for(Version("1.7.0"), Version("1.6.0")))
+        self.assertFalse(store.too_old_for(Version("1.7.0"), Version("1.7.0")))
 
 
 class SameAsBeforeTests(SettingsTestCase):

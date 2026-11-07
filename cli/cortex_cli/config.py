@@ -139,7 +139,7 @@ def too_new(root: str, own: Version) -> Optional[str]:
     version it comes with, which ``cortex self-update`` brings, not as a key this cortex does not
     know. Said as the store says it, which the bootstrap's rule acts on."""
     found = loose_pin(root)
-    if found is None or found[1] <= own:
+    if found is None or not store.too_old_for(found[1], own):
         return None
     name, version = found
     return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"

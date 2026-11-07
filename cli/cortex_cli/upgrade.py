@@ -463,7 +463,9 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     if wanted is None and pinned is not None and pinned[1] > the_store.own:
         # The default moves a project to this cortex's version, never down: a teammate's older binary
         # would otherwise undo the team's pin. Said from the version read before any key is checked,
-        # whatever key of a later version the file holds (ADR-013 §3.8).
+        # whatever key of a later version the file holds (ADR-013 §3.8). A source checkout or a
+        # development build is refused too, as in 1.7.0: passing, it would move the project down to
+        # its own 0.0.0-dev.
         name, newer = pinned
         raise UpgradeError(f"this project uses Cortex {newer}, which its {name} pins, newer than this cortex, "
                            f"{the_store.own} — nothing was changed. Update this cortex to serve it:\n"

@@ -60,7 +60,7 @@ def _origin(setting: cascade.Setting, newer: Optional[str]) -> str:
 def _too_new(found: cascade.Resolution) -> Optional[str]:
     """This cortex's version, when the project's is newer — ``None`` otherwise."""
     own = store.Store().own
-    if "version" in found and Version(str(found.value("version"))) > own:
+    if "version" in found and store.too_old_for(Version(str(found.value("version"))), own):
         return str(own)
     return None
 
@@ -70,7 +70,7 @@ def _loosely(root: str, error: config.ConfigError) -> cascade.Resolution:
     read before any key is checked (§3.8), and the machine's keys — what a later version's keys are,
     this cortex does not know. Any other refusal stands."""
     pinned = config.loose_pin(root)
-    if pinned is None or pinned[1] <= store.Store().own:
+    if pinned is None or not store.too_old_for(pinned[1], store.Store().own):
         raise error
     found = machine.resolution(store.cortex_home())
     version = cascade.Setting("version", str(pinned[1]), pinned[0])
