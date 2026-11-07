@@ -998,16 +998,21 @@ def _within(top: str, path: Path) -> Optional[str]:
         here = parent
 
 
-def _other_tree(top: str, path: Path) -> bool:
-    """Whether ``path`` lies in a work tree of its own inside ``top`` — a ``.git`` between them: the team's
-    folder, a submodule, whose files are committed in its repository (ADR-013 §3.11)."""
-    stop = os.path.normcase(os.path.realpath(top))
-    here = os.path.dirname(os.path.realpath(path))
-    while os.path.normcase(here) != stop and os.path.dirname(here) != here:
-        if os.path.lexists(os.path.join(here, ".git")):
-            return True
-        here = os.path.dirname(here)
-    return False
+def _other_tree(top: str, root: str, path: Path) -> bool:
+    """Whether ``path``, a file of the team's folder, is in a work tree of its own inside ``top`` — the
+    folder a repository or a submodule, whose files are committed there (ADR-013 §3.11). Git says
+    which work tree, as it would commit the file; a file it places in none is this one's, as in 1.7.0.
+    Any other file is left to the commit, as in 1.7.0."""
+    if not Path(os.path.abspath(path)).is_relative_to(Path(os.path.abspath(root), config.TEAM_FOLDER)):
+        return False
+    proc = _git(os.path.dirname(os.path.realpath(path)), "rev-parse", "--show-toplevel")
+    found = proc.stdout.strip()
+    if proc.returncode != 0 or not found:
+        return False
+    try:
+        return not os.path.samefile(found, top)
+    except OSError:
+        return False
 
 
 def _inside(top: str, path: Path) -> bool:
@@ -1250,7 +1255,7 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
         err.write(f"note: nothing to commit in {display(root)} — git ignores {_and(outcome.names())}\n")
         return outcome
     # A file of another work tree inside this one — the team's folder, a submodule — is that repository's.
-    outcome.outside = [path for path in outcome.files if not _inside(top, path) or _other_tree(top, path)]
+    outcome.outside = [path for path in outcome.files if not _inside(top, path) or _other_tree(top, root, path)]
     if outcome.outside:
         names = [_where(path, root) for path in outcome.outside]
         them = "them where they are" if len(names) > 1 else "it where it is"

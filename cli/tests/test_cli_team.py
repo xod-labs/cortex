@@ -793,13 +793,34 @@ class SecondReviewTests(TeamTestCase):
         self.assertIn("not committed with it: commit it where it is", proc.err)
         self.assertNotIn("as committed already", proc.out + proc.err)
 
-    def test_files_under_a_nested_work_tree_are_another_repository_s(self):
-        (self.tmp / "agents" / "roles").mkdir(parents=True)
-        (self.tmp / "agents" / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
-        self.assertTrue(upgrade._other_tree(str(self.tmp), self.tmp / "agents" / "cortex.team.lock"))
-        self.assertTrue(upgrade._other_tree(str(self.tmp), self.tmp / "agents" / "roles" / "x.md"))
-        self.assertFalse(upgrade._other_tree(str(self.tmp), self.tmp / "cortex.lock"))
-        self.assertFalse(upgrade._other_tree(str(self.tmp), self.tmp / "docs" / "x.md"))
+    @NEEDS_GIT
+    def test_git_says_which_files_of_the_team_s_folder_another_repository_holds(self):
+        root = self.tmp / "ws"
+        for name in ("agents/roles/x.md", ".github/copilot-instructions.md", "cortex.lock"):
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text("x\n", encoding="utf-8")
+        for where in (root, root / "agents", root / ".github"):        # the team's folder, and .github, their own
+            subprocess.run([GIT, "init", "-q", str(where)], check=True, capture_output=True)
+        top = str(root)
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}):
+            self.assertTrue(upgrade._other_tree(top, top, root / "agents" / "cortex.team.lock"))
+            self.assertTrue(upgrade._other_tree(top, top, root / "agents" / "roles" / "x.md"))
+            # Any other file is the commit's to take or refuse, as in 1.7.0 — a nested repository's included.
+            self.assertFalse(upgrade._other_tree(top, top, root / ".github" / "copilot-instructions.md"))
+            self.assertFalse(upgrade._other_tree(top, top, root / "cortex.lock"))
+            # A .git that git does not take — an empty directory, a gitfile to nowhere — makes no work tree.
+            for stray in ("directory", "gitfile"):
+                with self.subTest(stray=stray):
+                    shutil.rmtree(root / "agents" / ".git")
+                    if stray == "directory":
+                        (root / "agents" / ".git").mkdir()
+                    else:
+                        shutil.rmtree(root / "agents" / ".git", ignore_errors=True)
+                        (root / "agents" / ".git").write_text("gitdir: ../.git/modules/gone\n", encoding="utf-8")
+                    self.assertFalse(upgrade._other_tree(top, top, root / "agents" / "cortex.team.lock"))
+                    if stray == "directory":
+                        (root / "agents" / ".git").rmdir()
+                        (root / "agents" / ".git").mkdir()
 
     def test_an_unreadable_project_s_pinned_is_its_team_s_version(self):
         root = self.project('version = "9.9.7"\ntheme = "h2g2"\nlater = "x"\n', team='version = "9.9.8"\n',
