@@ -24,8 +24,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "core"))
 
+import subprocess  # noqa: E402
+
 import cli_harness as harness  # noqa: E402
-from cortex_cli import config, init, store, sync, upgrade  # noqa: E402
+from cortex_cli import config, init, store, sync, upgrade, validate  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
 OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
@@ -36,6 +38,8 @@ DEVELOPMENT = unittest.skipIf(harness.BINARY is not None and DEV_BUILD.fullmatch
 # The suite's own versions — 9.9.7 and 9.9.8 served, 9.9.9 this cortex's — which a build's version, 1.8.0 or a
 # development one, does not order as the source does.
 SOURCE = unittest.skipIf(harness.BINARY, "the suite's versions, ordered against this cortex's")
+GIT = shutil.which("git")
+NEEDS_GIT = unittest.skipIf(GIT is None or os.name == "nt", "needs git")
 AS_ROOT = unittest.skipIf(os.name == "nt" or os.geteuid() == 0, "root writes where its permissions say it may not")
 TEAM = "agents/cortex.team.toml"
 OLD = b"# Cortex AI Team\n\nWritten by 9.9.7: read cortex.local.toml first.\n"
@@ -147,7 +151,7 @@ class VersionTests(TeamTestCase):
         proc = self.cortex(root, "config")
         self.assertEqual(proc.returncode, 1)
         self.assertIn("cortex.local.toml: \"version\" is read once the team's version is 1.8.0 or later — the team's "
-                      "is 1.7.0", proc.err)
+                      "is 1.7.0: the team moves to 1.8.0 first, or remove `version` from cortex.local.toml", proc.err)
 
 
 @DEVELOPMENT
@@ -314,7 +318,8 @@ class TeamFileTests(TeamTestCase):
         root = self.project(f'version = "{OWN}"\n', team='theme = "h2g2"\nlocked = ["theme"]\n', local='theme = "none"\n')
         proc = self.cortex(root, "sync")
         self.assert_ok(proc)
-        self.assertIn(f"theme is locked by {TEAM} to \"h2g2\": cortex.local.toml's \"none\" is not read", proc.err)
+        self.assertIn(f"warning: theme is locked by {TEAM} to \"h2g2\": cortex.local.toml's \"none\" is not read",
+                      proc.err)
         proc = self.cortex(root, "validate", "--strict")
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("LOCKED_KEY", proc.out + proc.err)
@@ -631,6 +636,7 @@ class SharedTeamFolderTests(TeamTestCase):
                 self.assertEqual(proc.returncode, 1, proc.out + proc.err)
                 self.assertEqual((team / "cortex.team.toml").read_bytes(), before)
                 self.assertEqual(proc.out.count(f"fail against Cortex {OWN} — {TEAM} was not moved"), 3)  # 2 + summary
+                self.assertIn(f"The overlays of {harness_path(self.tmp / failing)}, checked against Cortex {OWN}:", proc.out)
 
     def test_the_shared_file_moves_once_and_each_follower_resumes(self):
         team, roots = self.shared(None)
@@ -640,6 +646,174 @@ class SharedTeamFolderTests(TeamTestCase):
         self.assertEqual(proc.out.count(f"{TEAM}: Cortex 9.9.8 → {OWN}"), 1)
         for root in roots:
             self.assertEqual(self.local(root)["synced"]["reads"], OWN)
+
+
+class SecondReviewTests(TeamTestCase):
+    """What the second counter-review of phase 2a found."""
+
+    def registered(self, *roots):
+        (self.home / "projects.toml").write_text("format = 1\n" + "".join(
+            f'\n[[project]]\nname = "{root.name}"\npath = "{harness_path(root)}"\n' for root in roots), encoding="utf-8")
+
+    def test_all_team_never_moves_a_pin_newer_than_this_cortex_down(self):
+        root = self.project('theme = "h2g2"\n', team='version = "99.0.0"\n')
+        self.registered(root)
+        before = (root / TEAM).read_bytes()
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("nothing was changed", proc.out + proc.err)
+        self.assertEqual((root / TEAM).read_bytes(), before)
+
+    @SOURCE
+    def test_a_development_build_names_the_version_for_the_team_s_pin(self):
+        root = self.project('theme = "h2g2"\n', team='version = "0.0.0-dev.7"\n')
+        self.registered(root)
+        before = (root / TEAM).read_bytes()
+        for args in (("upgrade", "--team"), ("upgrade", "--all", "--team")):
+            with self.subTest(args=args):
+                proc = self.cortex(self.tmp if "--all" in args else root, *args, CORTEX_SOURCE_VERSION="0.0.0-dev.7")
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn("this cortex is a development build, 0.0.0-dev.7, which no teammate can download — name "
+                              "the version", proc.out + proc.err)
+                self.assertEqual((root / TEAM).read_bytes(), before)
+
+    def test_a_version_less_cortex_toml_names_its_missing_team_s_folder(self):
+        root = self.project('theme = "h2g2"\n')
+        for state in ("is not there", "is empty"):
+            with self.subTest(state=state):
+                if state == "is empty":
+                    (root / "agents").mkdir()
+                proc = self.cortex(root, "sync")
+                self.assertEqual(proc.returncode, 1)
+                self.assertIn(f'"version" is required, or in {TEAM} — agents/ {state}: check it out, a submodule with '
+                              "`git submodule update --init`", proc.err)
+
+    @SOURCE
+    @DOWNLOADS
+    def test_init_during_a_try_writes_the_bootstrap_from_the_team_s_version(self):
+        self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": NEW, **{
+            f"templates/{name}": (harness.REPO / "templates" / name).read_bytes()
+            for name in ("project-overview.md.template", "project-context.md.template")}})
+        root = self.project('version = "9.9.8"\ntheme = "h2g2"\n', local=f'version = "{OWN}"\n')
+        (root / "AGENTS.md").write_bytes(init.stamped(init.instructions(NEW, True)))
+        proc = self.cortex(root, "init", "--tool", "claude", "--force")
+        self.assert_ok(proc)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(NEW, True)))
+        self.assertIn("✓ cortex.toml kept, at Cortex 9.9.8", proc.out)
+        self.assertIn(f"Cortex {OWN} is read — cortex.local.toml's, above the team's 9.9.8", proc.err)
+        self.assertNotIn("AGENTS.md is there and was kept", proc.err)
+
+    def test_team_and_local_dry_runs_exit_as_the_run_would(self):
+        root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n')
+        overlay = root / "agents" / "roles" / "engineering" / "architect.md"
+        overlay.parent.mkdir(parents=True)
+        overlay.write_text("<!-- OVERLAY\n     Base: cortex/agents/roles/engineering/nowhere.md\n     Scope: workspace\n"
+                           "-->\n\n# x\n", encoding="utf-8")
+        self.assertEqual(self.cortex(root, "upgrade", "--team", OWN, "--dry-run").returncode, 1)
+        (root / TEAM).write_text('version = "1.8.0"\n', encoding="utf-8")
+        self.assertEqual(self.cortex(root, "upgrade", "--local", OWN, "--dry-run").returncode, 1)
+        self.assertFalse((root / "cortex.local.toml").exists())
+
+    def test_the_team_s_lock_is_named_in_a_refusal(self):
+        root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n')
+        proc = self.cortex(root, "sync", "--locked")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("--locked: no agents/cortex.team.lock", proc.err)
+
+    def test_validate_names_the_team_s_lock_when_its_spec_left_the_store(self):
+        root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}):
+            found = validate.lock_warnings(config.load(str(root)), str(self.tmp / "gone"))
+        self.assertEqual([(name, code) for name, code, _ in found], [("agents/cortex.team.lock", "LOCK_DIGEST")])
+
+    def test_team_at_the_version_pinned_never_locks_another_spec(self):
+        root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        lock = root / "agents" / "cortex.team.lock"
+        lock.write_text(lock.read_text(encoding="utf-8").replace("sha256:", "sha256:0", 1)[:-2] + '"\n',
+                        encoding="utf-8")
+        before = lock.read_bytes()
+        proc = self.cortex(root, "upgrade", "--team", OWN)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertEqual(lock.read_bytes(), before)
+
+    @NEEDS_GIT
+    def test_a_resume_commits_nothing_of_the_team_s_own_repository(self):
+        env = {"PATH": os.path.dirname(GIT), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n', committed=False)
+        for where in (root / "agents", root):
+            for args in (("init", "-q", str(where)), ("-C", str(where), "add", "-A"),
+                         ("-C", str(where), "commit", "-q", "-m", "x")):
+                subprocess.run([GIT, *args], check=True, capture_output=True, env={**os.environ, **env})
+        proc = self.cortex(root, "upgrade", "--commit", "--message", "m", **env)
+        self.assert_ok(proc)
+        self.assertIn("agents/cortex.team.lock", proc.err)
+        self.assertIn("not committed with it: commit it where it is", proc.err)
+        self.assertNotIn("as committed already", proc.out + proc.err)
+
+    def test_files_under_a_nested_work_tree_are_another_repository_s(self):
+        (self.tmp / "agents" / "roles").mkdir(parents=True)
+        (self.tmp / "agents" / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+        self.assertTrue(upgrade._other_tree(str(self.tmp), self.tmp / "agents" / "cortex.team.lock"))
+        self.assertTrue(upgrade._other_tree(str(self.tmp), self.tmp / "agents" / "roles" / "x.md"))
+        self.assertFalse(upgrade._other_tree(str(self.tmp), self.tmp / "cortex.lock"))
+        self.assertFalse(upgrade._other_tree(str(self.tmp), self.tmp / "docs" / "x.md"))
+
+    def test_an_unreadable_project_s_pinned_is_its_team_s_version(self):
+        root = self.project('version = "9.9.7"\ntheme = "h2g2"\nlater = "x"\n', team='version = "9.9.8"\n',
+                            committed=False)
+        self.registered(root)
+        proc = self.cortex(self.tmp, "project", "list", "--json")
+        found = json.loads(proc.out)["projects"][0]
+        self.assertEqual((found["state"], found["pinned"], found["pinned_origin"]), ("unreadable", "9.9.8", TEAM))
+
+    def test_every_form_of_synced_is_written_again_in_its_line(self):
+        for text in (f'[synced]\npinned = "{OWN}"\nreads = "{OWN}"\n', f'synced.pinned = "{OWN}"\nsynced.reads = "{OWN}"\n'):
+            with self.subTest(text=text):
+                root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', local=text, name=f"t{abs(hash(text))}")
+                self.assert_ok(self.cortex(root, "sync"))
+                written = (root / "cortex.local.toml").read_text(encoding="utf-8")
+                self.assertIn("synced = {", written)
+                self.assertNotIn("[synced]", written)
+                self.assertNotIn("synced.", written)
+                self.assert_ok(self.cortex(root, "validate"))
+        root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', local='synced = "garbage"\n', name="garbage")
+        proc = self.cortex(root, "validate")
+        self.assertIn("— `cortex sync` writes it again", proc.err)
+
+    @SOURCE
+    @DOWNLOADS
+    def test_upgrade_during_a_try_says_commit_only_where_a_repository_is(self):
+        root = self.project('version = "9.9.7"\ntheme = "h2g2"\n', local=f'version = "{OWN}"\n', committed=False)
+        proc = self.cortex(root, "upgrade", "9.9.8")
+        self.assert_ok(proc)
+        self.assertIn("cortex.lock: Cortex 9.9.8\n", proc.out)
+
+    def test_a_try_at_or_below_the_team_s_in_cortex_toml_says_its_remedy_once(self):
+        root = self.project('version = "1.8.0"\ntheme = "h2g2"\n', team=f'version = "{OWN}"\n', committed=False)
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        self.assertIn(f"cortex.toml's version, 1.8.0, is at or below the team's {OWN} ({TEAM}) and changes nothing — "
+                      "remove `version` from cortex.toml", proc.err)
+
+    @DOWNLOADS
+    def test_team_checks_a_bootstrap_against_the_team_s_version(self):
+        self.release.replace_spec("9.9.7", {"templates/bootstrap-instructions.md": OLD})
+        self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": NEW})
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.7"\n', local=f'version = "{OWN}"\n')
+        (root / "CLAUDE.md").write_bytes(init.instructions(OLD, True))
+        proc = self.cortex(root, "upgrade", "--team", "9.9.8")
+        self.assert_ok(proc)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(NEW, True)))
+
+    def test_a_try_too_new_names_no_team_without_a_team_s_file(self):
+        root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', local='version = "99.0.0"\n')
+        proc = self.cortex(root, "upgrade")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("`cortex upgrade --local VERSION` the try", proc.err)
+        self.assertNotIn("--team", proc.err)
 
 
 def harness_path(root):
