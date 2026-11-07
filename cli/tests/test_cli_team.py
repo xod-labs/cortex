@@ -42,6 +42,8 @@ SOURCE = unittest.skipIf(harness.BINARY, "the suite's versions, ordered against 
 DEV_OWN = DEV_BUILD.fullmatch(OWN) is not None
 GIT = shutil.which("git")
 NEEDS_GIT = unittest.skipIf(GIT is None or os.name == "nt", "needs git")
+GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
 AS_ROOT = unittest.skipIf(os.name == "nt" or os.geteuid() == 0, "root writes where its permissions say it may not")
 TEAM = "agents/cortex.team.toml"
 OLD = b"# Cortex AI Team\n\nWritten by 9.9.7: read cortex.local.toml first.\n"
@@ -73,6 +75,10 @@ class TeamTestCase(unittest.TestCase):
         if committed:
             (root / ".git").mkdir()
         return root
+
+    def git(self, where, *args):
+        return subprocess.run([GIT, "-C", str(where), *args], check=True, capture_output=True, text=True,
+                              env={**os.environ, **GIT_ENV})
 
     def cortex(self, cwd, *args, **env):
         proc = harness.run(*args, cwd=cwd, env={**self.env, **env})
@@ -848,31 +854,52 @@ class SecondReviewTests(TeamTestCase):
     @NEEDS_GIT
     def test_git_says_which_files_of_the_team_s_folder_another_repository_holds(self):
         root = self.tmp / "ws"
-        for name in ("agents/roles/x.md", ".github/copilot-instructions.md", "cortex.lock"):
+        names = ("agents/cortex.team.toml", "agents/cortex.team.lock", "agents/roles/x.md",
+                 ".github/copilot-instructions.md", "cortex.lock")
+        for name in names:
             (root / name).parent.mkdir(parents=True, exist_ok=True)
             (root / name).write_text("x\n", encoding="utf-8")
         for where in (root, root / "agents", root / ".github"):        # the team's folder, and .github, their own
-            subprocess.run([GIT, "init", "-q", str(where)], check=True, capture_output=True)
+            self.git(where, "init", "-q")
         top = str(root)
-        with mock.patch.dict(os.environ, {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}):
+        with mock.patch.dict(os.environ, GIT_ENV):
             self.assertTrue(upgrade._other_tree(top, top, root / "agents" / "cortex.team.lock"))
-            self.assertTrue(upgrade._other_tree(top, top, root / "agents" / "roles" / "x.md"))
+            self.assertTrue(upgrade._other_tree(top, top, root / "agents" / "cortex.team.toml"))
             # Any other file is the commit's to take or refuse, as in 1.7.0 — a nested repository's included.
+            self.assertFalse(upgrade._other_tree(top, top, root / "agents" / "roles" / "x.md"))
             self.assertFalse(upgrade._other_tree(top, top, root / ".github" / "copilot-instructions.md"))
             self.assertFalse(upgrade._other_tree(top, top, root / "cortex.lock"))
-            # A .git that git does not take — an empty directory, a gitfile to nowhere — makes no work tree.
+            # A .git that git does not take — an empty directory, a gitfile to nowhere — makes no work tree: the
+            # outer one has the file, committed as it is, or sees it, a lock not committed yet.
+            shutil.rmtree(root / "agents" / ".git")
+            self.git(root, "add", "--", "agents/cortex.team.toml")
+            self.git(root, "commit", "-q", "-m", "team")
             for stray in ("directory", "gitfile"):
                 with self.subTest(stray=stray):
-                    shutil.rmtree(root / "agents" / ".git")
+                    shutil.rmtree(root / "agents" / ".git", ignore_errors=True)
+                    (root / "agents" / ".git").unlink(missing_ok=True)
                     if stray == "directory":
                         (root / "agents" / ".git").mkdir()
                     else:
-                        shutil.rmtree(root / "agents" / ".git", ignore_errors=True)
                         (root / "agents" / ".git").write_text("gitdir: ../.git/modules/gone\n", encoding="utf-8")
                     self.assertFalse(upgrade._other_tree(top, top, root / "agents" / "cortex.team.lock"))
-                    if stray == "directory":
-                        (root / "agents" / ".git").rmdir()
-                        (root / "agents" / ".git").mkdir()
+                    self.assertFalse(upgrade._other_tree(top, top, root / "agents" / "cortex.team.toml"))
+
+    @NEEDS_GIT
+    def test_a_submodule_whose_repository_is_gone_holds_the_team_s_lock(self):
+        team, root = self.tmp / "team", self.tmp / "ws"
+        for where in (team, root):
+            where.mkdir()
+            self.git(where, "init", "-q")
+        (team / "cortex.team.toml").write_text('version = "9.9.8"\n', encoding="utf-8")
+        self.git(team, "add", "-A")
+        self.git(team, "commit", "-q", "-m", "t")
+        self.git(root, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(team), "agents")
+        self.git(root, "commit", "-q", "-m", "sub")
+        (root / "agents" / "cortex.team.lock").write_text("x\n", encoding="utf-8")
+        shutil.rmtree(root / ".git" / "modules" / "agents")        # git cannot tell: the outer tree neither has nor sees it
+        with mock.patch.dict(os.environ, GIT_ENV):
+            self.assertTrue(upgrade._other_tree(str(root), str(root), root / "agents" / "cortex.team.lock"))
 
     def test_an_unreadable_project_s_pinned_is_its_team_s_version(self):
         root = self.project('version = "9.9.7"\ntheme = "h2g2"\nlater = "x"\n', team='version = "9.9.8"\n',

@@ -1012,20 +1012,25 @@ def _within(top: str, path: Path) -> Optional[str]:
 
 
 def _other_tree(top: str, root: str, path: Path) -> bool:
-    """Whether ``path``, a file of the team's folder, is in a work tree of its own inside ``top`` — the
-    folder a repository or a submodule, whose files are committed there (ADR-013 §3.11). Git says
-    which work tree, as it would commit the file; a file it places in none is this one's, as in 1.7.0.
-    Any other file is left to the commit, as in 1.7.0."""
-    if not Path(os.path.abspath(path)).is_relative_to(Path(os.path.abspath(root), config.TEAM_FOLDER)):
+    """Whether ``path``, the team's file or its lock, is in a work tree of its own inside ``top`` — the
+    team's folder a repository or a submodule, whose files are committed there (ADR-013 §3.11). Git
+    says which work tree, as it would commit the file. When it cannot — a repository of another owner,
+    a submodule whose repository is gone — the work tree of ``top`` says: a file it neither tracks nor
+    sees is another repository's. Any other file is left to the commit, as in 1.7.0."""
+    folder = Path(os.path.abspath(root), config.TEAM_FOLDER)
+    if Path(os.path.abspath(path)) not in (folder / config.TEAM_FILE, folder / config.TEAM_LOCK_FILE):
         return False
     proc = _git(os.path.dirname(os.path.realpath(path)), "rev-parse", "--show-toplevel")
     found = proc.stdout.strip()
-    if proc.returncode != 0 or not found:
+    if proc.returncode == 0 and found:
+        try:
+            return not os.path.samefile(found, top)
+        except OSError:
+            return False
+    name = _literal(_git_paths(top, [path]))
+    if _git(top, "ls-files", "--error-unmatch", "--", *name).returncode == 0:
         return False
-    try:
-        return not os.path.samefile(found, top)
-    except OSError:
-        return False
+    return not _git(top, "status", "--porcelain", "--untracked-files=all", "--", *name).stdout.strip()
 
 
 def _inside(top: str, path: Path) -> bool:
