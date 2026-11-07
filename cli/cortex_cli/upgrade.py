@@ -587,6 +587,24 @@ def team_target(pinned: Optional[Version], wanted: Optional[str], the_store: sto
     return target
 
 
+def _pinned_and_locked(agents: str, pinned: Optional[Version], target: Version, the_store: store.Store,
+                       out: TextIO) -> bool:
+    """Whether ``--team`` has nothing to move: the target is the team's pin, and its lock names it. The
+    lock is checked as sync checks it, by a dry run too: a spec whose files differ from the ones the
+    team locked is refused, not locked again."""
+    return target == pinned and sync.check_lock(agents, target, the_store, out, name=config.TEAM_LOCK_FILE)[1] is None
+
+
+def _team_left(agents: str, files: List[Path]) -> List[Path]:
+    """Those of the team's ``files`` its work tree sees changed, when ``--team`` writes nothing: what a
+    run before this one left — its commit refused, or not asked. Nothing when git cannot tell."""
+    try:
+        top = _work_tree(agents)
+        return _changed(agents, top, files) if top is not None else []
+    except UpgradeError:
+        return []
+
+
 def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: TextIO, err: TextIO,
               branch: Optional[str] = None, message: Optional[str] = None, checked: Optional[str] = None) -> Outcome:
     """``cortex upgrade --team [VERSION]`` (ADR-013 §3.11): the team's file's version and its lock, in the
@@ -613,11 +631,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     out.write(f"Project: {display(root)}\n")
     the_store.ensure(target)
     agents = str(Path(root) / config.TEAM_FOLDER)
-    # At the version pinned, the lock is checked as sync checks it, by the dry run too: a spec whose files
-    # differ from the ones the team locked is refused, not locked again; a lock that names it leaves
-    # nothing to move.
-    unchanged = target == pinned and \
-        sync.check_lock(agents, target, the_store, out, name=config.TEAM_LOCK_FILE)[1] is None
+    unchanged = _pinned_and_locked(agents, pinned, target, the_store, out)
     said = f"Cortex {target}, pinned and locked already — nothing to move" if unchanged else \
         f"Cortex {pinned} → {target}" if pinned is not None else f"Cortex {target}, a version added"
     out.write(f"{config.TEAM_NAME}: {said}\n")
@@ -630,13 +644,25 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     if dry_run:
         out.write("--dry-run: nothing of the project was changed\n")
         return Outcome(root, pinned, target)
-    # Nothing to move, no branch made and nothing committed, as an upgrade already on its target.
-    asked = (branch is not None or message is not None) and not unchanged
-    top = _team_git(agents, branch, out, err) if asked else None
-    files = [] if unchanged else [team_file, team_file.with_name(config.TEAM_LOCK_FILE)]
-    before = {path: path.read_bytes() if path.is_file() else None for path in files}
+    team_files = [team_file, team_file.with_name(config.TEAM_LOCK_FILE)]
+    asked = branch is not None or message is not None
+    # At the pin nothing is written: what a run before this one left of the two files — its commit refused,
+    # or not asked — --commit commits, as that run would have; otherwise no branch is made, as an upgrade
+    # already on its target makes none, and what is left is said.
+    left = _team_left(agents, team_files) if unchanged and asked else []
+    files = team_files if not unchanged else left if message is not None else []
+    if unchanged and not files:
+        if branch is not None and _on_branch(agents) != branch:
+            out.write(f"git: no branch {branch} is made — nothing was written\n")
+        if left:
+            names = [_shown_path(path, root) for path in left]
+            err.write(f"note: nothing was written in {config.TEAM_FOLDER}/, and {_and(names)} "
+                      f"{'hold' if len(names) > 1 else 'holds'} changes git has not committed — a run cut short, or "
+                      "a commit refused? `git status` there says what is left to commit\n")
+    top = _team_git(agents, branch, out, err) if asked and files else None
+    before = {} if unchanged else {path: path.read_bytes() if path.is_file() else None for path in files}
     try:
-        if files:
+        if not unchanged:
             with sync.project_lock(Path(agents), err):
                 config.write_text(str(team_file), config.render_team(root, {"version": str(target)}))
                 if target == pinned:        # checked again, under the folder's lock
@@ -656,6 +682,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
         err.write(f"note: {config.TEAM_NAME} and its lock are as they were\n")
         raise
     outcome = Outcome(root, pinned, target, files=list(files))
+    outcome.left = [] if files else left
     if project.follows:
         current_path = None
         try:
@@ -1323,7 +1350,7 @@ def upgrade_all(options: _Options, out: TextIO, err: TextIO) -> int:
     target = Version(options.wanted) if options.wanted else the_store.own
     if options.wanted:
         _served(the_store, target, f"cortex upgrade --all {target}")       # every project would refuse it
-    elif options.which == "team" and store.development(the_store.own):
+    elif options.which == "team" and store.development(the_store.own) and _followers(entries):
         raise _no_release(the_store)                                        # every team's file would refuse it
     newer = _asking(options.wanted)
     done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]] = []
@@ -1432,7 +1459,10 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
         return Outcome(entry.path, project.team_version, None, 1, str(error))
     the_store.ensure(target)
     failing = []
-    for other in [path for path, shared in followers if shared == folder]:
+    # At the pin, with its lock, nothing moves: no overlay is checked, as team_move checks none.
+    pinned_and_locked = _pinned_and_locked(os.path.join(entry.path, config.TEAM_FOLDER), team_pin(project), target,
+                                           the_store, out)
+    for other in [path for path, shared in followers if shared == folder and not pinned_and_locked]:
         code, report = check_overlays(other, the_store.path(target))
         if code != 0:
             failing.append(other)

@@ -686,6 +686,13 @@ class SecondReviewTests(TeamTestCase):
         self.assertEqual((root / TEAM).read_bytes(), before)
 
     @SOURCE
+    def test_a_development_build_skips_projects_without_a_team_s_file(self):
+        self.registered(self.project(f'version = "{OWN}"\ntheme = "h2g2"\n'))
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team", CORTEX_SOURCE_VERSION="0.0.0-dev.7")
+        self.assert_ok(proc)
+        self.assertIn("skipped: no team's file to move", proc.out)
+
+    @SOURCE
     def test_a_development_build_names_the_version_for_the_team_s_pin(self):
         root = self.project('theme = "h2g2"\n', team='version = "0.0.0-dev.7"\n')
         self.registered(root)
@@ -804,6 +811,17 @@ class SecondReviewTests(TeamTestCase):
         self.assertNotIn("Commit", proc.out)
         self.assertEqual([path.read_bytes() for path in files], before)
 
+    def test_all_team_at_the_pin_checks_no_follower_s_overlays(self):
+        root = self.failing_overlay(f'version = "{OWN}"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        self.registered(root)
+        for args in ((), ("--dry-run",)):
+            with self.subTest(args=args):
+                proc = self.cortex(self.tmp, "upgrade", "--all", "--team", OWN, *args)
+                self.assert_ok(proc)
+                self.assertNotIn("The overlays of", proc.out)
+                self.assertIn(f"already on {OWN}", proc.out)
+
     @NEEDS_GIT
     def test_team_at_the_version_pinned_and_locked_makes_no_branch(self):
         env = {"PATH": os.path.dirname(GIT), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
@@ -819,6 +837,57 @@ class SecondReviewTests(TeamTestCase):
                                   text=True, env={**os.environ, **env}).stdout
         self.assertEqual(branches.strip(), "")
         self.assertNotIn("Committed", proc.out)
+        self.assertIn("git: no branch move is made — nothing was written", proc.out)
+
+    def team_repository(self):
+        """A follower whose team's folder its work tree holds, pinned at OWN and locked, all committed."""
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n', committed=False)
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        self.assert_ok(self.cortex(root, "sync", **env))
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "init")
+        return root, env
+
+    @NEEDS_GIT
+    def test_team_commit_at_the_pin_commits_what_a_run_before_left(self):
+        root, env = self.team_repository()
+        lock = root / "agents" / "cortex.team.lock"
+        lock.write_text(lock.read_text(encoding="utf-8") + "\n", encoding="utf-8")       # as a run before left it
+        hook = root / ".git" / "hooks" / "pre-commit"
+        for refused in (True, False):
+            with self.subTest(refused=refused):
+                if refused:
+                    hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+                    hook.chmod(0o755)
+                else:
+                    hook.unlink()
+                proc = self.cortex(root, "upgrade", "--team", OWN, "--commit", "--message", "relock", **env)
+                self.assertEqual(proc.returncode, 1 if refused else 0, proc.out + proc.err)
+                self.assertIn(f"{TEAM}: Cortex {OWN}, pinned and locked already — nothing to move", proc.out)
+        self.assertIn("Committed in agents/", proc.out)
+        self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "relock")
+        self.assertEqual(self.git(root, "status", "--porcelain").stdout.strip(), "")
+
+    @NEEDS_GIT
+    def test_team_at_the_pin_says_what_a_run_before_left_uncommitted(self):
+        root, env = self.team_repository()
+        lock = root / "agents" / "cortex.team.lock"
+        lock.write_text(lock.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        proc = self.cortex(root, "upgrade", "--team", OWN, "--branch", "relock", **env)
+        self.assert_ok(proc)
+        self.assertIn("git: no branch relock is made — nothing was written", proc.out)
+        self.assertIn("note: nothing was written in agents/, and agents/cortex.team.lock holds changes git has not "
+                      "committed", proc.err)
+        self.registered(root)
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team", OWN, "--branch", "relock", **env)
+        self.assert_ok(proc)
+        self.assertIn("nothing written — agents/cortex.team.lock not committed, from before", proc.out)
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team", OWN, "--commit", "--message", "relock", **env)
+        self.assert_ok(proc)
+        self.assertNotIn("Nothing to commit, in any project", proc.out)
+        self.assertEqual(self.git(root, "status", "--porcelain").stdout.strip(), "")
 
     def test_team_never_moves_a_newer_pin_down_from_a_project_that_pins_its_own(self):
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', team='version = "99.0.0"\n')
