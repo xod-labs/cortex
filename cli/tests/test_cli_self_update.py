@@ -152,6 +152,20 @@ class SelfUpdateTests(ReleaseTestCase):
                 self.assertEqual(piped.read[0], self.ELSEWHERE)
         self.assertEqual(self.update("9.9.8")[2], "")       # nothing downloaded: nothing to say
 
+    def test_the_machine_s_file_names_the_host_and_its_other_keys_only_warn(self):
+        # ADR-013 §3.7: config.toml in the Cortex home, read through a key this cortex does not know.
+        machine_file = Path(os.environ["CORTEX_HOME"]) / "config.toml"
+        machine_file.parent.mkdir(parents=True, exist_ok=True)
+        machine_file.write_text(f'releases_url = "{self.release.url}"\nself_update_later = true\n', encoding="utf-8")
+        self.addCleanup(machine_file.unlink)
+        self.latest_is("9.9.9")
+        warned = io.StringIO()
+        with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": ""}), mock.patch("sys.stderr", warned):
+            code, out, err = self.update("9.9.9", dry_run=True)
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"note: downloading from {self.release.url}, set by {display(str(machine_file))} — ", err)
+        self.assertIn('unknown key "self_update_later", not read', warned.getvalue())
+
     def test_the_host_is_said_before_the_first_request_to_it(self):
         for wanted in ("9.9.9", None):
             with self.subTest(wanted=wanted):

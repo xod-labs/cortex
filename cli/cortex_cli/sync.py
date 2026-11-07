@@ -15,7 +15,7 @@ write — a submodule, a clone, any other directory at ``cortex/`` is refused, i
 switching back to ``store`` removes the link or the copy it made, and nothing else.
 
 A sync that succeeded registers the project in the machine's ``projects.toml`` when it is not
-listed there, and says so once (ADR-011 §3.3) — unless ``CORTEX_NO_REGISTER`` is set.
+listed there, and says so once (ADR-011 §3.3) — unless the machine's ``register`` is off (ADR-013 §3.7).
 """
 
 from __future__ import annotations
@@ -40,14 +40,13 @@ from typing import Dict, List, Optional, TextIO, Tuple
 
 from cortex_core.validate import shown
 
-from . import claude, config, registry, store
+from . import claude, config, machine, registry, store
 from .paths import display, working_directory
 
 LINK = "cortex"
 MARKER = ".synced"
 MARKER_NOTE = "A read-only copy of the Cortex spec, written by `cortex sync`: run it again to change this copy, never edit it."
 STAGING = ".cortex-sync-"
-NO_REGISTER = "CORTEX_NO_REGISTER"     # set, and not empty: init, sync and upgrade leave the registry alone
 
 
 class SyncError(Exception):
@@ -745,9 +744,9 @@ def register(root: str, out: TextIO, err: TextIO) -> None:
 
     A project listed already costs a read of the registry, without its lock, and no look at the
     other entries' directories: nothing is written, and nothing waits for another command's write.
-    ``CORTEX_NO_REGISTER``, set to anything but an empty value, leaves the registry alone, neither
-    read nor written."""
-    if os.environ.get(NO_REGISTER):
+    The machine's ``register`` off — ``CORTEX_NO_REGISTER`` set to anything but an empty value, or
+    ``register = false`` in ``config.toml`` — leaves the registry alone, neither read nor written."""
+    if not machine.setting(store.cortex_home(), "register").value:
         return
     root = os.path.abspath(root)
     try:

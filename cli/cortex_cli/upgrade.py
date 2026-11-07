@@ -47,7 +47,7 @@ from typing import Callable, Dict, List, Optional, TextIO, Tuple
 from cortex_core import validate as overlay_validator
 from cortex_core.project import shown
 
-from . import config, init, registry, self_update, store, sync
+from . import config, init, machine, registry, self_update, store, sync
 from .paths import display, working_directory
 from .semver import Version
 from .version import VERSION
@@ -380,8 +380,8 @@ class _NewerRelease(threading.Thread):
 
 def _asking(wanted: Optional[str]) -> Optional[_NewerRelease]:
     """The question of a release newer than this binary: asked with no ``VERSION``, once per command,
-    unless ``CORTEX_NO_UPDATE_CHECK`` is set."""
-    if wanted is not None or os.environ.get("CORTEX_NO_UPDATE_CHECK"):
+    unless the machine's ``update_check`` is off — ``CORTEX_NO_UPDATE_CHECK`` set, or ``config.toml``."""
+    if wanted is not None or not machine.setting(store.cortex_home(), "update_check").value:
         return None
     return _NewerRelease(Version(VERSION))
 
