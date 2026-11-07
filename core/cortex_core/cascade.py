@@ -132,7 +132,8 @@ def _versions(project_data: Mapping, local_data: Optional[Mapping], team_data: O
         if project.before_team(team[1]):
             raise project.ProjectFileError(
                 f'{LOCAL_FILE}: "version" is read once the team\'s version is {project.FIRST_TEAM_VERSION} or later — '
-                f"the team's is {team[1]}: the team moves to {project.FIRST_TEAM_VERSION} first, or remove it")
+                f"the team's is {team[1]}: the team moves to {project.FIRST_TEAM_VERSION} first, or remove `version` from "
+                f"{LOCAL_FILE}")
         developer = (LOCAL_FILE, local)
     if not own and pin is not None and team_pin is not None:
         developer = _higher(developer, (PROJECT_FILE, pin)) if developer else (PROJECT_FILE, pin)

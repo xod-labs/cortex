@@ -189,17 +189,18 @@ def check_synced(value: object) -> None:
     """Refuse a ``synced`` that is not one: a table of ``SYNCED_KEYS``, each a version — ``reads``
     ``""`` too, a checkout's — ``pinned`` and ``reads`` required."""
     name = f'{LOCAL_FILE}: "synced"'
+    again = " — `cortex sync` writes it again"
     if not isinstance(value, dict):
-        raise ProjectFileError(f"{name} must be a table, as `cortex sync` writes it")
+        raise ProjectFileError(f"{name} must be a table, as `cortex sync` writes it{again}")
     for key in value:
         if key not in SYNCED_KEYS:
-            raise ProjectFileError(f"{name}: unknown key {shown(key)} — it takes {listed(SYNCED_KEYS)} only")
+            raise ProjectFileError(f"{name}: unknown key {shown(key)} — it takes {listed(SYNCED_KEYS)} only{again}")
     for key in SYNCED_REQUIRED:
         if key not in value:
-            raise ProjectFileError(f'{name}: "{key}" is required')
+            raise ProjectFileError(f'{name}: "{key}" is required{again}')
     for key, version in value.items():
         if not (is_version(version) or (key == "reads" and version == "")):
-            raise ProjectFileError(f"{name}: {key} {shown(version)} is no version")
+            raise ProjectFileError(f"{name}: {key} {shown(version)} is no version{again}")
 
 
 def check_team(data: Mapping, name: str = f"{TEAM_FOLDER}/{TEAM_FILE}") -> None:
