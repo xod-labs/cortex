@@ -48,6 +48,11 @@ class TemplateTests(unittest.TestCase):
                              b"in `cortex.local.toml` or in the team's file, of your own accord"):
                     self.assertIn(rule, text)
                 self.assertNotIn(b"**The spec is of a version other than", text)
+                # A checkout is said before a version moved, a missing team's folder before a missing version.
+                self.assertLess(text.index(b"**A checkout**"), text.index(b"**A version moved**"))
+                self.assertLess(text.index(b"**It names a missing team's folder**"), text.index(b"**It refuses"))
+                self.assertIn(b"**No `synced`** in `cortex.local.toml`, and `cortex/` a link \xe2\x86\x92 nothing to "
+                              b"compare", text)
 
 
 @DOWNLOADS
