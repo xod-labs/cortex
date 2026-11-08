@@ -139,6 +139,28 @@ class OwnBootstrapTests(TeamTestCase):
         self.assert_ok(proc)
         self.assertEqual((root / "CLAUDE.md").read_bytes(), written(FORMAT_2) + OURS)
 
+    def test_a_file_that_cannot_be_read_is_left_alone(self):
+        real = Path.read_bytes
+
+        def read_bytes(path):
+            if path.name == "CLAUDE.md":
+                raise PermissionError(13, "Permission denied", str(path))
+            return real(path)
+
+        for committed in (False, True):                                    # the developer's own, the team's
+            with self.subTest(committed=committed):
+                root = self.project(team=f'version = "{OWN}"\n', committed=committed, name=f"unread-{committed}")
+                self.assert_ok(self.cortex(root, "sync"))
+                (root / "CLAUDE.md").write_bytes(written(FORMAT_2))
+                out, err = io.StringIO(), io.StringIO()
+                with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}), \
+                        mock.patch.object(Path, "read_bytes", read_bytes):
+                    project = config.load(str(root))
+                    upgrade.own_bootstraps(str(root), project, store.Store(), out, err)
+                    self.assertEqual(upgrade.behind(str(root), project, None, fetch=False), [])
+                self.assertEqual((out.getvalue(), err.getvalue()), ("", ""))
+                self.assertEqual((root / "CLAUDE.md").read_bytes(), written(FORMAT_2))
+
     def test_sync_from_a_checkout_writes_no_bootstrap(self):
         root = self.project(team=f'version = "{OWN}"\n', committed=False)
         self.assert_ok(self.cortex(root, "sync"))                          # the version in the store: it could
@@ -266,24 +288,58 @@ class BehindTests(TeamTestCase):
         (root / "CLAUDE.md").write_bytes(changed)                          # a changed block is never behind
         self.assertNotIn("BOOTSTRAP_BEHIND", (proc := self.cortex(root, "validate")).out + proc.err)
 
-    def test_a_team_s_version_before_1_8_0_is_never_behind(self):
+    def test_before_1_8_0_only_an_untouched_format_3_file_is_behind(self):
+        # A pin moved by hand below 1.8.0: no version before it writes format 3, which `cortex upgrade` writes again.
         root = self.project(toml='version = "1.7.0"\ntheme = "h2g2"\n')
         self.assert_ok(self.cortex(root, "sync"))
-        (root / "CLAUDE.md").write_bytes(written(TEMPLATE))
+        (root / "CLAUDE.md").write_bytes(written(FORMAT_2))
         proc = self.cortex(root, "sync")
         self.assert_ok(proc)
         self.assertNotIn("behind", proc.err)
         self.assertNotIn("BOOTSTRAP_BEHIND", (proc := self.cortex(root, "validate")).out + proc.err)
+        (root / "CLAUDE.md").write_bytes(written(TEMPLATE))
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        self.assertIn("note: CLAUDE.md is behind: Cortex 1.7.0, the team's version, writes another — `cortex upgrade` "
+                      "writes it again", proc.err)
+        self.assertIn("CLAUDE.md", (proc := self.cortex(root, "validate")).out + proc.err)
+        self.assertIn("BOOTSTRAP_BEHIND", proc.out + proc.err)
+        changed = written(TEMPLATE).replace(b"Cortex AI Team\n", b"Cortex AI Team, ours\n", 1)
+        (root / "CLAUDE.md").write_bytes(changed)                          # a changed block is never behind
+        self.assertNotIn("BOOTSTRAP_BEHIND", (proc := self.cortex(root, "validate")).out + proc.err)
+
+    def test_a_file_in_a_service_is_named_from_the_root(self):
+        root = self.project(team=f'version = "{OWN}"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        (root / ".github").mkdir()
+        (root / ".github" / "copilot-instructions.md").write_bytes(written(FORMAT_2))
+        proc = self.cortex(root / "agents", "validate")
+        self.assertIn(".github/copilot-instructions.md", proc.out + proc.err)
+        self.assertNotIn("../.github", proc.out + proc.err)
 
     def test_without_the_team_s_version_in_the_store_validate_says_not_checked(self):
         root = self.project(team='version = "9.9.8"\n')
         self.assert_ok(self.cortex(root, "sync"))
         (root / "CLAUDE.md").write_bytes(written(TEMPLATE))
-        project = config.load(str(root))
-        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.tmp / "empty-home")}):
-            said = upgrade.behind(str(root), project, None, fetch=False)
-        self.assertEqual(len(said), 1)
-        self.assertIn("not checked against Cortex 9.9.8, the team's version, which is not in the store", said[0])
+        proc = self.cortex(root, "validate", CORTEX_HOME=str(self.tmp / "empty-home"))
+        self.assertIn("note: CLAUDE.md not checked against Cortex 9.9.8, the team's version, which is not in the "
+                      "store — `cortex sync` puts it there", proc.err)
+        self.assertNotIn("BOOTSTRAP_BEHIND", proc.out + proc.err)
+
+    def test_a_machine_reading_a_checkout_is_never_behind(self):
+        for case, toml, team, options in (
+                ("synced", 'theme = "h2g2"\n', f'version = "{OWN}"\n', ("--link",)),
+                ("link", 'version = "1.7.0"\ntheme = "h2g2"\n', None, ("--link",)),
+                ("copy", 'version = "1.7.0"\ntheme = "h2g2"\n', None, ("--copy",))):
+            with self.subTest(case=case):
+                root = self.project(toml=toml, team=team, name=case)
+                self.assert_ok(self.cortex(root, "sync"))
+                (root / "CLAUDE.md").write_bytes(written(FORMAT_2 if team else TEMPLATE))
+                self.assertIn("BOOTSTRAP_BEHIND", (proc := self.cortex(root, "validate")).out + proc.err)
+                self.assert_ok(self.cortex(root, "sync", *options, "--from", str(harness.REPO)))
+                proc = self.cortex(root, "validate")
+                self.assertNotIn("BOOTSTRAP_BEHIND", proc.out + proc.err)
+                self.assertNotIn("not checked", proc.err)
 
 
 if __name__ == "__main__":

@@ -329,40 +329,66 @@ def _theirs_only(files: List[Path], project: config.Project, target: Version) ->
     return [path for path in files if path not in own], own
 
 
-def behind(root: str, project: config.Project, the_store: Optional[store.Store], fetch: bool) -> List[str]:
-    """What is said of the team's bootstrap files (ADR-013 §3.10): untouched and not the team's version's
-    template, each is behind — ``cortex upgrade`` writes it again. ``fetch``, the team's version is put in
-    the store to tell (`cortex sync`); without it and not there, they are said not checked (`cortex
-    validate`). A changed block, or a team's version before 1.8.0, is never behind. ``the_store``, ``None``
-    for one built only once there is a file to tell — `cortex validate` of a 1.7.0 project builds none."""
+def reads_a_checkout(root: str, project: config.Project) -> bool:
+    """Whether this machine reads a checkout of Cortex, `cortex sync --from`'s: no version a bootstrap is
+    told against (ADR-013 §3.10) — ``synced`` says so, else a copy's ``.synced`` naming no version, or a
+    spec outside the store's ``versions/``."""
+    if project.synced is not None:
+        return project.synced.get("reads") == ""
+    if project.spec is None:
+        return False
+    spec = Path(root, project.spec)
+    if project.spec == sync.LINK and not sync.is_link(spec):
+        marker = sync.read_marker(spec)
+        return marker is not None and marker.get("version") is None
+    return Path(os.path.realpath(spec)).parent != Path(os.path.realpath(store.cortex_home() / "versions"))
+
+
+def behind(root: str, project: config.Project, the_store: Optional[store.Store],
+           fetch: bool) -> List[Tuple[Optional[Path], str]]:
+    """What is said of the team's bootstrap files (ADR-013 §3.10), each with its file — ``None`` for a note
+    of them all: untouched and not the team's version's template, each is behind — ``cortex upgrade`` writes
+    it again. ``fetch``, the team's version is put in the store to tell (`cortex sync`); without it and not
+    there, they are said not checked (`cortex validate`). A team's version before 1.8.0 writes no format 3:
+    an untouched format 3 file — a pin moved by hand — is behind it, told without the store. A changed block,
+    a file that cannot be read, or a machine reading a checkout, is never behind. ``the_store``, ``None`` for
+    one built only once there is a file to tell — `cortex validate` of a 1.7.0 project builds none."""
     team = project.team_version
-    if grammar.before_team(str(team)):
+    below = grammar.before_team(str(team))
+    contents = {}
+    for path in _instructions_files(Path(root), None):
+        try:
+            contents[path] = init.normalised(path.read_bytes())
+        except OSError:
+            continue
+    if below:       # as 1.7.0 leaves them, but a format 3 file: no git asked of the others
+        contents = {path: content for path, content in contents.items() if _format(content) >= 3}
+    contents = {path: content for path, content in contents.items()
+                if init.untouched(content) and not sync.developers_own(path)}
+    if not contents or reads_a_checkout(root, project):
         return []
-    files = [path for path in _instructions_files(Path(root), None) if not sync.developers_own(path)]
-    files = [path for path in files if init.untouched(init.normalised(path.read_bytes()))]
-    if not files:
-        return []
+    reason = f"Cortex {team}, the team's version, writes another — `cortex upgrade` writes it again"
+    if below:
+        return [(path, reason) for path in contents]
+    names = _and([_shown_path(path, root) for path in contents])
     the_store = the_store or store.Store()
     if fetch:
         try:
             the_store.ensure(team)
         except store.StoreError as error:
-            return [f"{_and([display(str(path)) for path in files])} not checked against Cortex {team}, the team's "
-                    f"version: {error}"]
+            return [(None, f"{names} not checked against Cortex {team}, the team's version: {error}")]
     if not the_store.has(team):
-        return [f"{_and([display(str(path)) for path in files])} not checked against Cortex {team}, the team's "
-                "version, which is not in the store — `cortex sync` puts it there"]
+        return [(None, f"{names} not checked against Cortex {team}, the team's version, which is not in the store — "
+                       "`cortex sync` puts it there")]
     personality = project.team_theme != "none"
     said = []
-    for path in files:
-        content = init.normalised(path.read_bytes())
+    for path, content in contents.items():
         found = init.markers(content)
         if len(found) != 1:
             continue
         wanted = _written(the_store.path(team) / "templates", found[0][0], personality, path)
         if wanted is not None and wanted != init.parts(content)[0]:
-            said.append(f"{display(str(path))} is behind: Cortex {team}, the team's version, writes another — "
-                        "`cortex upgrade` writes it again")
+            said.append((path, reason))
     return said
 
 

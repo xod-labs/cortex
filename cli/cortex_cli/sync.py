@@ -739,8 +739,8 @@ def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err:
             from . import upgrade       # upgrade imports this module: the bootstraps are its
             project = config.load(root)
             upgrade.own_bootstraps(root, project, store.Store(), out, err, forced=bootstraps)
-            for note in upgrade.behind(root, project, None, fetch=True):
-                err.write(f"note: {note}\n")
+            for path, note in upgrade.behind(root, project, None, fetch=True):
+                err.write(f"note: {note}\n" if path is None else f"note: {upgrade._shown_path(path, root)} is behind: {note}\n")
     if registers:
         register(root, out, err)
 
