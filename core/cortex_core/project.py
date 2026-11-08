@@ -36,7 +36,7 @@ TEAM_LOCKABLE: Tuple[str, ...] = ("theme", "sync", "claude_access")
 FIRST_TEAM_VERSION = "1.8.0"
 # What `cortex sync` records in cortex.local.toml (ADR-013 §3.1): the version read from each file, the
 # team's, and the one synced — "" for a checkout.
-SYNCED_KEYS: Tuple[str, ...] = ("team", "project", "local", "pinned", "reads")
+SYNCED_KEYS: Tuple[str, ...] = ("team", "project", "local", "pinned", "reads", "agents")
 SYNCED_REQUIRED: Tuple[str, ...] = ("pinned", "reads")
 LOCK_FILE = "cortex.lock"
 LOCK_KEYS: Tuple[str, ...] = ("format", "version", "digest")
@@ -196,6 +196,8 @@ def check_agents(value: object, name: str = PROJECT_FILE) -> str:
         raise ProjectFileError(f"{name}: agents {shown(value)} is not {rule}")
     if value.startswith("/") or re.match(r"^[A-Za-z]:", value):
         raise ProjectFileError(f"{name}: agents {shown(value)} is an absolute path — it must be {rule}")
+    while value.startswith("./"):
+        value = value[2:]               # ./team-agents names team-agents
     parts = value.rstrip("/").split("/")
     if parts in ([""], ["."]) or any(not part for part in parts):
         raise ProjectFileError(f"{name}: agents {shown(value)} names the project root, or an empty folder name — "
@@ -208,15 +210,18 @@ def check_agents(value: object, name: str = PROJECT_FILE) -> str:
                                    f"{rule}")
     if parts[0].casefold() == "cortex":
         raise ProjectFileError(f"{name}: agents {shown(value)} is in cortex/, the spec's place — it must be {rule}")
-    return "/".join(parts)
+    folder = "/".join(parts)
+    # Names compare in any case (§3.6, §9): Agents names the default, never refused.
+    return TEAM_FOLDER if folder.casefold() == TEAM_FOLDER else folder
 
 
 def check_project(data: Mapping, optional: Tuple[str, ...] = ()) -> None:
     """Refuse a ``cortex.toml`` that is not one — ``ProjectFileError`` names the file and the key.
     ``optional``, of the required keys, those a team's file may give instead (ADR-013 §3.2): whether it
     does is its reader's to check."""
-    # A project before 1.8.0 is told 1.7.0's keys, as 1.7.0 told it; a later one, the keys it may set.
-    before = is_version(data.get("version")) and before_team(str(data["version"]))
+    # A project of 1.8.0 or later, or one that leaves its version to the team's file, is told the keys it may
+    # set; any other — before 1.8.0, or a version that does not read — 1.7.0's, as 1.7.0 told it.
+    before = "version" in data and not (is_version(data["version"]) and not before_team(str(data["version"])))
     _check_keys(PROJECT_FILE, data, PROJECT_KEYS, tuple(key for key in PROJECT_REQUIRED if key not in optional),
                 named=PROJECT_LISTED if before else PROJECT_KEYS)
     if "agents" in data:
@@ -256,6 +261,14 @@ def check_synced(value: object) -> None:
         if key not in value:
             raise ProjectFileError(f'{name}: "{key}" is required{again}')
     for key, version in value.items():
+        if key == "agents":             # the team's folder sync read, when cortex.toml renames it (ADR-013 §3.1)
+            try:
+                folder = check_agents(version, name)
+            except ProjectFileError as error:
+                raise ProjectFileError(f"{error}{again}")
+            if folder == TEAM_FOLDER:
+                raise ProjectFileError(f"{name}: agents is written only for a folder other than {TEAM_FOLDER}{again}")
+            continue
         if not (is_version(version) or (key == "reads" and version == "")):
             raise ProjectFileError(f"{name}: {key} {shown(version)} is no version{again}")
 

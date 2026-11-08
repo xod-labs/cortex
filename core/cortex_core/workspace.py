@@ -95,7 +95,15 @@ def services(project_root: str, base_root: Optional[str] = None, team_folder: Op
     found = find(project_root, "project-overview.md", maxdepth=5,
                  prune_names=("cortex", ".git") + _DEPENDENCY_TREES,
                  prune_paths=(base_root, f"{project_root}/agents") + team)
+    if team_folder is not None:         # a renamed team's folder, in any case (ADR-013 §3.6, §9)
+        found = [f for f in found if not _within(f, str(team_folder))]
     return [d for d in (os.path.dirname(f) for f in found) if d != project_root]
+
+
+def _within(path: str, folder: str) -> bool:
+    """Whether ``path`` is ``folder`` or below it, the names compared in any case."""
+    path, folder = os.path.normpath(path).casefold(), os.path.normpath(folder).casefold()
+    return path == folder or path.startswith(folder + os.sep)
 
 
 def _same_name(a: str, b: str) -> bool:
@@ -116,9 +124,9 @@ def check_team_folder(project_root: str, folder: str, base_root: Optional[str] =
     if os.path.isfile(os.path.join(where, PROJECT_FILE)):
         raise ProjectFileError(f"{PROJECT_FILE}: agents {shown(folder)} holds a project's {PROJECT_FILE} — the "
                                "team's folder is no project")
-    if os.path.isdir(os.path.join(where, "agents")):
-        raise ProjectFileError(f"{PROJECT_FILE}: agents {shown(folder)} holds an agents/ folder, a service's — the "
-                               "team's folder is no service: its overlays would not be read")
+    if os.path.isdir(os.path.join(where, "agents")) and os.path.isfile(os.path.join(where, "project-overview.md")):
+        raise ProjectFileError(f"{PROJECT_FILE}: agents {shown(folder)} is a service, its project-overview.md and "
+                               "agents/ — the team's folder is no service: its overlays would not be read")
     for overview in find(where, "project-overview.md", maxdepth=5, prune_names=("cortex", ".git") + _DEPENDENCY_TREES):
         below = os.path.dirname(overview)
         if below != where and os.path.isdir(os.path.join(below, "agents")):

@@ -18,12 +18,13 @@ TEAM = {"version": "1.8.0", "theme": "h2g2"}
 class AgentsTextTests(unittest.TestCase):
     def test_a_relative_path_inside_the_workspace_reads(self):
         for value, folder in (("team-agents", "team-agents"), ("team/agents", "team/agents"),
-                              ("team-agents/", "team-agents"), ("agents", "agents")):
+                              ("team-agents/", "team-agents"), ("agents", "agents"), ("./team-agents", "team-agents"),
+                              ("Agents", "agents"), ("./agents/", "agents")):
             with self.subTest(value=value):
                 self.assertEqual(project.check_agents(value), folder)
 
     def test_what_names_no_folder_inside_the_workspace_is_refused(self):
-        for value in ("../x", "a/../b", "/x", "C:\\x", "C:/x", "\\\\server\\x", "a\\b", ".", "./", "a//b", ".team",
+        for value in ("../x", "a/../b", "/x", "C:\\x", "C:/x", "\\\\server\\x", "a\\b", ".", "./", "././", "a//b", ".team",
                       "a/.b", "cortex", "Cortex", "cortex/x", "", 3):
             with self.subTest(value=value), self.assertRaises(project.ProjectFileError) as caught:
                 project.check_agents(value)
@@ -42,11 +43,19 @@ class AgentsTextTests(unittest.TestCase):
         self.assertIn('/h/config.toml: "agents" is set in cortex.toml only', warnings[0])
 
     def test_an_unknown_key_s_message_is_1_7_0_s_before_1_8_0(self):
-        for version, said in (("1.7.0", "cortex.toml takes version, theme, sync and claude_access"),
-                              ("1.8.0", "cortex.toml takes version, theme, sync, claude_access and agents")):
+        old, new = "cortex.toml takes version, theme, sync and claude_access", "cortex.toml takes version, theme, sync, claude_access and agents"
+        for version, said in (("1.7.0", old), ("1.7", old), ("1.8.0", new), (None, new)):
+            data = {**TEAM, "version": version, "verison": "1.8.0"} if version else {"theme": "h2g2", "verison": "1"}
             with self.subTest(version=version), self.assertRaises(project.ProjectFileError) as caught:
-                project.check_project({**TEAM, "version": version, "verison": "1.8.0"})
+                project.check_project(data, ("version",))
             self.assertIn(said, str(caught.exception))
+
+    def test_synced_records_a_renamed_team_s_folder_only(self):
+        base = {"project": "1.8.0", "pinned": "1.8.0", "reads": "1.8.0"}
+        project.check_synced({**base, "agents": "team-agents"})
+        for folder in ("agents", "../x", 3):
+            with self.subTest(folder=folder), self.assertRaises(project.ProjectFileError):
+                project.check_synced({**base, "agents": folder})
 
 
 class ResolutionTests(unittest.TestCase):
@@ -113,6 +122,9 @@ class CascadeTests(unittest.TestCase):
         self.assertEqual(found, ["svc"])
         self.assertEqual(sorted(Path(path).name for path in workspace.services(str(self.tmp), str(self.base))),
                          ["svc", "team-agents"])
+        found = [Path(path).name for path in workspace.services(str(self.tmp), str(self.base),
+                                                                str(self.tmp / "Team-Agents"))]
+        self.assertEqual(found, ["svc"])                        # cortex.toml's name, in another case than the disk's
 
     def test_a_folder_inside_a_service_or_holding_a_project_is_refused(self):
         (self.tmp / "svc").mkdir()
@@ -125,11 +137,14 @@ class CascadeTests(unittest.TestCase):
         (self.tmp / "apps" / "web" / "project-overview.md").write_text("# web\n", encoding="utf-8")
         for folder, said in (("svc/agents", 'inside the service "svc"'), ("svc/team", 'inside the service "svc"'),
                              ("Svc/team", 'inside the service "svc"'), ("other", "holds a project's cortex.toml"),
-                             ("svc", "holds an agents/ folder, a service's"), ("apps", 'holds the service "apps/web"')):
+                             ("svc", "is a service, its project-overview.md and agents/"),
+                             ("apps", 'holds the service "apps/web"')):
             with self.subTest(folder=folder), self.assertRaises(project.ProjectFileError) as caught:
                 workspace.check_team_folder(str(self.tmp), folder, str(self.base))
             self.assertIn(said, str(caught.exception))
         workspace.check_team_folder(str(self.tmp), "team-agents", str(self.base))     # its team files are no service
+        (self.tmp / "plain" / "agents").mkdir(parents=True)        # an agents/ in no service's folder: warned by sync
+        workspace.check_team_folder(str(self.tmp), "plain", str(self.base))
 
     def test_the_validator_names_the_team_s_folder(self):
         wrong = self.tmp / "team-agents" / "roles" / "engineering" / "lead-backend.md"
@@ -151,6 +166,26 @@ class CascadeTests(unittest.TestCase):
         validate.validate(str(self.tmp), str(self.base), "", False, out, validate.Colors(False),
                           team_folder=str(self.tmp / "team-agents"))
         self.assertIn("but file is not at workspace root (team-agents/...)", out.getvalue())
+
+    def test_service_dot_reads_as_1_7_0_did(self):
+        out = io.StringIO()
+        validate.validate(str(self.tmp), str(self.base), ".", False, out, validate.Colors(False))
+        self.assertIn("⚠ ./agents/roles/engineering/architect.md\n", out.getvalue())
+
+    def test_the_validator_s_messages_name_the_team_s_folder(self):
+        overlay = self.tmp / "team-agents" / "roles" / "engineering" / "architect.md"
+        overlay.write_text("<!-- OVERLAY\n     Base: cortex/agents/roles/engineering/architect.md\n     Scope: workspace\n"
+                           "     Semantic: replacement\n-->\n# x\n", encoding="utf-8")
+        out = io.StringIO()
+        validate.validate(str(self.tmp), str(self.base), "", False, out, validate.Colors(False),
+                          team_folder=str(self.tmp / "team-agents"))
+        self.assertIn("replacement is only allowed for files under team-agents/workflows/", out.getvalue())
+        empty = Path(tempfile.mkdtemp(prefix="cortex-empty-")).resolve()
+        self.addCleanup(lambda: __import__("shutil").rmtree(empty, ignore_errors=True))
+        out = io.StringIO()
+        validate.validate(str(empty), str(self.base), "", False, out, validate.Colors(False),
+                          team_folder=str(empty / "team-agents"))
+        self.assertIn("(no team-agents/ directory at workspace level, no agents/ at service level)", out.getvalue())
 
     def test_the_validator_reads_the_team_s_folder(self):
         team = str(self.tmp / "team-agents")

@@ -154,9 +154,9 @@ _NON_OVERRIDABLE = "characters.md is not overridable; fork the theme instead (se
 def layer_directory(root: str, project_root: str, team_folder: Optional[str] = None) -> str:
     """Where the overlays of ``root`` are: the team's folder for the workspace — ``{project_root}/agents``
     unless ``cortex.toml`` renames it (ADR-013 §3.6) — and ``{service}/agents`` for a service."""
-    if os.path.normpath(root) == os.path.normpath(project_root):
-        return str(team_folder) if team_folder is not None else f"{project_root}/agents"
-    return f"{root}/agents"
+    if team_folder is not None and os.path.normpath(root) == os.path.normpath(project_root):
+        return str(team_folder)
+    return f"{root}/agents"             # as 1.7.0 wrote it: `--service .` reads ./agents
 
 
 def check_overlay(file: str, root: str, project_root: str, base_root: str, report: Report,
@@ -172,7 +172,7 @@ def check_overlay(file: str, root: str, project_root: str, base_root: str, repor
     file_rel_to_agents = strip_prefix(file, f"{layers}/")
     in_workspace = os.path.normpath(root) == os.path.normpath(project_root)
     shown_layers = strip_prefix(layers, f"{project_root}/") if in_workspace else "agents"
-    shown_team = strip_prefix(layer_directory(project_root, project_root, team_folder), f"{project_root}/")
+    shown_team = strip_prefix(str(team_folder) if team_folder is not None else f"{project_root}/agents", f"{project_root}/")
     # The file's layer, and its path within it, as the resolver sees them
     layer, _, file_in_layer = file_rel_to_agents.partition("/")
     rule = resolver.semantic_for(layer, file_in_layer)
@@ -226,7 +226,8 @@ def check_overlay(file: str, root: str, project_root: str, base_root: str, repor
     # Tier 1.5 — replacement only where the resolver replaces: workflows
     if semantic == "replacement" and rule is not resolver.MergeSemantic.REPLACEMENT:
         report.error(rel_path, "REPLACEMENT_OUTSIDE_WORKFLOWS",
-                     "Semantic: replacement is only allowed for files under agents/workflows/")
+                     f"Semantic: replacement is only allowed for files under "
+                     f"{shown_team if in_workspace and team_folder is not None else 'agents'}/workflows/")
         return
 
     # Tier 1.6 — path mirroring
@@ -314,7 +315,9 @@ def validate(project_root: str, base_root: str, service: str, strict: bool, out:
 
     roots = overlay_roots(project_root, base_root, service, team_folder)
     if not roots:
-        report.echo(f"{c.YELLOW}ℹ{c.NC}  No overlay roots found (no agents/ directory at workspace or service level).")
+        where = "no agents/ directory at workspace or service level" if team_folder is None else \
+            f"no {strip_prefix(str(team_folder), f'{project_root}/')}/ directory at workspace level, no agents/ at service level"
+        report.echo(f"{c.YELLOW}ℹ{c.NC}  No overlay roots found ({where}).")
         report.echo("   Nothing to validate. This is expected if you haven't created overlays yet.")
         if report.warnings:   # the project's own: said in the summary, as an overlay's would be
             report.echo(SEPARATOR)

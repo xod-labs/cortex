@@ -161,6 +161,8 @@ def resolve(project_data: Optional[Mapping], local_data: Optional[Mapping], mach
     an origin names those files. ``variables`` are the environment's keys, each reader's own: the
     command's are ``VARIABLES``. ``ProjectFileError`` for what the team's version refuses (§3.8)."""
     keys = (KEYS if machine else PROJECT_SETTINGS) if project_data is not None else MACHINE_KEYS
+    if project_data is not None and "agents" in project_data:       # the folder as every message names it
+        project_data = {**project_data, "agents": project.check_agents(project_data["agents"])}
     settings: Dict[str, Setting] = {}
     notes: List[str] = []
     team_version = developer_version = None
