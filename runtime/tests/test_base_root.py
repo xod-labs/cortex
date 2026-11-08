@@ -264,7 +264,8 @@ class TeamVersionTests(SyncedProjectTestCase):
 
         self.files('version = "9.9.9"\ntheme = "h2g2"\n', team='version = "9.9.9"\n')
         with mock.patch.object(base.cascade, "read_team", side_effect=PermissionError(13, "Permission denied")):
-            with self.assertRaisesRegex(ValueError, "cannot be read"):
+            with self.assertRaisesRegex(ValueError, "^agents/cortex.team.toml of this workspace cannot be read: "
+                                                    "Permission denied$"):
                 base.read_pin(self.project)
 
     def test_at_a_2b_root_the_team_s_theme_as_cortex_config_locked_gives_it(self):

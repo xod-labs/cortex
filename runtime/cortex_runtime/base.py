@@ -69,7 +69,10 @@ def read_pin(root: Path) -> Optional[Pin]:
             project.check_project(data)
             found = cascade.resolve(data, None, {}, {}, locked=True)
             return Pin(version=_team_version(data["version"], None, local), theme=str(found.value("theme")))
-        team = cascade.read_team(str(root))
+        try:
+            team = cascade.read_team(str(root))
+        except OSError as error:        # the team's file's, not cortex.toml's
+            raise ValueError(f"{cascade.TEAM_NAME} of this workspace cannot be read: {error.strerror or error}")
         project.check_project(data, project.PROJECT_REQUIRED if team is not None else ())
         if isinstance(team, cascade.Unreadable):
             raise project.ProjectFileError(team.error)
