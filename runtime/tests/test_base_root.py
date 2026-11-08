@@ -244,9 +244,35 @@ class TeamVersionTests(SyncedProjectTestCase):
         with self.assertRaisesRegex(ValueError, r"run `cortex sync`"):          # stale: a teammate moved it
             pin()
         (self.project / "cortex.local.toml").unlink()
-        with self.assertRaisesRegex(ValueError, r"cortex.toml pins Cortex 1.7.0 and agents/cortex.team.toml Cortex "
-                                                r"1.8.1, and `cortex sync` recorded neither: run `cortex sync`"):
-            pin()                                                                # absent: the two differ
+        self.assertEqual(pin().version, "1.7.0")        # absent: not synced by a 1.8 cortex — the spec it has
+
+    def test_below_1_8_0_without_synced_cortex_toml_is_read_alone(self):
+        # A committed pin before 1.8.0: the CLI reads it and records no synced — a 422 nothing could clear.
+        for team in ('version = "1.8.0"\n', "version = \n", 'version = "1.8.0"\nagents = "x"\n'):
+            with self.subTest(team=team):
+                pin = self.files('version = "1.7.0"\ntheme = "h2g2"\n', team=team)
+                self.assertEqual((pin().version, pin().theme), ("1.7.0", "h2g2"))
+        pin = self.files('version = "1.7.0"\ntheme = "h2g2"\n', team="version = \n", local='version = "1.8.0"\n')
+        with self.assertRaisesRegex(ValueError, "reads Cortex 1.8.0, cortex.local.toml's version — a try"):
+            pin()                                                                # a try above it is still one
+        pin = self.files('version = "1.8.0"\ntheme = "h2g2"\n', team="version = \n", local="")
+        with self.assertRaisesRegex(ValueError, "cortex sync refuses this file too"):
+            pin()                                                                # from 1.8.0, it is read
+
+    def test_a_team_s_file_that_cannot_be_opened_is_a_422(self):
+        from cortex_runtime import base
+
+        self.files('version = "9.9.9"\ntheme = "h2g2"\n', team='version = "9.9.9"\n')
+        with mock.patch.object(base.cascade, "read_team", side_effect=PermissionError(13, "Permission denied")):
+            with self.assertRaisesRegex(ValueError, "cannot be read"):
+                base.read_pin(self.project)
+
+    def test_at_a_2b_root_the_team_s_theme_as_cortex_config_locked_gives_it(self):
+        # An uncommitted cortex.toml's theme is left out where the team's file sets one (ADR-013 §3.1).
+        recorded = 'synced = { team = "9.9.9", project = "9.9.8", pinned = "9.9.9", reads = "9.9.9" }\n'
+        pin = self.files('version = "9.9.8"\ntheme = "none"\n', team='version = "9.9.9"\ntheme = "h2g2"\n',
+                         local=recorded)
+        self.assertEqual((pin().version, pin().theme), ("9.9.9", "h2g2"))
 
     def test_the_team_s_file_moved_then_cortex_toml_edited_to_its_old_value_is_refused(self):
         tie = 'synced = { team = "1.8.0", project = "1.8.0", pinned = "1.8.0", reads = "1.8.0" }\n'
