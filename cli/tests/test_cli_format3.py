@@ -141,6 +141,7 @@ class OwnBootstrapTests(TeamTestCase):
 
     def test_sync_from_a_checkout_writes_no_bootstrap(self):
         root = self.project(team=f'version = "{OWN}"\n', committed=False)
+        self.assert_ok(self.cortex(root, "sync"))                          # the version in the store: it could
         (root / "CLAUDE.md").write_bytes(written(FORMAT_2))
         proc = self.cortex(root, "sync", "--link", "--from", str(harness.REPO))
         self.assert_ok(proc)
