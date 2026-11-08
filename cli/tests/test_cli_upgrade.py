@@ -482,7 +482,7 @@ class DigestTests(UpgradeTestCase):
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(written.replace(marker + b"\n", marker + b"\r\r\r\n"))
         self.assert_ok(self.upgrade(project))
-        self.assertEqual(init.markers((project / "CLAUDE.md").read_bytes()), [("workspace", 2)])
+        self.assertEqual(init.markers((project / "CLAUDE.md").read_bytes()), [("workspace", 3)])
 
     def test_one_a_team_changed_is_kept_and_said_when_the_target_writes_another(self):
         changed = self.marked() + b"\n## Our own rules\n"
@@ -788,8 +788,8 @@ class StampTests(unittest.TestCase):
     def test_it_is_the_digest_of_the_file_with_its_marker_plain(self):
         written = init.stamped(init.instructions(TEMPLATE, True))
         digest = hashlib.sha256(init.instructions(TEMPLATE, True)).hexdigest()[:16]
-        self.assertIn(f"<!-- cortex:bootstrap layout=single format=2 digest={digest} -->\n".encode(), written)
-        self.assertEqual(init.markers(written), [("single", 2)])
+        self.assertIn(f"<!-- cortex:bootstrap layout=single format=3 digest={digest} -->\n".encode(), written)
+        self.assertEqual(init.markers(written), [("single", 3)])
         self.assertIs(init.untouched(written), True)
         self.assertEqual(init.stamped(written), written)
 
@@ -805,7 +805,7 @@ class StampTests(unittest.TestCase):
         end = b"<!-- cortex:bootstrap end -->\n"
         for kept in (written.replace(b"Cortex", b"Kortex", 1), written.replace(end, b"## Ours\n" + end),
                      written.replace(end, b"") + b"## Ours\n",        # the end marker gone: all of it is the block
-                     written.replace(b"format=2 digest=", b"format=3 digest="),
+                     written.replace(b"format=3 digest=", b"format=4 digest="),
                      written.replace(b"layout=single", b"layout=workspace")):
             with self.subTest(kept=kept[-40:]):
                 self.assertIs(init.untouched(kept), False)
@@ -817,7 +817,7 @@ class StampTests(unittest.TestCase):
                      b"<!-- cortex:bootstrap end -->\n"):          # quoted by the team: its own text
             with self.subTest(team=team):
                 self.assertIs(init.untouched(written + team), True)
-                self.assertEqual(init.markers(written + team), [("single", 2)])
+                self.assertEqual(init.markers(written + team), [("single", 3)])
                 self.assertEqual(init.parts(written + team), (written, team))
 
     def test_no_digest_tells_nothing(self):

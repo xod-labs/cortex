@@ -190,18 +190,18 @@ class OptionTests(InitTestCase):
         self.assertNotIn("personality block", proc.err)
 
     def test_a_bootstrap_of_format_1_kept_is_said_older(self):
-        old = EXPECTED["single-claude"]["files"]["CLAUDE.md"].replace("<!-- cortex:bootstrap end -->\n", "").replace("format=2", "format=1")
+        old = EXPECTED["single-claude"]["files"]["CLAUDE.md"].replace("<!-- cortex:bootstrap end -->\n", "").replace("format=3", "format=1")
         (self.project / "CLAUDE.md").write_text(old, encoding="utf-8")
         proc = self.init("--tool", "claude")
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertEqual(self.read("CLAUDE.md"), old)
         self.assertIn(f"note: {display(self.project / 'CLAUDE.md')} is an older Cortex bootstrap: format 1, where this "
-                      "version writes format 2 — cortex init --force writes it again, and keeps it as .bak\n", proc.err)
+                      "version writes format 3 — cortex init --force writes it again, and keeps it as .bak\n", proc.err)
 
     def test_force_replaces_whole_a_file_without_the_end_marker(self):
         # No end marker, no team's part: a file of format 1, or one a team wrote, is replaced whole.
         expected = EXPECTED["single-claude"]["files"]["CLAUDE.md"]
-        old = expected.replace("<!-- cortex:bootstrap end -->\n", "").replace("format=2", "format=1") + "## Ours\n"
+        old = expected.replace("<!-- cortex:bootstrap end -->\n", "").replace("format=3", "format=1") + "## Ours\n"
         (self.project / "CLAUDE.md").write_text(old, encoding="utf-8")
         proc = self.init("--tool", "claude", "--force")
         self.assertEqual(proc.returncode, 0, proc.err)
@@ -421,14 +421,14 @@ class OptionTests(InitTestCase):
         proc = self.init("--tool", "claude")                                       # kept: no other layout said
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertNotIn("was written for a workspace", proc.err)
-        before = self.read("CLAUDE.md").replace("<!-- cortex:bootstrap layout=workspace format=2",
+        before = self.read("CLAUDE.md").replace("<!-- cortex:bootstrap layout=workspace format=3",
                                                 "<!-- cortex:bootstrap layout=workspace format=1", 1)
         (self.project / "CLAUDE.md").write_text(before, encoding="utf-8")          # an older format, to write again
         proc = self.init("--tool", "claude", "--force")
         self.assertEqual(proc.returncode, 0, proc.err)
         written = self.read("CLAUDE.md")
         self.assertTrue(written.startswith("# Cortex AI Team — Workspace Mode\n"), written[:80])
-        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", written)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=3 digest=", written)
         self.assertTrue(written.endswith(team))
         self.assertIn("CLAUDE.md was written for a workspace, and is written for one again — remove it first to write "
                       "a single project's", proc.err)
@@ -463,18 +463,18 @@ class OptionTests(InitTestCase):
         (self.project / "CLAUDE.md").write_text(old, encoding="utf-8")
         proc = self.init("--tool", "claude", "--force")
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=3 digest=", self.read("CLAUDE.md"))
         self.assertIn("was written for a workspace, and is written for one again", proc.err)
 
     def test_force_keeps_a_single_project_single_and_workspace_still_moves_it(self):
         self.assertEqual(self.init("--tool", "claude").returncode, 0)
         proc = self.init("--tool", "claude", "--force", "--no-personality")
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("<!-- cortex:bootstrap layout=single format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("<!-- cortex:bootstrap layout=single format=3 digest=", self.read("CLAUDE.md"))
         self.assertNotIn("written for a workspace", proc.err)
         proc = self.init("--tool", "claude", "--force", "--workspace")             # the option says the layout
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=3 digest=", self.read("CLAUDE.md"))
         self.assertNotIn("written for a workspace", proc.err)
 
     def test_the_backup_is_said_to_be_left_to_git(self):
