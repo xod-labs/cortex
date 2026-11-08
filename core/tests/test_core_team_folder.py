@@ -19,7 +19,7 @@ class AgentsTextTests(unittest.TestCase):
     def test_a_relative_path_inside_the_workspace_reads(self):
         for value, folder in (("team-agents", "team-agents"), ("team/agents", "team/agents"),
                               ("team-agents/", "team-agents"), ("agents", "agents"), ("./team-agents", "team-agents"),
-                              ("Agents", "agents"), ("./agents/", "agents")):
+                              ("Agents", "Agents"), ("./agents/", "agents")):
             with self.subTest(value=value):
                 self.assertEqual(project.check_agents(value), folder)
 
@@ -49,6 +49,15 @@ class AgentsTextTests(unittest.TestCase):
             with self.subTest(version=version), self.assertRaises(project.ProjectFileError) as caught:
                 project.check_project(data, ("version",))
             self.assertIn(said, str(caught.exception))
+        with self.assertRaises(project.ProjectFileError) as caught:            # cortex.local.toml, as 1.7.0 said
+            project.check_local({"foo": "x"}, project.lists_1_7_0({"version": "1.7.0"}))
+        self.assertIn("cortex.local.toml takes theme, spec, claude_access and claude_entry", str(caught.exception))
+        with self.assertRaises(project.ProjectFileError) as caught:
+            project.check_local({"foo": "x"}, project.lists_1_7_0({"version": "1.8.0"}))
+        self.assertIn("claude_entry and synced", str(caught.exception))
+        with self.assertRaises(project.ProjectFileError) as caught:            # quoted as written
+            project.check_agents(".//x")
+        self.assertIn('agents ".//x"', str(caught.exception))
 
     def test_synced_records_a_renamed_team_s_folder_only(self):
         base = {"project": "1.8.0", "pinned": "1.8.0", "reads": "1.8.0"}
@@ -168,6 +177,17 @@ class CascadeTests(unittest.TestCase):
         self.assertIn("but file is not at workspace root (team-agents/...)", out.getvalue())
 
     def test_service_dot_reads_as_1_7_0_did(self):
+        out = io.StringIO()
+        (self.base / "agents" / "roles" / "engineering" / "lead-backend.md").write_text("base", encoding="utf-8")
+        (self.tmp / "agents" / "roles" / "engineering" / "lead-backend.md").write_text(
+            "<!-- OVERLAY\n     Base: cortex/agents/roles/engineering/architect.md\n     Scope: workspace\n"
+            "     Semantic: additive\n-->\n## Ours (additive)\n", encoding="utf-8")
+        for service in (".", "./"):
+            with self.subTest(service=service):
+                out = io.StringIO()
+                validate.validate(str(self.tmp), str(self.base), service, False, out, validate.Colors(False))
+                self.assertIn("architect.md\n", out.getvalue())
+                self.assertIn("overlay path 'agents/roles/engineering/lead-backend.md' must mirror base", out.getvalue())
         out = io.StringIO()
         validate.validate(str(self.tmp), str(self.base), ".", False, out, validate.Colors(False))
         self.assertIn("⚠ ./agents/roles/engineering/architect.md\n", out.getvalue())

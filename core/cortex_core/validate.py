@@ -171,7 +171,8 @@ def check_overlay(file: str, root: str, project_root: str, base_root: str, repor
     layers = layer_directory(root, project_root, team_folder)
     file_rel_to_agents = strip_prefix(file, f"{layers}/")
     in_workspace = os.path.normpath(root) == os.path.normpath(project_root)
-    shown_layers = strip_prefix(layers, f"{project_root}/") if in_workspace else "agents"
+    # A renamed team's folder is named as cortex.toml names it; otherwise "agents", as 1.7.0 said — `--service .` too.
+    shown_layers = strip_prefix(layers, f"{project_root}/") if in_workspace and team_folder is not None else "agents"
     shown_team = strip_prefix(str(team_folder) if team_folder is not None else f"{project_root}/agents", f"{project_root}/")
     # The file's layer, and its path within it, as the resolver sees them
     layer, _, file_in_layer = file_rel_to_agents.partition("/")

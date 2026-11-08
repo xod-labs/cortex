@@ -142,7 +142,11 @@ class RefusalTests(FolderTestCase):
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', committed=False, name="nogit")
         (root / "agents" / "roles").mkdir(parents=True)
         self.assert_ok(self.cortex(root, "sync"))
-        for value in ("agents", "Agents", "./agents/"):
+        root = self.project(f'agents = "Agents"\nversion = "{OWN}"\ntheme = "h2g2"\n', committed=False, name="cased")
+        proc = self.cortex(root, "sync")                            # a folder of its own, as written: not committed
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn('"agents" is read from a committed cortex.toml only', proc.err)
+        for value in ("agents", "./agents/"):
             with self.subTest(value=value):
                 root = self.project(f'agents = "{value}"\nversion = "{OWN}"\ntheme = "h2g2"\n', committed=False,
                                     name=f"named-{value.strip('./')}-{len(value)}")

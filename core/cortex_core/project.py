@@ -23,6 +23,7 @@ MODES = ("store", "link", "copy")
 PROJECT_KEYS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access", "agents")
 # The keys an unknown key's message names to a project before 1.8.0, as 1.7.0 named them.
 PROJECT_LISTED: Tuple[str, ...] = ("version", "theme", "sync", "claude_access")
+LOCAL_LISTED: Tuple[str, ...] = ("theme", "spec", "claude_access", "claude_entry")
 PROJECT_REQUIRED: Tuple[str, ...] = ("version", "theme")
 LOCAL_KEYS: Tuple[str, ...] = ("version", "theme", "spec", "claude_access", "claude_entry", "synced")
 BOOLEAN_KEYS: Tuple[str, ...] = ("claude_access",)
@@ -196,34 +197,31 @@ def check_agents(value: object, name: str = PROJECT_FILE) -> str:
         raise ProjectFileError(f"{name}: agents {shown(value)} is not {rule}")
     if value.startswith("/") or re.match(r"^[A-Za-z]:", value):
         raise ProjectFileError(f"{name}: agents {shown(value)} is an absolute path — it must be {rule}")
+    written = value                     # quoted as written in every refusal
     while value.startswith("./"):
         value = value[2:]               # ./team-agents names team-agents
     parts = value.rstrip("/").split("/")
     if parts in ([""], ["."]) or any(not part for part in parts):
-        raise ProjectFileError(f"{name}: agents {shown(value)} names the project root, or an empty folder name — "
+        raise ProjectFileError(f"{name}: agents {shown(written)} names the project root, or an empty folder name — "
                                f"it must be {rule}")
     for part in parts:
         if part == "..":
-            raise ProjectFileError(f"{name}: agents {shown(value)} climbs out of the folder it is in — it must be {rule}")
+            raise ProjectFileError(f"{name}: agents {shown(written)} climbs out of the folder it is in — it must be {rule}")
         if part.startswith("."):
-            raise ProjectFileError(f"{name}: agents {shown(value)} names a folder that starts with \".\" — it must be "
+            raise ProjectFileError(f"{name}: agents {shown(written)} names a folder that starts with \".\" — it must be "
                                    f"{rule}")
     if parts[0].casefold() == "cortex":
-        raise ProjectFileError(f"{name}: agents {shown(value)} is in cortex/, the spec's place — it must be {rule}")
-    folder = "/".join(parts)
-    # Names compare in any case (§3.6, §9): Agents names the default, never refused.
-    return TEAM_FOLDER if folder.casefold() == TEAM_FOLDER else folder
+        raise ProjectFileError(f"{name}: agents {shown(written)} is in cortex/, the spec's place — it must be {rule}")
+    # Only agents itself is the default: Agents names a folder of its own, as written (§9).
+    return "/".join(parts)
 
 
 def check_project(data: Mapping, optional: Tuple[str, ...] = ()) -> None:
     """Refuse a ``cortex.toml`` that is not one — ``ProjectFileError`` names the file and the key.
     ``optional``, of the required keys, those a team's file may give instead (ADR-013 §3.2): whether it
     does is its reader's to check."""
-    # A project of 1.8.0 or later, or one that leaves its version to the team's file, is told the keys it may
-    # set; any other — before 1.8.0, or a version that does not read — 1.7.0's, as 1.7.0 told it.
-    before = "version" in data and not (is_version(data["version"]) and not before_team(str(data["version"])))
     _check_keys(PROJECT_FILE, data, PROJECT_KEYS, tuple(key for key in PROJECT_REQUIRED if key not in optional),
-                named=PROJECT_LISTED if before else PROJECT_KEYS)
+                named=PROJECT_LISTED if lists_1_7_0(data) else PROJECT_KEYS)
     if "agents" in data:
         check_agents(data["agents"])
     if "version" in data:
@@ -234,11 +232,20 @@ def check_project(data: Mapping, optional: Tuple[str, ...] = ()) -> None:
         raise ProjectFileError(f'{PROJECT_FILE}: sync {shown(data["sync"])} is none of {listed(MODES)}')
 
 
-def check_local(data: Mapping) -> None:
-    """Refuse a ``cortex.local.toml`` that is not one."""
+def lists_1_7_0(project_data: Mapping) -> bool:
+    """Whether an unknown key's message names 1.7.0's keys, as 1.7.0 named them: a ``cortex.toml`` whose
+    ``version`` is before 1.8.0, or does not read. One of 1.8.0 or later, or that leaves its version to the
+    team's file, is told the keys it may set."""
+    return "version" in project_data and not (is_version(project_data["version"])
+                                              and not before_team(str(project_data["version"])))
+
+
+def check_local(data: Mapping, listed_1_7_0: bool = False) -> None:
+    """Refuse a ``cortex.local.toml`` that is not one — an unknown key named among 1.7.0's keys when
+    ``listed_1_7_0``, ``lists_1_7_0`` of the project's ``cortex.toml``."""
     if "agents" in data:
         raise ProjectFileError(f"{LOCAL_FILE}: {_AGENTS_ONLY}")
-    _check_keys(LOCAL_FILE, data, LOCAL_KEYS, (), ("synced",))
+    _check_keys(LOCAL_FILE, data, LOCAL_KEYS, (), ("synced",), named=LOCAL_LISTED if listed_1_7_0 else LOCAL_KEYS)
     if "version" in data:
         _check_version(LOCAL_FILE, data["version"])
     if "theme" in data:

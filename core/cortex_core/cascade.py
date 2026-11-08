@@ -274,7 +274,8 @@ def read_project(root: str, local: bool = True, lenient: bool = False,
             except project.ProjectFileError:
                 local_data = {key: value for key, value in local_data.items() if key != "synced"}
                 local_data["synced"] = UNREADABLE_SYNCED
-        project.check_local({key: value for key, value in local_data.items() if value is not UNREADABLE_SYNCED})
+        project.check_local({key: value for key, value in local_data.items() if value is not UNREADABLE_SYNCED},
+                            project.lists_1_7_0(data))
     return data, local_data
 
 
