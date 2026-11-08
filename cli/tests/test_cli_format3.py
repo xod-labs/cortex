@@ -11,6 +11,7 @@ version: ``cortex sync`` and ``cortex validate`` say when an untouched one is be
 import errno
 import io
 import os
+import shutil
 import sys
 import unittest
 from pathlib import Path
@@ -371,6 +372,17 @@ class TryTests(TeamTestCase):
         self.assert_ok(proc)
         self.assertNotIn("not in the store", proc.err)
         self.assertEqual((root / "CLAUDE.md").read_bytes(), written(TEMPLATE) + OURS)
+
+    def test_a_resume_names_the_try_s_version_it_cannot_find(self):
+        root = self.project(toml='version = "9.9.7"\ntheme = "h2g2"\n', local='version = "9.9.8"\n', name="try-gone")
+        (root / ".gitignore").write_text("CLAUDE.md\ncortex.local.toml\n", encoding="utf-8")
+        self.assert_ok(self.cortex(root, "sync"))
+        (root / "CLAUDE.md").write_bytes(written(self.f97))
+        shutil.rmtree(self.home / "versions" / "9.9.8")
+        proc = self.cortex(root, "upgrade", "9.9.7", CORTEX_RELEASES_URL="http://127.0.0.1:9")
+        self.assertIn("note: CLAUDE.md not checked — Cortex 9.9.8, the version this machine reads, is not in the store",
+                      proc.err)
+        self.assertNotIn("Cortex 9.9.7 is not in the store", proc.err)
 
     def test_the_team_s_bootstrap_still_follows_the_team_s_version(self):
         root = self.tried("theirs", ignored=False)
