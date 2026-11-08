@@ -372,9 +372,11 @@ def _again(path: Path, root: str, version: Version, content: bytes, own: bool, w
         f"template — {why}\n"
 
 
-def _committed(root: str, rewrites: List[Tuple[Path, bytes]]) -> List[Path]:
-    """Of the developer's own files written, those the team still commits somewhere: none git ignores."""
-    return [path for path, _ in rewrites if sync.ignored(path.parent, path.name) is not True]
+def _committed(rewrites: List[Tuple[Path, bytes]], nowhere: bool = True) -> List[Path]:
+    """Of the developer's own files written, those still said with what the team commits: none git ignores —
+    nor, ``nowhere`` off, one in no repository, which `--team` would name to commit in the project."""
+    return [path for path, _ in rewrites if sync.ignored(path.parent, path.name) is not True
+            and (nowhere or not sync.in_no_repository(os.path.dirname(os.path.realpath(path))))]
 
 
 def reads_a_checkout(root: str, project: config.Project) -> bool:
@@ -871,7 +873,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
             _put(path, content)
             out.write(_again(path, root, after.version, content, after.version != target or
                              after.active_theme != after.team_theme))
-        outcome.files += _committed(root, mine)
+        outcome.files += _committed(mine, nowhere=False)
         if developer is not None and Version(str(developer.value)) > target:
             out.write(f"This machine reads Cortex {developer.value}, {developer.origin}'s — the try, above {target}.\n")
     if message is not None and top is not None:
@@ -1018,7 +1020,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     mine = _own_rewrites(own, project, after, the_store, err)
     differs = after != target or project.active_theme != project.team_theme
     team = [Path(root) / config.PROJECT_FILE, Path(root) / config.LOCK_FILE, *(path for path, _ in rewrites),
-            *_committed(root, mine)]
+            *_committed(mine)]
     if prepare is not None and not stops and refused is None:
         prepare(team)
 
@@ -1089,7 +1091,7 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     lock = Path(where[0]) / where[1] if where is not None else Path(root) / config.LOCK_FILE
     relock = behind is not None and where is not None and \
         getattr(config.load_lock(where[0], where[1]), "version", None) != project.version
-    team = ([lock] if relock else []) + [path for path, _ in rewrites] + _committed(root, mine)
+    team = ([lock] if relock else []) + [path for path, _ in rewrites] + _committed(mine)
     if prepare is not None and team:
         prepare(team)
     if dry_run:
@@ -1112,7 +1114,7 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
         out.write(_again(path, root, project.version, content, differs))
     relocked = lock.is_file() and lock.read_bytes() != locked
     return Outcome(root, current, current, files=([lock] if relocked else []) + [path for path, _ in rewrites]
-                   + _committed(root, mine))
+                   + _committed(mine))
 
 
 def _write(rewrites: List[Tuple[Path, bytes]], committed: Dict[Path, Optional[bytes]], root: str, err: TextIO,

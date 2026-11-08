@@ -317,6 +317,16 @@ class TryTests(TeamTestCase):
                               "follows the version this machine reads", proc.out)
                 self.assertEqual((root / "CLAUDE.md").read_bytes(), before + OURS)
 
+    def test_at_a_2b_root_team_names_no_own_file_to_commit(self):
+        root = self.project(toml="", team='version = "9.9.7"\ntheme = "h2g2"\n', local='theme = "none"\n',
+                            committed=False, name="2b")
+        self.assert_ok(self.cortex(root, "sync"))
+        (root / "CLAUDE.md").write_bytes(written(self.f97))
+        proc = self.cortex(root, "upgrade", "--team", "9.9.8")
+        self.assert_ok(proc)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(FORMAT_2, False)))
+        self.assertIn("\nCommit agents/cortex.team.toml and agents/cortex.team.lock in agents/; teammates run", proc.out)
+
     def test_the_team_s_bootstrap_still_follows_the_team_s_version(self):
         root = self.tried("theirs", ignored=False)
         (root / "CLAUDE.md").write_bytes(written(self.f97) + OURS)
