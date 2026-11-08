@@ -76,6 +76,13 @@ def read_pin(root: Path) -> Optional[Pin]:
         # The team's folder cortex.toml names, inside the root the runtime mounts (§3.6) — asked of no git,
         # whose committedness the command checks: its text, and what the file system says of it.
         folder = project.check_agents(data["agents"]) if "agents" in data else project.TEAM_FOLDER
+        synced = local.get("synced")
+        # pinned other than cortex.toml's: the team's file won over an uncommitted cortex.toml (decision 24 lets a
+        # committed one win), whose keys the team's resolution leaves out where the file sets them (§3.1).
+        committed = False if isinstance(synced, dict) and "project" in synced \
+            and synced.get("pinned") != synced["project"] else None
+        if folder != project.TEAM_FOLDER and committed is False:
+            raise project.ProjectFileError(project.AGENTS_UNCOMMITTED)      # as the command refuses it (§9)
         if folder != project.TEAM_FOLDER:
             workspace.check_team_folder(str(root), folder)
         name = cascade.team_name(folder)
@@ -86,11 +93,6 @@ def read_pin(root: Path) -> Optional[Pin]:
         project.check_project(data, project.PROJECT_REQUIRED if team is not None else ())
         if isinstance(team, cascade.Unreadable):
             raise project.ProjectFileError(team.error)
-        synced = local.get("synced")
-        # pinned other than cortex.toml's: the team's file won over an uncommitted cortex.toml (decision 24 lets a
-        # committed one win), whose keys the team's resolution leaves out where the file sets them (§3.1).
-        committed = False if isinstance(synced, dict) and "project" in synced \
-            and synced.get("pinned") != synced["project"] else None
         found = cascade.resolve(data, None, {}, {}, locked=True, team_data=team, committed=committed, team_name=name)
     except OSError as error:
         raise ValueError(f"{project.PROJECT_FILE} of this workspace cannot be read: {error.strerror or error}")

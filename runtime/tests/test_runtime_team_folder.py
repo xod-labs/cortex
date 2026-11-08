@@ -45,6 +45,21 @@ class PinTests(TeamFolderTestCase):
         with self.assertRaisesRegex(ValueError, '"version" is required'):
             read_pin(self.project)
 
+    def test_an_uncommitted_cortex_toml_as_synced_shows_it_names_no_team_s_folder(self):
+        # The team's file won over cortex.toml: it is not committed (decision 24), and its agents not read (§3.6).
+        (self.project / "cortex.toml").write_text(f'version = "9.9.8"\ntheme = "h2g2"\nagents = "{FOLDER}"\n',
+                                                  encoding="utf-8")
+        (self.project / FOLDER / "cortex.team.toml").write_text('version = "9.9.9"\n', encoding="utf-8")
+        (self.project / "cortex.local.toml").write_text(
+            'synced = { team = "9.9.9", project = "9.9.8", pinned = "9.9.9", reads = "9.9.9" }\n', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, '"agents" is read from a committed cortex.toml only'):
+            read_pin(self.project)
+        (self.project / "cortex.toml").write_text('version = "9.9.8"\ntheme = "h2g2"\nagents = "agents"\n',
+                                                  encoding="utf-8")
+        (self.project / "agents").mkdir()
+        (self.project / "agents" / "cortex.team.toml").write_text('version = "9.9.9"\n', encoding="utf-8")
+        self.assertEqual(read_pin(self.project).team_folder, "agents")      # the default, named: never refused
+
     def test_what_cortex_sync_refuses_of_agents_the_runtime_refuses(self):
         (self.project / "other").mkdir()
         (self.project / "other" / "cortex.toml").write_text('version = "9.9.9"\n', encoding="utf-8")
