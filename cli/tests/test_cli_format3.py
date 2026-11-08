@@ -36,6 +36,16 @@ def written(template):
     return init.stamped(init.instructions(template, True))
 
 
+def remove_store(path):
+    """Remove a version of the store, read-only as the store writes it (ADR-008 §3.3): writable first — a user
+    who is not root, and Windows, remove no read-only file."""
+    for directory, _, files in os.walk(path):
+        os.chmod(directory, 0o700)
+        for name in files:
+            os.chmod(os.path.join(directory, name), 0o600)
+    shutil.rmtree(path)
+
+
 class TemplateTests(unittest.TestCase):
     def test_both_templates_are_format_3_and_read_the_team_s_file(self):
         for name, text in (("single", TEMPLATE), ("workspace", WORKSPACE)):
@@ -378,7 +388,7 @@ class TryTests(TeamTestCase):
         (root / ".gitignore").write_text("CLAUDE.md\ncortex.local.toml\n", encoding="utf-8")
         self.assert_ok(self.cortex(root, "sync"))
         (root / "CLAUDE.md").write_bytes(written(self.f97))
-        shutil.rmtree(self.home / "versions" / "9.9.8")
+        remove_store(self.home / "versions" / "9.9.8")
         proc = self.cortex(root, "upgrade", "9.9.7", CORTEX_RELEASES_URL="http://127.0.0.1:9")
         self.assertIn("note: CLAUDE.md not checked — Cortex 9.9.8, the version this machine reads, is not in the store",
                       proc.err)
