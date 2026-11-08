@@ -172,6 +172,7 @@ def check_overlay(file: str, root: str, project_root: str, base_root: str, repor
     file_rel_to_agents = strip_prefix(file, f"{layers}/")
     in_workspace = os.path.normpath(root) == os.path.normpath(project_root)
     shown_layers = strip_prefix(layers, f"{project_root}/") if in_workspace else "agents"
+    shown_team = strip_prefix(layer_directory(project_root, project_root, team_folder), f"{project_root}/")
     # The file's layer, and its path within it, as the resolver sees them
     layer, _, file_in_layer = file_rel_to_agents.partition("/")
     rule = resolver.semantic_for(layer, file_in_layer)
@@ -248,7 +249,7 @@ def check_overlay(file: str, root: str, project_root: str, base_root: str, repor
     # Tier 2.3 — scope vs location
     if scope.startswith("workspace") and not in_workspace:
         report.warning(rel_path, "SCOPE_MISMATCH",
-                       f"Scope: '{scope}' but file is not at workspace root ({shown_layers}/...)")
+                       f"Scope: '{scope}' but file is not at workspace root ({shown_team}/...)")
     if scope.startswith("service") and in_workspace:
         report.warning(rel_path, "SCOPE_MISMATCH",
                        f"Scope: '{scope}' but file is at workspace root — should be under {{service}}/agents/")

@@ -41,10 +41,12 @@ class AgentsTextTests(unittest.TestCase):
         self.assertEqual(values, {})
         self.assertIn('/h/config.toml: "agents" is set in cortex.toml only', warnings[0])
 
-    def test_an_unknown_key_s_message_is_1_7_0_s(self):
-        with self.assertRaises(project.ProjectFileError) as caught:
-            project.check_project({**TEAM, "verison": "1.8.0"})
-        self.assertIn("cortex.toml takes version, theme, sync and claude_access", str(caught.exception))
+    def test_an_unknown_key_s_message_is_1_7_0_s_before_1_8_0(self):
+        for version, said in (("1.7.0", "cortex.toml takes version, theme, sync and claude_access"),
+                              ("1.8.0", "cortex.toml takes version, theme, sync, claude_access and agents")):
+            with self.subTest(version=version), self.assertRaises(project.ProjectFileError) as caught:
+                project.check_project({**TEAM, "version": version, "verison": "1.8.0"})
+            self.assertIn(said, str(caught.exception))
 
 
 class ResolutionTests(unittest.TestCase):
@@ -118,8 +120,12 @@ class CascadeTests(unittest.TestCase):
         (self.tmp / "other").mkdir()
         (self.tmp / "other" / "cortex.toml").write_text('version = "1.8.0"\n', encoding="utf-8")
         (self.tmp / "team-agents" / "project-overview.md").write_text("# the team\n", encoding="utf-8")
+        (self.tmp / "svc" / "agents").mkdir()
+        (self.tmp / "apps" / "web" / "agents").mkdir(parents=True)
+        (self.tmp / "apps" / "web" / "project-overview.md").write_text("# web\n", encoding="utf-8")
         for folder, said in (("svc/agents", 'inside the service "svc"'), ("svc/team", 'inside the service "svc"'),
-                             ("other", "holds a project's cortex.toml")):
+                             ("Svc/team", 'inside the service "svc"'), ("other", "holds a project's cortex.toml"),
+                             ("svc", "holds an agents/ folder, a service's"), ("apps", 'holds the service "apps/web"')):
             with self.subTest(folder=folder), self.assertRaises(project.ProjectFileError) as caught:
                 workspace.check_team_folder(str(self.tmp), folder, str(self.base))
             self.assertIn(said, str(caught.exception))
@@ -134,6 +140,17 @@ class CascadeTests(unittest.TestCase):
         validate.validate(str(self.tmp), str(self.base), "", False, out, validate.Colors(False),
                           team_folder=str(self.tmp / "team-agents"))
         self.assertIn("overlay path 'team-agents/roles/engineering/lead-backend.md' must mirror base", out.getvalue())
+
+    def test_a_service_overlay_of_the_workspace_s_scope_names_the_team_s_folder(self):
+        (self.tmp / "svc" / "agents" / "roles" / "engineering").mkdir(parents=True)
+        (self.tmp / "svc" / "project-overview.md").write_text("# svc\n", encoding="utf-8")
+        (self.tmp / "svc" / "agents" / "roles" / "engineering" / "architect.md").write_text(
+            "<!-- OVERLAY\n     Base: cortex/agents/roles/engineering/architect.md\n     Scope: workspace\n"
+            "     Semantic: additive\n-->\n## Ours (additive)\n", encoding="utf-8")
+        out = io.StringIO()
+        validate.validate(str(self.tmp), str(self.base), "", False, out, validate.Colors(False),
+                          team_folder=str(self.tmp / "team-agents"))
+        self.assertIn("but file is not at workspace root (team-agents/...)", out.getvalue())
 
     def test_the_validator_reads_the_team_s_folder(self):
         team = str(self.tmp / "team-agents")

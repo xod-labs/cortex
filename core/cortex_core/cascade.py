@@ -173,9 +173,7 @@ def resolve(project_data: Optional[Mapping], local_data: Optional[Mapping], mach
                       (("team", team_data), ("project", project_data), ("local", local_data))
                       if data is not None and "version" in data}
         if "agents" in project_data and project.before_team(team[1]):
-            raise project.ProjectFileError(
-                f'{PROJECT_FILE}: "agents" is read once the team\'s version is {project.FIRST_TEAM_VERSION} or later — '
-                f"the team's is {team[1]}: move to {project.FIRST_TEAM_VERSION} first, or remove `agents`")
+            raise project.ProjectFileError(project.agents_before(team[1]))
     else:
         team_data = None
     lock_keys = tuple(team_data.get("locked", ())) if team_data is not None else ()

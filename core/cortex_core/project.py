@@ -21,7 +21,7 @@ PROJECT_FILE = "cortex.toml"
 LOCAL_FILE = "cortex.local.toml"
 MODES = ("store", "link", "copy")
 PROJECT_KEYS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access", "agents")
-# The keys an unknown key's message names, as 1.7.0 named them: a project of 1.7.0 is told what it was.
+# The keys an unknown key's message names to a project before 1.8.0, as 1.7.0 named them.
 PROJECT_LISTED: Tuple[str, ...] = ("version", "theme", "sync", "claude_access")
 PROJECT_REQUIRED: Tuple[str, ...] = ("version", "theme")
 LOCAL_KEYS: Tuple[str, ...] = ("version", "theme", "spec", "claude_access", "claude_entry", "synced")
@@ -168,6 +168,19 @@ _AGENTS_ONLY = (f'"agents" is set in {PROJECT_FILE} only — every developer rea
                 "(ADR-013, decision 30)")
 
 
+def agents_before(version: str) -> str:
+    """The refusal of ``agents`` while the team's version is before 1.8.0 (ADR-013 §3.8, step 3)."""
+    return (f'{PROJECT_FILE}: "agents" is read once the team\'s version is {FIRST_TEAM_VERSION} or later — the '
+            f"team's is {version}: move to {FIRST_TEAM_VERSION} first, or remove `agents`")
+
+
+# An ``agents`` in a cortex.toml that is not committed (decision 30): said by the command, which asks git, and by
+# the runtime, from ``synced``.
+AGENTS_UNCOMMITTED = (f'{PROJECT_FILE}: "agents" is read from a committed {PROJECT_FILE} only, and this one is not — '
+                      "every developer reads the same team's folder (ADR-013, decision 30): commit it, or remove "
+                      f"`agents` — the team's folder is then {TEAM_FOLDER}/")
+
+
 def check_agents(value: object, name: str = PROJECT_FILE) -> str:
     """Refuse an ``agents`` that names no folder inside the workspace (ADR-013 §3.6), from its text
     alone: a relative path with ``/`` — no ``\\``, no absolute path of any platform, no ``..`` nor a
@@ -202,8 +215,10 @@ def check_project(data: Mapping, optional: Tuple[str, ...] = ()) -> None:
     """Refuse a ``cortex.toml`` that is not one — ``ProjectFileError`` names the file and the key.
     ``optional``, of the required keys, those a team's file may give instead (ADR-013 §3.2): whether it
     does is its reader's to check."""
+    # A project before 1.8.0 is told 1.7.0's keys, as 1.7.0 told it; a later one, the keys it may set.
+    before = is_version(data.get("version")) and before_team(str(data["version"]))
     _check_keys(PROJECT_FILE, data, PROJECT_KEYS, tuple(key for key in PROJECT_REQUIRED if key not in optional),
-                named=PROJECT_LISTED)
+                named=PROJECT_LISTED if before else PROJECT_KEYS)
     if "agents" in data:
         check_agents(data["agents"])
     if "version" in data:

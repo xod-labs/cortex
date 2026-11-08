@@ -10,7 +10,6 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
-import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -100,11 +99,9 @@ def services(project_root: str, base_root: Optional[str] = None, team_folder: Op
 
 
 def _same_name(a: str, b: str) -> bool:
-    """Two names of the workspace compare as written, in any case where the file system ignores it —
-    macOS and Windows (ADR-013 §3.6)."""
-    if sys.platform in ("darwin", "win32"):
-        return a.casefold() == b.casefold()
-    return a == b
+    """Two names of the workspace, compared in any case on every platform (ADR-013 §3.6, §9): ``cortex.toml``
+    is committed, and read where names ignore case — macOS, Windows, a Linux workspace on such a file system."""
+    return a.casefold() == b.casefold()
 
 
 def check_team_folder(project_root: str, folder: str, base_root: Optional[str] = None) -> None:
@@ -119,6 +116,15 @@ def check_team_folder(project_root: str, folder: str, base_root: Optional[str] =
     if os.path.isfile(os.path.join(where, PROJECT_FILE)):
         raise ProjectFileError(f"{PROJECT_FILE}: agents {shown(folder)} holds a project's {PROJECT_FILE} — the "
                                "team's folder is no project")
+    if os.path.isdir(os.path.join(where, "agents")):
+        raise ProjectFileError(f"{PROJECT_FILE}: agents {shown(folder)} holds an agents/ folder, a service's — the "
+                               "team's folder is no service: its overlays would not be read")
+    for overview in find(where, "project-overview.md", maxdepth=5, prune_names=("cortex", ".git") + _DEPENDENCY_TREES):
+        below = os.path.dirname(overview)
+        if below != where and os.path.isdir(os.path.join(below, "agents")):
+            raise ProjectFileError(f"{PROJECT_FILE}: agents {shown(folder)} holds the service "
+                                   f"{shown(os.path.relpath(below, root).replace(os.sep, '/'))} — the team's folder "
+                                   "holds no service: its overlays would not be read")
     parts = folder.split("/")
     for service in services(root, base_root, where):
         rel = Path(service).relative_to(root).parts
