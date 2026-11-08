@@ -88,10 +88,10 @@ READ_NOW: Any = _ReadNow()
 def resolve_run(req: RunRequest, root: Path, theme: Optional[str] = None, *,
                 pin: Union[Pin, None, _ReadNow] = READ_NOW) -> ResolvedRun:
     """Compile a request into a resolved bundle. ``theme`` is the workspace's active theme
-    (deployment config — never a developer's own, in ``cortex.local.toml``); without one, the
-    theme the project's ``cortex.toml`` names. The base is the store's copy of the version
-    ``cortex.toml`` pins, or ``{root}/cortex`` without one (ADR-008 §3.6): a version the store
-    lacks is a ``ValueError``, as a bad service is.
+    (deployment config, ``CORTEX_THEME`` — never a developer's own, in ``cortex.local.toml``); without
+    one, the team's theme — and the team's file's whatever the deployment says when it locks ``theme``
+    (ADR-013 §3.12). The base is the store's copy of the team's version, or ``{root}/cortex`` without
+    ``cortex.toml`` (ADR-008 §3.6): a version the store lacks is a ``ValueError``, as a bad service is.
 
     ``pin`` is what ``cortex.toml`` said when the run was accepted — a queued run resolves as it
     was checked, whatever the file says by the time a worker takes it (``None``: it had none)."""
@@ -100,8 +100,8 @@ def resolve_run(req: RunRequest, root: Path, theme: Optional[str] = None, *,
     if pin is READ_NOW:
         pin = read_pin(root)
     base_root = base_for(pin)
-    if theme is None and pin is not None:
-        theme = pin.theme
+    if pin is not None and (theme is None or pin.theme_locked):
+        theme = pin.theme       # the team's file's lock wins over the deployment's CORTEX_THEME (ADR-013 §3.12)
 
     capabilities = derive_capabilities(root, req.service, base_root=base_root)
     system_prompt = build_system_prompt(

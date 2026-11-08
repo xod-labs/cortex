@@ -220,6 +220,82 @@ class CascadeTests(SyncedProjectTestCase):
         self.assertEqual((pin.version, pin.theme), (host["version"]["value"], host["theme"]["value"]))
 
 
+class TeamVersionTests(SyncedProjectTestCase):
+    """The runtime reads the team's version, asking no git (ADR-013 §3.12): what ``cortex sync`` recorded in
+    ``synced``, once each file's ``version`` is still what it recorded — a ``422`` naming ``cortex sync``
+    otherwise; without ``synced``, ``cortex.toml``'s, else the team's file's."""
+
+    def files(self, toml, team=None, local=None):
+        from cortex_runtime.base import read_pin
+
+        (self.project / "cortex.toml").write_text(toml, encoding="utf-8")
+        if team is not None:
+            (self.project / "agents" / "cortex.team.toml").write_text(team, encoding="utf-8")
+        if local is not None:
+            (self.project / "cortex.local.toml").write_text(local, encoding="utf-8")
+        return lambda: read_pin(self.project)
+
+    def test_at_a_2b_root_the_team_s_version_as_the_cli_reads_it(self):
+        # An uncommitted cortex.toml at 1.7.0 beside a team's file at 1.8.0: the CLI reads 1.8.0 and records it.
+        fresh = 'synced = { team = "1.8.0", project = "1.7.0", pinned = "1.8.0", reads = "1.8.0" }\n'
+        pin = self.files('version = "1.7.0"\ntheme = "h2g2"\n', team='version = "1.8.0"\n', local=fresh)
+        self.assertEqual(pin().version, "1.8.0")
+        (self.project / "agents" / "cortex.team.toml").write_text('version = "1.8.1"\n', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, r"run `cortex sync`"):          # stale: a teammate moved it
+            pin()
+        (self.project / "cortex.local.toml").unlink()
+        with self.assertRaisesRegex(ValueError, r"cortex.toml pins Cortex 1.7.0 and agents/cortex.team.toml Cortex "
+                                                r"1.8.1, and `cortex sync` recorded neither: run `cortex sync`"):
+            pin()                                                                # absent: the two differ
+
+    def test_the_team_s_file_moved_then_cortex_toml_edited_to_its_old_value_is_refused(self):
+        tie = 'synced = { team = "1.8.0", project = "1.8.0", pinned = "1.8.0", reads = "1.8.0" }\n'
+        pin = self.files('version = "1.8.0"\ntheme = "h2g2"\n', team='version = "1.8.0"\n', local=tie)
+        self.assertEqual(pin().version, "1.8.0")
+        (self.project / "agents" / "cortex.team.toml").write_text('version = "1.9.0"\n', encoding="utf-8")
+        (self.project / "cortex.toml").write_text('version = "1.8.0"\ntheme = "h2g2"\n', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, r"not those `cortex sync` recorded .* run `cortex sync`"):
+            pin()
+
+    def test_without_synced_cortex_toml_s_version_else_the_team_s_file_s(self):
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', team='version = "9.9.9"\n')
+        self.assertEqual(pin().version, "9.9.9")
+        pin = self.files('theme = "h2g2"\n', team='version = "1.8.0"\n')
+        self.assertEqual(pin().version, "1.8.0")
+        pin = self.files('version = "1.8.0"\ntheme = "h2g2"\n', team='version = "1.9.0"\n')
+        with self.assertRaisesRegex(ValueError, r"`cortex sync` recorded neither: run `cortex sync`"):
+            pin()
+
+    def test_a_local_version_above_the_team_s_is_refused_naming_it(self):
+        recorded = 'version = "9.9.9"\nsynced = { project = "9.9.8", local = "9.9.9", pinned = "9.9.8", reads = "9.9.9" }\n'
+        pin = self.files('version = "9.9.8"\ntheme = "h2g2"\n', local=recorded)
+        with self.assertRaisesRegex(ValueError, r"reads Cortex 9\.9\.9, cortex\.local\.toml's version — a try"):
+            pin()
+        pin = self.files('version = "9.9.8"\ntheme = "h2g2"\n', local='version = "9.9.9"\n')
+        with self.assertRaisesRegex(ValueError, r"reads Cortex 9\.9\.9, cortex\.local\.toml's version — a try"):
+            pin()
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local='version = "9.9.8"\n')
+        self.assertEqual(pin().version, "9.9.9")                                # below the team's: changes nothing
+
+    def test_a_cortex_local_toml_that_does_not_read_is_none_as_in_1_7_0(self):
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local="spec = [\n")
+        self.assertEqual(pin().version, "9.9.9")
+
+    def test_cortex_theme_is_under_the_team_s_lock(self):
+        self.files('version = "9.9.9"\n', team='theme = "h2g2"\nlocked = ["theme"]\n')
+        self.assertIn("BASE-THEME", resolve_run(self.request(), self.project, theme="none").system_prompt)
+        (self.project / "agents" / "cortex.team.toml").write_text('theme = "h2g2"\n', encoding="utf-8")
+        self.assertNotIn("BASE-THEME", resolve_run(self.request(), self.project, theme="none").system_prompt)
+        self.assertIn("BASE-THEME", resolve_run(self.request(), self.project).system_prompt)
+
+    def test_a_queued_run_keeps_its_lock_on_the_theme(self):
+        from cortex_runtime.base import Pin
+
+        pin = Pin(version="9.9.9", theme="h2g2", theme_locked=True)
+        self.assertEqual(Pin.from_job(pin.to_job()), pin)
+        self.assertFalse(Pin.from_job({"version": "9.9.9", "theme": "h2g2"}).theme_locked)     # a job of 1.7.0
+
+
 class WithoutCortexTomlTests(unittest.TestCase):
     def test_the_base_stays_under_the_project(self):
         self.assertIsNone(base_root_for(FIXTURE))
