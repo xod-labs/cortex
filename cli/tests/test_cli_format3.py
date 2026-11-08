@@ -363,6 +363,15 @@ class TryTests(TeamTestCase):
         self.assertIn("CLAUDE.md is not what Cortex wrote, by the digest in its marker — you changed it — so it is kept",
                       proc.err)
 
+    def test_a_resume_checks_the_developer_s_own_bootstrap_without_the_team_s_version(self):
+        root = self.tried("own-only", toml='version = "9.9.8"\ntheme = "h2g2"\n')
+        (root / "CLAUDE.md").write_bytes(written(FORMAT_2) + OURS)
+        self.assertFalse((self.home / "versions" / "9.9.8").exists())           # the try is what was synced
+        proc = self.cortex(root, "upgrade", "9.9.8", CORTEX_RELEASES_URL="http://127.0.0.1:9")
+        self.assert_ok(proc)
+        self.assertNotIn("not in the store", proc.err)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), written(TEMPLATE) + OURS)
+
     def test_the_team_s_bootstrap_still_follows_the_team_s_version(self):
         root = self.tried("theirs", ignored=False)
         (root / "CLAUDE.md").write_bytes(written(self.f97) + OURS)

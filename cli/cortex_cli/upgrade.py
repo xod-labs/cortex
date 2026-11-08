@@ -1081,13 +1081,22 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     rewrites: List[Tuple[Path, bytes]] = []
     mine: List[Tuple[Path, bytes]] = []
     theirs, own = _theirs_only(files, current)
-    if files:
+    if theirs:
         try:
             the_store.ensure(current)
-            rewrites = bootstraps(theirs, current, the_store.path(current), the_store.path(current), personality, err)
-            mine = _own_rewrites(own, project, project.version, the_store, err)
         except store.StoreError as error:
             err.write(f"note: the bootstrap files were not checked — Cortex {current} is not in the store: {error}\n")
+        else:
+            rewrites = bootstraps(theirs, current, the_store.path(current), the_store.path(current), personality, err)
+    if own:
+        try:
+            mine = _own_rewrites(own, project, project.version, the_store, err)
+        except store.StoreError as error:
+            if project.version == current:
+                err.write(f"note: the bootstrap files were not checked — Cortex {current} is not in the store: {error}\n")
+            else:
+                err.write(f"note: {_and([_shown_path(path, root) for path in own])} not checked — Cortex "
+                          f"{project.version}, the version this machine reads, is not in the store: {error}\n")
     differs = project.version != current or project.active_theme != project.team_theme
     if behind is not None:
         out.write(f"{behind}, and {project.version_origin} pins Cortex {project.version} — an upgrade cut short, or a "
