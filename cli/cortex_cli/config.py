@@ -281,11 +281,17 @@ def team_folder(root: str, known: Optional[bool] = None) -> Tuple[str, Optional[
         folder = project.check_agents(written)
     except project.ProjectFileError as error:
         raise ConfigError(str(error))
+    if folder == TEAM_FOLDER:
+        return folder, known                # the default, named: never refused (ADR-013 §3.6)
     known = committed(root) if known is None else known
     if not known:
-        raise ConfigError(f'{PROJECT_FILE}: "agents" is read from a committed {PROJECT_FILE} only, and git tracks '
-                          f"none here — every developer reads the same team's folder (ADR-013, decision 30): commit "
-                          f"it, or remove `agents` — the team's folder is then {TEAM_FOLDER}/")
+        # Uncommitted, the team's version is the team's file's, else cortex.toml's: before 1.8.0, that is what to
+        # move, before anything is committed (§3.8, step 3).
+        loose = cascade.loose_versions(root)
+        version = (loose.get("team") or loose.get("project") or (None, None))[1]
+        if version is not None and project.is_version(version) and project.before_team(version):
+            raise ConfigError(project.agents_before(version))
+        raise ConfigError(project.AGENTS_UNCOMMITTED)
     try:
         workspace.check_team_folder(root, folder)
     except project.ProjectFileError as error:

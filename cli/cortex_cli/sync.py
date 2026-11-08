@@ -860,8 +860,10 @@ def _team_folder_note(project: config.Project) -> Optional[str]:
         if empty else None
 
 
-# What a root agents/ left behind still holds, when cortex.toml names another team's folder (ADR-013 §3.6).
-_TEAM_CONTENT = ("roles", "capabilities", "personalities", "workflows", "project-overview.md", "project-context.md")
+# What a root agents/ left behind still holds, when cortex.toml names another team's folder (ADR-013 §3.6):
+# overlays, context files, and a team's file and lock that no longer apply.
+_TEAM_CONTENT = ("roles", "capabilities", "personalities", "workflows", "project-overview.md", "project-context.md",
+                 config.TEAM_FILE, config.TEAM_LOCK_FILE)
 
 
 def renamed_folder_notes(project: config.Project) -> List[str]:

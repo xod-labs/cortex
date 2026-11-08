@@ -521,9 +521,13 @@ def out_of_step(root: Path, project: config.Project, the_store: store.Store) -> 
 # --------------------------------------------------------------------------- #
 
 def check_overlays(root: str, base: Path) -> Tuple[int, str]:
-    """The overlay validator's exit code and report, with ``base`` as the spec."""
+    """The overlay validator's exit code and report, with ``base`` as the spec — the workspace's overlays
+    in the team's folder ``cortex.toml`` names (ADR-013 §3.6), as ``cortex validate`` reads them."""
+    folder = config.loose_team_folder(root)
+    team = None if folder == config.TEAM_FOLDER else f"{root}/{folder}"
     report = io.StringIO()
-    code = overlay_validator.validate(root, str(base), "", False, report, overlay_validator.Colors(False))
+    code = overlay_validator.validate(root, str(base), "", False, report, overlay_validator.Colors(False),
+                                      team_folder=team)
     return code, report.getvalue()
 
 

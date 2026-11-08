@@ -184,7 +184,7 @@ def roots_and_folder(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]], Op
                 sys.stderr.write(f"note: {note}\n")
             else:
                 warnings.append((Path(os.path.relpath(path, root)).as_posix(), "BOOTSTRAP_BEHIND", note))
-        team = project.team_dir if project.team_folder != config.TEAM_FOLDER else None
+        team = f"{root}/{project.team_folder}" if project.team_folder != config.TEAM_FOLDER else None
         return root, base, warnings, team
     if sync.is_checkout(Path(cwd)) and os.path.isfile(os.path.join(cwd, "templates", "bootstrap-instructions.md")):
         return cwd, cwd, [], None

@@ -120,10 +120,13 @@ class RefusalTests(FolderTestCase):
         made = self.named(name="made")
         (made / "svc").mkdir()
         (made / "svc" / "project-overview.md").write_text("# svc\n", encoding="utf-8")
+        (made / "svc" / "agents").mkdir()
+        (made / "apps" / "web" / "agents").mkdir(parents=True)
+        (made / "apps" / "web" / "project-overview.md").write_text("# web\n", encoding="utf-8")
         (made / "other").mkdir()
         (made / "other" / "cortex.toml").write_text('version = "1.8.0"\n', encoding="utf-8")
         for value in ("../x", "a/../b", "/x", "C:\\x", "\\\\server\\x", "a\\b", ".", "cortex", "cortex/x", ".team",
-                      "svc/agents", "svc/team", "other"):
+                      "svc/agents", "svc/team", "svc", "apps", "other"):
             with self.subTest(value=value):
                 (made / "cortex.toml").write_text(f"agents = {json.dumps(value)}\ntheme = \"h2g2\"\n", encoding="utf-8")
                 proc = self.cortex(made, "sync")
@@ -136,6 +139,8 @@ class RefusalTests(FolderTestCase):
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', committed=False, name="nogit")
         (root / "agents" / "roles").mkdir(parents=True)
         self.assert_ok(self.cortex(root, "sync"))
+        root = self.project(f'agents = "agents"\nversion = "{OWN}"\ntheme = "h2g2"\n', committed=False, name="named")
+        self.assert_ok(self.cortex(root, "sync"))                   # named, uncommitted: the default all the same
 
     def test_agents_in_an_uncommitted_cortex_toml_is_refused(self):
         root = self.named(committed=False)
@@ -148,6 +153,10 @@ class RefusalTests(FolderTestCase):
         root = self.project(f'version = "1.7.0"\ntheme = "h2g2"\nagents = "{FOLDER}"\n')
         (root / FOLDER).mkdir()
         proc = self.cortex(root, "sync")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn('"agents" is read once the team\'s version is 1.8.0 or later — the team\'s is 1.7.0', proc.err)
+        root = self.project(f'version = "1.7.0"\ntheme = "h2g2"\nagents = "{FOLDER}"\n', committed=False, name="nogit")
+        proc = self.cortex(root, "sync")                            # at a 2.B root: 1.8.0 named, not "commit it"
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn('"agents" is read once the team\'s version is 1.8.0 or later — the team\'s is 1.7.0', proc.err)
 
@@ -206,9 +215,12 @@ class FolderStateTests(FolderTestCase):
         root = self.named()
         (root / "agents" / "roles").mkdir(parents=True)
         (root / "agents" / "project-context.md").write_text("# the team\n", encoding="utf-8")
+        (root / "agents" / "cortex.team.toml").write_text('claude_access = false\nlocked = ["claude_access"]\n',
+                                                          encoding="utf-8")
         proc = self.cortex(root, "sync")
         self.assert_ok(proc)
-        self.assertIn(f"warning: agents/ still holds project-context.md, roles — the team's folder is {FOLDER}/", proc.err)
+        self.assertIn(f"warning: agents/ still holds cortex.team.toml, project-context.md, roles — the team's folder "
+                      f"is {FOLDER}/", proc.err)
         proc = self.cortex(root, "validate")
         self.assertIn("TEAM_FOLDER_LEFT_BEHIND", proc.out)
 
@@ -218,6 +230,47 @@ class FolderStateTests(FolderTestCase):
         self.assert_ok(proc)
         self.assertNotIn("is not there", proc.err)
         self.assertNotIn("still holds", proc.err)
+
+
+class UpgradeGateTests(FolderTestCase):
+    """Every overlay gate of `cortex upgrade` checks the team's folder, as `cortex validate` does."""
+
+    BROKEN = "<!-- OVERLAY\n     Base: cortex/agents/roles/engineering/nowhere.md\n     Scope: workspace\n-->\n\n# x\n"
+
+    def broken(self, root, folder):
+        overlay = root / folder / "roles" / "engineering" / "architect.md"
+        overlay.parent.mkdir(parents=True, exist_ok=True)
+        overlay.write_text(self.BROKEN, encoding="utf-8")
+
+    def test_team_stops_on_the_folder_s_failing_overlays(self):
+        root = self.named()
+        self.broken(root, FOLDER)
+        before = (root / FOLDER / "cortex.team.toml").read_bytes()
+        proc = self.cortex(root, "upgrade", "--team", OWN)       # no lock yet: one to write, the overlays checked
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"{FOLDER}/roles/engineering/architect.md", proc.out)
+        self.assertEqual((root / FOLDER / "cortex.team.toml").read_bytes(), before)
+        self.assertFalse((root / FOLDER / "cortex.team.lock").exists())
+
+    def test_an_agents_left_behind_stops_no_move(self):
+        root = self.named()
+        self.broken(root, "agents")
+        proc = self.cortex(root, "upgrade", "--team", OWN)
+        self.assert_ok(proc)
+        self.assertIn(f"The project's overlays pass against Cortex {OWN}", proc.out)
+        self.assertTrue((root / FOLDER / "cortex.team.lock").is_file())
+
+    @DOWNLOADS
+    def test_a_move_stops_on_the_folder_s_failing_overlays(self):
+        root = self.project(f'version = "9.9.8"\ntheme = "h2g2"\nagents = "{FOLDER}"\n')
+        self.broken(root, FOLDER)
+        self.assert_ok(self.cortex(root, "sync"))
+        for args in ((OWN, "--dry-run"), (OWN,)):
+            with self.subTest(args=args):
+                proc = self.cortex(root, "upgrade", *args)
+                self.assertNotEqual(proc.returncode, 0, proc.out + proc.err)
+                self.assertIn(f"{FOLDER}/roles/engineering/architect.md", proc.out)
+                self.assertIn('version = "9.9.8"', (root / "cortex.toml").read_text(encoding="utf-8"))
 
 
 @DOWNLOADS
