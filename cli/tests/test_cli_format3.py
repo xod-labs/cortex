@@ -341,6 +341,28 @@ class TryTests(TeamTestCase):
                 self.assert_ok(proc)
                 self.assertEqual((root / "CLAUDE.md").read_bytes(), wanted)
 
+    def test_an_own_bootstrap_without_a_digest_is_known_in_the_team_s_theme(self):
+        # Written by a Cortex before 1.8.0 in the team's theme; the developer's theme is none.
+        root = self.project(toml='version = "9.9.7"\ntheme = "h2g2"\n', local='theme = "none"\n', name="nodigest")
+        (root / ".gitignore").write_text("CLAUDE.md\ncortex.local.toml\n", encoding="utf-8")
+        self.assert_ok(self.cortex(root, "sync"))
+        (root / "CLAUDE.md").write_bytes(init.instructions(self.f97, True))
+        proc = self.cortex(root, "upgrade", "9.9.8")
+        self.assert_ok(proc)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(FORMAT_2, False)))
+
+    def test_a_changed_own_bootstrap_is_said_changed_by_you(self):
+        root = self.project(toml='version = "9.9.7"\ntheme = "h2g2"\n', name="yours")
+        (root / ".gitignore").write_text("CLAUDE.md\ncortex.local.toml\n", encoding="utf-8")
+        self.assert_ok(self.cortex(root, "sync"))
+        changed = written(self.f97).replace(b"Cortex AI Team\n", b"Cortex AI Team, ours\n", 1)
+        (root / "CLAUDE.md").write_bytes(changed)
+        proc = self.cortex(root, "upgrade", "9.9.8")
+        self.assert_ok(proc)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), changed)
+        self.assertIn("CLAUDE.md is not what Cortex wrote, by the digest in its marker — you changed it — so it is kept",
+                      proc.err)
+
     def test_the_team_s_bootstrap_still_follows_the_team_s_version(self):
         root = self.tried("theirs", ignored=False)
         (root / "CLAUDE.md").write_bytes(written(self.f97) + OURS)

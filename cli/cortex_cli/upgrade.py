@@ -183,13 +183,15 @@ def _format(content: Optional[bytes]) -> int:
     return found[0][1] if found else 0
 
 
-def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path,
-              personality: bool) -> Tuple[Optional[bytes], Optional[str]]:
+def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path, personality: bool,
+              team_personality: Optional[bool] = None) -> Tuple[Optional[bytes], Optional[str]]:
     """What becomes of the bootstrap at ``path`` when the project moves from ``pinned``, whose spec
     is at ``current`` — ``None`` when the store has it not — to the spec at ``target`` (ADR-010
     §3.5, step 5): the bytes to write, or the note to give; ``(None, None)`` when nothing is to be
     done. A file nobody changed is written again whenever the target writes another, whichever the
-    direction: its marker's digest says so, or, without one, its being the pinned version's file."""
+    direction: its marker's digest says so, or, without one, its being the pinned version's file.
+    ``team_personality``, the developer's own file (ADR-013 §3.10): the personality of the team's theme, which a
+    Cortex before 1.8.0 wrote it with — that file is the pinned version's too."""
     kept = path.read_bytes()
     content = init.normalised(kept)
     found = init.markers(content)
@@ -202,16 +204,19 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     if not (found or init.bootstrap_of_cortex(content)):
         return None, None       # no Cortex bootstrap: cortex init says so
     layouts = [found[0][0]] if found else list(TEMPLATES)
+    who = "a team changed it" if team_personality is None else "you changed it"
     # ADR-012 §3.4: the end marker of the file `cortex init --force` writes, the target's — none before format 2.
     ends = any(init.END_MARKER.search(_written(target / "templates", name, personality, path) or b"") for name in layouts)
     below = " — your own rules go below its end marker, where Cortex keeps them" if ends else ""
     intact = init.untouched(content)
     if intact is None and current is None:
         return None, (f"{display(str(path))} was not checked: its marker carries no digest, and Cortex {pinned}, whose "
-                      f"templates would tell whether a team changed it, is not in the store. It is kept: {again}")
+                      f"templates would tell whether {who}, is not in the store. It is kept: {again}")
     layout = layouts[0] if intact else None
     if intact is None:
         layout = written_by(init.parts(content)[0], current / "templates", layouts, personality, path)
+        if layout is None and team_personality not in (None, personality):
+            layout = written_by(init.parts(content)[0], current / "templates", layouts, team_personality, path)
     if layout is None and _format(content) >= 3 > max(_format(_written(target / "templates", name, personality, path))
                                                      for name in layouts):
         # Moved below 1.8.0, a format 3 file a team changed: its rules need a cortex of 1.8.0 (ADR-013 §3.10).
@@ -231,16 +236,16 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
                                              for name in layouts)
         if not matters:
             if cursor:
-                return None, (f"{display(str(path))} is not what Cortex wrote — a team changed it — and it has no "
+                return None, (f"{display(str(path))} is not what Cortex wrote — {who} — and it has no "
                               "`alwaysApply: true` line in a frontmatter, as Cursor's documentation writes it: Cursor "
                               f"may not apply it in every conversation. It is kept: {again}{below}")
             if not found and intact is None:    # #313: no marker, and not the pinned version's file
                 return None, (f"{display(str(path))} is a bootstrap without the marker, not what Cortex {pinned} writes "
-                              f"— a team changed it, or an older Cortex wrote it — so it is kept: {again}{below}")
+                              f"— {who}, or an older Cortex wrote it — so it is kept: {again}{below}")
             return None, None
-        what = "not what Cortex wrote, by the digest in its marker — a team changed it" if intact is False else \
+        what = f"not what Cortex wrote, by the digest in its marker — {who}" if intact is False else \
             (f"{f'format {found[0][1]}' if found else 'a bootstrap without the marker'}, not what Cortex {pinned} "
-             "writes — a team changed it, or an older Cortex wrote it")
+             f"writes — {who}, or an older Cortex wrote it")
         rule = ("; and with no `alwaysApply: true` line in a frontmatter, as Cursor's documentation writes it, "
                 "Cursor may not apply it in every conversation") if cursor else ""
         return None, (f"{display(str(path))} is {what} — so it is kept, and the target's template is not written"
@@ -267,11 +272,11 @@ def _nobody(written: bytes) -> str:
 
 
 def bootstraps(files: List[Path], pinned: Version, current: Optional[Path], target: Path, personality: bool,
-               err: TextIO) -> List[Tuple[Path, bytes]]:
+               err: TextIO, team_personality: Optional[bool] = None) -> List[Tuple[Path, bytes]]:
     """The bootstrap files to write again, and what they are now; the notes said on ``err``."""
     rewrites = []
     for path in files:
-        content, note = bootstrap(path, pinned, current, target, personality)
+        content, note = bootstrap(path, pinned, current, target, personality, team_personality)
         if note:
             err.write(f"note: {note}\n")
         if content is not None:
@@ -361,7 +366,7 @@ def _own_rewrites(files: List[Path], project: config.Project, after: Version, th
     current = project.version
     the_store.ensure(after)
     return bootstraps(files, current, the_store.path(current) if the_store.has(current) else None,
-                      the_store.path(after), project.active_theme != "none", err)
+                      the_store.path(after), project.active_theme != "none", err, project.team_theme != "none")
 
 
 def _again(path: Path, root: str, version: Version, content: bytes, own: bool, would: bool = False) -> str:
