@@ -587,14 +587,15 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
         return outcome.code
     if which == "team":
         outcome = team_move(cwd, wanted, dry_run, force, out, err, branch, message)
-        agents = os.path.join(outcome.root, config.TEAM_FOLDER)
+        folder = config.loose_team_folder(outcome.root)
+        agents = os.path.join(outcome.root, folder)
         team = [path for path in outcome.files if _inside(agents, path)]
         if not dry_run and outcome.why is None and team:
             own = [path for path in outcome.files if path not in team]
             mine = f"; {_and([_shown_path(path, outcome.root) for path in own])} in the project" if own else ""
-            out.write(f"\nCommit {_and([_shown_path(path, outcome.root) for path in team])} in {config.TEAM_FOLDER}/"
+            out.write(f"\nCommit {_and([_shown_path(path, outcome.root) for path in team])} in {folder}/"
                       f"{mine}; teammates run `cortex sync` after they pull.\n"
-                      if outcome.committed is None else f"\nCommitted in {config.TEAM_FOLDER}/ on {outcome.committed}"
+                      if outcome.committed is None else f"\nCommitted in {folder}/ on {outcome.committed}"
                       f" — nothing was pushed{mine}; teammates run `cortex sync` after they pull.\n")
         return outcome.code
     newer = _asking(wanted)
@@ -713,19 +714,20 @@ def _local_then_sync(root: str, values: Dict[str, object], out: TextIO, err: Tex
         raise
 
 
-def _team_git(agents: str, branch: Optional[str], out: TextIO, err: TextIO) -> Optional[str]:
-    """The work tree of the team's folder, for --branch and --commit, which act in the team's
+def _team_git(agents: str, branch: Optional[str], out: TextIO, err: TextIO,
+              folder: str = config.TEAM_FOLDER) -> Optional[str]:
+    """The work tree of the team's folder ``folder``, for --branch and --commit, which act in the team's
     repository (ADR-013 §3.11) — the branch made before anything is written."""
     top = _work_tree(agents)
     if top is None:
-        err.write(f"note: {config.TEAM_FOLDER}/ is in no git work tree — nothing is committed there\n")
+        err.write(f"note: {folder}/ is in no git work tree — nothing is committed there\n")
         return None
     if branch is not None and _on_branch(agents) != branch:
         if _branch_exists(agents, branch):
             raise UpgradeError(f"the branch {branch} exists already in {display(top)} — nothing was changed. Name "
                                "another one with --branch")
         _git_ok(agents, "checkout", "-q", "-b", branch)
-        out.write(f"git: on a new branch in {config.TEAM_FOLDER}/, {branch}\n")
+        out.write(f"git: on a new branch in {folder}/, {branch}\n")
     return top
 
 
@@ -745,28 +747,31 @@ def _no_release(the_store: store.Store) -> UpgradeError:
                         "from a released cortex: `cortex upgrade --team [VERSION]` there. Nothing was changed")
 
 
-def team_target(pinned: Optional[Version], wanted: Optional[str], the_store: store.Store) -> Version:
-    """The version ``--team`` moves the team's file to: ``wanted``, or this cortex's own — never down to it,
-    nor to a source or development build's, which names no release a teammate can download."""
+def team_target(pinned: Optional[Version], wanted: Optional[str], the_store: store.Store,
+                name: str = config.TEAM_NAME) -> Version:
+    """The version ``--team`` moves the team's file — ``name``, as the project root names it — to:
+    ``wanted``, or this cortex's own — never down to it, nor to a source or development build's, which
+    names no release a teammate can download."""
     if wanted is None and store.development(the_store.own):
         raise _no_release(the_store)
     if wanted is None and pinned is not None and pinned > the_store.own:
-        raise UpgradeError(f"{config.TEAM_NAME} pins Cortex {pinned}, newer than this cortex, {the_store.own} — nothing "
+        raise UpgradeError(f"{name} pins Cortex {pinned}, newer than this cortex, {the_store.own} — nothing "
                            f"was changed. Update this cortex:\n    {store.update_command(pinned)}")
     target = Version(wanted) if wanted else the_store.own
     if grammar.before_team(str(target)):
-        raise UpgradeError(f"{config.TEAM_NAME} reads Cortex {grammar.FIRST_TEAM_VERSION} or later, and {target} is "
+        raise UpgradeError(f"{name} reads Cortex {grammar.FIRST_TEAM_VERSION} or later, and {target} is "
                            "before it — nothing was changed")
     _served(the_store, target, f"cortex upgrade --team {target}")
     return target
 
 
 def _pinned_and_locked(agents: str, pinned: Optional[Version], target: Version, the_store: store.Store,
-                       out: TextIO) -> bool:
+                       out: TextIO, folder: str = config.TEAM_FOLDER) -> bool:
     """Whether ``--team`` has nothing to move: the target is the team's pin, and its lock names it. The
     lock is checked as sync checks it, by a dry run too: a spec whose files differ from the ones the
     team locked is refused, not locked again."""
-    return target == pinned and sync.check_lock(agents, target, the_store, out, name=config.TEAM_LOCK_FILE)[1] is None
+    return target == pinned and sync.check_lock(agents, target, the_store, out, name=config.TEAM_LOCK_FILE,
+                                                folder=folder)[1] is None
 
 
 def _team_left(agents: str, files: List[Path]) -> List[Path]:
@@ -785,16 +790,16 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     team's folder; the current project synced, and its untouched team's bootstrap written again, when it
     follows the file. ``--branch`` and ``--commit`` act in the team's repository."""
     root, project = _project(cwd)
-    team_file = Path(root) / config.TEAM_FOLDER / config.TEAM_FILE
+    name, folder = project.team_name, project.team_folder
+    team_file = Path(project.team_dir) / config.TEAM_FILE
     if not team_file.is_file():
-        raise UpgradeError(f"no {config.TEAM_NAME} — the team creates it, by a commit in its repository. Nothing was "
-                           "changed")
+        raise UpgradeError(f"no {name} — the team creates it, by a commit in its repository. Nothing was changed")
     if not project.team_file:
-        raise UpgradeError(f"{config.TEAM_NAME} is not read: this project pins Cortex {project.team_version}, before "
+        raise UpgradeError(f"{name} is not read: this project pins Cortex {project.team_version}, before "
                            f"{grammar.FIRST_TEAM_VERSION}. Nothing was changed")
     the_store = store.Store()
     pinned = team_pin(project)
-    target = team_target(pinned, wanted, the_store)
+    target = team_target(pinned, wanted, the_store, name)
     developer = project.developer_version
     if developer is not None and project.follows:
         after = max(target, Version(str(developer.value)))
@@ -804,17 +809,17 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
                                f"{target}. Nothing was changed")
     out.write(f"Project: {display(root)}\n")
     the_store.ensure(target)
-    agents = str(Path(root) / config.TEAM_FOLDER)
-    unchanged = _pinned_and_locked(agents, pinned, target, the_store, out)
+    agents = project.team_dir
+    unchanged = _pinned_and_locked(agents, pinned, target, the_store, out, folder)
     said = f"Cortex {target}, pinned and locked already — nothing to move" if unchanged else \
         f"Cortex {pinned} → {target}" if pinned is not None else f"Cortex {target}, a version added"
-    out.write(f"{config.TEAM_NAME}: {said}\n")
+    out.write(f"{name}: {said}\n")
     if project.follows and checked is None and not unchanged:
         if _overlays(root, target, the_store.path(target), force, dry_run, out, err):
             return Outcome(root, pinned, target, 1, f"the overlays fail against Cortex {target} — nothing was changed")
     elif not project.follows:
         out.write(f"This project pins its own version, Cortex {project.team_version}, in its committed "
-                  f"{config.PROJECT_FILE}: it does not follow {config.TEAM_NAME}, and its overlays are not checked\n")
+                  f"{config.PROJECT_FILE}: it does not follow {name}, and its overlays are not checked\n")
     if dry_run:
         out.write("--dry-run: nothing of the project was changed\n")
         return Outcome(root, pinned, target)
@@ -830,17 +835,18 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
             out.write(f"git: no branch {branch} is made — nothing was written\n")
         if left:
             names = [_shown_path(path, root) for path in left]
-            err.write(f"note: nothing was written in {config.TEAM_FOLDER}/, and {_and(names)} "
+            err.write(f"note: nothing was written in {folder}/, and {_and(names)} "
                       f"{'hold' if len(names) > 1 else 'holds'} changes git has not committed — a run cut short, or "
                       "a commit refused? `git status` there says what is left to commit\n")
-    top = _team_git(agents, branch, out, err) if asked and files else None
+    top = _team_git(agents, branch, out, err, folder) if asked and files else None
     before = {} if unchanged else {path: path.read_bytes() if path.is_file() else None for path in files}
     try:
         if not unchanged:
             with sync.project_lock(Path(agents), err):
-                config.write_text(str(team_file), config.render_team(root, {"version": str(target)}))
+                config.write_text(str(team_file), config.render_team(root, {"version": str(target)}, folder))
                 if target == pinned:        # checked again, under the folder's lock
-                    digest, written = sync.check_lock(agents, target, the_store, out, name=config.TEAM_LOCK_FILE)
+                    digest, written = sync.check_lock(agents, target, the_store, out, name=config.TEAM_LOCK_FILE,
+                                                      folder=folder)
                     if written is not None:
                         config.write_lock(agents, target, digest, config.TEAM_LOCK_FILE)
                 else:
@@ -853,7 +859,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
                 path.unlink(missing_ok=True)
             else:
                 _put(path, content)
-        err.write(f"note: {config.TEAM_NAME} and its lock are as they were\n")
+        err.write(f"note: {name} and its lock are as they were\n")
         raise
     outcome = Outcome(root, pinned, target, files=list(files))
     outcome.left = [] if files else left
@@ -923,7 +929,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         # A try, or the team's pin, newer than this cortex: said with its own remedy (ADR-013 §3.8) — a
         # source or development build, which the gate lets by, never moves the project down to itself.
         name, newer = pinned
-        team = os.path.isfile(os.path.join(root, config.TEAM_FOLDER, config.TEAM_FILE))
+        team = os.path.isfile(os.path.join(root, config.loose_team_folder(root), config.TEAM_FILE))
         raise UpgradeError(f"this project reads Cortex {newer}, which its {name} pins, newer than this cortex, "
                            f"{the_store.own} — nothing was changed. Name the version to move to: "
                            + ("`cortex upgrade --team VERSION` moves the team's pin, " if team else "")
@@ -947,7 +953,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         # It follows the team's file — an uncommitted cortex.toml included, at a 2.B root: a move is the
         # team's, or a try; without VERSION, or with the team's or the version read, it resumes.
         if wanted is not None and Version(wanted) not in (current, project.version):
-            raise UpgradeError(f"this project follows {config.TEAM_NAME}, which pins Cortex {current} — moving it "
+            raise UpgradeError(f"this project follows {project.team_name}, which pins Cortex {current} — moving it "
                                f"is the team's: `cortex upgrade --team {wanted}`; trying it here: `cortex upgrade "
                                f"--local {wanted}`. Nothing was changed")
         wanted = None
@@ -963,9 +969,11 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
                                f"than this cortex, {the_store.own} — drop the try first: cortex upgrade --local "
                                f"{target}. Nothing was changed")
     if target != current and grammar.before_team(str(target)):
-        uses = [what for what, used in ((config.TEAM_NAME, project.team_file),
+        uses = [what for what, used in ((project.team_name, project.team_file),
                                         (f"{config.LOCAL_FILE}'s version", developer is not None
                                          and developer.origin == config.LOCAL_FILE),
+                                        (f"{config.PROJECT_FILE}'s agents",
+                                         "agents" in (project.inputs[0] if project.inputs is not None else {})),
                                         (f"a {config.PROJECT_FILE} without version or theme", project.theme is None))
                 if used]
         if uses:
@@ -1252,7 +1260,7 @@ def _other_tree(top: str, root: str, path: Path) -> bool:
     says which work tree, as it would commit the file. When it cannot — a repository of another owner,
     a submodule whose repository is gone — the work tree of ``top`` says: a file it neither tracks nor
     sees is another repository's. Any other file is left to the commit, as in 1.7.0."""
-    folder = Path(os.path.abspath(root), config.TEAM_FOLDER)
+    folder = Path(os.path.abspath(root), config.loose_team_folder(root))
     if Path(os.path.abspath(path)) not in (folder / config.TEAM_FILE, folder / config.TEAM_LOCK_FILE):
         return False
     proc = _git(os.path.dirname(os.path.realpath(path)), "rev-parse", "--show-toplevel")
@@ -1620,7 +1628,7 @@ def _each(entries: List[registry.Entry], options: _Options, out: TextIO, err: Te
 
 
 def folder_of(root: str) -> str:
-    return os.path.normcase(os.path.realpath(os.path.join(root, config.TEAM_FOLDER)))
+    return os.path.normcase(os.path.realpath(os.path.join(root, config.loose_team_folder(root))))
 
 
 def _followers(entries: List[registry.Entry]) -> List[Tuple[str, str]]:
@@ -1660,7 +1668,7 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
     # Every follower of this folder, checked against the target team_move will use, before it moves.
     the_store = store.Store()
     try:
-        target = team_target(team_pin(project), options.wanted, the_store)
+        target = team_target(team_pin(project), options.wanted, the_store, project.team_name)
     except UpgradeError as error:
         moved[folder] = str(error)
         out.write(f"refused: {error}\n")
@@ -1668,8 +1676,8 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
     the_store.ensure(target)
     failing = []
     # At the pin, with its lock, nothing moves: no overlay is checked, as team_move checks none.
-    pinned_and_locked = _pinned_and_locked(os.path.join(entry.path, config.TEAM_FOLDER), team_pin(project), target,
-                                           the_store, out)
+    pinned_and_locked = _pinned_and_locked(project.team_dir, team_pin(project), target, the_store, out,
+                                           project.team_folder)
     for other in [path for path, shared in followers if shared == folder and not pinned_and_locked]:
         code, report = check_overlays(other, the_store.path(target))
         if code != 0:
@@ -1677,7 +1685,7 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
             out.write(f"The overlays of {display(other)}, checked against Cortex {target}:\n{report}")
     if failing and not options.force:
         why = (f"the overlays of {_and([display(path) for path in failing])} fail against Cortex {target} — "
-               f"{config.TEAM_NAME} was not moved, for any project that follows it")
+               f"{project.team_name} was not moved, for any project that follows it")
         moved[folder] = why
         out.write(f"refused: {why}\n")
         return Outcome(entry.path, project.team_version, target, 1, why)

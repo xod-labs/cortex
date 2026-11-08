@@ -122,8 +122,9 @@ def versions_of(root: Path, err: TextIO) -> List[str]:
         return []
     # Its candidate versions — the team's file's, cortex.toml's and a local try's (ADR-013 §3.11) — and
     # the one it resolves: a version a teammate's bump or a try reads is kept as the pin is.
+    loose = cascade.loose_versions(str(root), project.team_folder)
     used = list(dict.fromkeys([str(project.version), str(project.team_version),
-                               *(version for _, version in cascade.loose_versions(str(root)).values())]))
+                               *(version for _, version in loose.values())]))
     spec = project.spec_directory()
     if spec is not None and os.path.isdir(spec):
         synced = validate._synced_version(project.root, project.spec, spec)

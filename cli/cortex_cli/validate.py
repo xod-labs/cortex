@@ -73,9 +73,9 @@ def lock_warnings(project: config.Project, base: str, files: Optional[Dict[str, 
         return []
     directory, name, shown_name = where
     version = version or project.version
-    pins = config.PROJECT_FILE if shown_name == config.LOCK_FILE else config.TEAM_NAME
+    pins = config.PROJECT_FILE if shown_name == config.LOCK_FILE else project.team_name
     try:
-        lock = config.load_lock(directory, name)
+        lock = config.load_lock(directory, name, shown_name)
     except config.ConfigError as error:
         return [(shown_name, "LOCK_INVALID", str(error))]
     if lock is None:
@@ -93,14 +93,12 @@ def lock_warnings(project: config.Project, base: str, files: Optional[Dict[str, 
     return []
 
 
-ROLES = {"team": config.TEAM_NAME, "project": config.PROJECT_FILE, "local": config.LOCAL_FILE}
-
-
 def _recorded(project: config.Project) -> Optional[str]:
     """What, of the files' versions, is not what ``cortex sync`` recorded — ``None`` when all are
     (ADR-013 §3.11): the test the bootstrap gives the assistant, by plain equality."""
     candidates = project.settings.candidates if project.settings is not None else {}
-    for role, name in ROLES.items():
+    roles = {"team": project.team_name, "project": config.PROJECT_FILE, "local": config.LOCAL_FILE}
+    for role, name in roles.items():
         now, then = candidates.get(role), (project.synced or {}).get(role)
         if now != then:
             return (f"{name} {'pins Cortex ' + now if now else 'pins no version'}, and `cortex sync` recorded "
@@ -118,7 +116,15 @@ def _origin_of(project: config.Project, reads: str) -> Optional[str]:
 
 def roots(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]]]:
     """The project root and the base root to validate from ``cwd``, and the warnings of the
-    project itself."""
+    project itself. ``team_folder`` — the workspace's layer directory, cortex.toml's ``agents``
+    (ADR-013 §3.6) — is ``roots_and_folder``'s."""
+    root, base, warnings, _ = roots_and_folder(cwd)
+    return root, base, warnings
+
+
+def roots_and_folder(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]], Optional[str]]:
+    """``roots``, and the team's folder of the project — ``None`` for the default ``agents/``, or
+    outside a project."""
     root = config.find_project(cwd)
     if root is not None:
         # A version newer than this cortex, said before any key is checked (ADR-013 §3.8) — but of a
@@ -158,11 +164,15 @@ def roots(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]]]:
         for note in sync.version_notes(project):
             if "is locked by" not in note and "is not read" not in note:
                 sys.stderr.write(f"note: {note}\n")
-        warnings = [(config.TEAM_NAME, "LOCKED_KEY" if "is locked by" in note else "TEAM_NOT_READ", note)
+        warnings = [(project.team_name, "LOCKED_KEY" if "is locked by" in note else "TEAM_NOT_READ", note)
                     for note in (project.settings.notes if project.settings is not None else ())]
         folder = sync._team_folder_note(project)
         if folder is not None:
-            warnings.append((config.TEAM_FOLDER + "/", "TEAM_FOLDER_EMPTY", folder))
+            warnings.append((project.team_folder + "/", "TEAM_FOLDER_EMPTY", folder))
+        for said in sync.renamed_folder_notes(project):
+            missing = said.startswith(f"{project.team_folder}/ is not there")
+            warnings.append(((project.team_folder if missing else config.TEAM_FOLDER) + "/",
+                             "TEAM_FOLDER_MISSING" if missing else "TEAM_FOLDER_LEFT_BEHIND", said))
         if synced:
             origin = _origin_of(project, synced) if project.synced is not None else None
             warnings += lock_warnings(project, base, marker.get("files") if marker else None,
@@ -174,9 +184,10 @@ def roots(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]]]:
                 sys.stderr.write(f"note: {note}\n")
             else:
                 warnings.append((Path(os.path.relpath(path, root)).as_posix(), "BOOTSTRAP_BEHIND", note))
-        return root, base, warnings
+        team = project.team_dir if project.team_folder != config.TEAM_FOLDER else None
+        return root, base, warnings, team
     if sync.is_checkout(Path(cwd)) and os.path.isfile(os.path.join(cwd, "templates", "bootstrap-instructions.md")):
-        return cwd, cwd, []
+        return cwd, cwd, [], None
     hint = (" — a cortex/ submodule or clone is here: `cortex init` says how to leave it"
             if os.path.isdir(os.path.join(cwd, "cortex")) else "")
     raise RootsError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory a "
@@ -187,10 +198,10 @@ def run(args: List[str]) -> int:
     if any(arg in ("-h", "--help") for arg in args):
         return validate.main(args, project_root=".", base_root="cortex", prog="cortex validate")
     try:
-        project_root, base_root, warnings = roots(working_directory())
+        project_root, base_root, warnings, team = roots_and_folder(working_directory())
     except RootsError as error:
         return sync.failed("cortex validate", str(error), 2)
     except OSError as error:
         return sync.failed("cortex validate", sync.os_error(error), 2)
     return validate.main(args, project_root=project_root, base_root=base_root, prog="cortex validate",
-                         project_warnings=warnings)
+                         project_warnings=warnings, team_folder=team)

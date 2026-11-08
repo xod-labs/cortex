@@ -92,11 +92,12 @@ class ConfigCommandTests(SettingsTestCase):
         proc = self.cortex(project, "config")
         self.assert_ok(proc)
         lines = {line.split()[0]: line.split(None, 2)[1:] for line in proc.out.splitlines()}
-        self.assertEqual(list(lines), ["version", "theme", "sync", "claude_access", "releases_url", "update_check",
-                                       "register"])
+        self.assertEqual(list(lines), ["version", "theme", "sync", "claude_access", "agents", "releases_url",
+                                       "update_check", "register"])
         self.assertEqual(lines["version"], [OWN, "cortex.toml"])
         self.assertEqual(lines["theme"], ["none", "cortex.local.toml"])
         self.assertEqual(lines["sync"], ["store", "default"])
+        self.assertEqual(lines["agents"], ["agents", "default"])
         self.assertEqual(lines["claude_access"], ["true", "cortex.toml"])
         self.assertEqual(lines["register"], ["false", "CORTEX_NO_REGISTER"])
         self.assertEqual(snapshot(self.tmp), before)                     # it writes nothing
@@ -289,7 +290,7 @@ class TooNewTests(SettingsTestCase):
         self.assertIn(self.WHY, proc.err)
         proc = self.cortex(project, "config", "verison")
         self.assertEqual(proc.returncode, 2, proc.err)
-        self.assertIn("cortex config knows version, theme, sync, claude_access, releases_url", proc.err)
+        self.assertIn("cortex config knows version, theme, sync, claude_access, agents, releases_url", proc.err)
         found = self.settings(project)
         self.assertIs(found["too_new"], True)
 

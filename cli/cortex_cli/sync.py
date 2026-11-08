@@ -135,16 +135,21 @@ def _gitdir(path: Path) -> Optional[str]:
     return os.path.normpath(os.path.join(path, text[len("gitdir:"):].strip()))
 
 
-def is_submodule(path: Path) -> bool:
+def is_submodule(path: Path, relative: Optional[str] = None) -> bool:
     """``.gitmodules`` has a ``path = cortex``: a submodule, whether its repository is under the
-    superproject's ``.git/modules/`` or, as older git made them, in the ``.git`` it holds."""
+    superproject's ``.git/modules/`` or, as older git made them, in the ``.git`` it holds. ``relative``,
+    the folder as the project root names it — a team's folder, ``team/agents`` — the ``.gitmodules`` read
+    is the root's."""
+    top = path.parent if relative is None else Path(str(path)[:-len(relative)] if str(path).endswith(relative)
+                                                    else path.parent)
+    name = path.name if relative is None else relative
     try:
-        lines = (path.parent / ".gitmodules").read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = (top / ".gitmodules").read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return False
     for line in lines:
         key, _, value = line.partition("=")
-        if key.strip() == "path" and value.strip().strip('"').rstrip("/") == path.name:
+        if key.strip() == "path" and value.strip().strip('"').rstrip("/") == name:
             return True
     return False
 
@@ -770,16 +775,18 @@ def register(root: str, out: TextIO, err: TextIO) -> None:
 
 
 def check_lock(root: str, version: store.Version, the_store: store.Store, out: TextIO,
-               locked: bool = False, name: str = config.LOCK_FILE, writer: str = "`cortex sync`") -> Tuple[str, Optional[str]]:
-    """``cortex.lock`` — or the lock ``name`` names in ``root``, the team's in its folder — against
-    ``version`` in the store (ADR-010 §3.3), before anything of the project changes: the digest of the
-    spec, and what to say of the lock to write — ``None`` when it stays as it is. A spec whose files
-    are not those the project locked is put in the store again, once: still different, the release is
-    not the one the team locked, and it is refused. ``locked`` — ``cortex sync --locked``, in a
-    project's CI — a lock to write is refused instead: the one committed must already be the pin's."""
-    shown_name = config.TEAM_LOCK_NAME if name == config.TEAM_LOCK_FILE else name
-    pins = config.TEAM_NAME if name == config.TEAM_LOCK_FILE else config.PROJECT_FILE
-    lock = config.load_lock(root, name)
+               locked: bool = False, name: str = config.LOCK_FILE, writer: str = "`cortex sync`",
+               folder: str = config.TEAM_FOLDER) -> Tuple[str, Optional[str]]:
+    """``cortex.lock`` — or the lock ``name`` names in ``root``, the team's in its folder ``folder`` —
+    against ``version`` in the store (ADR-010 §3.3), before anything of the project changes: the digest
+    of the spec, and what to say of the lock to write — ``None`` when it stays as it is. A spec whose
+    files are not those the project locked is put in the store again, once: still different, the
+    release is not the one the team locked, and it is refused. ``locked`` — ``cortex sync --locked``, in
+    a project's CI — a lock to write is refused instead: the one committed must already be the pin's."""
+    team = name == config.TEAM_LOCK_FILE
+    shown_name = f"{folder}/{config.TEAM_LOCK_FILE}" if team else name
+    pins = config.cascade.team_name(folder) if team else config.PROJECT_FILE
+    lock = config.load_lock(root, name, shown_name)
     digest = the_store.digest(version)
     if lock is not None and lock.version == version:
         if lock.digest == digest:
@@ -809,8 +816,8 @@ def against_locks(project: config.Project, flags: Dict[str, object]) -> None:
     for key, value in flags.items():
         setting = project.settings[key] if project.settings is not None and key in project.settings else None
         if value is not None and setting is not None and setting.locked and setting.value != value:
-            raise SyncError(f"{key} is locked to {config.toml_value(setting.value)} by {config.TEAM_NAME} — the team's "
-                            "choice, which a flag does not undo")
+            raise SyncError(f"{key} is locked to {config.toml_value(setting.value)} by {project.team_name} — the "
+                            "team's choice, which a flag does not undo")
 
 
 def version_notes(project: config.Project) -> List[str]:
@@ -840,16 +847,44 @@ def version_notes(project: config.Project) -> List[str]:
 
 
 def _team_folder_note(project: config.Project) -> Optional[str]:
-    """The default team's folder, a submodule left empty (ADR-013 §3.4): a warning, which
-    ``validate --strict`` fails — for a project whose team's version reads what it holds."""
-    folder = Path(project.root) / config.TEAM_FOLDER
-    if project_before_team(project) or not folder.is_dir() or not is_submodule(folder):
+    """The team's folder, a submodule left empty (ADR-013 §3.4): a warning, which ``validate --strict``
+    fails — for a project whose team's version reads what it holds."""
+    folder = Path(project.team_dir)
+    if project_before_team(project) or not folder.is_dir() or not is_submodule(folder, project.team_folder):
         return None
     try:
         empty = not any(folder.iterdir())
     except OSError:
         return None
-    return f"{config.TEAM_FOLDER}/ is empty — a submodule not checked out: `git submodule update --init`" if empty else None
+    return f"{project.team_folder}/ is empty — a submodule not checked out: `git submodule update --init`" \
+        if empty else None
+
+
+# What a root agents/ left behind still holds, when cortex.toml names another team's folder (ADR-013 §3.6).
+_TEAM_CONTENT = ("roles", "capabilities", "personalities", "workflows", "project-overview.md", "project-context.md")
+
+
+def renamed_folder_notes(project: config.Project) -> List[str]:
+    """What is said of a team's folder ``cortex.toml`` names (ADR-013 §3.6), at every sync and validate:
+    missing — its overlays, its context and the team's file are not read — or the root's ``agents/``
+    left behind, still holding overlays or context files nobody reads. Nothing of the default folder:
+    a project of 1.7.0 is said nothing new."""
+    if project.team_folder == config.TEAM_FOLDER:
+        return []
+    said = []
+    if not os.path.isdir(project.team_dir):
+        said.append(f"{project.team_folder}/ is not there — the team's folder {config.PROJECT_FILE} names: its "
+                    "overlays, its context files and the team's file are not read; check it out there")
+    old = os.path.join(project.root, config.TEAM_FOLDER)
+    try:
+        left = [name for name in sorted(os.listdir(old)) if name in _TEAM_CONTENT]
+    except OSError:
+        left = []
+    if left:
+        said.append(f"{config.TEAM_FOLDER}/ still holds {', '.join(left)} — the team's folder is "
+                    f"{project.team_folder}/, which {config.PROJECT_FILE} names: what {config.TEAM_FOLDER}/ holds is "
+                    "not read; move it there")
+    return said
 
 
 def project_before_team(project: config.Project) -> bool:
@@ -920,10 +955,19 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         # During a try, a plain sync reads the try and leaves the committed lock: `cortex upgrade` writes it.
         ahead = project.version != project.team_version
         digest, lock = check_lock(where[0], version, the_store, out, locked, where[1],
-                                  "`cortex upgrade`, which a try leaves to it," if locked and ahead else "`cortex sync`")
+                                  "`cortex upgrade`, which a try leaves to it," if locked and ahead else "`cortex sync`",
+                                  project.team_folder)
+    # CI reads what the team committed: a folder cortex.toml names, not checked out, reads nothing of it —
+    # missing, or a submodule left empty (ADR-013 §3.4); the default agents/ left empty stays a warning.
     folder_note = _team_folder_note(project)
+    if folder_note is not None and locked and project.team_folder != config.TEAM_FOLDER:
+        raise SyncError(f"--locked: {folder_note}. Nothing of the project was changed")
     if folder_note is not None:
         err.write(f"warning: {folder_note}\n")
+    for said in renamed_folder_notes(project):
+        if locked and said.startswith(f"{project.team_folder}/ is not there"):
+            raise SyncError(f"--locked: {said}. Nothing of the project was changed")
+        err.write(f"warning: {said}\n")
 
     # Everything is prepared and checked before anything of the project moves: the new
     # cortex.local.toml, the new link or copy beside cortex/. Then one rename puts it in place.
@@ -958,7 +1002,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         # the version from the file it is beside, whatever comes next. The team's is written under a
         # lock of its folder, which several projects may sync at once; one this user cannot write is a
         # warning on a developer's machine, an error under --locked (ADR-013 §3.4).
-        if where[2] == config.TEAM_LOCK_NAME:
+        if where[1] == config.TEAM_LOCK_FILE:
             try:
                 with project_lock(Path(where[0]), err):
                     config.write_lock(where[0], version, digest, where[1])
@@ -998,16 +1042,16 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         out.write(f"{config.LOCK_FILE}: neither read nor written — a checkout has no version (--from)\n")
     elif lock is not None:
         name = where[2]
-        commit = " — commit it" + (f" in {config.TEAM_FOLDER}/" if name == config.TEAM_LOCK_NAME else "")
+        commit = " — commit it" + (f" in {project.team_folder}/" if where[1] == config.TEAM_LOCK_FILE else "")
         nowhere = in_no_repository(where[0])
         out.write(f"{name}: {lock}{'' if nowhere else commit}\n")
     if notes:
         _notes(Path(root), mode, err)
     _claude(Path(root), project, None if mode == "copy" else spec_source, out, err)
     theme = project.active_theme
-    if theme != "none" and not any((base / "agents" / "personalities" / theme).is_dir()
-                                   for base in (spec_source, Path(root))):
-        err.write(f'warning: theme "{theme}" is neither in the spec nor in agents/personalities/ — '
+    if theme != "none" and not any(base.is_dir() for base in (spec_source / "agents" / "personalities" / theme,
+                                                              Path(project.team_dir) / "personalities" / theme)):
+        err.write(f'warning: theme "{theme}" is neither in the spec nor in {project.team_folder}/personalities/ — '
                   "the Prompt Manager would not find it\n")
 
 

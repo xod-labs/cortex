@@ -20,13 +20,15 @@ from typing import Dict, List, Mapping, Tuple
 PROJECT_FILE = "cortex.toml"
 LOCAL_FILE = "cortex.local.toml"
 MODES = ("store", "link", "copy")
-PROJECT_KEYS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access")
+PROJECT_KEYS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access", "agents")
+# The keys an unknown key's message names, as 1.7.0 named them: a project of 1.7.0 is told what it was.
+PROJECT_LISTED: Tuple[str, ...] = ("version", "theme", "sync", "claude_access")
 PROJECT_REQUIRED: Tuple[str, ...] = ("version", "theme")
 LOCAL_KEYS: Tuple[str, ...] = ("version", "theme", "spec", "claude_access", "claude_entry", "synced")
 BOOLEAN_KEYS: Tuple[str, ...] = ("claude_access",)
 # The team's settings, in the team's folder, committed in the team's repository (ADR-013 §3.5): read
 # only once the team's version is 1.8.0 or later — an earlier version's templates know none of it.
-TEAM_FOLDER = "agents"
+TEAM_FOLDER = "agents"      # the team's folder, which a committed cortex.toml's `agents` renames (ADR-013 §3.6)
 TEAM_FILE = "cortex.team.toml"
 TEAM_LOCK_FILE = "cortex.team.lock"
 TEAM_KEYS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access", "locked")
@@ -128,12 +130,13 @@ def listed(keys: Tuple[str, ...]) -> str:
 
 
 def _check_keys(name: str, data: Mapping, allowed: Tuple[str, ...], required: Tuple[str, ...],
-                others: Tuple[str, ...] = ()) -> None:
+                others: Tuple[str, ...] = (), named: Tuple[str, ...] = ()) -> None:
     """Every key allowed, the required ones there, each a string or a boolean — but ``others``,
-    which their reader checks."""
+    which their reader checks. ``named``, the keys an unknown key's message lists — ``allowed`` by
+    default."""
     for key in data:
         if key not in allowed:
-            raise ProjectFileError(f'{name}: unknown key {shown(key)} — {name} takes {listed(allowed)}'
+            raise ProjectFileError(f'{name}: unknown key {shown(key)} — {name} takes {listed(named or allowed)}'
                                    + (" only" if name == LOCAL_FILE else ""))
     for key in required:
         if key not in data:
@@ -161,11 +164,48 @@ def _check_version(name: str, value: object) -> None:
         raise ProjectFileError(f'{name}: version {shown(value)} is no version — X.Y.Z, for instance 1.0.0')
 
 
+_AGENTS_ONLY = (f'"agents" is set in {PROJECT_FILE} only — every developer reads the same team\'s folder '
+                "(ADR-013, decision 30)")
+
+
+def check_agents(value: object, name: str = PROJECT_FILE) -> str:
+    """Refuse an ``agents`` that names no folder inside the workspace (ADR-013 §3.6), from its text
+    alone: a relative path with ``/`` — no ``\\``, no absolute path of any platform, no ``..`` nor a
+    component that starts with ``.``, neither the project root itself nor ``cortex/``, the spec, nor
+    what it holds. ``cortex`` is told in any case: the file is committed, and read where names ignore
+    case too, macOS and Windows. A service's folder, or one holding a project's ``cortex.toml``, takes
+    the file system: its reader checks them. The folder, as the messages name it: without a final
+    ``/``."""
+    rule = f"a relative path, with /, naming a folder inside the workspace — {TEAM_FOLDER} by default"
+    if not isinstance(value, str) or not value:
+        raise ProjectFileError(f'{name}: "agents" must be {rule}, in quotes')
+    if CONTROL.search(value) or "\\" in value:
+        raise ProjectFileError(f"{name}: agents {shown(value)} is not {rule}")
+    if value.startswith("/") or re.match(r"^[A-Za-z]:", value):
+        raise ProjectFileError(f"{name}: agents {shown(value)} is an absolute path — it must be {rule}")
+    parts = value.rstrip("/").split("/")
+    if parts in ([""], ["."]) or any(not part for part in parts):
+        raise ProjectFileError(f"{name}: agents {shown(value)} names the project root, or an empty folder name — "
+                               f"it must be {rule}")
+    for part in parts:
+        if part == "..":
+            raise ProjectFileError(f"{name}: agents {shown(value)} climbs out of the folder it is in — it must be {rule}")
+        if part.startswith("."):
+            raise ProjectFileError(f"{name}: agents {shown(value)} names a folder that starts with \".\" — it must be "
+                                   f"{rule}")
+    if parts[0].casefold() == "cortex":
+        raise ProjectFileError(f"{name}: agents {shown(value)} is in cortex/, the spec's place — it must be {rule}")
+    return "/".join(parts)
+
+
 def check_project(data: Mapping, optional: Tuple[str, ...] = ()) -> None:
     """Refuse a ``cortex.toml`` that is not one — ``ProjectFileError`` names the file and the key.
     ``optional``, of the required keys, those a team's file may give instead (ADR-013 §3.2): whether it
     does is its reader's to check."""
-    _check_keys(PROJECT_FILE, data, PROJECT_KEYS, tuple(key for key in PROJECT_REQUIRED if key not in optional))
+    _check_keys(PROJECT_FILE, data, PROJECT_KEYS, tuple(key for key in PROJECT_REQUIRED if key not in optional),
+                named=PROJECT_LISTED)
+    if "agents" in data:
+        check_agents(data["agents"])
     if "version" in data:
         _check_version(PROJECT_FILE, data["version"])
     if "theme" in data:
@@ -176,6 +216,8 @@ def check_project(data: Mapping, optional: Tuple[str, ...] = ()) -> None:
 
 def check_local(data: Mapping) -> None:
     """Refuse a ``cortex.local.toml`` that is not one."""
+    if "agents" in data:
+        raise ProjectFileError(f"{LOCAL_FILE}: {_AGENTS_ONLY}")
     _check_keys(LOCAL_FILE, data, LOCAL_KEYS, (), ("synced",))
     if "version" in data:
         _check_version(LOCAL_FILE, data["version"])
@@ -209,6 +251,8 @@ def check_team(data: Mapping, name: str = f"{TEAM_FOLDER}/{TEAM_FILE}") -> None:
     sets, each once, never ``version`` nor ``locked``, and ``claude_access`` only at ``false``: a team
     may forbid a permission, never grant one on a developer's machine (decision 25). ``name`` is how
     the messages name the file."""
+    if "agents" in data:
+        raise ProjectFileError(f"{name}: {_AGENTS_ONLY} — the team's file is in the folder it names")
     _check_keys(name, data, TEAM_KEYS, (), ("locked",))
     if "version" in data:
         _check_version(name, data["version"])
@@ -322,7 +366,10 @@ def machine_values(data: Mapping, name: str = MACHINE_FILE) -> Tuple[Dict[str, o
     values: Dict[str, object] = {}
     warnings: List[str] = []
     for key, value in data.items():
-        if key not in MACHINE_KEYS:
+        if key == "agents":
+            warnings.append(f'{name}: "agents" is set in {PROJECT_FILE} only, not read — every developer reads the same '
+                            "team's folder (ADR-013, decision 30)")
+        elif key not in MACHINE_KEYS:
             warnings.append(f"{name}: unknown key {shown(key)}, not read — {MACHINE_FILE} takes {listed(MACHINE_KEYS)}")
         elif key in MACHINE_BOOLEAN_KEYS and not isinstance(value, bool):
             warnings.append(f'{name}: "{key}" must be true or false, without quotes — not read')

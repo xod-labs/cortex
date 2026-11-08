@@ -463,8 +463,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
              "claude_access": options.claude_access}
     for key, value in flags.items():
         if value is not None and key in locks and locks[key] != value:
-            raise InitError(f"{key} is locked to {config.toml_value(locks[key])} by {config.TEAM_NAME} — the team's "
-                            "choice, which an option does not undo")
+            raise InitError(f"{key} is locked to {config.toml_value(locks[key])} by "
+                            f"{project.team_name if project else config.TEAM_NAME} — the team's choice, which an option "
+                            "does not undo")
     team_pins = bool(team_data) and "version" in team_data
     # A project keeps the version it reads — never another, older or newer; a new one takes the team's,
     # or this binary's. A version newer than this binary is refused here.
@@ -490,13 +491,14 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     chosen = options.theme is not None or options.no_personality
     if project is None and theme is None:
         theme = team_theme or "h2g2"
-    # A theme Cortex ships, or one of the project's own, in its agents/personalities/.
-    own_themes = root / "agents" / "personalities"
+    # A theme Cortex ships, or one of the project's own, in its team's folder's personalities/ (ADR-013 §3.6).
+    team_folder = project.team_folder if project else config.TEAM_FOLDER
+    own_themes = root / team_folder / "personalities"
     if theme not in (None, "none") and not any((base / theme).is_dir()
                                                for base in (spec / "agents" / "personalities", own_themes)):
         themes = sorted({p.name for base in (spec / "agents" / "personalities", own_themes) if base.is_dir()
                          for p in base.iterdir() if p.is_dir()})
-        raise InitError(f"theme '{theme}' is neither in {described} nor in agents/personalities/ — "
+        raise InitError(f"theme '{theme}' is neither in {described} nor in {team_folder}/personalities/ — "
                         f"the themes are: {', '.join(themes)}")
 
     # Claude Code asks before it reads the store (ADR-008 §9): on a terminal, offer the team setting
@@ -659,12 +661,13 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                 if not (folder / file).exists():
                     (folder / file).write_bytes(with_alias(content, alias))
                     out.write(f"✓ {name}/{file} — @{alias}\n")
-        agents = root / "agents"
+        agents = root / team_folder
         if is_git_working_tree(agents):
             for file, content in (("project-overview.md", overview), ("project-context.md", context)):
                 if not (agents / file).exists():
                     (agents / file).write_bytes(content)
-                    out.write(f"✓ agents/{file} — the team's, agents/ is its own git repository (ADR-006)\n")
+                    out.write(f"✓ {team_folder}/{file} — the team's, {team_folder}/ is its own git repository "
+                              "(ADR-006)\n")
     sync.register(str(root), out, err)
     if options.tool == "claude" and claude_access is None and spec_mode != "copy" \
             and not config.load(str(root)).active_claude_access:

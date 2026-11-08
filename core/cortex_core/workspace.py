@@ -10,8 +10,11 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+from .project import PROJECT_FILE, ProjectFileError, shown
 
 # Where a workspace keeps its dependencies: never a service, and the bulk of its files.
 _DEPENDENCY_TREES = ("node_modules", "vendor", ".venv")
@@ -77,25 +80,54 @@ def same_directory(a: str, b: str) -> bool:
         return os.path.normpath(a) == os.path.normpath(b)
 
 
-def services(project_root: str, base_root: Optional[str] = None) -> List[str]:
+def services(project_root: str, base_root: Optional[str] = None, team_folder: Optional[str] = None) -> List[str]:
     """Every service of the workspace: a folder below the project root, five levels deep at most,
     holding a ``project-overview.md`` — in ``find``'s order, sorted by name.
 
     Services are looked for outside the base, wherever it is mounted and whatever it is called,
-    outside the project root's own ``agents/`` — the cascade's tiers and ADR-006's team files,
-    no service — outside any directory named ``cortex`` or ``.git`` below the project root — a
-    service may mount its own Cortex — and outside its dependency trees, ``node_modules``,
-    ``vendor``, ``.venv``.
+    outside the project root's own ``agents/`` and the team's folder ``team_folder`` that renames it
+    (ADR-013 §3.6) — the cascade's tiers and ADR-006's team files, no service — outside any directory
+    named ``cortex`` or ``.git`` below the project root — a service may mount its own Cortex — and
+    outside its dependency trees, ``node_modules``, ``vendor``, ``.venv``.
     """
     project_root = str(project_root)
     base_root = str(base_root) if base_root is not None else f"{project_root}/cortex"
+    team = (str(team_folder),) if team_folder is not None else ()
     found = find(project_root, "project-overview.md", maxdepth=5,
                  prune_names=("cortex", ".git") + _DEPENDENCY_TREES,
-                 prune_paths=(base_root, f"{project_root}/agents"))
+                 prune_paths=(base_root, f"{project_root}/agents") + team)
     return [d for d in (os.path.dirname(f) for f in found) if d != project_root]
 
 
-def service_index(project_root, base_root=None, active: Optional[str] = None) -> str:
+def _same_name(a: str, b: str) -> bool:
+    """Two names of the workspace compare as written, in any case where the file system ignores it —
+    macOS and Windows (ADR-013 §3.6)."""
+    if sys.platform in ("darwin", "win32"):
+        return a.casefold() == b.casefold()
+    return a == b
+
+
+def check_team_folder(project_root: str, folder: str, base_root: Optional[str] = None) -> None:
+    """Refuse a team's folder ``folder`` — as ``cortex.toml``'s ``agents`` names it, its text checked
+    already (``project.check_agents``) — that the file system says is no team's folder (ADR-013 §3.6): a
+    folder inside a service — its ``{service}/agents/`` among them — or one holding a project's
+    ``cortex.toml``. A folder holding a ``project-overview.md`` is no service once it is the team's:
+    ADR-006's team files are there, and the service scan leaves it out. The path is compared as
+    written: a link is the developer's own, and never resolved. ``ProjectFileError`` names the key."""
+    root = str(project_root)
+    where = f"{root}/{folder}"
+    if os.path.isfile(os.path.join(where, PROJECT_FILE)):
+        raise ProjectFileError(f"{PROJECT_FILE}: agents {shown(folder)} holds a project's {PROJECT_FILE} — the "
+                               "team's folder is no project")
+    parts = folder.split("/")
+    for service in services(root, base_root, where):
+        rel = Path(service).relative_to(root).parts
+        if len(parts) > len(rel) and all(_same_name(a, b) for a, b in zip(parts, rel)):
+            raise ProjectFileError(f"{PROJECT_FILE}: agents {shown(folder)} is inside the service "
+                                   f"{shown('/'.join(rel))} — the team's folder is the workspace's, no service's")
+
+
+def service_index(project_root, base_root=None, active: Optional[str] = None, team_folder: Optional[str] = None) -> str:
     """The workspace's services as an agent is shown them — one line each, by folder:
     ``- `@alias` — `folder/` — title``, the alias from the overview's ``<!-- @alias: … -->``
     marker (the folder's name without one), the title from its first heading. ``active`` — the
@@ -103,7 +135,7 @@ def service_index(project_root, base_root=None, active: Optional[str] = None) ->
     """
     root = Path(project_root)
     lines = []
-    for folder in sorted(Path(s).relative_to(root).as_posix() for s in services(str(root), base_root)):
+    for folder in sorted(Path(s).relative_to(root).as_posix() for s in services(str(root), base_root, team_folder)):
         text = (root / folder / "project-overview.md").read_text(encoding="utf-8", errors="replace")
         alias = _ALIAS.search(text)
         title = next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), "")
