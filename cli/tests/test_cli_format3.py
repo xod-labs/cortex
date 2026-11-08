@@ -190,6 +190,23 @@ class OwnBootstrapTests(TeamTestCase):
                         self.assertEqual(upgrade.behind(str(root), project, None, fetch=False), [])
                 self.assertEqual((out.getvalue(), err.getvalue()), ("", ""))
 
+    def test_a_changed_own_bootstrap_is_said_kept_when_its_version_writes_another(self):
+        root = self.project(team=f'version = "{OWN}"\n', committed=False)
+        self.assert_ok(self.cortex(root, "sync"))
+        stale = written(FORMAT_2).replace(b"Cortex AI Team\n", b"Cortex AI Team, ours\n", 1)
+        (root / "CLAUDE.md").write_bytes(stale)
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), stale)
+        self.assertIn(f"note: CLAUDE.md is not what Cortex wrote, by the digest in its marker — you changed it — so it is "
+                      f"kept, and Cortex {OWN}'s template is not written: cortex init --force writes it again, and keeps "
+                      "yours as .bak — your own rules go below its end marker", proc.err)
+        # Changed after Cortex wrote this version's: nothing new to say.
+        (root / "CLAUDE.md").write_bytes(written(TEMPLATE).replace(b"Cortex AI Team\n", b"Cortex AI Team, ours\n", 1))
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        self.assertNotIn("CLAUDE.md", proc.out + proc.err)
+
     def test_sync_from_a_checkout_writes_no_bootstrap(self):
         root = self.project(team=f'version = "{OWN}"\n', committed=False)
         self.assert_ok(self.cortex(root, "sync"))                          # the version in the store: it could
@@ -269,6 +286,36 @@ class TryTests(TeamTestCase):
                 (root / "CLAUDE.md").write_bytes(before)
                 self.assert_own(root, self.cortex(root, "upgrade", "--team", "9.9.8"), before)
                 self.assertIn('version = "9.9.8"', (root / TEAM).read_text(encoding="utf-8"))
+
+    def test_outside_a_try_the_developer_s_own_bootstrap_keeps_the_developer_s_theme(self):
+        bare = (lambda template: init.stamped(init.instructions(template, False)))
+        for case, toml, team, args, before in (
+                ("move", 'version = "9.9.7"\ntheme = "h2g2"\n', None, ("9.9.8",), bare(self.f97)),
+                ("resume", 'version = "9.9.8"\ntheme = "h2g2"\n', None, ("9.9.8",), written(FORMAT_2)),
+                ("team", 'theme = "h2g2"\n', 'version = "9.9.7"\n', ("--team", "9.9.8"), bare(self.f97))):
+            with self.subTest(case=case):
+                root = self.project(toml=toml, team=team, local='theme = "none"\n', name=f"theme-{case}")
+                (root / ".gitignore").write_text("CLAUDE.md\ncortex.local.toml\n", encoding="utf-8")
+                self.assert_ok(self.cortex(root, "sync"))
+                (root / "CLAUDE.md").write_bytes(before + OURS)
+                proc = self.cortex(root, "upgrade", *args)
+                self.assert_ok(proc)
+                self.assertEqual((root / "CLAUDE.md").read_bytes(), bare(FORMAT_2) + OURS)
+                self.assertNotRegex(proc.out, r"Commit [^\n]*CLAUDE\.md|CLAUDE\.md in the project")
+                self.assert_ok(self.cortex(root, "sync"))                      # and no flip back
+                self.assertEqual((root / "CLAUDE.md").read_bytes(), bare(FORMAT_2) + OURS)
+
+    def test_a_dry_run_says_what_it_would_write_of_the_developer_s_own_bootstrap(self):
+        for case, toml, before in (("move", 'version = "9.9.7"\ntheme = "h2g2"\n', written(self.f97)),
+                                   ("resume", 'version = "9.9.8"\ntheme = "h2g2"\n', written(FORMAT_2))):
+            with self.subTest(case=case):
+                root = self.tried(f"dry-{case}", toml=toml)
+                (root / "CLAUDE.md").write_bytes(before + OURS)
+                proc = self.cortex(root, "upgrade", "9.9.8", "--dry-run")
+                self.assert_ok(proc)
+                self.assertIn(f"CLAUDE.md: would be written again from Cortex {OWN}'s template — your own bootstrap "
+                              "follows the version this machine reads", proc.out)
+                self.assertEqual((root / "CLAUDE.md").read_bytes(), before + OURS)
 
     def test_the_team_s_bootstrap_still_follows_the_team_s_version(self):
         root = self.tried("theirs", ignored=False)
