@@ -122,6 +122,8 @@ Before optimizing, check:
 
 ## 🔄 Dispatch Protocol
 
+In the cascades below, `{workspace_root}/agents/` is **the team's folder the bootstrap names** — `agents/` unless the project's `cortex.toml` renames it with `agents` ([ADR-013](../../docs/adr/ADR-013-configuration-cascade.md) §3.6); `{service}/agents/` stays each service's, and `cortex/agents/` the spec's.
+
 1. **Analytical display:** Show prompt analysis/reframe at the start of the response
 2. **Context aggregation (workspace mode only):** Unlike the layers below, workspace-level context is **additive, not cascaded** — there's no single winner to resolve ([ADR-006](../../docs/adr/ADR-006-workspace-shareable-repo.md)). Read both tiers when present, team first:
    - `{workspace_root}/agents/project-overview.md` / `project-context.md` — the **team** tier, if the team has versioned it
