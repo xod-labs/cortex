@@ -573,8 +573,16 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     kept_workspace = not options.workspace and instructions_file is not None and instructions_file.is_file() \
         and written_for_workspace(instructions_file.read_bytes())
     workspace = options.workspace or kept_workspace
-    bootstrap = templates / ("bootstrap-instructions-workspace.md" if workspace else "bootstrap-instructions.md")
-    template = bootstrap.read_bytes()
+    layout = "bootstrap-instructions-workspace.md" if workspace else "bootstrap-instructions.md"
+    template = (templates / layout).read_bytes()
+    # The developer's own instructions file follows the version this machine reads, and its theme (ADR-013
+    # §3.10) — git asked only where they are not the team's.
+    if project is not None and instructions_file is not None \
+            and (templates_spec != spec or theme is None and project.active_theme != project.team_theme) \
+            and sync.developers_own(instructions_file):
+        template = (spec / "templates" / layout).read_bytes()
+        if theme is None:
+            personality = project.active_theme != "none"
     if instructions_file is None:
         out.write("✓ the instructions files are kept — several are there; --tool names the one to write\n")
     elif instructions_file.exists() and not options.force:
@@ -620,7 +628,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             other = root / rel
             if other == instructions_file or not other.is_file():
                 continue
-            found = kept_bootstrap(other.read_bytes(), template)
+            found = kept_bootstrap(other.read_bytes(), (templates / layout).read_bytes())
             if found is None:
                 continue
             if not found.force:

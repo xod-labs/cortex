@@ -167,6 +167,82 @@ class OwnBootstrapTests(TeamTestCase):
 
 
 @DOWNLOADS
+class TryTests(TeamTestCase):
+    """During a try above the team's version, a move, a resume and init leave the developer's own bootstrap
+    to the try: written from the version this machine reads, and never named among what the team commits."""
+
+    def setUp(self):
+        super().setUp()
+        self.f97 = FORMAT_2.replace(b"in 2", b"in 2, of 9.9.7", 1)
+        for version, template in (("9.9.7", self.f97), ("9.9.8", FORMAT_2)):
+            self.release.replace_spec(version, {"templates/bootstrap-instructions.md": template,
+                                                "templates/project-overview.md.template": b"# Overview\n",
+                                                "templates/project-context.md.template": b"# Context\n"})
+
+    def tried(self, name, toml='version = "9.9.7"\ntheme = "h2g2"\n', team=None, ignored=True):
+        root = self.project(toml=toml, team=team, local=f'version = "{OWN}"\n', name=name)
+        if ignored:
+            (root / ".gitignore").write_text("CLAUDE.md\ncortex.local.toml\n", encoding="utf-8")
+        self.assert_ok(self.cortex(root, "sync"))
+        return root
+
+    def assert_own(self, root, proc, before):
+        self.assert_ok(proc)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), written(TEMPLATE) + OURS)
+        self.assertNotRegex(proc.out, r"Commit [^\n]*CLAUDE\.md|CLAUDE\.md in the project")
+        if before != written(TEMPLATE) + OURS:
+            self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s template — your own bootstrap follows the "
+                          "version this machine reads", proc.out)
+        else:
+            self.assertNotIn("CLAUDE.md", proc.out)
+
+    def test_a_move_leaves_the_developer_s_own_bootstrap_to_the_try(self):
+        for before in (written(TEMPLATE) + OURS, written(self.f97) + OURS):
+            with self.subTest(before=before[:60]):
+                root = self.tried(f"move-{len(before)}")
+                (root / "CLAUDE.md").write_bytes(before)
+                self.assert_own(root, self.cortex(root, "upgrade", "9.9.8"), before)
+                self.assertIn('version = "9.9.8"', (root / "cortex.toml").read_text(encoding="utf-8"))
+
+    def test_a_resume_leaves_the_developer_s_own_bootstrap_to_the_try(self):
+        for before in (written(TEMPLATE) + OURS, written(FORMAT_2) + OURS):
+            with self.subTest(before=before[:60]):
+                root = self.tried(f"resume-{len(before)}", toml='version = "9.9.8"\ntheme = "h2g2"\n')
+                (root / "CLAUDE.md").write_bytes(before)
+                self.assert_own(root, self.cortex(root, "upgrade", "9.9.8"), before)
+
+    def test_a_team_move_leaves_a_follower_s_own_bootstrap_to_the_try(self):
+        for before in (written(TEMPLATE) + OURS, written(self.f97) + OURS):
+            with self.subTest(before=before[:60]):
+                root = self.tried(f"team-{len(before)}", toml='theme = "h2g2"\n', team='version = "9.9.7"\n')
+                (root / "CLAUDE.md").write_bytes(before)
+                self.assert_own(root, self.cortex(root, "upgrade", "--team", "9.9.8"), before)
+                self.assertIn('version = "9.9.8"', (root / TEAM).read_text(encoding="utf-8"))
+
+    def test_the_team_s_bootstrap_still_follows_the_team_s_version(self):
+        root = self.tried("theirs", ignored=False)
+        (root / "CLAUDE.md").write_bytes(written(self.f97) + OURS)
+        proc = self.cortex(root, "upgrade", "9.9.8")
+        self.assert_ok(proc)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), written(FORMAT_2) + OURS)
+        self.assertRegex(proc.out, r"Commit [^\n]*CLAUDE\.md")
+
+    def test_init_writes_the_developer_s_own_bootstrap_from_the_full_resolution(self):
+        root = self.tried("init", toml='version = "9.9.8"\ntheme = "h2g2"\n')
+        proc = self.cortex(root, "init", "--tool", "claude")
+        self.assert_ok(proc)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), written(TEMPLATE))
+        root = self.tried("init-theirs", toml='version = "9.9.8"\ntheme = "h2g2"\n', ignored=False)
+        self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), written(FORMAT_2))
+        # The theme too: a local theme of none writes the developer's own file without the personality block.
+        root = self.project(toml='version = "9.9.8"\ntheme = "h2g2"\n', local='theme = "none"\n', name="init-none")
+        (root / ".gitignore").write_text("CLAUDE.md\ncortex.local.toml\n", encoding="utf-8")
+        self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(FORMAT_2, False)))
+
+
+@DOWNLOADS
 class BehindTests(TeamTestCase):
     """The team's bootstrap follows the team's version: untouched and not its template, it is behind."""
 

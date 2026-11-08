@@ -1097,6 +1097,17 @@ def ignored(root: Path, name: str) -> Optional[bool]:
     return any(line.strip() in wanted for line in lines)
 
 
+def developers_own(path: Path) -> bool:
+    """Whether the bootstrap at ``path`` is the developer's own (ADR-013 §3.1): one git ignores, or one in no
+    repository — a link asked of the file it resolves to, in that file's repository; a file not yet written,
+    of the first folder there is on its way. Any other is the team's."""
+    real = Path(os.path.realpath(path))
+    folder = real.parent
+    while not folder.is_dir() and folder != folder.parent:
+        folder = folder.parent
+    return in_no_repository(folder) or ignored(folder, os.path.relpath(real, folder)) is True
+
+
 def _notes(root: Path, mode: str, err: TextIO) -> None:
     if mode != "store" and ignored(root, LINK) is False:
         err.write(f"note: git does not ignore {LINK}/ — add a `/{LINK}` line to .gitignore, without the final slash: "

@@ -279,35 +279,35 @@ def bootstraps(files: List[Path], pinned: Version, current: Optional[Path], targ
     return rewrites
 
 
-def developers_own(path: Path) -> bool:
-    """Whether the bootstrap at ``path`` is the developer's own (ADR-013 §3.1): one git ignores, or one in no
-    repository — a link asked of the file it resolves to, in that file's repository. Any other is the team's."""
-    real = Path(os.path.realpath(path))
-    return config.in_no_repository(real.parent) or sync.ignored(real.parent, real.name) is True
-
-
 def own_bootstraps(root: str, project: config.Project, the_store: store.Store, out: TextIO, err: TextIO,
-                   forced: bool = False) -> None:
+                   forced: bool = False, files: Optional[List[Path]] = None) -> None:
     """The developer's own bootstrap files written again from the version this machine reads (ADR-013 §3.10):
     by `cortex sync` in a project that has a team's file and whose team's version is 1.8.0 or later, by
-    `cortex upgrade --local` whenever it sets a version (``forced``). A team's version before 1.8.0 writes an
+    `cortex upgrade --local` whenever it sets a version (``forced``), and after a move or a resume during a
+    try above the team's version — ``files``, those it left out. A team's version before 1.8.0 writes an
     untouched format 3 one again from the resolved version's template, and says a changed one needs 1.8.0;
-    one of an earlier format is left as 1.7.0 leaves it. A file whose marker carries no digest is left alone."""
+    one of an earlier format is left as 1.7.0 leaves it. A file whose marker carries no digest, or that
+    cannot be read, is left alone."""
     below = grammar.before_team(str(project.team_version))
     if not (forced or below or project.team_file):
         return
-    files = _instructions_files(Path(root), None)
+    contents = {}
+    for path in _instructions_files(Path(root), None) if files is None else files:
+        try:
+            contents[path] = init.normalised(path.read_bytes())
+        except OSError:
+            continue        # what cannot be read is not written: `cortex upgrade` says so of the team's
     if below:       # as 1.7.0 leaves them, but a format 3 file: no git asked of the others
-        files = [path for path in files if _format(init.normalised(path.read_bytes())) >= 3]
-    files = [path for path in files if developers_own(path)]
+        contents = {path: content for path, content in contents.items() if _format(content) >= 3}
     version = project.version
     target = the_store.path(version)
     personality = project.active_theme != "none"
-    for path in files:
-        content = init.normalised(path.read_bytes())
+    for path, content in contents.items():
+        if files is None and not sync.developers_own(path):
+            continue
         intact = init.untouched(content)
         if intact is False and below:
-            err.write(f"note: {display(str(path))} is of format {_format(content)}, which Cortex "
+            err.write(f"note: {_shown_path(path, root)} is of format {_format(content)}, which Cortex "
                       f"{grammar.FIRST_TEAM_VERSION} or later reads, and not what Cortex wrote — so it is kept: "
                       "cortex init --force writes it again, and keeps yours as .bak\n")
         if not intact:
@@ -315,8 +315,18 @@ def own_bootstraps(root: str, project: config.Project, the_store: store.Store, o
         written, _ = bootstrap(path, version, None, target, personality)
         if written is not None:
             _put(path, written)
-            out.write(f"{display(str(path))}: written again from Cortex {version}'s template — your own bootstrap "
+            out.write(f"{_shown_path(path, root)}: written again from Cortex {version}'s template — your own bootstrap "
                       f"follows the version this machine reads; {_nobody(written)}\n")
+
+
+def _theirs_only(files: List[Path], project: config.Project, target: Version) -> Tuple[List[Path], List[Path]]:
+    """The bootstrap files a move to ``target``, or a resume on it, writes from its template, and those it
+    leaves to ``own_bootstraps``: during a try above it, the developer's own follows the try (ADR-013 §3.10)."""
+    developer = project.developer_version
+    if developer is None or Version(str(developer.value)) <= target:
+        return files, []
+    own = [path for path in files if sync.developers_own(path)]
+    return [path for path in files if path not in own], own
 
 
 def behind(root: str, project: config.Project, the_store: Optional[store.Store], fetch: bool) -> List[str]:
@@ -328,7 +338,7 @@ def behind(root: str, project: config.Project, the_store: Optional[store.Store],
     team = project.team_version
     if grammar.before_team(str(team)):
         return []
-    files = [path for path in _instructions_files(Path(root), None) if not developers_own(path)]
+    files = [path for path in _instructions_files(Path(root), None) if not sync.developers_own(path)]
     files = [path for path in files if init.untouched(init.normalised(path.read_bytes()))]
     if not files:
         return []
@@ -773,13 +783,16 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
             current_path = the_store.path(project.team_version)
         except store.StoreError:
             pass
-        rewrites = bootstraps(_instructions_files(Path(root), None), project.team_version, current_path,
-                              the_store.path(target), project.team_theme != "none", err)
+        theirs, own = _theirs_only(_instructions_files(Path(root), None), project, target)
+        rewrites = bootstraps(theirs, project.team_version, current_path, the_store.path(target),
+                              project.team_theme != "none", err)
         for path, content in rewrites:
             _put(path, content)
             out.write(f"{_shown_path(path, root)}: written again from Cortex {target}'s template — left uncommitted, "
                       "this project's\n")
             outcome.files.append(path)
+        if own:
+            own_bootstraps(root, config.load(root), the_store, out, err, forced=True, files=own)
         if developer is not None and Version(str(developer.value)) > target:
             out.write(f"This machine reads Cortex {developer.value}, {developer.origin}'s — the try, above {target}.\n")
     if message is not None and top is not None:
@@ -920,7 +933,8 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
             raise
         refused = str(error)
 
-    rewrites = bootstraps(files, current, current_path, target_path, personality, err)
+    theirs, own = _theirs_only(files, project, target)
+    rewrites = bootstraps(theirs, current, current_path, target_path, personality, err)
     team = [Path(root) / config.PROJECT_FILE, Path(root) / config.LOCK_FILE, *(path for path, _ in rewrites)]
     if prepare is not None and not stops and refused is None:
         prepare(team)
@@ -957,6 +971,8 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     _write(rewrites, committed, root, err, switch)
     for path, content in rewrites:
         out.write(f"{_shown_path(path, root)}: written again from Cortex {target}'s template — {_nobody(content)}\n")
+    if own:
+        own_bootstraps(root, config.load(root), the_store, out, err, forced=True, files=own)
     if developer is not None and Version(str(developer.value)) > target:
         out.write(f"This machine reads Cortex {developer.value}, {developer.origin}'s — the try, above {target}.\n")
     return Outcome(root, current, target, files=team)
@@ -971,13 +987,14 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     current = project.team_version         # what the committed bootstrap follows (ADR-013 §3.10)
     behind = out_of_step(Path(root), project, the_store)
     rewrites: List[Tuple[Path, bytes]] = []
-    if files:
+    theirs, own = _theirs_only(files, project, current)
+    if theirs:
         try:
             the_store.ensure(current)
         except store.StoreError as error:
             err.write(f"note: the bootstrap files were not checked — Cortex {current} is not in the store: {error}\n")
         else:
-            rewrites = bootstraps(files, current, the_store.path(current), the_store.path(current), personality, err)
+            rewrites = bootstraps(theirs, current, the_store.path(current), the_store.path(current), personality, err)
     if behind is not None:
         out.write(f"{behind}, and {project.version_origin} pins Cortex {project.version} — an upgrade cut short, or a "
                   f"pin moved by hand: {'the sync would put them on it' if dry_run else 'syncing'}\n")
@@ -996,12 +1013,16 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
             out.write("--dry-run: nothing of the project was changed\n")
         return Outcome(root, current, current, files=team)
     if not rewrites and behind is None:
+        if own:
+            own_bootstraps(root, project, the_store, out, err, forced=True, files=own)
         return Outcome(root, current, current)
     locked = lock.read_bytes() if lock.is_file() else None
     _write(rewrites, {lock: locked} if behind is not None else {}, root, err,
            (lambda: sync.sync(root, None, None, out, err, announce=False)) if behind is not None else (lambda: None))
     for path, content in rewrites:
         out.write(f"{_shown_path(path, root)}: written again from Cortex {current}'s template — {_nobody(content)}\n")
+    if own:
+        own_bootstraps(root, project, the_store, out, err, forced=True, files=own)
     relocked = lock.is_file() and lock.read_bytes() != locked
     return Outcome(root, current, current, files=([lock] if relocked else []) + [path for path, _ in rewrites])
 
