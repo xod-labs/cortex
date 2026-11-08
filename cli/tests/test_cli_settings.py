@@ -50,6 +50,16 @@ def snapshot(root):
     return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
 
 
+def remove_store(path):
+    """Remove a version of the store, read-only as the store writes it (ADR-008 §3.3): writable first — a user
+    who is not root, and Windows, remove no read-only file."""
+    for directory, _, files in os.walk(path):
+        os.chmod(directory, 0o700)
+        for name in files:
+            os.chmod(os.path.join(directory, name), 0o600)
+    shutil.rmtree(path)
+
+
 class SettingsTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="cortex-settings-")).resolve()
@@ -191,7 +201,7 @@ class MachineFileTests(SettingsTestCase):
         found = self.settings(project, CORTEX_RELEASES_URL="")
         self.assertEqual(found["settings"]["releases_url"]["origin"], display(self.home / "config.toml"))
         self.machine('releases_url = "http://example.com/releases"\n')   # refused, if it were read
-        shutil.rmtree(self.home / "versions")
+        remove_store(self.home / "versions")
         self.assert_ok(self.cortex(project, "sync"))                     # the variable's
         self.assertEqual(self.settings(project)["settings"]["releases_url"]["origin"], "CORTEX_RELEASES_URL")
 
