@@ -28,6 +28,14 @@ class TeamFolderTestCase(SyncedProjectTestCase):
         shutil.move(str(self.project / "agents"), self.project / FOLDER)
         (self.project / "cortex.toml").write_text(f'version = "9.9.9"\ntheme = "h2g2"\nagents = "{FOLDER}"\n',
                                                   encoding="utf-8")
+        self.synced(project="9.9.9")
+
+    def synced(self, agents=FOLDER, **versions):
+        """cortex.local.toml's synced, as `cortex sync` records it: the versions read, and the team's folder."""
+        pinned = versions.get("project") or versions.get("team")
+        fields = [f'{key} = "{value}"' for key, value in versions.items()]
+        fields += [f'pinned = "{pinned}"', f'reads = "{pinned}"'] + ([f'agents = "{agents}"'] if agents else [])
+        (self.project / "cortex.local.toml").write_text(f"synced = {{ {', '.join(fields)} }}\n", encoding="utf-8")
 
 
 class PinTests(TeamFolderTestCase):
@@ -40,6 +48,7 @@ class PinTests(TeamFolderTestCase):
     def test_the_team_s_file_is_read_in_the_folder(self):
         (self.project / "cortex.toml").write_text(f'theme = "h2g2"\nagents = "{FOLDER}"\n', encoding="utf-8")
         (self.project / FOLDER / "cortex.team.toml").write_text('version = "9.9.9"\n', encoding="utf-8")
+        self.synced(team="9.9.9")
         self.assertEqual(read_pin(self.project).version, "9.9.9")
         (self.project / FOLDER / "cortex.team.toml").unlink()
         with self.assertRaisesRegex(ValueError, '"version" is required'):
@@ -59,6 +68,17 @@ class PinTests(TeamFolderTestCase):
         (self.project / "agents").mkdir()
         (self.project / "agents" / "cortex.team.toml").write_text('version = "9.9.9"\n', encoding="utf-8")
         self.assertEqual(read_pin(self.project).team_folder, "agents")      # the default, named: never refused
+
+    def test_a_team_s_folder_sync_did_not_record_is_refused(self):
+        # A folder sync never read — an uncommitted cortex.toml it refused, a key added since — is not read (§3.12).
+        for synced in ({"agents": None}, {"agents": "other-agents"}):
+            with self.subTest(synced=synced):
+                self.synced(project="9.9.9", **synced)
+                with self.assertRaisesRegex(ValueError, "is not the team's folder `cortex sync` recorded"):
+                    read_pin(self.project)
+        (self.project / "cortex.local.toml").unlink()
+        with self.assertRaisesRegex(ValueError, "is not the team's folder `cortex sync` recorded"):
+            read_pin(self.project)
 
     def test_what_cortex_sync_refuses_of_agents_the_runtime_refuses(self):
         (self.project / "other").mkdir()
@@ -109,11 +129,22 @@ class ResolveTests(TeamFolderTestCase):
         self.assertIn("TEAM-ONLY-CAP", run.system_prompt)
         self.assertIn("TEAM-CAP", run.system_prompt)
 
+    def test_the_service_whose_agents_is_the_team_s_folder_is_refused(self):
+        (self.project / "team").mkdir()
+        shutil.move(str(self.project / FOLDER), self.project / "team" / "agents")
+        (self.project / "cortex.toml").write_text('version = "9.9.9"\ntheme = "h2g2"\nagents = "team/agents"\n',
+                                                  encoding="utf-8")
+        self.synced(agents="team/agents", project="9.9.9")
+        self.assertIn("WORKSPACE-RULE", resolve_run(self.request(), self.project, theme="h2g2").system_prompt)
+        for service in ("team", "Team"):
+            with self.subTest(service=service), self.assertRaisesRegex(ValueError, "whose agents/ is the team's folder"):
+                resolve_run(self.request(service=service), self.project, theme="h2g2")
+
     def test_the_team_s_folder_is_no_service(self):
         (self.project / FOLDER / "project-overview.md").write_text("# The team\n", encoding="utf-8")
         run = resolve_run(self.request(), self.project, theme="h2g2")
         self.assertNotIn(f"`{FOLDER}/`", run.system_prompt)
-        for service in (FOLDER, f"{FOLDER}/roles"):
+        for service in (FOLDER, f"{FOLDER}/roles", FOLDER.upper()):
             with self.subTest(service=service), self.assertRaisesRegex(ValueError, "the team's folder"):
                 resolve_run(self.request(service=service), self.project, theme="h2g2")
 

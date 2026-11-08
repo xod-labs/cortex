@@ -74,10 +74,15 @@ def _service_inside(service: Optional[str], team_folder: str = "agents") -> Opti
         return None                  # "." is the workspace itself: no service
     if path.parts[0] == "agents":
         raise ValueError(f"service must be a folder of the workspace other than agents/, got {service!r}")
-    team = PurePosixPath(team_folder).parts
-    if path.parts[:len(team)] == team:
-        raise ValueError(f"service must be a folder of the workspace other than {team_folder}/, the team's folder, "
-                         f"got {service!r}")
+    if team_folder != "agents":         # a renamed team's folder, in any case (ADR-013 §3.6, §9)
+        team = tuple(part.casefold() for part in PurePosixPath(team_folder).parts)
+        parts = tuple(part.casefold() for part in path.parts)
+        if parts[:len(team)] == team:
+            raise ValueError(f"service must be a folder of the workspace other than {team_folder}/, the team's "
+                             f"folder, got {service!r}")
+        if parts + ("agents",) == team:    # its agents/ the team's folder: the same overlays, twice
+            raise ValueError(f"service must not be the folder whose agents/ is the team's folder, {team_folder}/, "
+                             f"got {service!r}")
     return str(path)
 
 

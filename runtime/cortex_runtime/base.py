@@ -81,10 +81,15 @@ def read_pin(root: Path) -> Optional[Pin]:
         # committed one win), whose keys the team's resolution leaves out where the file sets them (§3.1).
         committed = False if isinstance(synced, dict) and "project" in synced \
             and synced.get("pinned") != synced["project"] else None
-        if folder != project.TEAM_FOLDER and committed is False:
-            raise project.ProjectFileError(project.AGENTS_UNCOMMITTED)      # as the command refuses it (§9)
         if folder != project.TEAM_FOLDER:
             workspace.check_team_folder(str(root), folder)
+        if folder != project.TEAM_FOLDER and committed is False:
+            raise project.ProjectFileError(project.AGENTS_UNCOMMITTED)      # as the command refuses it (§9)
+        if folder != project.TEAM_FOLDER and not (isinstance(synced, dict) and synced.get("agents") == folder):
+            # Read from a committed cortex.toml only, which sync checks with git and records (§3.1, §9).
+            raise ValueError(f"{project.PROJECT_FILE}: agents {project.shown(folder)} is not the team's folder "
+                             f"`cortex sync` recorded in {project.LOCAL_FILE} — run `cortex sync` in the project, "
+                             f"which reads it from a committed {project.PROJECT_FILE} only")
         name = cascade.team_name(folder)
         try:
             team = cascade.read_team(str(root), folder)
