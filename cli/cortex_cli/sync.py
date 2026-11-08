@@ -1166,7 +1166,8 @@ def developers_own(path: Path) -> bool:
     folder = real.parent
     while not folder.is_dir() and folder != folder.parent:
         folder = folder.parent
-    return in_no_repository(folder) or ignored(folder, os.path.relpath(real, folder)) is True
+    # git matches its patterns against `/`: a Windows relative path would match none of them.
+    return in_no_repository(folder) or ignored(folder, Path(os.path.relpath(real, folder)).as_posix()) is True
 
 
 def _notes(root: Path, mode: str, err: TextIO) -> None:
