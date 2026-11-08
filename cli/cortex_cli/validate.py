@@ -169,10 +169,9 @@ def roots_and_folder(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]], Op
         folder = sync._team_folder_note(project)
         if folder is not None:
             warnings.append((project.team_folder + "/", "TEAM_FOLDER_EMPTY", folder))
-        for said in sync.renamed_folder_notes(project):
-            missing = said.startswith(f"{project.team_folder}/ is not there")
-            warnings.append(((project.team_folder if missing else config.TEAM_FOLDER) + "/",
-                             "TEAM_FOLDER_MISSING" if missing else "TEAM_FOLDER_LEFT_BEHIND", said))
+        for code, said in sync.renamed_folder_notes(project):
+            where = config.TEAM_FOLDER if code == "TEAM_FOLDER_LEFT_BEHIND" else project.team_folder
+            warnings.append((where + "/", code, said))
         if synced:
             origin = _origin_of(project, synced) if project.synced is not None else None
             warnings += lock_warnings(project, base, marker.get("files") if marker else None,

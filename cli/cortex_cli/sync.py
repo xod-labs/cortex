@@ -866,26 +866,39 @@ _TEAM_CONTENT = ("roles", "capabilities", "personalities", "workflows", "project
                  config.TEAM_FILE, config.TEAM_LOCK_FILE)
 
 
-def renamed_folder_notes(project: config.Project) -> List[str]:
+def renamed_folder_notes(project: config.Project) -> List[Tuple[str, str]]:
     """What is said of a team's folder ``cortex.toml`` names (ADR-013 §3.6), at every sync and validate:
     missing — its overlays, its context and the team's file are not read — or the root's ``agents/``
     left behind, still holding overlays or context files nobody reads. Nothing of the default folder:
-    a project of 1.7.0 is said nothing new."""
+    a project of 1.7.0 is said nothing new. Each with ``cortex validate``'s code."""
     if project.team_folder == config.TEAM_FOLDER:
         return []
     said = []
     if not os.path.isdir(project.team_dir):
-        said.append(f"{project.team_folder}/ is not there — the team's folder {config.PROJECT_FILE} names: its "
-                    "overlays, its context files and the team's file are not read; check it out there")
+        said.append(("TEAM_FOLDER_MISSING",
+                     f"{project.team_folder}/ is not there — the team's folder {config.PROJECT_FILE} names: its "
+                     "overlays, its context files and the team's file are not read; check it out there"))
+    elif os.path.isdir(os.path.join(project.team_dir, config.TEAM_FOLDER)):
+        # An agents/ inside the team's folder, no service's (ADR-013 §9): what it holds is read from neither.
+        nested = f"{project.team_folder}/{config.TEAM_FOLDER}"
+        said.append(("TEAM_FOLDER_NESTED",
+                     f"{nested}/ is not read — the team's folder is {project.team_folder}/ itself, its roles/, "
+                     f"capabilities/, personalities/ and workflows/; overlays kept in {nested}/ want "
+                     f'agents = "{nested}"'))
     old = os.path.join(project.root, config.TEAM_FOLDER)
     try:
-        left = [name for name in sorted(os.listdir(old)) if name in _TEAM_CONTENT]
+        same = os.path.samefile(old, project.team_dir)      # a link kept for a while, or a name in another case
+    except OSError:
+        same = False
+    try:
+        left = [] if same else [name for name in sorted(os.listdir(old)) if name in _TEAM_CONTENT]
     except OSError:
         left = []
     if left:
-        said.append(f"{config.TEAM_FOLDER}/ still holds {', '.join(left)} — the team's folder is "
-                    f"{project.team_folder}/, which {config.PROJECT_FILE} names: what {config.TEAM_FOLDER}/ holds is "
-                    "not read; move it there")
+        said.append(("TEAM_FOLDER_LEFT_BEHIND",
+                     f"{config.TEAM_FOLDER}/ still holds {', '.join(left)} — the team's folder is "
+                     f"{project.team_folder}/, which {config.PROJECT_FILE} names: what {config.TEAM_FOLDER}/ holds is "
+                     "not read; move it there"))
     return said
 
 
@@ -901,8 +914,10 @@ def synced_record(project: config.Project, reads: str) -> Optional[Dict[str, str
     if project_before_team(project):
         return None
     candidates = project.settings.candidates if project.settings is not None else {}
+    # The team's folder read, when cortex.toml renames it: the runtime reads no other (ADR-013 §3.1, §3.12).
+    folder = {"agents": project.team_folder} if project.team_folder != config.TEAM_FOLDER else {}
     return {**{key: candidates[key] for key in ("team", "project", "local") if key in candidates},
-            "pinned": str(project.team_version), "reads": reads}
+            "pinned": str(project.team_version), "reads": reads, **folder}
 
 
 def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
@@ -966,8 +981,8 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         raise SyncError(f"--locked: {folder_note}. Nothing of the project was changed")
     if folder_note is not None:
         err.write(f"warning: {folder_note}\n")
-    for said in renamed_folder_notes(project):
-        if locked and said.startswith(f"{project.team_folder}/ is not there"):
+    for code, said in renamed_folder_notes(project):
+        if locked and code == "TEAM_FOLDER_MISSING":
             raise SyncError(f"--locked: {said}. Nothing of the project was changed")
         err.write(f"warning: {said}\n")
 

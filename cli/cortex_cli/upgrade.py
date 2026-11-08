@@ -508,7 +508,7 @@ def out_of_step(root: Path, project: config.Project, the_store: store.Store) -> 
     where = config.lock_of(project)
     if where is None:                       # a local try: no lock (ADR-013 §3.4)
         return None
-    lock = config.load_lock(where[0], where[1])
+    lock = config.load_lock(where[0], where[1], where[2])
     if lock is None:
         return f"there is no {where[2]}"
     if lock.version != project.version:
@@ -1116,7 +1116,7 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     where = config.lock_of(project)
     lock = Path(where[0]) / where[1] if where is not None else Path(root) / config.LOCK_FILE
     relock = behind is not None and where is not None and \
-        getattr(config.load_lock(where[0], where[1]), "version", None) != project.version
+        getattr(config.load_lock(where[0], where[1], where[2]), "version", None) != project.version
     team = ([lock] if relock else []) + [path for path, _ in rewrites] + _committed(mine)
     if prepare is not None and team:
         prepare(team)

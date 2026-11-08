@@ -48,6 +48,9 @@ class FollowsTests(FolderTestCase):
         self.assertEqual(lines["version"], [OWN, f"{FOLDER}/cortex.team.toml"])
         self.assertEqual(lines["agents"], [FOLDER, "cortex.toml"])
         self.assertEqual(self.local(root)["synced"]["team"], OWN)
+        self.assertEqual(self.local(root)["synced"]["agents"], FOLDER)       # what the runtime reads (§3.12)
+        (root / "cortex.toml").write_text(f'agents = "./{FOLDER}/"\ntheme = "h2g2"\n', encoding="utf-8")
+        self.assertEqual(self.value(root, "agents"), FOLDER)                    # as every message names it
 
     def test_the_overlays_validated_are_the_folder_s(self):
         root = self.named()
@@ -139,8 +142,12 @@ class RefusalTests(FolderTestCase):
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', committed=False, name="nogit")
         (root / "agents" / "roles").mkdir(parents=True)
         self.assert_ok(self.cortex(root, "sync"))
-        root = self.project(f'agents = "agents"\nversion = "{OWN}"\ntheme = "h2g2"\n', committed=False, name="named")
-        self.assert_ok(self.cortex(root, "sync"))                   # named, uncommitted: the default all the same
+        for value in ("agents", "Agents", "./agents/"):
+            with self.subTest(value=value):
+                root = self.project(f'agents = "{value}"\nversion = "{OWN}"\ntheme = "h2g2"\n', committed=False,
+                                    name=f"named-{value.strip('./')}-{len(value)}")
+                self.assert_ok(self.cortex(root, "sync"))           # named, uncommitted: the default all the same
+                self.assertNotIn("agents", self.local(root)["synced"])
 
     def test_agents_in_an_uncommitted_cortex_toml_is_refused(self):
         root = self.named(committed=False)
@@ -223,6 +230,35 @@ class FolderStateTests(FolderTestCase):
                       f"is {FOLDER}/", proc.err)
         proc = self.cortex(root, "validate")
         self.assertIn("TEAM_FOLDER_LEFT_BEHIND", proc.out)
+
+    @LINKS
+    def test_an_agents_kept_as_a_link_to_the_folder_is_not_left_behind(self):
+        root = self.named()
+        (root / FOLDER / "roles").mkdir()
+        (root / "agents").symlink_to(FOLDER, target_is_directory=True)
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        self.assertNotIn("still holds", proc.err)
+        self.assertNotIn("TEAM_FOLDER_LEFT_BEHIND", self.cortex(root, "validate").out)
+
+    def test_an_agents_inside_the_folder_is_said_unread(self):
+        root = self.named()
+        (root / FOLDER / "agents" / "roles").mkdir(parents=True)
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        self.assertIn(f'warning: {FOLDER}/agents/ is not read — the team\'s folder is {FOLDER}/ itself', proc.err)
+        self.assertIn(f'want agents = "{FOLDER}/agents"', proc.err)
+        self.assertIn("TEAM_FOLDER_NESTED", self.cortex(root, "validate").out)
+
+    def test_a_team_s_lock_that_does_not_read_is_named_in_the_folder(self):
+        root = self.named()
+        self.assert_ok(self.cortex(root, "sync"))
+        (root / FOLDER / "cortex.team.lock").write_text("garbage = \n", encoding="utf-8")
+        for args in (("init", "--tool", "claude"), ("upgrade", "--dry-run")):
+            with self.subTest(args=args):
+                proc = self.cortex(root, *args)
+                self.assertIn(f"{FOLDER}/cortex.team.lock", proc.out + proc.err)
+                self.assertNotIn("agents/cortex.team.lock", (proc.out + proc.err).replace(f"{FOLDER}/", ""))
 
     def test_nothing_is_said_of_the_default_folder(self):
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n')

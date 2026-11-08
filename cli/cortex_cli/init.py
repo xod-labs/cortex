@@ -531,7 +531,8 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             (str(root / config.TEAM_FOLDER), config.TEAM_LOCK_FILE, config.TEAM_LOCK_NAME) if team_pins else \
             (str(root), config.LOCK_FILE, config.LOCK_FILE)
         if where is not None:
-            sync.check_lock(where[0], version, the_store, out, name=where[1])
+            sync.check_lock(where[0], version, the_store, out, name=where[1],
+                            folder=project.team_folder if project else config.TEAM_FOLDER)
 
     # Now the writes.
     root.mkdir(parents=True, exist_ok=True)
