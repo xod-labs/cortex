@@ -327,6 +327,20 @@ class TryTests(TeamTestCase):
         self.assertEqual((root / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(FORMAT_2, False)))
         self.assertIn("\nCommit agents/cortex.team.toml and agents/cortex.team.lock in agents/; teammates run", proc.out)
 
+    def test_init_writes_the_developer_s_own_bootstrap_in_the_theme_that_still_wins(self):
+        # --theme, or --no-personality, under a local theme that still wins: the next sync must not flip it.
+        for option, local, personality in ((("--theme", "h2g2"), "none", False), (("--no-personality",), "h2g2", True)):
+            with self.subTest(option=option):
+                root = self.project(toml="", team='version = "9.9.8"\ntheme = "h2g2"\n', local=f'theme = "{local}"\n',
+                                    committed=False, name=f"flip-{local}")
+                self.assert_ok(self.cortex(root, "sync"))
+                self.assert_ok(self.cortex(root, "init", "--tool", "claude", "--force", *option))
+                wanted = init.stamped(init.instructions(FORMAT_2, personality))
+                self.assertEqual((root / "CLAUDE.md").read_bytes(), wanted)
+                proc = self.cortex(root, "sync")
+                self.assert_ok(proc)
+                self.assertEqual((root / "CLAUDE.md").read_bytes(), wanted)
+
     def test_the_team_s_bootstrap_still_follows_the_team_s_version(self):
         root = self.tried("theirs", ignored=False)
         (root / "CLAUDE.md").write_bytes(written(self.f97) + OURS)

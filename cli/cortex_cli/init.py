@@ -577,12 +577,12 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     template = (templates / layout).read_bytes()
     # The developer's own instructions file follows the version this machine reads, and its theme, from a team's
     # version of 1.8.0 (ADR-013 §3.10): before it, as 1.7.0 writes it — git asked only where they are not the team's.
-    if project is not None and instructions_file is not None and not grammar.before_team(str(project.team_version)) \
-            and (templates_spec != spec or theme is None and project.active_theme != project.team_theme) \
-            and sync.developers_own(instructions_file):
-        template = (spec / "templates" / layout).read_bytes()
-        if theme is None:
-            personality = project.active_theme != "none"
+    if project is not None and instructions_file is not None and not grammar.before_team(str(project.team_version)):
+        # The theme as read once cortex.toml is written: a local theme, or a lock, wins over --theme still.
+        mine = config.load(str(root)).active_theme != "none"
+        if (templates_spec != spec or mine != personality) and sync.developers_own(instructions_file):
+            template = (spec / "templates" / layout).read_bytes()
+            personality = mine
     if instructions_file is None:
         out.write("✓ the instructions files are kept — several are there; --tool names the one to write\n")
     elif instructions_file.exists() and not options.force:
