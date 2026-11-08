@@ -262,6 +262,11 @@ class TryTests(TeamTestCase):
         root = self.tried("init-theirs", toml='version = "9.9.8"\ntheme = "h2g2"\n', ignored=False)
         self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
         self.assertEqual((root / "CLAUDE.md").read_bytes(), written(FORMAT_2))
+        # A file whose folder is not there yet, git asked of the first folder there is.
+        root = self.tried("init-copilot", toml='version = "9.9.8"\ntheme = "h2g2"\n', ignored=False)
+        (root / ".gitignore").write_text(".github/copilot-instructions.md\ncortex.local.toml\n", encoding="utf-8")
+        self.assert_ok(self.cortex(root, "init", "--tool", "copilot"))
+        self.assertEqual((root / ".github" / "copilot-instructions.md").read_bytes(), written(TEMPLATE))
         # The theme too: a local theme of none writes the developer's own file without the personality block.
         root = self.project(toml='version = "9.9.8"\ntheme = "h2g2"\n', local='theme = "none"\n', name="init-none")
         (root / ".gitignore").write_text("CLAUDE.md\ncortex.local.toml\n", encoding="utf-8")
@@ -319,8 +324,7 @@ class BehindTests(TeamTestCase):
         (root / ".github").mkdir()
         (root / ".github" / "copilot-instructions.md").write_bytes(written(FORMAT_2))
         proc = self.cortex(root / "agents", "validate")
-        self.assertIn(".github/copilot-instructions.md", proc.out + proc.err)
-        self.assertNotIn("../.github", proc.out + proc.err)
+        self.assertIn("⚠ .github/copilot-instructions.md\n  BOOTSTRAP_BEHIND — ", proc.out + proc.err)
 
     def test_without_the_team_s_version_in_the_store_validate_says_not_checked(self):
         root = self.project(team='version = "9.9.8"\n')
