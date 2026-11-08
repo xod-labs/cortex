@@ -378,6 +378,13 @@ class BeforeTheTeamTests(TeamTestCase):
                     self.assertEqual((root / "CLAUDE.md").read_bytes(), before)
                     self.assertEqual([path.name for path in root.iterdir() if ".bak" in path.name], [])
 
+    def test_a_sync_writes_an_own_format_3_file_back_with_the_team_s_theme(self):
+        # As 1.7.0's own upgrade writes it: cortex.toml's theme, whatever cortex.local.toml's.
+        root = self.project(toml='version = "1.7.0"\ntheme = "h2g2"\n', local='theme = "none"\n', committed=False)
+        (root / "CLAUDE.md").write_bytes(init.stamped(init.instructions(TEMPLATE, False)))
+        self.assert_ok(self.cortex(root, "sync"))
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), written(FORMAT_2))
+
 
 @DOWNLOADS
 class BehindTests(TeamTestCase):
