@@ -275,6 +275,40 @@ class TryTests(TeamTestCase):
 
 
 @DOWNLOADS
+class BeforeTheTeamTests(TeamTestCase):
+    """Before a team's version of 1.8.0, `cortex init` writes the developer's own bootstrap as 1.7.0 does."""
+
+    def setUp(self):
+        super().setUp()
+        self.release.replace_spec("1.7.0", {"templates/bootstrap-instructions.md": FORMAT_2,
+                                            "templates/project-overview.md.template": b"# Overview\n",
+                                            "templates/project-context.md.template": b"# Context\n"})
+
+    def test_init_keeps_the_team_s_theme_in_a_1_7_0_project(self):
+        # A local theme whose none-ness differs from cortex.toml's: 1.7.0 finds the file it would write.
+        for team, local in (("h2g2", "none"), ("none", "h2g2")):
+            for case, committed in (("2.B", False), ("ignored", True)):
+                with self.subTest(team=team, case=case):
+                    root = self.project(toml=f'version = "1.7.0"\ntheme = "{team}"\n', committed=committed,
+                                        name=f"{team}-{case}")
+                    if committed:
+                        (root / ".gitignore").write_text("CLAUDE.md\ncortex.local.toml\n", encoding="utf-8")
+                    self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+                    before = (root / "CLAUDE.md").read_bytes()
+                    self.assertEqual(before, init.stamped(init.instructions(FORMAT_2, team != "none")))
+                    with open(root / "cortex.local.toml", "a", encoding="utf-8") as file:
+                        file.write(f'theme = "{local}"\n')
+                    proc = self.cortex(root, "init", "--tool", "claude")
+                    self.assert_ok(proc)
+                    self.assertNotIn("personality block", proc.err)
+                    proc = self.cortex(root, "init", "--tool", "claude", "--force")
+                    self.assert_ok(proc)
+                    self.assertIn("CLAUDE.md is what --force would write: left as it is", proc.out)
+                    self.assertEqual((root / "CLAUDE.md").read_bytes(), before)
+                    self.assertEqual([path.name for path in root.iterdir() if ".bak" in path.name], [])
+
+
+@DOWNLOADS
 class BehindTests(TeamTestCase):
     """The team's bootstrap follows the team's version: untouched and not its template, it is behind."""
 

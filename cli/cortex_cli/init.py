@@ -575,9 +575,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     workspace = options.workspace or kept_workspace
     layout = "bootstrap-instructions-workspace.md" if workspace else "bootstrap-instructions.md"
     template = (templates / layout).read_bytes()
-    # The developer's own instructions file follows the version this machine reads, and its theme (ADR-013
-    # §3.10) — git asked only where they are not the team's.
-    if project is not None and instructions_file is not None \
+    # The developer's own instructions file follows the version this machine reads, and its theme, from a team's
+    # version of 1.8.0 (ADR-013 §3.10): before it, as 1.7.0 writes it — git asked only where they are not the team's.
+    if project is not None and instructions_file is not None and not grammar.before_team(str(project.team_version)) \
             and (templates_spec != spec or theme is None and project.active_theme != project.team_theme) \
             and sync.developers_own(instructions_file):
         template = (spec / "templates" / layout).read_bytes()
