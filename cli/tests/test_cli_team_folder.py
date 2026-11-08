@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_cli_format3 import FORMAT_2, OURS, TEMPLATE, written  # noqa: E402
-from test_cli_team import DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, TeamTestCase  # noqa: E402
+from test_cli_team import DEVELOPMENT, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, TeamTestCase  # noqa: E402
 
 FOLDER = "team-agents"
 NAMED = f'agents = "{FOLDER}"\ntheme = "h2g2"\n'
@@ -80,6 +80,7 @@ class FollowsTests(FolderTestCase):
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn(f"nor in {FOLDER}/personalities/", proc.err)
 
+    @DEVELOPMENT
     def test_a_version_too_new_is_said_of_the_team_s_file_in_the_folder(self):
         root = self.named(team='version = "99.0.0"\n')
         proc = self.cortex(root, "sync")
