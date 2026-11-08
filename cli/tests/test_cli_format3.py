@@ -8,6 +8,7 @@ untouched format 3 one goes back to its version's format. The team's bootstrap f
 version: ``cortex sync`` and ``cortex validate`` say when an untouched one is behind it.
 """
 
+import errno
 import io
 import os
 import sys
@@ -78,7 +79,7 @@ class OwnBootstrapTests(TeamTestCase):
                 if case == "the team's":
                     self.assertEqual((root / "CLAUDE.md").read_bytes(), written(FORMAT_2) + OURS)
                     self.assertIn(f"CLAUDE.md is behind: Cortex {OWN}, the team's version, writes another — "
-                                  "`cortex upgrade` writes it again", proc.err)
+                                  f"`cortex upgrade {OWN}` writes it again", proc.err)
                 else:
                     self.assertEqual((root / "CLAUDE.md").read_bytes(), written(TEMPLATE) + OURS)
                     self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s template — your own bootstrap follows "
@@ -165,6 +166,29 @@ class OwnBootstrapTests(TeamTestCase):
                     self.assertEqual(upgrade.behind(str(root), project, None, fetch=False), [])
                 self.assertEqual((out.getvalue(), err.getvalue()), ("", ""))
                 self.assertEqual((root / "CLAUDE.md").read_bytes(), written(FORMAT_2))
+
+    def test_a_folder_this_user_cannot_enter_holds_no_bootstrap(self):
+        # Path.is_file raises on EACCES: `cortex sync` and `cortex validate` would fail where 1.7.0 looked at nothing.
+        real = os.stat
+
+        def stat(path, *args, **kwargs):
+            if f"{os.sep}.github" in os.fspath(path):
+                raise PermissionError(errno.EACCES, "Permission denied", os.fspath(path))
+            return real(path, *args, **kwargs)
+
+        for name, toml, team in (("old", 'version = "1.7.0"\ntheme = "h2g2"\n', None),
+                                 ("new", 'theme = "h2g2"\n', f'version = "{OWN}"\n')):
+            with self.subTest(project=name):
+                root = self.project(toml=toml, team=team, committed=False, name=f"eacces-{name}")
+                self.assert_ok(self.cortex(root, "sync"))
+                (root / ".github").mkdir()
+                out, err = io.StringIO(), io.StringIO()
+                with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}):
+                    project = config.load(str(root))
+                    with mock.patch("os.stat", stat):
+                        upgrade.own_bootstraps(str(root), project, store.Store(), out, err)
+                        self.assertEqual(upgrade.behind(str(root), project, None, fetch=False), [])
+                self.assertEqual((out.getvalue(), err.getvalue()), ("", ""))
 
     def test_sync_from_a_checkout_writes_no_bootstrap(self):
         root = self.project(team=f'version = "{OWN}"\n', committed=False)
@@ -344,8 +368,8 @@ class BehindTests(TeamTestCase):
         (root / "CLAUDE.md").write_bytes(written(TEMPLATE))
         proc = self.cortex(root, "sync")
         self.assert_ok(proc)
-        self.assertIn("note: CLAUDE.md is behind: Cortex 1.7.0, the team's version, writes another — `cortex upgrade` "
-                      "writes it again", proc.err)
+        self.assertIn("note: CLAUDE.md is behind: Cortex 1.7.0, the team's version, writes another — `cortex upgrade "
+                      "1.7.0` writes it again", proc.err)
         self.assertIn("CLAUDE.md", (proc := self.cortex(root, "validate")).out + proc.err)
         self.assertIn("BOOTSTRAP_BEHIND", proc.out + proc.err)
         changed = written(TEMPLATE).replace(b"Cortex AI Team\n", b"Cortex AI Team, ours\n", 1)

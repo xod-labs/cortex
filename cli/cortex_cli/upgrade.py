@@ -279,6 +279,12 @@ def bootstraps(files: List[Path], pinned: Version, current: Optional[Path], targ
     return rewrites
 
 
+def _listed(root: Path) -> List[Path]:
+    """Every known tool's instructions file there, as `cortex sync` and `cortex validate` look at them: a folder
+    this user cannot enter holds none — 1.7.0 never looked (``_instructions_files``, `cortex upgrade`'s, raises)."""
+    return [root / rel for rel in init.TOOLS.values() if os.path.isfile(root / rel)]
+
+
 def own_bootstraps(root: str, project: config.Project, the_store: store.Store, out: TextIO, err: TextIO,
                    forced: bool = False, files: Optional[List[Path]] = None) -> None:
     """The developer's own bootstrap files written again from the version this machine reads (ADR-013 §3.10):
@@ -292,7 +298,7 @@ def own_bootstraps(root: str, project: config.Project, the_store: store.Store, o
     if not (forced or below or project.team_file):
         return
     contents = {}
-    for path in _instructions_files(Path(root), None) if files is None else files:
+    for path in _listed(Path(root)) if files is None else files:
         try:
             contents[path] = init.normalised(path.read_bytes())
         except OSError:
@@ -356,7 +362,7 @@ def behind(root: str, project: config.Project, the_store: Optional[store.Store],
     team = project.team_version
     below = grammar.before_team(str(team))
     contents = {}
-    for path in _instructions_files(Path(root), None):
+    for path in _listed(Path(root)):
         try:
             contents[path] = init.normalised(path.read_bytes())
         except OSError:
@@ -367,7 +373,7 @@ def behind(root: str, project: config.Project, the_store: Optional[store.Store],
                 if init.untouched(content) and not sync.developers_own(path)}
     if not contents or reads_a_checkout(root, project):
         return []
-    reason = f"Cortex {team}, the team's version, writes another — `cortex upgrade` writes it again"
+    reason = f"Cortex {team}, the team's version, writes another — `cortex upgrade {team}` writes it again"
     if below:
         return [(path, reason) for path in contents]
     names = _and([_shown_path(path, root) for path in contents])
