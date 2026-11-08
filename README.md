@@ -479,6 +479,7 @@ The PowerShell lines for a Windows runner are in [extending-layers.md](docs/exte
 curl -fsSL https://raw.githubusercontent.com/xod-labs/cortex/main/install.sh | sh                   # the latest release
 export PATH="$HOME/.cortex/bin:$PATH"
 version="$(cortex config version --locked)"                                                      # the team's version
+[ -n "$version" ] || exit 1                                                                      # none: the job stops
 curl -fsSL https://raw.githubusercontent.com/xod-labs/cortex/main/install.sh | sh -s -- "$version"
 cortex sync --locked
 cortex validate --strict

@@ -150,9 +150,9 @@ class TeamCiLinesTests(unittest.TestCase):
             (self.bin / name).write_text(text, encoding="utf-8")
             (self.bin / name).chmod(0o755)
 
-    def run_lines(self, root):
+    def run_lines(self, root, code=0):
         proc = subprocess.run(["/bin/sh", "-c", team_block()], cwd=root, env=self.env, capture_output=True, text=True)
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(proc.returncode, code, proc.stdout + proc.stderr)
         return self.log.read_text(encoding="utf-8").splitlines()
 
     def test_a_project_whose_version_is_the_team_s_file_s(self):
@@ -170,6 +170,13 @@ class TeamCiLinesTests(unittest.TestCase):
         (root / "cortex.toml").write_text('version = "1.7.0"\ntheme = "h2g2"\n', encoding="utf-8")
         subprocess.run([str(self.bin / "cortex"), "sync"], cwd=root, env=self.env, check=True, capture_output=True)
         self.assertEqual(self.run_lines(root), ["", "-s -- 1.7.0"])
+
+    def test_no_version_read_stops_the_job_before_the_second_install(self):
+        root = self.tmp / "refused"
+        (root / "agents").mkdir(parents=True)
+        (root / "cortex.toml").write_text("", encoding="utf-8")
+        (root / "agents" / "cortex.team.toml").write_text("version = \n", encoding="utf-8")   # refused: no version
+        self.assertEqual(self.run_lines(root, code=1), [""])
 
 
 if __name__ == "__main__":
