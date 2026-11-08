@@ -719,18 +719,28 @@ def unswap(target: Path, aside: Optional[Path]) -> None:
 
 def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
          claude_access: Optional[bool] = None, notes: bool = True, locked: bool = False,
-         announce: bool = True, registers: bool = True) -> None:
+         announce: bool = True, registers: bool = True, bootstraps: Optional[bool] = None) -> None:
     """Sync the project at or above ``cwd``. ``notes`` off, what git ignores is left to the
     caller — ``cortex init`` writes .gitignore once ``cortex/`` has its final form. ``locked``,
     ``cortex.lock`` is never written: a sync that would write it stops. ``announce`` off, the
     project is not named: ``cortex upgrade`` has named it already. ``registers`` off, the project
-    is not registered: ``cortex init`` registers it once all of it succeeded, not only its sync."""
+    is not registered: ``cortex init`` registers it once all of it succeeded, not only its sync.
+    ``bootstraps`` — `cortex sync`'s own run, and ``cortex upgrade --local``'s — writes the developer's
+    own bootstrap again and says whether the team's is behind (ADR-013 §3.10), still under the
+    project's lock: ``True`` writes the developer's own whatever the team's file, ``False`` only
+    where there is one."""
     root = config.find_project(cwd)
     if root is None:
         raise SyncError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
                         "a Cortex project")
     with project_lock(Path(root), err):
         _sync(root, mode, source, out, err, claude_access, notes, locked, announce)
+        if bootstraps is not None and source is None and not locked:
+            from . import upgrade       # upgrade imports this module: the bootstraps are its
+            project = config.load(root)
+            upgrade.own_bootstraps(root, project, store.Store(), out, err, forced=bootstraps)
+            for note in upgrade.behind(root, project, None, fetch=True):
+                err.write(f"note: {note}\n")
     if registers:
         register(root, out, err)
 
@@ -1124,7 +1134,7 @@ def run(args: List[str]) -> int:
         parser.error("--locked checks cortex.lock, and --from reads none: a checkout has no version")
     try:
         sync(working_directory(), options.mode, options.source, sys.stdout, sys.stderr, options.claude_access,
-             locked=options.locked)
+             locked=options.locked, bootstraps=False)
     except (config.ConfigError, store.StoreError, SyncError) as error:
         return failed("cortex sync", str(error))
     except OSError as error:

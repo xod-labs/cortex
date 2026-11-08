@@ -617,7 +617,7 @@ class DigestTests(UpgradeTestCase):
             ("9.9.8", b"# Cortex AI Team\n\nWritten by an older Cortex: read cortex.local.toml first.\n",
              "CLAUDE.md is a bootstrap without the marker, not what Cortex 9.9.8 writes — a team changed it, or an older "
              "Cortex wrote it — so it is kept: cortex init --force writes it again, and keeps yours as .bak\n"),
-            (OWN, newer, "CLAUDE.md is not what Cortex wrote, by the digest in its marker — a team changed it" + kept),
+            (OWN, newer, "CLAUDE.md is of format 3, which Cortex 1.8.0 or later reads, and not what Cortex wrote" + kept),
         )
         for pinned, content, note in cases:
             with self.subTest(pinned=pinned):

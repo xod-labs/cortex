@@ -212,6 +212,12 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     layout = layouts[0] if intact else None
     if intact is None:
         layout = written_by(init.parts(content)[0], current / "templates", layouts, personality, path)
+    if layout is None and _format(content) >= 3 > max(_format(_written(target / "templates", name, personality, path))
+                                                     for name in layouts):
+        # Moved below 1.8.0, a format 3 file a team changed: its rules need a cortex of 1.8.0 (ADR-013 §3.10).
+        return None, (f"{display(str(path))} is of format {_format(content)}, which Cortex {grammar.FIRST_TEAM_VERSION} or "
+                      f"later reads, and not what Cortex wrote — so it is kept, and the target's template is not "
+                      f"written: {again}{below}")
     if layout is None:
         # A team changed it: said when the target writes another file than the pinned version, or,
         # without the pinned version, a later format — and, of a Cursor rule, when it lacks the
@@ -271,6 +277,83 @@ def bootstraps(files: List[Path], pinned: Version, current: Optional[Path], targ
         if content is not None:
             rewrites.append((path, content))
     return rewrites
+
+
+def developers_own(path: Path) -> bool:
+    """Whether the bootstrap at ``path`` is the developer's own (ADR-013 §3.1): one git ignores, or one in no
+    repository — a link asked of the file it resolves to, in that file's repository. Any other is the team's."""
+    real = Path(os.path.realpath(path))
+    return config.in_no_repository(real.parent) or sync.ignored(real.parent, real.name) is True
+
+
+def own_bootstraps(root: str, project: config.Project, the_store: store.Store, out: TextIO, err: TextIO,
+                   forced: bool = False) -> None:
+    """The developer's own bootstrap files written again from the version this machine reads (ADR-013 §3.10):
+    by `cortex sync` in a project that has a team's file and whose team's version is 1.8.0 or later, by
+    `cortex upgrade --local` whenever it sets a version (``forced``). A team's version before 1.8.0 writes an
+    untouched format 3 one again from the resolved version's template, and says a changed one needs 1.8.0;
+    one of an earlier format is left as 1.7.0 leaves it. A file whose marker carries no digest is left alone."""
+    below = grammar.before_team(str(project.team_version))
+    if not (forced or below or project.team_file):
+        return
+    files = _instructions_files(Path(root), None)
+    if below:       # as 1.7.0 leaves them, but a format 3 file: no git asked of the others
+        files = [path for path in files if _format(init.normalised(path.read_bytes())) >= 3]
+    files = [path for path in files if developers_own(path)]
+    version = project.version
+    target = the_store.path(version)
+    personality = project.active_theme != "none"
+    for path in files:
+        content = init.normalised(path.read_bytes())
+        intact = init.untouched(content)
+        if intact is False and below:
+            err.write(f"note: {display(str(path))} is of format {_format(content)}, which Cortex "
+                      f"{grammar.FIRST_TEAM_VERSION} or later reads, and not what Cortex wrote — so it is kept: "
+                      "cortex init --force writes it again, and keeps yours as .bak\n")
+        if not intact:
+            continue
+        written, _ = bootstrap(path, version, None, target, personality)
+        if written is not None:
+            _put(path, written)
+            out.write(f"{display(str(path))}: written again from Cortex {version}'s template — your own bootstrap "
+                      f"follows the version this machine reads; {_nobody(written)}\n")
+
+
+def behind(root: str, project: config.Project, the_store: Optional[store.Store], fetch: bool) -> List[str]:
+    """What is said of the team's bootstrap files (ADR-013 §3.10): untouched and not the team's version's
+    template, each is behind — ``cortex upgrade`` writes it again. ``fetch``, the team's version is put in
+    the store to tell (`cortex sync`); without it and not there, they are said not checked (`cortex
+    validate`). A changed block, or a team's version before 1.8.0, is never behind. ``the_store``, ``None``
+    for one built only once there is a file to tell — `cortex validate` of a 1.7.0 project builds none."""
+    team = project.team_version
+    if grammar.before_team(str(team)):
+        return []
+    files = [path for path in _instructions_files(Path(root), None) if not developers_own(path)]
+    files = [path for path in files if init.untouched(init.normalised(path.read_bytes()))]
+    if not files:
+        return []
+    the_store = the_store or store.Store()
+    if fetch:
+        try:
+            the_store.ensure(team)
+        except store.StoreError as error:
+            return [f"{_and([display(str(path)) for path in files])} not checked against Cortex {team}, the team's "
+                    f"version: {error}"]
+    if not the_store.has(team):
+        return [f"{_and([display(str(path)) for path in files])} not checked against Cortex {team}, the team's "
+                "version, which is not in the store — `cortex sync` puts it there"]
+    personality = project.team_theme != "none"
+    said = []
+    for path in files:
+        content = init.normalised(path.read_bytes())
+        found = init.markers(content)
+        if len(found) != 1:
+            continue
+        wanted = _written(the_store.path(team) / "templates", found[0][0], personality, path)
+        if wanted is not None and wanted != init.parts(content)[0]:
+            said.append(f"{display(str(path))} is behind: Cortex {team}, the team's version, writes another — "
+                        "`cortex upgrade` writes it again")
+    return said
 
 
 def _and(names: List[str]) -> str:
@@ -529,7 +612,7 @@ def _local_then_sync(root: str, values: Dict[str, object], out: TextIO, err: Tex
     before = path.read_bytes() if path.is_file() else None
     config.write_local(root, values, {"version": "your try — `cortex upgrade --local` writes it"})
     try:
-        sync.sync(root, None, None, out, err, announce=False)
+        sync.sync(root, None, None, out, err, announce=False, bootstraps=True)
     except BaseException:
         if before is None:
             path.unlink(missing_ok=True)
