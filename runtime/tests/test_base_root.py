@@ -304,6 +304,20 @@ class TeamVersionTests(SyncedProjectTestCase):
         pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local='version = "9.9.8"\n')
         self.assertEqual(pin().version, "9.9.9")                                # below the team's: changes nothing
 
+    def test_below_1_8_0_beside_a_team_s_file_the_remedy_is_a_sync(self):
+        # Mid-adoption, at a root no repository holds: `cortex sync` reads the team's file over an uncommitted
+        # cortex.toml, and takes the theme this one lacks from it — it does not refuse this file.
+        pin = self.files('version = "1.7.0"\n', team='version = "1.8.0"\ntheme = "h2g2"\n')
+        with self.assertRaisesRegex(ValueError, r'"theme" is required — run `cortex sync` in the project, which may '
+                                                r"read agents/cortex\.team\.toml instead of a cortex\.toml not committed$"):
+            pin()
+
+    def test_a_synced_that_is_none_names_its_remedy_once(self):
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local='synced = { pinned = "9.9.9" }\n')
+        with self.assertRaisesRegex(ValueError, r'"synced": "reads" is required') as caught:
+            pin()
+        self.assertEqual(str(caught.exception).count("cortex sync"), 1, caught.exception)
+
     def test_a_cortex_local_toml_that_does_not_read_is_none_as_in_1_7_0(self):
         pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local="spec = [\n")
         self.assertEqual(pin().version, "9.9.9")
