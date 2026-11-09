@@ -6,10 +6,13 @@ run's number. ``X.Y.Z`` is the version the branch prepares, which ``CHANGELOG.md
 - the base is the highest release among its sections, by semver order — not the first section
   after ``[Unreleased]``: a fix carried up from an older line, ``1.7.1``, whose section sits among
   the others, never lowers it. A changelog that names none starts from ``0.0.0``;
-- ``[Unreleased]`` gives the bump: an entry under ``Removed``, or one marked breaking (``💥``), a
-  major; one under ``Added``, ``Changed`` or ``Deprecated``, a minor; anything else — ``Fixed``
-  and ``Security`` only, or no entry yet — a patch. A kind is read in any case, an emoji or a note
-  around it: ``### ✨ Added``, ``### Fixed (CLI)``;
+- ``[Unreleased]`` gives the bump: an entry under ``Removed``, or one marked breaking (``💥``) — or
+  under a heading so marked, ``### 💥 Breaking`` — a major; one under ``Added``, ``Changed`` or
+  ``Deprecated``, a minor; anything else — ``Fixed`` and ``Security`` only, or no entry yet — a
+  patch. A kind is read in any case, an emoji or a note around it: ``### ✨ Added``, ``### Fixed
+  (CLI)``. Markdown's rules hold: a heading may be indented up to three spaces, an entry starts with
+  ``-``, ``*`` or ``+``, and a line ends at a line feed or a carriage return alone — not at the
+  other breaks Python splits text at, which an entry may hold;
 - a changelog that writes a pre-release's section — Cortex's does not (ADR-009 §3.7) — has it as
   a floor: above the base, ``3.1.0-rc.1`` makes the version the higher of its release and the
   bump's — ``3.1.0`` after a fix or an addition, ``4.0.0`` after a removal.
@@ -26,15 +29,18 @@ from typing import Dict, List, Optional
 from .semver import Version
 
 UNRELEASED = "unreleased"
-# A second-level section: `## [1.7.0] - 2026-11-06 — …`, `## [Unreleased]`.
-SECTION = re.compile(r"## \[(?P<label>[^\]]+)\].*")
-KIND = re.compile(r"### (?P<kind>.+?)\s*")
+# A second-level section: `## [1.7.0] - 2026-11-06 — …`, `## [Unreleased]` — indented up to three spaces, as
+# Markdown has a heading.
+SECTION = re.compile(r" {0,3}## \[(?P<label>[^\]]+)\].*")
+KIND = re.compile(r" {0,3}### (?P<kind>.+?)\s*")
 # The kinds of Keep a Changelog, as a heading names one: `### Added`, `### ✨ Added`, `### fixed (CLI)`.
 KINDS = re.compile(r"\b(added|changed|deprecated|removed|fixed|security)\b", re.IGNORECASE)
 # An entry is a line of its own starting a list item; what follows it, indented, is its text.
-ENTRY = re.compile(r"[-*][ \t]+(?P<text>.*)")
+ENTRY = re.compile(r"[-*+][ \t]+(?P<text>.*)")
 BREAKING = re.compile(r"(?:\*\*)?💥")
-MAJOR = frozenset({"Removed"})
+# A heading marked breaking, `### 💥 Breaking`, `### Breaking changes`: its entries are, whatever kind it names.
+BREAKING_KIND = re.compile(r"💥|\bbreaking\b", re.IGNORECASE)
+MAJOR = frozenset({"Removed", "Breaking"})
 MINOR = frozenset({"Added", "Changed", "Deprecated"})
 
 
@@ -51,8 +57,9 @@ def released(text: str) -> List[Version]:
 
 def unreleased(text: str) -> Dict[str, List[str]]:
     """The entries of ``[Unreleased]`` by kind, ``{"Added": [...], "Fixed": [...]}``: each entry's
-    first line, without its marker. A kind with no entry is left out; a heading that names none of
-    Keep a Changelog's is a kind of its own, which asks nothing."""
+    first line, without its marker. A kind with no entry is left out; a heading marked breaking is the
+    kind ``Breaking``; one that names none of Keep a Changelog's is a kind of its own, which asks
+    nothing."""
     entries: Dict[str, List[str]] = {}
     inside, kind = False, None
     for line in _lines(text):
@@ -66,7 +73,8 @@ def unreleased(text: str) -> Dict[str, List[str]]:
         heading = KIND.fullmatch(line)
         if heading:
             named = KINDS.search(heading.group("kind"))
-            kind = named.group(1).capitalize() if named else heading.group("kind")
+            kind = "Breaking" if BREAKING_KIND.search(heading.group("kind")) else \
+                named.group(1).capitalize() if named else heading.group("kind")
             continue
         entry = ENTRY.fullmatch(line)
         if entry and kind is not None:
@@ -98,7 +106,8 @@ def prepared(text: str) -> Version:
 
 
 def _lines(text: str) -> List[str]:
-    return text.removeprefix("\ufeff").splitlines()
+    # Markdown's line endings alone: `splitlines` would also break at U+2028, U+0085 or a form feed in an entry.
+    return re.split(r"\r\n|\r|\n", text.removeprefix("\ufeff"))
 
 
 def development(text: str, build: Optional[int] = None) -> str:

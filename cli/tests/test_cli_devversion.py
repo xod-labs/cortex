@@ -141,6 +141,26 @@ class BumpTests(unittest.TestCase):
             with self.subTest(unreleased=unreleased):
                 self.assertEqual(prepared(changelog(unreleased, "2.3.4")), "2.3.5")
 
+    def test_a_heading_marked_breaking_is_a_major(self):
+        for heading in ("### 💥 Breaking", "### Breaking changes", "### 💥 Changed", "### BREAKING"):
+            with self.subTest(heading=heading):
+                self.assertEqual(prepared(changelog(f"{heading}\n- a thing\n", "2.3.4")), "3.0.0")
+        self.assertEqual(devversion.unreleased(changelog("### 💥 Changed\n- a thing\n")), {"Breaking": ["a thing"]})
+
+    def test_markdown_s_headings_entries_and_line_ends(self):
+        # A heading indented up to three spaces is one; four make it code, no heading.
+        self.assertEqual(prepared(changelog("   ### Added\n- a thing\n", "2.3.4")), "2.4.0")
+        self.assertEqual(prepared(changelog("### Fixed\n- a fix\n    ### Removed\n- a thing\n", "2.3.4")), "2.3.5")
+        self.assertEqual(prepared(HEAD + "## [Unreleased]\n\n### Fixed\n- a fix\n\n  ## [2.3.4] - 2026-11-01\n"), "2.3.5")
+        # An entry starts with -, * or +.
+        self.assertEqual(devversion.unreleased(changelog("### Added\n+ a thing\n")), {"Added": ["a thing"]})
+        # A line ends at a line feed or a carriage return alone: not at U+2028, U+0085, a form feed.
+        for separator in ("\u2028", "\u0085", "\x0c", "\x1e"):
+            with self.subTest(separator=repr(separator)):
+                text = changelog(f"### Fixed\n- a fix{separator}## [99.0.0] - not a section\n", "2.3.4")
+                self.assertEqual(prepared(text), "2.3.5")
+        self.assertEqual(prepared(changelog("### Added\r- a thing\r", "2.3.4")), "2.4.0")
+
     def test_a_byte_order_mark_is_no_part_of_the_text(self):
         text = "\ufeff## [Unreleased]\n\n### Added\n- a thing\n\n## [2.3.4] - 2026-11-01 — A Name _(Released)_\n"
         self.assertEqual(prepared(text), "2.4.0")
