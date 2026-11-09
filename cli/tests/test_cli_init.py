@@ -445,17 +445,31 @@ class OptionTests(InitTestCase):
             self.assertNotIn("agents/project-overview.md", proc.out)
         self.assertIn("✓ agents/project-overview.md", self.init("--tool", "claude", "--workspace").out)
 
-    def test_another_tool_s_file_of_the_other_layout_is_said_to_be_removed_first(self):
-        # --tool X --force keeps a file's own layout now (#329): the way out is to remove it.
+    def test_another_tool_s_file_of_the_other_layout_names_force(self):
+        # --tool X --force keeps a file's own layout now (#329), and its team's part, with a .bak: never "remove it",
+        # which at a root in no repository would lose the team's part.
         self.assertEqual(self.init("--tool", "claude", "--workspace").returncode, 0)
         self.assertEqual(self.init("--tool", "agents").returncode, 0)                   # a single project's AGENTS.md
+        team = "\n## Workspace services\n\n| @alias | Folder | Description |\n|---|---|---|\n| `@svc` | svc/ | x |\n"
+        (self.project / "CLAUDE.md").write_text(self.read("CLAUDE.md") + team, encoding="utf-8")
         proc = self.init()
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("note: CLAUDE.md is there and was kept: a bootstrap written for a workspace — remove it, then "
-                      "cortex init --tool claude writes a single project's", proc.err)
+        self.assertIn("note: CLAUDE.md is there and was kept: a bootstrap written for a workspace — cortex init --tool "
+                      "claude --force writes it again, a workspace's as it was written, and keeps it as .bak", proc.err)
+        self.assertNotIn("remove it", proc.err)
         proc = self.init("--workspace")
-        self.assertIn("note: AGENTS.md is there and was kept: a bootstrap written for a single project — remove it, "
-                      "then cortex init --tool agents --workspace writes a workspace's", proc.err)
+        self.assertIn("note: AGENTS.md is there and was kept: a bootstrap written for a single project — cortex init "
+                      "--tool agents --workspace --force writes a workspace's, and keeps it as .bak", proc.err)
+        self.assertNotIn("remove it", proc.err)
+        # Followed, the note keeps the team's part and the layout.
+        before = self.read("CLAUDE.md").replace("<!-- cortex:bootstrap layout=workspace format=2",
+                                                "<!-- cortex:bootstrap layout=workspace format=1", 1)
+        (self.project / "CLAUDE.md").write_text(before, encoding="utf-8")
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertTrue(self.read("CLAUDE.md").endswith(team))
+        self.assertEqual((self.project / "CLAUDE.md.bak").read_text(encoding="utf-8"), before)
 
     def test_force_without_workspace_knows_a_workspace_written_before_the_marker(self):
         # The file of 1.3.0, which every workspace a team changed is sent to `cortex init --force` with.

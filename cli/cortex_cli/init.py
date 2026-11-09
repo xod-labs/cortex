@@ -583,8 +583,10 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             if not found.force:
                 again = "kept as it is"
             elif found.layout:
-                again = f"remove it, then cortex init --tool {name}{' --workspace' if workspace else ''} writes " \
-                        f"{'a workspace' if workspace else 'a single project'}'s"
+                # Never "remove it": at a root in no repository, its team's part would be lost with it (#329).
+                again = f"cortex init --tool {name} --workspace --force writes a workspace's" if workspace else \
+                    f"cortex init --tool {name} --force writes it again, a workspace's as it was written"
+                again += ", and keeps it as .bak"
             else:
                 again = f"cortex init --tool {name} --force replaces it, and keeps it as .bak"
             err.write(f"note: {rel} is there and was kept: {found.phrase} — {again}\n")
