@@ -434,6 +434,20 @@ class SharedRenamedFolderTests(FolderTestCase):
             f'\n[[project]]\nname = "{root.name}"\npath = "{harness_path(root)}"\n' for root in roots), encoding="utf-8")
         return team, roots
 
+    @SOURCE
+    def test_a_project_that_pins_its_own_version_is_no_follower_of_the_shared_file(self):
+        # --all --team checks the overlays of the followers only: beta shares the folder, but its committed
+        # cortex.toml pins its own version — its overlays, which fail, do not stop the move.
+        team, (alpha, beta) = self.shared("beta")
+        (beta / "cortex.toml").write_text(NAMED + 'version = "9.9.8"\n', encoding="utf-8")
+        if upgrade.check_overlays(str(beta), Path(harness.REPO))[0] == 0:
+            self.skipTest("the validator reads no service overlay here")
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team", OWN)
+        self.assert_ok(proc)
+        self.assertIn(f'version = "{OWN}"', (team / "cortex.team.toml").read_text(encoding="utf-8"))
+        self.assertNotIn(f"The overlays of {harness_path(beta)}", proc.out)
+        self.assertIn("pins its own version, 9.9.8", proc.out + proc.err)
+
     def test_a_failing_follower_stops_the_shared_file_in_either_order(self):
         for failing in ("alpha", "beta"):
             with self.subTest(failing=failing):
