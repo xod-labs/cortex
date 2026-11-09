@@ -17,8 +17,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_cli_format3 import FORMAT_2, OURS, TEMPLATE, written  # noqa: E402
-from test_cli_team import (DEVELOPMENT, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, SOURCE, TeamTestCase,  # noqa: E402
-                           harness_path)
+from test_cli_team import (AS_ROOT, DEVELOPMENT, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, SOURCE,  # noqa: E402
+                           TeamTestCase, harness_path)
 
 import cli_harness as harness  # noqa: E402
 from cortex_cli import config, store, upgrade, validate  # noqa: E402
@@ -493,7 +493,29 @@ class CodeReviewFolderTests(FolderTestCase):
                 proc = self.cortex(root, *args)
                 self.assertEqual(proc.returncode, 1, proc.out + proc.err)
                 self.assertIn(f"cortex upgrade: {FOLDER}/cortex.team.lock: Invalid", proc.err)
+                self.assertIn("delete it, and `cortex upgrade` writes it again", proc.err)
                 self.assertNotIn(" agents/cortex.team.lock", proc.err)
+
+    @SOURCE
+    @DOWNLOADS
+    @AS_ROOT
+    def test_a_resume_during_a_try_warns_of_the_folder_it_cannot_write(self):
+        # As in agents/: a warning naming the folder cortex.toml names, the lock not updated, the rest done.
+        root = self.named(team='version = "9.9.8"\n', local=f'version = "{OWN}"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        lock = root / FOLDER / "cortex.team.lock"
+        lock.write_text(config.render_lock(store.Version("9.9.7"), "sha256:" + "0" * 64), encoding="utf-8")
+        before = lock.read_bytes()
+        os.chmod(root / FOLDER, 0o555)
+        self.addCleanup(os.chmod, root / FOLDER, 0o755)
+        proc = self.cortex(root, "upgrade", "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn(f"{FOLDER}/ cannot be written here — it would be a warning, the lock not updated", proc.out)
+        proc = self.cortex(root, "upgrade")
+        self.assert_ok(proc)
+        self.assertIn(f"warning: {FOLDER}/cortex.team.lock cannot be written — ", proc.err)
+        self.assertEqual(lock.read_bytes(), before)
+        self.assertFalse((root / "agents").exists())
 
     @NEEDS_GIT
     def test_team_commit_names_the_folder_of_the_developer_s_own_change(self):
