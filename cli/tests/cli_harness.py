@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unittest
 from pathlib import Path
 
 CLI = Path(__file__).resolve().parents[1]
@@ -36,6 +37,24 @@ atexit.register(shutil.rmtree, _EMPTY_PATH, ignore_errors=True)
 _HOME = tempfile.mkdtemp(prefix="cortex-home-")
 atexit.register(shutil.rmtree, _HOME, ignore_errors=True)
 os.environ["CORTEX_HOME"] = _HOME
+
+
+def _repository_above(directory):
+    """A ``.git`` at ``directory`` or above it, as written or resolved — the repository Cortex takes a project made
+    there to be in: the folder that holds it, or ``None``."""
+    for start in {directory, os.path.realpath(directory)}:
+        for folder in (start, *map(str, Path(start).parents)):
+            if os.path.lexists(os.path.join(folder, ".git")):
+                return folder
+    return None
+
+
+REPOSITORY_ABOVE_TEMP = _repository_above(tempfile.gettempdir())
+# A test of a project in no repository makes it in the temporary directory: where that directory is in one — a TMPDIR
+# inside a clone — the project is in it too, and the test is skipped, saying why.
+outside_a_repository = unittest.skipIf(
+    REPOSITORY_ABOVE_TEMP is not None,
+    f"needs a temporary directory in no git repository: {REPOSITORY_ABOVE_TEMP} is one — set TMPDIR outside it")
 
 
 def command(*args):
