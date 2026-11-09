@@ -39,7 +39,7 @@ class BaseTests(unittest.TestCase):
     """The base is the highest version among the sections, by semver order."""
 
     def test_a_fix_carried_up_from_an_older_line_never_lowers_it(self):
-        # On a 3.x branch, 1.7.1's section, merged forward from the line 1.x, sits above 3.0.0's.
+        # On a 3.x branch, 1.7.1's section, carried up from the line 1.x, sits among the others: wherever it is.
         text = changelog("### Fixed\n- a fix\n", "1.7.1", "3.0.0", "2.4.0", "1.7.0", "1.6.0")
         self.assertEqual(max(devversion.released(text)), Version("3.0.0"))
         self.assertEqual(prepared(text), "3.0.1")

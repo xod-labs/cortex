@@ -4,14 +4,15 @@ A source checkout reports ``X.Y.Z-dev``; a build of no release, ``X.Y.Z-dev.N``,
 run's number. ``X.Y.Z`` is the version the branch prepares, which ``CHANGELOG.md`` says:
 
 - the base is the highest release among its sections, by semver order — not the first section
-  after ``[Unreleased]``: a fix carried up from an older line, ``1.7.1`` written above ``3.0.0``,
-  never lowers it. A changelog that names none starts from ``0.0.0``;
+  after ``[Unreleased]``: a fix carried up from an older line, ``1.7.1``, whose section sits among
+  the others, never lowers it. A changelog that names none starts from ``0.0.0``;
 - ``[Unreleased]`` gives the bump: an entry under ``Removed``, or one marked breaking (``💥``), a
   major; one under ``Added``, ``Changed`` or ``Deprecated``, a minor; anything else — ``Fixed``
   and ``Security`` only, or no entry yet — a patch. A kind is read in any case, an emoji or a note
   around it: ``### ✨ Added``, ``### Fixed (CLI)``;
-- a pre-release above the base, ``3.1.0-rc.1``, is a floor: the version is the higher of its
-  release and the bump's — ``3.1.0`` after a fix or an addition, ``4.0.0`` after a removal.
+- a changelog that writes a pre-release's section — Cortex's does not (ADR-009 §3.7) — has it as
+  a floor: above the base, ``3.1.0-rc.1`` makes the version the higher of its release and the
+  bump's — ``3.1.0`` after a fix or an addition, ``4.0.0`` after a removal.
 
 Once a release's section is written, the branch prepares the next one: the release job stamps
 ``X.Y.Z`` itself. ``cli/build.py --development-version N`` prints it for the CI's builds.
