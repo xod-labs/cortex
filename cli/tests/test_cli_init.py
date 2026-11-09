@@ -338,10 +338,24 @@ class OptionTests(InitTestCase):
 
     def test_a_root_inside_a_repository_is_not_said_to_be_in_none(self):
         # The repository is a .git at the root or above it, git or not on the PATH — as cortex upgrade tells it.
+        # Without git to ask, .gitignore's own lines say what is ignored, in a subdirectory too: it is written.
         (self.project.parent / ".git").mkdir(parents=True)
         proc = self.init()
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertNotIn("is in no git repository", proc.err)
+        self.assertIn("cortex.local.toml", self.read(".gitignore").splitlines())
+
+    @unittest.skipUnless(HAS_GIT, "needs git")
+    def test_a_repository_git_refuses_above_the_root_still_gets_the_gitignore(self):
+        # git asked, and refusing — here a worktree whose repository is gone — is no "no repository": .gitignore's own
+        # lines say what is ignored, and the file is written.
+        self.project.parent.mkdir(parents=True, exist_ok=True)
+        (self.project.parent / ".git").write_text("gitdir: ../nowhere\n", encoding="utf-8")
+        self.env = dict(self.env, PATH=os.pathsep.join([os.path.dirname(shutil.which("git")), self.env["PATH"]]))
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("is in no git repository", proc.err)
+        self.assertIn("cortex.local.toml", self.read(".gitignore").splitlines())
 
     @unittest.skipUnless(HAS_GIT, "needs git")
     def test_a_copy_turned_into_a_link_is_ignored_as_a_link(self):
@@ -445,17 +459,31 @@ class OptionTests(InitTestCase):
             self.assertNotIn("agents/project-overview.md", proc.out)
         self.assertIn("✓ agents/project-overview.md", self.init("--tool", "claude", "--workspace").out)
 
-    def test_another_tool_s_file_of_the_other_layout_is_said_to_be_removed_first(self):
-        # --tool X --force keeps a file's own layout now (#329): the way out is to remove it.
+    def test_another_tool_s_file_of_the_other_layout_names_force(self):
+        # --tool X --force keeps a file's own layout now (#329), and its team's part, with a .bak: never "remove it",
+        # which at a root in no repository would lose the team's part.
         self.assertEqual(self.init("--tool", "claude", "--workspace").returncode, 0)
         self.assertEqual(self.init("--tool", "agents").returncode, 0)                   # a single project's AGENTS.md
+        team = "\n## Workspace services\n\n| @alias | Folder | Description |\n|---|---|---|\n| `@svc` | svc/ | x |\n"
+        (self.project / "CLAUDE.md").write_text(self.read("CLAUDE.md") + team, encoding="utf-8")
         proc = self.init()
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("note: CLAUDE.md is there and was kept: a bootstrap written for a workspace — remove it, then "
-                      "cortex init --tool claude writes a single project's", proc.err)
+        self.assertIn("note: CLAUDE.md is there and was kept: a bootstrap written for a workspace — cortex init --tool "
+                      "claude --force writes it again, a workspace's as it was written, and keeps it as .bak", proc.err)
+        self.assertNotIn("remove it", proc.err)
         proc = self.init("--workspace")
-        self.assertIn("note: AGENTS.md is there and was kept: a bootstrap written for a single project — remove it, "
-                      "then cortex init --tool agents --workspace writes a workspace's", proc.err)
+        self.assertIn("note: AGENTS.md is there and was kept: a bootstrap written for a single project — cortex init "
+                      "--tool agents --workspace --force writes a workspace's, and keeps it as .bak", proc.err)
+        self.assertNotIn("remove it", proc.err)
+        # Followed, the note keeps the team's part and the layout.
+        before = self.read("CLAUDE.md").replace("<!-- cortex:bootstrap layout=workspace format=2",
+                                                "<!-- cortex:bootstrap layout=workspace format=1", 1)
+        (self.project / "CLAUDE.md").write_text(before, encoding="utf-8")
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertTrue(self.read("CLAUDE.md").endswith(team))
+        self.assertEqual((self.project / "CLAUDE.md.bak").read_text(encoding="utf-8"), before)
 
     def test_force_without_workspace_knows_a_workspace_written_before_the_marker(self):
         # The file of 1.3.0, which every workspace a team changed is sent to `cortex init --force` with.
@@ -465,6 +493,28 @@ class OptionTests(InitTestCase):
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn("<!-- cortex:bootstrap layout=workspace format=3 digest=", self.read("CLAUDE.md"))
         self.assertIn("was written for a workspace, and is written for one again", proc.err)
+
+    def test_force_without_workspace_finds_the_title_below_a_line_a_team_wrote_above_it(self):
+        # A file of before the marker, opened by the team's own line: the title is still the templates' — it was
+        # written single, in silence.
+        old = "<!-- our notes -->\n# Cortex AI Team — Workspace Mode\n\nRead cortex.local.toml first.\n"
+        (self.project / "CLAUDE.md").write_text(old, encoding="utf-8")
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("was written for a workspace, and is written for one again", proc.err)
+        self.assertEqual(self.read("CLAUDE.md.bak"), old)
+
+    def test_force_with_workspace_says_nothing_of_a_layout_read_from_the_file(self):
+        # The note is of the layout read from the file, without the option: with --workspace, the option chose it.
+        self.assertEqual(self.init("--tool", "claude", "--workspace").returncode, 0)
+        before = self.read("CLAUDE.md").replace("<!-- cortex:bootstrap layout=workspace format=2",
+                                                "<!-- cortex:bootstrap layout=workspace format=1", 1)
+        (self.project / "CLAUDE.md").write_text(before, encoding="utf-8")          # an older format, to write again
+        proc = self.init("--tool", "claude", "--workspace", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertNotIn("was written for a workspace", proc.err)
 
     def test_force_keeps_a_single_project_single_and_workspace_still_moves_it(self):
         self.assertEqual(self.init("--tool", "claude").returncode, 0)
@@ -1694,6 +1744,10 @@ class BootstrapMarkerTests(unittest.TestCase):
         rule = b"---\nalwaysApply: true\n---\n" + old
         self.assertTrue(init_command.written_for_workspace(rule))                 # WS4: after a frontmatter
         self.assertFalse(init_command.written_for_workspace("# Workspace Mode notes\n".encode("utf-8")))
+        above = b"<!-- our notes -->\n" + old                                    # a line of the team's above the title
+        self.assertTrue(init_command.written_for_workspace(above))
+        self.assertTrue(init_command.written_for_workspace(b"---\nalwaysApply: true\n---\n" + above))
+        self.assertFalse(init_command.written_for_workspace(b"<!-- our notes -->\n" + said))
 
     def test_a_version_whose_templates_carry_no_marker_keeps_its_checks(self):
         # A project pinned to 1.3: its templates have no marker, and its bootstrap is not "older".

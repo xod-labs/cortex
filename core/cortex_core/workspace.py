@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from .project import PROJECT_FILE, ProjectFileError, shown
+from .project import PROJECT_FILE, ProjectFileError, folded, shown
 
 # Where a workspace keeps its dependencies: never a service, and the bulk of its files.
 _DEPENDENCY_TREES = ("node_modules", "vendor", ".venv")
@@ -102,14 +102,14 @@ def services(project_root: str, base_root: Optional[str] = None, team_folder: Op
 
 def _within(path: str, folder: str) -> bool:
     """Whether ``path`` is ``folder`` or below it, the names compared in any case."""
-    path, folder = os.path.normpath(path).casefold(), os.path.normpath(folder).casefold()
+    path, folder = folded(os.path.normpath(path)), folded(os.path.normpath(folder))
     return path == folder or path.startswith(folder + os.sep)
 
 
 def _same_name(a: str, b: str) -> bool:
     """Two names of the workspace, compared in any case on every platform (ADR-013 §3.6, §9): ``cortex.toml``
     is committed, and read where names ignore case — macOS, Windows, a Linux workspace on such a file system."""
-    return a.casefold() == b.casefold()
+    return folded(a) == folded(b)
 
 
 def check_team_folder(project_root: str, folder: str, base_root: Optional[str] = None) -> None:

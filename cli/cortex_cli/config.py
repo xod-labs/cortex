@@ -220,12 +220,15 @@ def committed(root) -> bool:
     """Whether ``cortex.toml`` at ``root`` is committed (ADR-013 §3.1): git tracks it — ADR-011 §3.5's
     test. Without git on ``PATH``, or with a git that refuses — a repository another user owns, say —
     a ``.git`` at or above the root counts. A ``cortex.toml`` git does not track, in a repository, is
-    not committed: the developer's own."""
+    not committed: the developer's own. Git is asked of the root's own repository, as from a shell
+    that sets none of git's variables — a hook exports ``GIT_DIR``, which would make it another's —
+    and of the file's name as written, no pattern."""
     git = shutil.which("git")
     if git is not None:
+        environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
         try:
-            proc = subprocess.run([git, "-C", str(root), "ls-files", "--error-unmatch", "--", PROJECT_FILE],
-                                  capture_output=True, timeout=30)
+            proc = subprocess.run([git, "-C", str(root), "ls-files", "--error-unmatch", "--",
+                                   f":(literal){PROJECT_FILE}"], capture_output=True, timeout=30, env=environment)
         except (OSError, subprocess.SubprocessError):
             proc = None
         if proc is not None and proc.returncode in (0, 1):
@@ -301,13 +304,16 @@ def team_folder(root: str, known: Optional[bool] = None) -> Tuple[str, Optional[
 
 def loose_team_folder(root: str) -> str:
     """The team's folder read loosely — what a too-new version is said from, ``cortex prune`` and the
-    registry read: a committed ``cortex.toml``'s ``agents`` whose text reads, else ``agents``. Never
-    a refusal: ``load`` says it."""
+    registry read: a committed ``cortex.toml``'s ``agents``, else ``agents``. Read before its text is
+    checked (ADR-013 §3.8, step 1): a folder this version refuses for its name — ``.team`` — a later
+    one may take, and its team's file may pin that version; only what names no folder inside the
+    workspace, nor one any version reads, leaves ``agents``. Never a refusal: ``load`` says it, once
+    the version passed the gate."""
     written = cascade.loose_agents(root)
     if written is None:
         return TEAM_FOLDER
     try:
-        folder = project.check_agents(written)
+        folder = project.check_agents(written, loose=True)
     except project.ProjectFileError:
         return TEAM_FOLDER
     return folder if committed(root) else TEAM_FOLDER

@@ -64,12 +64,18 @@ def read_pin(root: Path) -> Optional[Pin]:
     if not path.is_file():
         raise ValueError(f"{project.PROJECT_FILE} of this workspace is not a file")
     local = _local(Path(root))
+    remedy = "cortex sync refuses this file too"
     try:
         data = tomllib.loads(path.read_bytes().decode("utf-8-sig"))
         if local.get("synced") is None and project.is_version(data.get("version")) \
                 and project.before_team(data["version"]):
             # Below 1.8.0 nothing of ADR-013 is read (§3.8), and `cortex sync` records no `synced` (§3.1): the
             # version is cortex.toml's alone, as 1.7.0 read it — a 422 there no sync could ever clear (§9).
+            if os.path.lexists(Path(root) / cascade.TEAM_NAME):
+                # Mid-adoption: of a cortex.toml no commit holds, `cortex sync` reads the team's file instead (§3.3),
+                # which may give what this one lacks — or refuses it too, committed.
+                remedy = (f"run `cortex sync` in the project, which may read {cascade.TEAM_NAME} instead of a "
+                          f"{project.PROJECT_FILE} not committed")
             project.check_project(data)
             found = cascade.resolve(data, None, {}, {}, locked=True)
             return Pin(version=_team_version(data["version"], None, local), theme=str(found.value("theme")))
@@ -104,7 +110,7 @@ def read_pin(root: Path) -> Optional[Pin]:
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         raise ValueError(f"{project.PROJECT_FILE} of this workspace cannot be read: {error}")
     except project.ProjectFileError as error:
-        raise ValueError(f"{error} — cortex sync refuses this file too")
+        raise ValueError(f"{error} — {remedy}")
     team_version = None if not found.team or team is None else team.get("version")
     version = _team_version(data.get("version"), team_version, local, name)
     return Pin(version=version, theme=str(found.value("theme")), theme_locked=found["theme"].locked, team_folder=folder)
@@ -134,8 +140,8 @@ def _team_version(pin: Optional[str], team: Optional[str], local: Mapping[str, A
     if synced is not None:
         try:
             project.check_synced(synced)
-        except project.ProjectFileError as error:
-            raise ValueError(f"{error} — run `cortex sync` in the project, which writes it again")
+        except project.ProjectFileError as error:       # its message names `cortex sync`, which writes it again
+            raise ValueError(str(error)) from None
         now = {name: value for name, value in (("team", team), ("project", pin), ("local", tried)) if value is not None}
         recorded = {name: synced[name] for name in ("team", "project", "local") if name in synced}
         if now != recorded:

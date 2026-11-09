@@ -101,8 +101,9 @@ def _loosely(root: Path) -> Optional[config.Project]:
     spec = read(config.LOCAL_FILE).get("spec")
     if found is None:
         return None
+    # Its team's folder as the gate read it: the candidates are read there, a renamed one included.
     return config.Project(root=str(root), version=found[1], theme="none", sync=None, local_theme=None,
-                          spec=spec if isinstance(spec, str) else None)
+                          spec=spec if isinstance(spec, str) else None, team_folder=config.loose_team_folder(str(root)))
 
 
 def versions_of(root: Path, err: TextIO) -> List[str]:
