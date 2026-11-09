@@ -512,6 +512,45 @@ class CodeReviewFolderTests(FolderTestCase):
         self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "init")
         self.assertFalse((root / "agents").exists())
 
+    @LINKS
+    @NEEDS_GIT
+    def test_team_commit_names_the_folder_in_no_work_tree(self):
+        # A renamed folder is read from a committed cortex.toml: it is in no work tree as a link out of it.
+        root, shared = self.tmp / "ws", self.tmp / "shared"
+        for where in (root, shared):
+            where.mkdir()
+        (shared / "cortex.team.toml").write_text('version = "1.8.0"\n', encoding="utf-8")
+        (root / FOLDER).symlink_to(shared, target_is_directory=True)
+        (root / "cortex.toml").write_text(NAMED, encoding="utf-8")
+        (root / ".gitignore").write_text(f"cortex.local.toml\ncortex\n{FOLDER}\n", encoding="utf-8")
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "ws")
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        proc = self.cortex(root, "upgrade", "--team", OWN, "--commit", "--message", "move", **env)
+        self.assert_ok(proc)
+        self.assertIn(f"{FOLDER}/ is in no git work tree", proc.out + proc.err)
+        self.assertNotIn(" agents/ is in no", proc.out + proc.err)
+
+    @NEEDS_GIT
+    def test_team_commit_in_a_submodule_names_the_folder_and_the_superproject(self):
+        team, root = self.tmp / "team", self.tmp / "ws"
+        for where in (team, root):
+            where.mkdir()
+            self.git(where, "init", "-q")
+        (team / "cortex.team.toml").write_text('version = "1.8.0"\n', encoding="utf-8")
+        self.git(team, "add", "-A")
+        self.git(team, "commit", "-q", "-m", "t")
+        (root / "cortex.toml").write_text(NAMED, encoding="utf-8")
+        self.git(root, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(team), FOLDER)
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "ws")
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        proc = self.cortex(root, "upgrade", "--team", OWN, "--commit", "--message", "move", **env)
+        self.assert_ok(proc)
+        self.assertIn(f"note: {FOLDER}/ is a submodule of {harness_path(root)}, which now shows it changed — commit "
+                      "it there too", proc.err)
+
     def test_validate_names_the_folder_whose_lock_this_user_cannot_write(self):
         root = self.named()
         self.assert_ok(self.cortex(root, "sync"))

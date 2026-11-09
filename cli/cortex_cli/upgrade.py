@@ -755,8 +755,9 @@ def _local_then_sync(root: str, values: Dict[str, object], out: TextIO, err: Tex
 def _team_git(agents: str, branch: Optional[str], out: TextIO, err: TextIO,
               folder: str = config.TEAM_FOLDER) -> Optional[str]:
     """The work tree of the team's folder ``folder``, for --branch and --commit, which act in the team's
-    repository (ADR-013 §3.11) — the branch made before anything is written."""
-    top = _work_tree(agents)
+    repository (ADR-013 §3.11) — the branch made before anything is written. Asked where the folder is: a
+    link out of the project's repository is in that other place's work tree, or in none (§3.6)."""
+    top = _work_tree(os.path.realpath(agents))
     if top is None:
         err.write(f"note: {folder}/ is in no git work tree — nothing is committed there\n")
         return None
@@ -816,7 +817,7 @@ def _team_left(agents: str, files: List[Path]) -> List[Path]:
     """Those of the team's ``files`` its work tree sees changed, when ``--team`` writes nothing: what a
     run before this one left — its commit refused, or not asked. Nothing when git cannot tell."""
     try:
-        top = _work_tree(agents)
+        top = _work_tree(os.path.realpath(agents))
         return _changed(agents, top, files) if top is not None else []
     except UpgradeError:
         return []
