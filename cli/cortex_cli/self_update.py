@@ -38,7 +38,8 @@ from .paths import display
 from .semver import Version
 from .version import TARGET, VERSION
 
-# The first release with this command: a binary before it is moved by the install script only.
+# The first release with this command: a binary before it — a pre-release of 1.4.0 has it — is moved by
+# the install script only.
 FIRST_SELF_UPDATE = Version("1.4.0")
 MAX_ASSET = 256 * 1024 * 1024
 MAX_BINARY = 512 * 1024 * 1024
@@ -268,7 +269,7 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
     out.flush()             # before the notes: a pipe would otherwise show them first
     if target < own:
         err.write(f"note: a downgrade — a project pinned to a version after {target} is now refused\n")
-        if target < FIRST_SELF_UPDATE:
+        if target.core < FIRST_SELF_UPDATE.core:       # a pre-release has its release's features
             err.write(f"note: Cortex {target} has no self-update — the install script moves it again:\n"
                       f"    {store.install_command()}\n")
             if ASIDE:       # its starts do not tidy: the binary renamed aside stays
