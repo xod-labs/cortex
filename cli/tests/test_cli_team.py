@@ -1225,6 +1225,87 @@ class CodeReviewTests(TeamTestCase):
         self.assertFalse((root / "cortex.local.toml").exists())
 
 
+    @SOURCE
+    @DOWNLOADS
+    def test_locked_says_the_try_is_not_read(self):
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n', local=f'version = "{OWN}"\n')
+        proc = self.cortex(root, "sync", "--locked")
+        self.assertIn(f"note: cortex.local.toml's version, {OWN}, is not read: --locked checks the team's 9.9.8 ({TEAM})",
+                      proc.err)
+        self.assertNotIn(f"Cortex {OWN} is read", proc.err)
+
+    @DOWNLOADS
+    def test_a_resume_says_each_note_once(self):
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n', local='version = "9.9.8"\n')
+        proc = self.cortex(root, "upgrade")              # not synced yet: the resume syncs
+        self.assert_ok(proc)
+        self.assertIn("syncing", proc.out)
+        self.assertEqual(proc.err.count("cortex.local.toml's version, 9.9.8, is at or below the team's"), 1, proc.err)
+
+    def test_team_at_the_pin_without_its_lock_writes_the_lock_alone(self):
+        root = self.project('theme = "h2g2"\n', team=f'# the team\'s\nversion = "{OWN}"\n')
+        before = (root / TEAM).read_bytes()
+        proc = self.cortex(root, "upgrade", "--team", OWN)
+        self.assert_ok(proc)
+        self.assertIn(f"{TEAM}: Cortex {OWN}, pinned already — its lock is written\n", proc.out)
+        self.assertNotIn("→", proc.out)
+        self.assertIn("Commit agents/cortex.team.lock in agents/", proc.out)
+        self.assertEqual((root / TEAM).read_bytes(), before)
+        self.assertEqual(str(config.load_lock(str(root / "agents"), config.TEAM_LOCK_FILE).version), OWN)
+
+    @SOURCE
+    @unittest.skipIf(os.name == "nt", "a link to a directory needs a privilege on Windows")
+    def test_all_team_dry_run_says_each_follower_would_follow(self):
+        first = self.project('theme = "h2g2"\n', team='version = "1.8.0"\n', name="alpha")
+        second = self.project('theme = "h2g2"\n', name="beta")
+        (second / "agents").symlink_to(first / "agents", target_is_directory=True)
+        self.registered(first, second)
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team", OWN, "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn(f"  alpha  would move 1.8.0 → {OWN}\n", proc.out)
+        self.assertIn(f"  beta   would move 1.8.0 → {OWN}\n", proc.out)
+        self.assertIn(f"alpha: agents/cortex.team.toml and agents/cortex.team.lock\n", proc.out)
+        self.assertEqual(tomllib.loads((first / TEAM).read_text(encoding="utf-8"))["version"], "1.8.0")
+
+    @NEEDS_GIT
+    def test_team_commit_in_a_submodule_names_the_superproject(self):
+        team, root = self.tmp / "team", self.tmp / "ws"
+        for where in (team, root):
+            where.mkdir()
+            self.git(where, "init", "-q")
+        (team / "cortex.team.toml").write_text('version = "1.8.0"\n', encoding="utf-8")
+        self.git(team, "add", "-A")
+        self.git(team, "commit", "-q", "-m", "t")
+        (root / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")
+        self.git(root, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(team), "agents")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "ws")
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        proc = self.cortex(root, "upgrade", "--team", OWN, "--commit", "--message", "move", **env)
+        self.assert_ok(proc)
+        self.assertIn(f"note: agents/ is a submodule of {harness_path(root)}, which now shows it changed — commit it "
+                      "there too", proc.err)
+
+    def test_validate_names_who_writes_a_team_s_lock_this_user_cannot(self):
+        root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        (root / "agents" / "cortex.team.lock").unlink()
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}):
+            project = config.load(str(root))
+            with mock.patch.object(validate.os, "access", return_value=False):
+                found = validate.lock_warnings(project, str(self.home / "versions" / OWN))
+        self.assertEqual([code for _, code, _ in found], ["LOCK_MISSING"])
+        self.assertIn("agents/ cannot be written here", found[0][2])
+        self.assertNotIn("run `cortex sync`, then commit it", found[0][2])
+
+    def test_team_on_a_project_before_1_8_0_names_the_move_first(self):
+        root = self.project('version = "1.7.0"\ntheme = "h2g2"\n', team='theme = "h2g2"\n', committed=False)
+        proc = self.cortex(root, "upgrade", "--team", OWN)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(f"{TEAM} is not read: this project pins Cortex 1.7.0, before 1.8.0 — move it there first: cortex "
+                      "upgrade 1.8.0", proc.err)
+
+
 def newer_refused(pin):
     """What --team with no VERSION says of a team's pin newer than this cortex."""
     return (f"this cortex is a development build, {OWN}, which serves no release" if DEV_OWN else

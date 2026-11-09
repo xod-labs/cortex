@@ -36,7 +36,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, TextIO, Tuple
+from typing import Collection, Dict, List, Optional, TextIO, Tuple
 
 from cortex_core.validate import shown
 
@@ -719,18 +719,19 @@ def unswap(target: Path, aside: Optional[Path]) -> None:
 
 def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
          claude_access: Optional[bool] = None, notes: bool = True, locked: bool = False,
-         announce: bool = True, registers: bool = True) -> None:
+         announce: bool = True, registers: bool = True, said: Collection[str] = ()) -> None:
     """Sync the project at or above ``cwd``. ``notes`` off, what git ignores is left to the
     caller — ``cortex init`` writes .gitignore once ``cortex/`` has its final form. ``locked``,
     ``cortex.lock`` is never written: a sync that would write it stops. ``announce`` off, the
     project is not named: ``cortex upgrade`` has named it already. ``registers`` off, the project
-    is not registered: ``cortex init`` registers it once all of it succeeded, not only its sync."""
+    is not registered: ``cortex init`` registers it once all of it succeeded, not only its sync. ``said``:
+    the notes of the versions the caller said already — ``cortex upgrade``'s — not said again."""
     root = config.find_project(cwd)
     if root is None:
         raise SyncError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
                         "a Cortex project")
     with project_lock(Path(root), err):
-        _sync(root, mode, source, out, err, claude_access, notes, locked, announce)
+        _sync(root, mode, source, out, err, claude_access, notes, locked, announce, said)
     if registers:
         register(root, out, err)
 
@@ -803,16 +804,19 @@ def against_locks(project: config.Project, flags: Dict[str, object]) -> None:
                             "choice, which a flag does not undo")
 
 
-def version_notes(project: config.Project) -> List[str]:
+def version_notes(project: config.Project, locked: bool = False) -> List[str]:
     """What a sync, an upgrade and a validate say of the versions, every time (ADR-013 §3.3): the
-    developer's version ahead of the team's, or caught up and changing nothing; what the team's
-    resolution says of the team's file and of a locked key; a committed ``cortex.lock`` nothing reads."""
+    developer's version ahead of the team's — not read under ``--locked``, which checks the team's —
+    or caught up and changing nothing; what the team's resolution says of the team's file and of a
+    locked key; a committed ``cortex.lock`` nothing reads."""
     said: List[str] = []
     found = project.developer_version
     team, origin = project.team_version, project.team_origin
     if found is not None:
         mine = store.Version(str(found.value))
-        if mine > team:
+        if mine > team and locked:
+            said.append(f"{found.origin}'s version, {mine}, is not read: --locked checks the team's {team} ({origin})")
+        elif mine > team:
             said.append(f"Cortex {mine} is read — {found.origin}'s, above the team's {team} ({origin})"
                         + (": it is not locked, its release checked against its SHA256SUMS when downloaded"
                            if found.origin == config.LOCAL_FILE else ""))
@@ -871,7 +875,8 @@ def synced_record(project: config.Project, reads: str) -> Optional[Dict[str, str
 
 
 def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
-          claude_access: Optional[bool], notes: bool, locked: bool = False, announce: bool = True) -> None:
+          claude_access: Optional[bool], notes: bool, locked: bool = False, announce: bool = True,
+          said: Collection[str] = ()) -> None:
     if source is None:
         # A version newer than this cortex, said before any key is checked (ADR-013 §3.8) — `--from`
         # checks no version, as before.
@@ -882,7 +887,9 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     against_locks(project, {"sync": mode, "claude_access": claude_access})
     if announce:
         out.write(f"Project: {display(root)}\n")
-    for note in version_notes(project):
+    for note in version_notes(project, locked):
+        if note in said:
+            continue                        # said by `cortex upgrade`, before this sync
         # A locked key set otherwise is a warning (ADR-013 §3.5): its value is not read.
         err.write(f"{'warning' if ' is locked by ' in note else 'note'}: {note}\n")
     if claude_access is not None:

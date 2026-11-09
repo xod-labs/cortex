@@ -78,11 +78,15 @@ def lock_warnings(project: config.Project, base: str, files: Optional[Dict[str, 
         lock = config.load_lock(directory, name)
     except config.ConfigError as error:
         return [(shown_name, "LOCK_INVALID", str(error))]
+    # The team's lock in a folder this user cannot write: the sync only warns of it here (ADR-013 §3.4).
+    fix = (f"{config.TEAM_FOLDER}/ cannot be written here — a `cortex sync` where it can be writes it, committed in "
+           "the team's repository") if shown_name == config.TEAM_LOCK_NAME and not os.access(directory, os.W_OK) \
+        else "run `cortex sync`, then commit it"
     if lock is None:
-        return [(shown_name, "LOCK_MISSING", f"no {shown_name} — run `cortex sync`, then commit it")]
+        return [(shown_name, "LOCK_MISSING", f"no {shown_name} — {fix}")]
     if lock.version != version:
         return [(shown_name, "LOCK_STALE", f"{shown_name} names Cortex {lock.version}, and {pins} pins "
-                 f"{version} — run `cortex sync`, then commit it")]
+                 f"{version} — {fix}")]
     try:
         actual = store.digest_of(files) if files is not None else store.digest(Path(base))
     except store.StoreError as error:      # a version removed from the store meanwhile
