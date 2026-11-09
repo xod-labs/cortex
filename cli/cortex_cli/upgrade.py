@@ -791,6 +791,9 @@ def _team_theirs(agents: str, team_file: Path, target: Version) -> Optional[str]
         return f"it could not be told whether {config.TEAM_NAME} held changes of yours — {error}"
     if found.replace("\r\n", "\n") == expected.replace("\r\n", "\n"):
         return None
+    if committed is None:
+        return (f"{config.TEAM_NAME} is not committed yet, and holds more than the version --team writes — commit by "
+                "hand what is the team's")
     return (f"{config.TEAM_NAME} holds changes of yours besides its version — commit by hand what is the team's")
 
 

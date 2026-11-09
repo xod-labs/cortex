@@ -1425,6 +1425,38 @@ class CodeReviewFixTests(TeamTestCase):
                                    r"agents/cortex.team.lock — committed on \S+, [0-9a-f]+; CLAUDE.md — not committed: "
                                    r"--team commits in the team's folder only\n")
 
+    def team_repository(self, content, commit=True, name="app"):
+        """A follower whose work tree holds its team's file, ``content`` as bytes — committed, or not."""
+        root = self.project('theme = "h2g2"\n', team="", committed=False, name=name)
+        (root / TEAM).write_bytes(content)
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        self.git(root, "init", "-q")
+        self.git(root, "add", *(["-A"] if commit else ["cortex.toml", ".gitignore"]))
+        self.git(root, "commit", "-q", "-m", "init")
+        return root, {"PATH": os.path.dirname(GIT), **GIT_ENV}
+
+    @NEEDS_GIT
+    def test_team_commit_reads_a_team_s_file_in_any_line_endings(self):
+        # What --team writes over the committed file, line endings and a byte order mark aside, is the team's.
+        for name, content in (("crlf", b'version = "1.8.0"\r\ntheme = "h2g2"\r\n'),
+                              ("bom", b'\xef\xbb\xbfversion = "1.8.0"\r\ntheme = "h2g2"\r\n')):
+            with self.subTest(name=name):
+                root, env = self.team_repository(content, name=name)
+                proc = self.cortex(root, "upgrade", "--team", OWN, "--commit", "--message", "move", **env)
+                self.assert_ok(proc)
+                self.assertNotIn("nothing is committed", proc.err)
+                self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "move")
+
+    @NEEDS_GIT
+    def test_team_commit_says_a_team_s_file_is_not_committed_yet(self):
+        root, env = self.team_repository(b'version = "1.8.0"\ntheme = "h2g2"\n', commit=False)
+        proc = self.cortex(root, "upgrade", "--team", OWN, "--commit", "--message", "move", **env)
+        self.assert_ok(proc)
+        self.assertIn(f"note: nothing is committed in agents/ — {TEAM} is not committed yet, and holds more than the "
+                      "version --team writes — commit by hand what is the team's", proc.err)
+        self.assertNotIn("changes of yours", proc.err)
+        self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "init")
+
     def test_team_checks_no_overlay_of_a_project_that_pins_its_own_version(self):
         # It does not follow the team's file: its overlays are its own pin's, not the team's to check.
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', team=f'version = "{OWN}"\n')
