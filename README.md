@@ -344,7 +344,7 @@ register       true                                           default
 |---|---|
 | `KEY` | prints that setting's value alone — `cortex config version`, in a CI script. An unknown key exits 2 |
 | `--locked` | the team's resolution, without `cortex.local.toml`: the version and the lock `cortex sync --locked` checks, and what the runtime reads. `cortex sync --locked` still applies your own `theme` and `claude_access` to your machine |
-| `--json` | one JSON object, with a `format` field: each setting's value, its origin, the values it overrode — whether `cortex.toml` is committed, whether the project's version is newer than this cortex, and the machine file's warnings |
+| `--json` | one JSON object, with a `format` field: each setting's value, its origin, the values it overrode — whether `cortex.toml` is committed, whether the project's version is newer than this cortex, and the warnings: the machine file's, and a `releases_url` a download would refuse |
 
 Outside a project, it knows the machine's keys only. A project pinned to a version newer than the binary is printed all the same, with the `cortex self-update` that serves it. A file it refuses exits 1, naming it.
 
@@ -375,7 +375,7 @@ It exits `0` when clean, `1` on errors — or on warnings under `--strict` — a
 | `SSL_CERT_FILE`, `SSL_CERT_DIR` | the binary | the certificates a download is checked with, as OpenSSL reads them. Unset, the binary looks where the common systems keep theirs |
 | `CORTEX_SOURCE_VERSION` | a source checkout | the version a checkout's tests stand for — for contributors; a built binary never reads it |
 
-**The machine's file.** `config.toml` in the Cortex home — `~/.cortex/config.toml` by default — holds the same three settings, for every project of this user ([ADR-013](docs/adr/ADR-013-configuration-cascade.md) §3.7): `releases_url`, `update_check` and `register`. Each variable goes over its key, as it always did — an empty `CORTEX_RELEASES_URL` counts as unset — and no variable turns a key back on. The file is optional, and no command writes it. It never stops one: an unknown key, a value of the wrong type, or a file that cannot be read is a warning, and the rest is read — `cortex self-update` above all. A `releases_url` that is no https address is refused as the variable is, naming the file. `cortex config` says which one a setting comes from.
+**The machine's file.** `config.toml` in the Cortex home — `~/.cortex/config.toml` by default — holds the same three settings, for every project of this user ([ADR-013](docs/adr/ADR-013-configuration-cascade.md) §3.7): `releases_url`, `update_check` and `register`. Each variable goes over its key, as it always did — an empty `CORTEX_RELEASES_URL` counts as unset — and no variable turns a key back on. The file is optional, and no command writes it. It never stops one: an unknown key, a value of the wrong type, or a file that cannot be read is a warning, and the rest is read — `cortex self-update` above all. A `releases_url` that is no https address is refused as the variable is, naming the file — `cortex config` prints it, with a warning. `cortex config` says which one a setting comes from.
 
 ```toml
 # ~/.cortex/config.toml
