@@ -1306,6 +1306,137 @@ class CodeReviewTests(TeamTestCase):
                       "upgrade 1.8.0", proc.err)
 
 
+class CodeReviewFixTests(TeamTestCase):
+    """What the counter-review of the code review's fixes found (2026-11-09)."""
+
+    def stale_own_lock(self, committed=False):
+        """A project that pins its own 9.9.8, its committed cortex.lock naming 9.9.7, and a try above."""
+        root = self.project('version = "9.9.8"\ntheme = "h2g2"\n', committed=committed)
+        (root / "cortex.lock").write_text(config.render_lock(store.Version("9.9.7"), "sha256:" + "0" * 64),
+                                          encoding="utf-8")
+        return root
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_a_resume_during_a_try_writes_its_own_lock_on_the_branch_named(self):
+        # The try's lock is the project's own cortex.lock: the resume makes the branch before it writes it.
+        root = self.stale_own_lock()
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        self.git(root, "init", "-q", "-b", "main")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "init")
+        (root / "cortex.local.toml").write_text(f'version = "{OWN}"\n', encoding="utf-8")
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        self.assert_ok(self.cortex(root, "sync", **env))
+        proc = self.cortex(root, "upgrade", "9.9.8", "--branch", "relock", "--commit", "--message", "relock", **env)
+        self.assert_ok(proc)
+        self.assertNotIn("no branch", proc.out)
+        self.assertEqual(self.git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "relock")
+        self.assertEqual(self.git(root, "log", "-1", "--format=%s", "main").stdout.strip(), "init")
+        self.assertEqual(self.git(root, "log", "-1", "--format=%s", "relock").stdout.strip(), "relock")
+        self.assertEqual(str(config.load_lock(str(root), config.LOCK_FILE).version), "9.9.8")
+
+    @SOURCE
+    @DOWNLOADS
+    def test_all_dry_run_lists_the_own_lock_a_try_leaves(self):
+        root = self.stale_own_lock(committed=True)
+        (root / "cortex.local.toml").write_text(f'version = "{OWN}"\n', encoding="utf-8")
+        self.assert_ok(self.cortex(root, "sync"))
+        (self.home / "projects.toml").write_text(
+            f'format = 1\n\n[[project]]\nname = "app"\npath = "{harness_path(root)}"\n', encoding="utf-8")
+        proc = self.cortex(self.tmp, "upgrade", "--all", "9.9.8", "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn(f"app  {harness_path(root)}: cortex.lock\n", proc.out)
+        self.assertNotIn("Nothing to commit", proc.out)
+
+    def stale_team_lock(self, local=f'version = "{OWN}"\n', name="app"):
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n', local=local, name=name)
+        lock = root / "agents" / "cortex.team.lock"
+        lock.write_text(config.render_lock(store.Version("9.9.7"), "sha256:" + "0" * 64), encoding="utf-8")
+        return root, lock
+
+    @SOURCE
+    @AS_ROOT
+    def test_a_resume_during_a_try_warns_of_a_team_s_folder_it_cannot_write(self):
+        # As the sync, on a developer's machine: a warning, the lock not updated, the rest done (ADR-013 §3.4).
+        for local in (f'version = "{OWN}"\n', None):
+            with self.subTest(trying=local is not None):
+                root, lock = self.stale_team_lock(local, name="trying" if local else "plain")
+                self.assert_ok(self.cortex(root, "sync"))
+                lock.write_text(config.render_lock(store.Version("9.9.7"), "sha256:" + "0" * 64), encoding="utf-8")
+                before = lock.read_bytes()
+                os.chmod(root / "agents", 0o555)
+                self.addCleanup(os.chmod, root / "agents", 0o755)
+                if local is not None:
+                    proc = self.cortex(root, "upgrade", "--dry-run")
+                    self.assert_ok(proc)
+                    self.assertIn("agents/ cannot be written here — it would be a warning, the lock not updated",
+                                  proc.out)
+                proc = self.cortex(root, "upgrade")
+                self.assert_ok(proc)
+                self.assertIn("warning: agents/cortex.team.lock cannot be written — ", proc.err)
+                self.assertIn("the team's lock is not updated here", proc.err)
+                self.assertEqual(lock.read_bytes(), before)
+
+    @SOURCE
+    def test_a_resume_cut_short_says_no_sync_it_did_not_run(self):
+        # The team's version cannot be downloaded: the resume fails as a whole, and no sync moved this machine.
+        release = FakeRelease(("9.9.7",))
+        self.addCleanup(release.close)
+        root, lock = self.stale_team_lock()
+        env = {"CORTEX_RELEASES_URL": release.url}
+        self.assert_ok(self.cortex(root, "sync", **env))
+        before = lock.read_bytes()
+        proc = self.cortex(root, "upgrade", "--dry-run", **env)
+        self.assert_ok(proc)
+        self.assertIn("it would be written, once Cortex 9.9.8 is downloaded", proc.out)
+        proc = self.cortex(root, "upgrade", **env)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("note: agents/cortex.team.lock is as it was\n", proc.err)
+        self.assertNotIn("`cortex sync` puts this machine back", proc.err)
+        self.assertEqual(lock.read_bytes(), before)
+
+    def test_team_checks_no_overlay_of_a_project_that_pins_its_own_version(self):
+        # It does not follow the team's file: its overlays are its own pin's, not the team's to check.
+        root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', team=f'version = "{OWN}"\n')
+        overlay = root / "agents" / "roles" / "engineering" / "architect.md"
+        overlay.parent.mkdir(parents=True)
+        overlay.write_text("<!-- OVERLAY\n     Base: cortex/agents/roles/engineering/nowhere.md\n     Scope: workspace\n"
+                           "-->\n\n# x\n", encoding="utf-8")
+        proc = self.cortex(root, "upgrade", "--team", OWN)
+        self.assert_ok(proc)
+        self.assertIn(f"This project pins its own version, Cortex {OWN}, in its committed cortex.toml: it does not "
+                      f"follow {TEAM}, and its overlays are not checked\n", proc.out)
+        self.assertNotIn("the overlays", proc.err)
+
+    def test_a_file_that_cannot_be_put_back_is_said_and_the_others_are(self):
+        root = self.tmp / "app"
+        root.mkdir()
+        first, second = root / "CLAUDE.md", root / "cortex.lock"
+        first.write_bytes(b"old\n")
+        second.write_bytes(b"lock\n")
+        put = upgrade._put
+
+        def refused(path, content):
+            if path == second:
+                raise PermissionError(errno.EACCES, "Permission denied", str(path))
+            put(path, content)
+
+        def then():
+            second.write_bytes(b"changed\n")
+            raise RuntimeError("the switch failed")
+
+        err = io.StringIO()
+        with mock.patch.object(upgrade, "_put", side_effect=refused):
+            with self.assertRaisesRegex(RuntimeError, "the switch failed"):
+                upgrade._write([(first, b"new\n")], {second: b"lock\n"}, str(root), err, then)
+        self.assertEqual(first.read_bytes(), b"old\n")
+        self.assertIn("note: CLAUDE.md is as it was", err.getvalue())
+        self.assertIn("warning: cortex.lock — Permission denied", err.getvalue())
+        self.assertIn(": not put back as it was\n", err.getvalue())
+
+
 def newer_refused(pin):
     """What --team with no VERSION says of a team's pin newer than this cortex."""
     return (f"this cortex is a development build, {OWN}, which serves no release" if DEV_OWN else

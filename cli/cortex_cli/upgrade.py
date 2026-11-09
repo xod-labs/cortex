@@ -33,6 +33,7 @@ nothing at all when ``cortex.toml``, or a bootstrap file it wrote, held the deve
 from __future__ import annotations
 
 import argparse
+import errno
 import io
 import os
 import shutil
@@ -362,12 +363,21 @@ def try_lock(project: config.Project) -> Optional[Tuple[Tuple[str, str, str], st
 def _write_try_lock(where: Tuple[str, str, str], version: Version, the_store: store.Store, out: TextIO,
                     err: TextIO) -> None:
     """Write the lock ``where`` names — the team's version's, which a try leaves — from ``version`` in
-    the store: the team's under a lock of its folder, as the sync writes it (ADR-013 §3.4)."""
+    the store: the team's under a lock of its folder, as the sync writes it (ADR-013 §3.4). A team's
+    folder this user cannot write is a warning, as it is to the sync on a developer's machine: the
+    lock is not updated here."""
     directory, name, shown_name = where
     digest, said = sync.check_lock(directory, version, the_store, out, name=name)
     if shown_name == config.TEAM_LOCK_NAME:
-        with sync.project_lock(Path(directory), err):
-            config.write_lock(directory, version, digest, name)
+        try:
+            with sync.project_lock(Path(directory), err):
+                config.write_lock(directory, version, digest, name)
+        except OSError as error:
+            if error.errno not in (errno.EACCES, errno.EPERM, errno.EROFS):
+                raise
+            err.write(f"warning: {shown_name} cannot be written — {sync.os_error(error)}: the team's lock is not "
+                      "updated here\n")
+            return
     else:
         config.write_lock(directory, version, digest, name)
     team = f" in {config.TEAM_FOLDER}/" if shown_name == config.TEAM_LOCK_NAME else ""
@@ -971,14 +981,20 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
         out.write(f"{behind}, and {project.version_origin} pins Cortex {project.version} — an upgrade cut short, or a "
                   f"pin moved by hand: {'the sync would put them on it' if dry_run else 'syncing'}\n")
     if stale is not None:
+        would = "it would be written" + ("" if the_store.has(current) else f", once Cortex {current} is downloaded")
+        if stale[0][2] == config.TEAM_LOCK_NAME and not os.access(stale[0][0], os.W_OK):
+            would = f"{config.TEAM_FOLDER}/ cannot be written here — it would be a warning, the lock not updated"
         out.write(f"{stale[1]}, and {project.team_origin} pins Cortex {current} — the sync reads the try and leaves "
-                  f"it to `cortex upgrade`: {'it would be written' if dry_run else 'writing it'}\n")
+                  f"it to `cortex upgrade`: {would if dry_run else 'writing it'}\n")
     where = config.lock_of(project)
     lock = Path(where[0]) / where[1] if where is not None else Path(root) / config.LOCK_FILE
     relock = behind is not None and where is not None and \
         getattr(config.load_lock(where[0], where[1]), "version", None) != project.version
     team_lock = Path(stale[0][0]) / stale[0][1] if stale is not None else None
-    locks = ([lock] if relock else []) + ([team_lock] if team_lock is not None and team_lock != lock else [])
+    # The try's lock may be the project's own `cortex.lock` — a committed pin of its own, read beside a
+    # try: it is left out only when the relock names it already.
+    locks = ([lock] if relock else [])
+    locks += [team_lock] if team_lock is not None and team_lock not in locks else []
     team = locks + [path for path, _ in rewrites]
     if prepare is not None and team:
         prepare(team)
@@ -994,14 +1010,17 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     kept = {path: path.read_bytes() if path.is_file() else None
             for path in ([lock] if behind is not None else []) + ([team_lock] if team_lock is not None else [])}
 
+    synced: List[bool] = []
+
     def then() -> None:
         if stale is not None:
             the_store.ensure(current)
             _write_try_lock(stale[0], current, the_store, out, err)
         if behind is not None:
+            synced.append(True)
             sync.sync(root, None, None, out, err, announce=False, said=said)
 
-    _write(rewrites, kept, root, err, then)
+    _write(rewrites, kept, root, err, then, lambda: bool(synced))
     for path, content in rewrites:
         out.write(f"{_shown_path(path, root)}: written again from Cortex {current}'s template — {_nobody(content)}\n")
     relocked = [path for path, before in kept.items() if path.is_file() and path.read_bytes() != before]
@@ -1009,25 +1028,37 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
 
 
 def _write(rewrites: List[Tuple[Path, bytes]], committed: Dict[Path, Optional[bytes]], root: str, err: TextIO,
-           then: Callable[[], None]) -> None:
+           then: Callable[[], None], synced: Callable[[], bool] = lambda: True) -> None:
     """Write the bootstrap files again, then run ``then`` — the switch: anything that fails puts back
     the files, and ``committed``, as they were. The bootstrap files go first: a run cut short after
     them leaves files whose digest the next `cortex upgrade` reads as nobody's change — and the
-    pinned version it finds then, it finishes."""
+    pinned version it finds then, it finishes. A file still as it was is not written back; one that
+    cannot be is said, and the others are put back all the same. ``synced`` tells whether the sync
+    had started, which moves this machine: only then does `cortex sync` put it back."""
     before = {**committed, **{path: path.read_bytes() for path, _ in rewrites}}
     try:
         for path, content in rewrites:
             _put(path, content)
         then()
     except BaseException:
+        back, lost = [], []
         for path, content in before.items():
-            if content is None:
-                path.unlink(missing_ok=True)
-            else:
-                _put(path, content)
-        names = _and([_shown_path(path, root) for path in before])
-        err.write(f"note: {names} {'are as they were' if len(before) > 1 else 'is as it was'}"
-                  f"{' — `cortex sync` puts this machine back on them' if committed else ''}\n")
+            try:
+                now = path.read_bytes() if path.is_file() else None
+                if now != content:
+                    if content is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        _put(path, content)
+                back.append(path)
+            except OSError as error:
+                lost.append(f"{_shown_path(path, root)} — {sync.os_error(error)}")
+        if back:
+            names = _and([_shown_path(path, root) for path in back])
+            err.write(f"note: {names} {'are as they were' if len(back) > 1 else 'is as it was'}"
+                      f"{' — `cortex sync` puts this machine back on them' if committed and synced() else ''}\n")
+        for what in lost:
+            err.write(f"warning: {what}: not put back as it was\n")
         raise
 
 
