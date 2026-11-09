@@ -205,6 +205,19 @@ class CommittedTests(SettingsTestCase):
         self.assertIs(self.settings(other, PATH=path, GIT_DIR=str(empty / ".git"))["committed"], True)
         self.assertIs(self.settings(other, PATH=path, GIT_INDEX_FILE=str(empty / "index"))["committed"], True)
 
+    @NEEDS_GIT
+    @DEVELOPMENT
+    def test_a_project_too_new_says_whether_it_is_committed(self):
+        repo = self.tmp / "repo"
+        repo.mkdir()
+        (repo / "cortex.toml").write_text('version = "99.0.0"\ntheme = "h2g2"\nagents = "team"\n', encoding="utf-8")
+        subprocess.run([GIT, "init", "-q", str(repo)], check=True)
+        path = os.path.dirname(GIT)
+        found = self.settings(repo, PATH=path)
+        self.assertEqual((found["too_new"], found["committed"]), (True, False))
+        subprocess.run([GIT, "-C", str(repo), "add", "cortex.toml"], check=True)
+        found = self.settings(repo, PATH=path)
+        self.assertEqual((found["too_new"], found["committed"]), (True, True))
 
 
 class MachineFileTests(SettingsTestCase):
