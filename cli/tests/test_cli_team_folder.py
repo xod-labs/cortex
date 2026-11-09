@@ -364,6 +364,7 @@ class CounterReviewTests(FolderTestCase):
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn("Cortex 99.0.0, which its .team/cortex.team.toml pins, newer than this cortex", proc.err)
         self.assertNotIn('starts with "."', proc.err)
+        self.assertNotIn("--team", proc.err)                            # a move this cortex would refuse
         proc = self.cortex(root, "config", "version")                   # the CI recipe
         self.assert_ok(proc)
         self.assertEqual(proc.out.strip(), "99.0.0")

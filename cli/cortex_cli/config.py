@@ -396,9 +396,20 @@ def too_new(root: str, own: Version) -> Optional[str]:
     name, version = found
     teams = loose_team(root)
     other = (f"\nor drop the try: cortex upgrade --local {teams[1] if teams else own}" if name == LOCAL_FILE else
-             f"\nor move the team's pin: cortex upgrade --team {own}" if name.endswith(f"/{TEAM_FILE}") else "")
+             f"\nor move the team's pin: cortex upgrade --team {own}"
+             if name.endswith(f"/{TEAM_FILE}") and _takes_folder(name[:-len(TEAM_FILE) - 1]) else "")
     return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
             f"    {store.update_command(version)}{other}")
+
+
+def _takes_folder(folder: str) -> bool:
+    """Whether this cortex takes the team's folder by its name — a folder only a later version may take,
+    ``.team``, read for its version alone (§3.8, step 1), it cannot move the team's pin in."""
+    try:
+        project.check_agents(folder)
+    except project.ProjectFileError:
+        return False
+    return True
 
 
 def local_spec(root: str) -> Optional[str]:
