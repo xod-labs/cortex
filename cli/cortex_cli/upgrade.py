@@ -1078,7 +1078,7 @@ def _git(root: str, *args: str, timeout: Optional[float] = 30) -> subprocess.Com
         raise UpgradeError("git is not on PATH")
     try:
         return subprocess.run([git, "-C", root, *args], capture_output=True, encoding="utf-8", errors="replace",
-                              stdin=subprocess.DEVNULL, timeout=timeout)
+                              stdin=subprocess.DEVNULL, timeout=timeout, env=sync.git_environment())
     except (OSError, subprocess.SubprocessError) as error:
         raise UpgradeError(f"git {args[0]} could not run — {error}")
 
