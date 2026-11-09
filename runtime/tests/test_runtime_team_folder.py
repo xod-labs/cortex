@@ -148,6 +148,18 @@ class ResolveTests(TeamFolderTestCase):
             with self.subTest(service=service), self.assertRaisesRegex(ValueError, "the team's folder"):
                 resolve_run(self.request(service=service), self.project, theme="h2g2")
 
+    def test_a_service_whose_name_folds_further_is_no_team_s_folder(self):
+        # NTFS and APFS take straße and strasse for two folders: so does the runtime.
+        shutil.move(str(self.project / FOLDER), self.project / "strasse")
+        (self.project / "cortex.toml").write_text('version = "9.9.9"\ntheme = "h2g2"\nagents = "strasse"\n',
+                                                  encoding="utf-8")
+        self.synced(agents="strasse", project="9.9.9")
+        (self.project / "straße" / "agents").mkdir(parents=True)
+        (self.project / "straße" / "project-overview.md").write_text("# straße\n", encoding="utf-8")
+        resolve_run(self.request(service="straße"), self.project, theme="h2g2")
+        with self.assertRaisesRegex(ValueError, "the team's folder"):
+            resolve_run(self.request(service="STRASSE"), self.project, theme="h2g2")
+
 
 @unittest.skipUnless(HAVE_FASTAPI, "fastapi not installed")
 class ApiTests(TeamFolderTestCase):

@@ -182,14 +182,25 @@ AGENTS_UNCOMMITTED = (f'{PROJECT_FILE}: "agents" is read from a committed {PROJE
                       f"`agents` — the team's folder is then {TEAM_FOLDER}/")
 
 
-def check_agents(value: object, name: str = PROJECT_FILE) -> str:
+def folded(name: str) -> str:
+    """A name of the workspace as file systems that ignore case compare it — NTFS, APFS: each character
+    lowered on its own, a character whose lower case is longer kept as written. ``str.casefold`` folds
+    further, ``ß`` as ``ss``, and would take two folders of the disk for one."""
+    return "".join(char.lower() if len(char.lower()) == 1 else char for char in name)
+
+
+def check_agents(value: object, name: str = PROJECT_FILE, loose: bool = False) -> str:
     """Refuse an ``agents`` that names no folder inside the workspace (ADR-013 §3.6), from its text
     alone: a relative path with ``/`` — no ``\\``, no absolute path of any platform, no ``..`` nor a
-    component that starts with ``.``, neither the project root itself nor ``cortex/``, the spec, nor
-    what it holds. ``cortex`` is told in any case: the file is committed, and read where names ignore
-    case too, macOS and Windows. A service's folder, or one holding a project's ``cortex.toml``, takes
-    the file system: its reader checks them. The folder, as the messages name it: without a final
-    ``/``."""
+    component that starts with ``.`` or ends with ``.`` or a space, neither the project root itself nor
+    ``cortex/``, the spec, nor what it holds. ``cortex`` is told in any case: the file is committed, and
+    read where names ignore case too, macOS and Windows — which drops a final ``.`` or space, ``cortex.``
+    naming ``cortex``. A service's folder, or one holding a project's ``cortex.toml``, takes the file
+    system: its reader checks them. The folder, as the messages name it: without a final ``/``.
+
+    ``loose`` — the version gate's reading, before the text is checked (§3.8, step 1) — takes what a later
+    version may take, a component that starts with ``.``; what names no folder inside the workspace, nor
+    one any version reads, is refused all the same."""
     rule = f"a relative path, with /, naming a folder inside the workspace — {TEAM_FOLDER} by default"
     if not isinstance(value, str) or not value:
         raise ProjectFileError(f'{name}: "agents" must be {rule}, in quotes')
@@ -207,10 +218,14 @@ def check_agents(value: object, name: str = PROJECT_FILE) -> str:
     for part in parts:
         if part == "..":
             raise ProjectFileError(f"{name}: agents {shown(written)} climbs out of the folder it is in — it must be {rule}")
-        if part.startswith("."):
+        if part.endswith((".", " ")):
+            # Windows drops it: "cortex." and "cortex " name cortex, "team." names team.
+            raise ProjectFileError(f"{name}: agents {shown(written)} names a folder that ends with \".\" or a space, "
+                                   f"which Windows drops — it must be {rule}")
+        if part.startswith(".") and not loose:
             raise ProjectFileError(f"{name}: agents {shown(written)} names a folder that starts with \".\" — it must be "
                                    f"{rule}")
-    if parts[0].casefold() == "cortex":
+    if folded(parts[0]) == "cortex":
         raise ProjectFileError(f"{name}: agents {shown(written)} is in cortex/, the spec's place — it must be {rule}")
     # Only agents itself is the default: Agents names a folder of its own, as written (§9).
     return "/".join(parts)
