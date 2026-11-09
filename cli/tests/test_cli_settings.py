@@ -206,7 +206,6 @@ class CommittedTests(SettingsTestCase):
         self.assertIs(self.settings(other, PATH=path, GIT_INDEX_FILE=str(empty / "index"))["committed"], True)
 
     @NEEDS_GIT
-    @DEVELOPMENT
     def test_a_project_too_new_says_whether_it_is_committed(self):
         repo = self.tmp / "repo"
         repo.mkdir()
@@ -315,7 +314,6 @@ class TooNewTests(SettingsTestCase):
                 self.assertIn("cortex self-update 99.0.0", proc.err)
                 self.assertNotIn("unknown key", proc.err)
 
-    @DEVELOPMENT
     def test_validate_of_a_synced_project_or_of_a_spec_not_there_says_the_version(self):
         # Only a spec that names no version — a checkout's — passes the gate: the store's version does
         # not, nor a spec that is not there.
