@@ -17,6 +17,7 @@ Cortex is a **framework of AI agents** that host projects use through the `corte
 | Create a personality theme | [docs/creating-a-theme.md](docs/creating-a-theme.md) |
 | Understand a design decision | [docs/adr/](docs/adr/) |
 | Deliver a multi-phase ADR | [docs/process/adr-implementation.md](docs/process/adr-implementation.md) |
+| Make a first change, from the clone to the pull request | [A first change, step by step](#a-first-change-step-by-step) |
 
 ## 🧱 Repository structure (what to touch where)
 
@@ -66,6 +67,7 @@ A throwaway host project reads the spec **from your checkout**, not from a relea
 git clone <your-fork-url> cortex-dev
 cd cortex-dev
 pip install -e core -e cli             # a `cortex` command running this checkout's code
+cortex --version                       # cortex X.Y.Z-dev: the version this branch prepares
 
 # 2A. A throwaway single project
 mkdir /tmp/cortex-test-single && cd /tmp/cortex-test-single
@@ -191,7 +193,7 @@ Why? Because changes to the framework affect every host project. The ADR is a fo
 
 ## 🔀 Branch & PR workflow
 
-1. **Branch from `main`** with a descriptive name: `feat/redis-capability`, `fix/init-workspace-template`, `docs/extending-layers-examples`
+1. **Branch from `main`** — or from an older major's branch, `N.x`, for a fix there — with a descriptive name: `feat/redis-capability`, `fix/init-workspace-template`, `docs/extending-layers-examples`
 2. **Make atomic commits** — one logical change per commit. Cortex uses **[Conventional Commits](https://www.conventionalcommits.org/) prefixed with a [gitmoji](https://gitmoji.dev/)** (see table below).
 3. **Update the changelog** if your change is user-visible: add an entry under `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md), in its Keep a Changelog group (`Added`, `Changed`, `Fixed`, …)
 4. **Run validators** before pushing
@@ -202,6 +204,19 @@ Why? Because changes to the framework affect every host project. The ADR is a fo
 6. **Address review feedback** with new commits. Every pull request is merged with a **merge commit** — the repository allows nothing else: a squash or a rebase rewrites the commits a stacked branch is built on, and drops from `main` the commits a pre-release is tagged on
 
 > **Delivering a multi-phase ADR?** The branches, the stacked pull requests, the issue hierarchy and the gates are described in [docs/process/adr-implementation.md](docs/process/adr-implementation.md).
+
+### A first change, step by step
+
+From the clone to the pull request, for a fix or a small feature:
+
+1. **Fork the repository and clone your fork**: `git clone <your-fork-url> cortex-dev && cd cortex-dev`.
+2. **Check out what you change.** `main` holds the newest major version. A fix for an older major starts from its line's branch — `git switch 1.x` once 2.0.0 has shipped ([ADR-009 §3.11](docs/adr/ADR-009-release-cycle.md#311-lines--several-major-versions-at-once)). To reproduce a bug in a release first, check out its tag: `git switch --detach 1.7.0`, then back to the branch you will change.
+3. **Branch** from it: `git switch -c fix/init-workspace-template`.
+4. **Make the change, and its entry** under `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md), in its group — `Fixed`, `Added`, `Changed`, `Removed`… A breaking change starts its entry with 💥.
+5. **Run the command from your checkout**: `pip install -e core -e cli`, then `cortex --version`. It prints `cortex X.Y.Z-dev`, the version your branch prepares, which `CHANGELOG.md` gives ([ADR-009 §9](docs/adr/ADR-009-release-cycle.md#9-amendments)): the highest version it names, bumped by the `[Unreleased]` entries — a patch for fixes only, a minor for an addition or a change, a major for a removal or an entry marked 💥. After 1.7.0, a fix prepares `1.7.1-dev`, an addition `1.8.0-dev`. Your checkout serves a project pinned to a release before it, and is too old for one pinned to the release it prepares. `cortex upgrade` moves no project to it unless you name it: `cortex upgrade 1.8.0-dev`, in a throwaway project.
+6. **Test**: the suites — `(cd cli && python3 -m unittest discover -s tests)`, and `core/`'s when you touched it — then [a throwaway project](#clone--test-loop), and [the checklist](#-testing-checklist-before-opening-a-pr).
+7. **Open the pull request** against the branch you started from, `main` or `N.x`, with the *why* and a test plan. Its CI runs the tests, and the `binary` workflow builds the `cortex` binary of each target at `X.Y.Z-dev.N`, `N` the run's number. Each one is an artifact of that run: the reviewer downloads one — `gh run download RUN_ID --name cortex-linux-x86_64` — and tries it on a project of their own. A maintainer may retarget the pull request to the integration branch of the release that ships it ([Versioning & releases](#-versioning--releases)).
+8. **The reviewer decides whether the change goes to other lines**: a fix released on `1.x` goes up to `main` through a pull request of its own (ADR-009 §3.11). Your part ends with the merge.
 
 ### Commit message convention
 
