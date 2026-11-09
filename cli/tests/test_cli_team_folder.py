@@ -11,16 +11,17 @@ import os
 import shutil
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_cli_format3 import FORMAT_2, OURS, TEMPLATE, written  # noqa: E402
-from test_cli_team import (DEVELOPMENT, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, TeamTestCase,  # noqa: E402
+from test_cli_team import (DEVELOPMENT, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, SOURCE, TeamTestCase,  # noqa: E402
                            harness_path)
 
 import cli_harness as harness  # noqa: E402
-from cortex_cli import upgrade  # noqa: E402
+from cortex_cli import config, store, upgrade, validate  # noqa: E402
 
 FOLDER = "team-agents"
 NAMED = f'agents = "{FOLDER}"\ntheme = "h2g2"\n'
@@ -458,6 +459,56 @@ class SharedRenamedFolderTests(FolderTestCase):
         self.assertEqual(proc.out.count(f"{FOLDER}/cortex.team.toml: Cortex 9.9.8 → {OWN}"), 1)
         for root in roots:
             self.assertEqual(self.local(root)["synced"]["reads"], OWN)
+
+
+class CodeReviewFolderTests(FolderTestCase):
+    """The counter-review's fixes of the team's file and lock (2026-11-09), in a folder cortex.toml names."""
+
+    @SOURCE
+    @DOWNLOADS
+    def test_a_resume_during_a_try_writes_the_team_s_lock_in_the_folder(self):
+        root = self.named(team='version = "9.9.8"\n', local=f'version = "{OWN}"\n')
+        lock = root / FOLDER / "cortex.team.lock"
+        lock.write_text(config.render_lock(store.Version("9.9.7"), "sha256:" + "0" * 64), encoding="utf-8")
+        self.assert_ok(self.cortex(root, "sync"))
+        proc = self.cortex(root, "sync", "--locked")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(f"--locked: {FOLDER}/cortex.team.lock names Cortex 9.9.7", proc.err)
+        proc = self.cortex(root, "upgrade", "9.9.8")
+        self.assert_ok(proc)
+        self.assertIn(f"{FOLDER}/cortex.team.lock: Cortex 9.9.8, where it named 9.9.7 — commit it in {FOLDER}/\n",
+                      proc.out)
+        self.assertEqual(str(config.load_lock(str(lock.parent), lock.name).version), "9.9.8")
+        self.assertFalse((root / "agents").exists())
+        self.assert_ok(self.cortex(root, "sync", "--locked"))
+
+    @NEEDS_GIT
+    def test_team_commit_names_the_folder_of_the_developer_s_own_change(self):
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        root = self.named(team='version = "1.8.0"\n', committed=False)
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "init")
+        team = root / FOLDER / "cortex.team.toml"
+        team.write_text(team.read_text(encoding="utf-8") + 'theme = "mine"\n', encoding="utf-8")
+        proc = self.cortex(root, "upgrade", "--team", OWN, "--commit", "--message", "move", **env)
+        self.assert_ok(proc)
+        self.assertIn(f"note: nothing is committed in {FOLDER}/ — {FOLDER}/cortex.team.toml holds changes of yours "
+                      "besides its version", proc.err)
+        self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "init")
+        self.assertFalse((root / "agents").exists())
+
+    def test_validate_names_the_folder_whose_lock_this_user_cannot_write(self):
+        root = self.named()
+        self.assert_ok(self.cortex(root, "sync"))
+        (root / FOLDER / "cortex.team.lock").unlink()
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}):
+            project = config.load(str(root))
+            with mock.patch.object(validate.os, "access", return_value=False):
+                found = validate.lock_warnings(project, str(self.home / "versions" / OWN))
+        self.assertEqual([code for _, code, _ in found], ["LOCK_MISSING"])
+        self.assertIn(f"{FOLDER}/ cannot be written here", found[0][2])
 
 
 if __name__ == "__main__":
