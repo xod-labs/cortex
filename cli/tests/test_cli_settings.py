@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a p
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 
 import cli_harness as harness  # noqa: E402
-from cortex_cli import machine, store  # noqa: E402
+from cortex_cli import machine, store, sync, upgrade  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
@@ -188,6 +188,25 @@ class CommittedTests(SettingsTestCase):
         self.assertIs(self.settings(project, PATH=path)["committed"], False)      # in a repository, untracked
         subprocess.run([GIT, "-C", str(repo), "add", "projects/foo/cortex.toml"], check=True)
         self.assertIs(self.settings(project, PATH=path)["committed"], True)
+
+    @NEEDS_GIT
+    def test_every_git_call_asks_the_project_s_own_repository(self):
+        # sync's and upgrade's git, as committed's: the variables that point git at a repository — a hook's — are not
+        # followed, and the others stay: the author's name.
+        other, mine = self.tmp / "other", self.tmp / "mine"
+        for repo in (other, mine):
+            subprocess.run([GIT, "init", "-q", str(repo)], check=True)
+        project = self.project()
+        alone = sync.ignored(project, "cortex.local.toml")             # None in no repository, as TMPDIR has it
+        with mock.patch.dict(os.environ, {"GIT_DIR": str(other / ".git"), "GIT_AUTHOR_NAME": "Kept"}):
+            self.assertEqual(sync.ignored(project, "cortex.local.toml"), alone)
+            for call in (sync._git, upgrade._git):
+                with self.subTest(call=call.__module__):
+                    found = call(str(mine), "rev-parse", "--absolute-git-dir").stdout.strip()
+                    self.assertEqual(os.path.realpath(found), os.path.realpath(mine / ".git"))
+            environment = sync.git_environment()
+            self.assertEqual(environment.get("GIT_AUTHOR_NAME"), "Kept")
+            self.assertNotIn("GIT_DIR", environment)
 
     @NEEDS_GIT
     def test_git_s_variables_of_the_caller_do_not_name_another_repository(self):

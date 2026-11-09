@@ -164,13 +164,30 @@ def only_submodule(path: Path) -> bool:
     return paths == {path.name}
 
 
+# The variables that point git at one repository — what `git rev-parse --local-env-vars` lists, which a hook
+# exports — and those that change how a pathspec matches. Git asked about a project runs without them, from the
+# project's folder: a hook's GIT_DIR would make it answer of another repository. The others stay — the author's
+# name, the transport, a CI's configuration.
+GIT_LOCAL = frozenset({
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
+    "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS",
+})
+
+
+def git_environment() -> Dict[str, str]:
+    """The environment git runs in, asked about a project: this process's, without ``GIT_LOCAL``."""
+    return {key: value for key, value in os.environ.items() if key.upper() not in GIT_LOCAL}
+
+
 def _git(root: str, *args: str) -> Optional[subprocess.CompletedProcess]:
     git = shutil.which("git")
     if git is None:
         return None
     try:
         return subprocess.run([git, "-C", root, *args], capture_output=True, encoding="utf-8", errors="replace",
-                              timeout=30)
+                              timeout=30, env=git_environment())
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -965,15 +982,15 @@ def committed(root) -> bool:
     """Whether ``cortex.toml`` at ``root`` is committed (ADR-013 §3.1): git tracks it — ADR-011 §3.5's
     test. Without git on ``PATH``, or with a git that refuses — a repository another user owns, say —
     a ``.git`` at or above the root counts. A ``cortex.toml`` git does not track, in a repository, is
-    not committed: the developer's own. Git is asked of the root's own repository, as from a shell
-    that sets none of git's variables — a hook exports ``GIT_DIR``, which would make it another's —
+    not committed: the developer's own. Git is asked of the root's own repository, without the variables
+    that point it at one (``GIT_LOCAL``) — a hook exports ``GIT_DIR``, which would make it another's —
     and of the file's name as written, no pattern."""
     git = shutil.which("git")
     if git is not None:
-        environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
         try:
             proc = subprocess.run([git, "-C", str(root), "ls-files", "--error-unmatch", "--",
-                                   f":(literal){config.PROJECT_FILE}"], capture_output=True, timeout=30, env=environment)
+                                   f":(literal){config.PROJECT_FILE}"], capture_output=True, timeout=30,
+                                  env=git_environment())
         except (OSError, subprocess.SubprocessError):
             proc = None
         if proc is not None and proc.returncode in (0, 1):
@@ -988,7 +1005,7 @@ def ignored(root: Path, name: str) -> Optional[bool]:
     if git is not None:
         try:
             proc = subprocess.run([git, "-C", str(root), "check-ignore", "-q", "--", name],
-                                  capture_output=True, timeout=30)
+                                  capture_output=True, timeout=30, env=git_environment())
         except (OSError, subprocess.SubprocessError):
             proc = None
         if proc is not None and proc.returncode in (0, 1):
