@@ -7,7 +7,7 @@
 
 In these instructions, `cortex/` is the directory that `spec` names in `cortex.local.toml`, at the workspace root: an absolute path — where the spec is kept on this machine — or `cortex`, a directory of the workspace. Read `cortex.local.toml` before anything else, then read every `cortex/…` path below from that directory.
 
-**The team's folder** is the folder `agents` names in `cortex.toml`, else `agents/`; the team's file, when the team has one, is `cortex.team.toml` in it. Below, `{workspace_root}/agents/` stands for the team's folder; `{service}/agents/` stays each service's, and `cortex/agents/` the spec's.
+**The team's folder** is the folder `synced`, in `cortex.local.toml`, records as `agents`, else `agents/` — `cortex sync` records the one a committed `cortex.toml` names; the team's file, when the team has one, is `cortex.team.toml` in it. **`cortex.toml` names another folder** — its `agents`, else `agents/` → run `cortex sync`, once — on a checkout, below, tell the user instead — and when it still does, tell the user, and go no further. Below, `{workspace_root}/agents/` stands for the team's folder; `{service}/agents/` stays each service's, and `cortex/agents/` the spec's.
 
 **No `cortex.local.toml`, or no `spec` in it** → Cortex is not synced on this machine. Run `cortex sync` at the workspace root, and go no further until it succeeded.
 

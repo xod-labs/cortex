@@ -52,7 +52,8 @@ class TemplateTests(unittest.TestCase):
             with self.subTest(template=name):
                 self.assertEqual(init.markers(text), [(name, 3)])
                 self.assertIsNotNone(init.END_MARKER.search(text))
-                for rule in (b"**The team's folder** is the folder `agents` names in `cortex.toml`, else `agents/`",
+                for rule in (b"**The team's folder** is the folder `synced`, in `cortex.local.toml`, records as `agents`, "
+                             b"else `agents/`", b"**`cortex.toml` names another folder**",
                              b"`cortex.team.toml`", b"**A version moved**", b"never order versions",
                              b"**A checkout**", b"**No `synced`**", b"below 1.8.0, run `cortex self-update`",
                              b"**It names a missing team's folder**",
