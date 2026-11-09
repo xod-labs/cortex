@@ -501,7 +501,7 @@ The bootstrap file has the assistant keep the machine in step with the project b
 | a `spec` naming a directory that does not exist — `cortex prune` removed the version, or the store was emptied | runs `cortex sync`, which gets the version back |
 | a spec of another version than `cortex.toml`'s — a teammate moved it | runs `cortex sync`, and goes no further until it succeeded |
 | from 1.8.0, a file's `version` — `cortex.toml`'s, `cortex.local.toml`'s, the team's file's — or the spec's, other than what `cortex sync` recorded in `synced` | runs `cortex sync`, once: a plain comparison, nothing to run while they match ([ADR-013](docs/adr/ADR-013-configuration-cascade.md) §3.10) |
-| `cortex sync` saying this cortex is too old for the project — a newer pin, or a later lock format | runs the command the refusal names — `cortex self-update X.Y.Z`, or the install script's from a binary before 1.4.0 — then `cortex sync` again |
+| `cortex sync` saying this cortex is too old for the project — a newer pin, or a later lock format | runs the command the refusal names — `cortex self-update X.Y.Z`, or the install script's from a binary before 1.4.0 — then `cortex sync` again, once; still too old, it tells you and goes no further |
 | no `cortex` command, nor `cortex-ai`, on `PATH` or in `~/.cortex/bin` | tells you to install it, as [Installation](#-installation) says, and goes no further |
 
 - **Which command.** `cortex-ai` when there is one; otherwise `cortex`, once `cortex --version` printed `cortex` followed by a version — anything else is another program, whose `sync` it must not run. It looks in `~/.cortex/bin` (`%USERPROFILE%\.cortex\bin`) too when its tool's `PATH` has neither: an editor started before the install changed `PATH`.
