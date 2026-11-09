@@ -54,7 +54,8 @@ class TemplateTests(unittest.TestCase):
                 self.assertIsNotNone(init.END_MARKER.search(text))
                 for rule in (b"**The team's folder** is the folder `agents` names in `cortex.toml`, else `agents/`",
                              b"`cortex.team.toml`", b"**A version moved**", b"never order versions",
-                             b"**A checkout**", b"**No `synced`**", b"below 1.8.0, run `cortex self-update`",
+                             b"**A checkout**", b"**No `synced`**",
+                             b"below 1.8.0, read as above \xe2\x80\x94 the numbers before any `-` \xe2\x80\x94 run `cortex self-update`",
                              # A pre-release or a development build of 1.8.0 is 1.8.0 (ADR-009), and each
                              # self-update is followed by one sync only: no loop when nothing newer is out.
                              b"read the numbers before any `-`: `1.7.3` is below it, `1.8.0-rc.1` and `1.8.0-dev.2` "
