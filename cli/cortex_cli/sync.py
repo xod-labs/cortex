@@ -36,7 +36,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Collection, Dict, List, Optional, TextIO, Tuple
+from typing import Collection, Dict, List, Optional, Set, TextIO, Tuple
 
 from cortex_core.validate import shown
 
@@ -164,13 +164,17 @@ def only_submodule(path: Path) -> bool:
     return paths == {path.name}
 
 
+GIT_LOCAL = config.GIT_LOCAL                   # ADR-013 §3.1: git asked of the project's own repository
+git_environment = config.git_environment
+
+
 def _git(root: str, *args: str) -> Optional[subprocess.CompletedProcess]:
     git = shutil.which("git")
     if git is None:
         return None
     try:
         return subprocess.run([git, "-C", root, *args], capture_output=True, encoding="utf-8", errors="replace",
-                              timeout=30)
+                              timeout=30, env=git_environment())
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -1073,7 +1077,7 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
     if not path.is_file() and ignored(root, config.LOCAL_FILE) is None:
         return []
     data = path.read_bytes() if path.is_file() else b""
-    present = {line.strip().lstrip("\ufeff") for line in data.decode("utf-8", errors="replace").splitlines()}
+    present = gitignore_lines(data.decode("utf-8", errors="replace"))
     missing = []
     for line, probe in entries.items():
         state = ignored(root, probe)
@@ -1094,6 +1098,12 @@ in_no_repository = config.in_no_repository     # ADR-008 §9: a root that is no 
 committed = config.committed                   # ADR-013 §3.1
 
 
+def gitignore_lines(text: str) -> Set[str]:
+    """``.gitignore``'s lines as Cortex reads them without git: each stripped, the first without the byte order
+    mark an editor may put there. One reading, to tell what is ignored and what to add alike."""
+    return {line.strip().lstrip("\ufeff") for line in text.splitlines()}
+
+
 def ignored(root: Path, name: str) -> Optional[bool]:
     """Whether git ignores ``name`` in the project: asked of git when the project is a repository
     of it; ``None`` when there is no repository to ask about — no ``.git`` at the root or above it."""
@@ -1101,23 +1111,23 @@ def ignored(root: Path, name: str) -> Optional[bool]:
     if git is not None:
         try:
             proc = subprocess.run([git, "-C", str(root), "check-ignore", "-q", "--", name],
-                                  capture_output=True, timeout=30)
+                                  capture_output=True, timeout=30, env=git_environment())
         except (OSError, subprocess.SubprocessError):
             proc = None
         if proc is not None and proc.returncode in (0, 1):
             return proc.returncode == 0
     if in_no_repository(root):
         return None
-    # No git to ask, or git refusing the repository — its owner, say: .gitignore's own lines, the root's — in a
-    # subdirectory of a repository too, where git reads that file as well. A link is a file to git — `cortex/` does
-    # not match it.
+    # No git to ask, or git refusing the repository — its owner, say: the project's own .gitignore, at the root of
+    # the repository or in a subdirectory of it, read for the lines Cortex writes — no pattern, no negation, no
+    # .gitignore of a folder above, which git would read too. A link is a file to git — `cortex/` does not match it.
     directory = (root / name).is_dir() and not is_link(root / name)
     wanted = {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if directory else set())
     try:
-        lines = (root / ".gitignore").read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = gitignore_lines((root / ".gitignore").read_text(encoding="utf-8", errors="replace"))
     except OSError:
         return False
-    return any(line.strip() in wanted for line in lines)
+    return bool(lines & wanted)
 
 
 def developers_own(path: Path) -> bool:

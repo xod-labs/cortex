@@ -192,6 +192,23 @@ def _read(path: str, name: Optional[str] = None) -> Dict:
         raise ConfigError(f"{name}: {error}")
 
 
+# The variables that point git at one repository — what `git rev-parse --local-env-vars` lists, which a hook
+# exports — and those that change how a pathspec matches. Git asked about a project runs without them, from the
+# project's folder: a hook's GIT_DIR would make it answer of another repository. The others stay — the author's
+# name, the transport, a CI's configuration.
+GIT_LOCAL = frozenset({
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
+    "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS",
+})
+
+
+def git_environment() -> Dict[str, str]:
+    """The environment git runs in, asked about a project: this process's, without ``GIT_LOCAL``."""
+    return {key: value for key, value in os.environ.items() if key.upper() not in GIT_LOCAL}
+
+
 def in_no_repository(root) -> bool:
     """No ``.git`` at ``root`` or above it — as written or resolved, git or not on this machine: what Cortex
     writes there is committed nowhere, the root being no work tree (ADR-008 §9)."""
@@ -204,15 +221,15 @@ def committed(root) -> bool:
     """Whether ``cortex.toml`` at ``root`` is committed (ADR-013 §3.1): git tracks it — ADR-011 §3.5's
     test. Without git on ``PATH``, or with a git that refuses — a repository another user owns, say —
     a ``.git`` at or above the root counts. A ``cortex.toml`` git does not track, in a repository, is
-    not committed: the developer's own. Git is asked of the root's own repository, as from a shell
-    that sets none of git's variables — a hook exports ``GIT_DIR``, which would make it another's —
+    not committed: the developer's own. Git is asked of the root's own repository, without the variables
+    that point it at one (``GIT_LOCAL``) — a hook exports ``GIT_DIR``, which would make it another's —
     and of the file's name as written, no pattern."""
     git = shutil.which("git")
     if git is not None:
-        environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
         try:
             proc = subprocess.run([git, "-C", str(root), "ls-files", "--error-unmatch", "--",
-                                   f":(literal){PROJECT_FILE}"], capture_output=True, timeout=30, env=environment)
+                                   f":(literal){PROJECT_FILE}"], capture_output=True, timeout=30,
+                                  env=git_environment())
         except (OSError, subprocess.SubprocessError):
             proc = None
         if proc is not None and proc.returncode in (0, 1):
@@ -509,13 +526,14 @@ def write_spec(root: str, spec: str) -> None:
     write_local_text(root, render_spec(root, spec))
 
 
-def load_lock(root: str, name: str = LOCK_FILE) -> Optional[Lock]:
+def load_lock(root: str, name: str = LOCK_FILE, *, writer: str = "`cortex sync`") -> Optional[Lock]:
     """The project's ``cortex.lock`` — or the lock ``name`` names under ``root``, the team's in its
-    folder — checked with the core's grammar; ``None`` when there is none."""
+    folder — checked with the core's grammar; ``None`` when there is none. ``writer`` is the command a
+    lock that is no lock is deleted for: the sync, or — the lock a try leaves — `cortex upgrade`."""
     path = os.path.join(root, name)
     if not os.path.isfile(path):
         return None
-    again = "delete it, and `cortex sync` writes it again"     # a merge left conflict markers in it, say
+    again = f"delete it, and {writer} writes it again"     # a merge left conflict markers in it, say
     shown_name = TEAM_LOCK_NAME if name == TEAM_LOCK_FILE else name
     try:
         data = _read(path, shown_name)
