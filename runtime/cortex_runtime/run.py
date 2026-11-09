@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from cortex_core.project import folded
 from cortex_core.workspace import service_index
 
 from .base import Pin, base_for, read_pin
@@ -75,8 +76,8 @@ def _service_inside(service: Optional[str], team_folder: str = "agents") -> Opti
     if path.parts[0] == "agents":
         raise ValueError(f"service must be a folder of the workspace other than agents/, got {service!r}")
     if team_folder != "agents":         # a renamed team's folder, in any case (ADR-013 §3.6, §9)
-        team = tuple(part.casefold() for part in PurePosixPath(team_folder).parts)
-        parts = tuple(part.casefold() for part in path.parts)
+        team = tuple(folded(part) for part in PurePosixPath(team_folder).parts)
+        parts = tuple(folded(part) for part in path.parts)
         if parts[:len(team)] == team:
             raise ValueError(f"service must be a folder of the workspace other than {team_folder}/, the team's "
                              f"folder, got {service!r}")

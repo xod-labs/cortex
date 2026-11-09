@@ -24,11 +24,26 @@ class AgentsTextTests(unittest.TestCase):
                 self.assertEqual(project.check_agents(value), folder)
 
     def test_what_names_no_folder_inside_the_workspace_is_refused(self):
-        for value in ("../x", "a/../b", "/x", "C:\\x", "C:/x", "\\\\server\\x", "a\\b", ".", "./", "././", "a//b", ".team",
-                      "a/.b", "cortex", "Cortex", "cortex/x", "", 3):
+        for value in ("../x", "a/../b", "/x", "C:\\x", "C:/x", "C:x", "C:", "\\\\server\\x", "a\\b", ".", "./", "././",
+                      "a//b", ".team", "a/.b", "a/./b", "cortex", "Cortex", "cortex/x", "", 3, "a\nb", "a\tb", "a\x7fb",
+                      "cortex.", "cortex ", "team.", "a/b ", " "):
             with self.subTest(value=value), self.assertRaises(project.ProjectFileError) as caught:
                 project.check_agents(value)
             self.assertIn("agents", str(caught.exception))
+
+    def test_the_gate_reads_a_name_a_later_version_may_take(self):
+        # ADR-013 §3.8, step 1: a folder starting with "." is read loosely, before its text is refused.
+        for value, folder in ((".team", ".team"), ("./.team/", ".team"), ("a/.b", "a/.b"), ("team-agents", "team-agents")):
+            with self.subTest(value=value):
+                self.assertEqual(project.check_agents(value, loose=True), folder)
+        for value in ("../x", "/x", "C:x", "a\\b", "a\nb", ".", "a/./b", "cortex", "cortex.", "team ", "", 3):
+            with self.subTest(value=value), self.assertRaises(project.ProjectFileError):
+                project.check_agents(value, loose=True)
+
+    def test_names_fold_as_file_systems_fold_them(self):
+        self.assertEqual(project.folded("Team-Agents"), "team-agents")
+        self.assertNotEqual(project.folded("straße"), project.folded("strasse"))     # two folders on NTFS and APFS
+        self.assertEqual(project.folded("STRASSE"), "strasse")
 
     def test_cortex_toml_takes_it_and_the_other_files_refuse_it(self):
         project.check_project({**TEAM, "agents": "team-agents"})
@@ -134,6 +149,32 @@ class CascadeTests(unittest.TestCase):
         found = [Path(path).name for path in workspace.services(str(self.tmp), str(self.base),
                                                                 str(self.tmp / "Team-Agents"))]
         self.assertEqual(found, ["svc"])                        # cortex.toml's name, in another case than the disk's
+
+    def test_the_scan_leaves_out_the_team_s_folder_only(self):
+        for folder in ("team", "teamwork", "straße"):
+            (self.tmp / folder).mkdir(exist_ok=True)
+            (self.tmp / folder / "project-overview.md").write_text(f"# {folder}\n", encoding="utf-8")
+        found = sorted(Path(path).name for path in workspace.services(str(self.tmp), str(self.base), str(self.tmp / "team")))
+        self.assertEqual(found, ["straße", "teamwork"])              # a name it begins, no folder below it
+        found = sorted(Path(path).name for path in workspace.services(str(self.tmp), str(self.base),
+                                                                      str(self.tmp / "strasse")))
+        self.assertEqual(found, ["straße", "team", "teamwork"])      # another folder on every file system
+
+    def test_a_folder_holding_team_files_below_it_is_no_service(self):
+        (self.tmp / "team-agents" / "docs").mkdir()
+        (self.tmp / "team-agents" / "docs" / "project-overview.md").write_text("# notes\n", encoding="utf-8")
+        workspace.check_team_folder(str(self.tmp), "team-agents", str(self.base))     # no agents/ there: no service
+        (self.tmp / "straße" / "agents").mkdir(parents=True)
+        (self.tmp / "straße" / "project-overview.md").write_text("# straße\n", encoding="utf-8")
+        workspace.check_team_folder(str(self.tmp), "strasse/team", str(self.base))     # not inside the service straße
+
+    def test_service_dot_reads_the_team_s_folder(self):
+        (self.base / "agents" / "roles" / "engineering" / "lead-backend.md").write_text("base", encoding="utf-8")
+        out = io.StringIO()
+        validate.validate(str(self.tmp), str(self.base), ".", False, out, validate.Colors(False),
+                          team_folder=str(self.tmp / "team-agents"))
+        self.assertIn("team-agents/roles/engineering/architect.md\n", out.getvalue())
+        self.assertNotIn("agents/roles/engineering/architect.md\n", out.getvalue().replace("team-agents/", ""))
 
     def test_a_folder_inside_a_service_or_holding_a_project_is_refused(self):
         (self.tmp / "svc").mkdir()

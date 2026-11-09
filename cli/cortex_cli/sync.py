@@ -36,7 +36,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, TextIO, Tuple
+from typing import Collection, Dict, List, Optional, TextIO, Tuple
 
 from cortex_core.validate import shown
 
@@ -140,8 +140,9 @@ def is_submodule(path: Path, relative: Optional[str] = None) -> bool:
     superproject's ``.git/modules/`` or, as older git made them, in the ``.git`` it holds. ``relative``,
     the folder as the project root names it — a team's folder, ``team/agents`` — the ``.gitmodules`` read
     is the root's."""
-    top = path.parent if relative is None else Path(str(path)[:-len(relative)] if str(path).endswith(relative)
-                                                    else path.parent)
+    # The root, as many folders up as ``relative`` has names: a Windows path, written with backslashes, never
+    # ends with its text.
+    top = path.parent if relative is None else path.parents[len(relative.split("/")) - 1]
     name = path.name if relative is None else relative
     try:
         lines = (top / ".gitmodules").read_text(encoding="utf-8", errors="replace").splitlines()
@@ -724,7 +725,8 @@ def unswap(target: Path, aside: Optional[Path]) -> None:
 
 def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
          claude_access: Optional[bool] = None, notes: bool = True, locked: bool = False,
-         announce: bool = True, registers: bool = True, bootstraps: Optional[bool] = None) -> None:
+         announce: bool = True, registers: bool = True, bootstraps: Optional[bool] = None,
+         said: Collection[str] = ()) -> None:
     """Sync the project at or above ``cwd``. ``notes`` off, what git ignores is left to the
     caller — ``cortex init`` writes .gitignore once ``cortex/`` has its final form. ``locked``,
     ``cortex.lock`` is never written: a sync that would write it stops. ``announce`` off, the
@@ -733,13 +735,14 @@ def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err:
     ``bootstraps`` — `cortex sync`'s own run, and ``cortex upgrade --local``'s — writes the developer's
     own bootstrap again and says whether the team's is behind (ADR-013 §3.10), still under the
     project's lock: ``True`` writes the developer's own whatever the team's file, ``False`` only
-    where there is one."""
+    where there is one. ``said``: the notes of the versions the caller said already —
+    ``cortex upgrade``'s — not said again."""
     root = config.find_project(cwd)
     if root is None:
         raise SyncError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
                         "a Cortex project")
     with project_lock(Path(root), err):
-        _sync(root, mode, source, out, err, claude_access, notes, locked, announce)
+        _sync(root, mode, source, out, err, claude_access, notes, locked, announce, said)
         if bootstraps is not None and source is None and not locked:
             from . import upgrade       # upgrade imports this module: the bootstraps are its
             project = config.load(root)
@@ -806,7 +809,8 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
     if locked:
         why = (f"no {shown_name}" if lock is None else
                f"{shown_name} names Cortex {lock.version}, and {pins} pins {version}")
-        raise SyncError(f"--locked: {why} — {writer} writes it, then commit it. Nothing of the project was changed")
+        commit = "" if in_no_repository(root) else ", then commit it"     # committed nowhere (ADR-008 §9)
+        raise SyncError(f"--locked: {why} — {writer} writes it{commit}. Nothing of the project was changed")
     return digest, ("written" if lock is None else f"Cortex {version}, where it named {lock.version}")
 
 
@@ -820,16 +824,19 @@ def against_locks(project: config.Project, flags: Dict[str, object]) -> None:
                             "team's choice, which a flag does not undo")
 
 
-def version_notes(project: config.Project) -> List[str]:
+def version_notes(project: config.Project, locked: bool = False) -> List[str]:
     """What a sync, an upgrade and a validate say of the versions, every time (ADR-013 §3.3): the
-    developer's version ahead of the team's, or caught up and changing nothing; what the team's
-    resolution says of the team's file and of a locked key; a committed ``cortex.lock`` nothing reads."""
+    developer's version ahead of the team's — not read under ``--locked``, which checks the team's —
+    or caught up and changing nothing; what the team's resolution says of the team's file and of a
+    locked key; a committed ``cortex.lock`` nothing reads."""
     said: List[str] = []
     found = project.developer_version
     team, origin = project.team_version, project.team_origin
     if found is not None:
         mine = store.Version(str(found.value))
-        if mine > team:
+        if mine > team and locked:
+            said.append(f"{found.origin}'s version, {mine}, is not read: --locked checks the team's {team} ({origin})")
+        elif mine > team:
             said.append(f"Cortex {mine} is read — {found.origin}'s, above the team's {team} ({origin})"
                         + (": it is not locked, its release checked against its SHA256SUMS when downloaded"
                            if found.origin == config.LOCAL_FILE else ""))
@@ -846,11 +853,24 @@ def version_notes(project: config.Project) -> List[str]:
     return said
 
 
+def gitlink(path: Path) -> bool:
+    """git's index holds ``path`` as a submodule — mode 160000 — wherever the project sits in its
+    repository: in a subdirectory, the ``.gitmodules`` that names it is at the repository's top, and
+    names it by its path from there. ``False`` without git to ask."""
+    proc = _git(str(path.parent), "ls-files", "--stage", "-z", "--", path.name)
+    if proc is None or proc.returncode != 0:
+        return False
+    return any(entry.startswith("160000 ") and entry.partition("\t")[2] == path.name for entry in proc.stdout.split("\0"))
+
+
 def _team_folder_note(project: config.Project) -> Optional[str]:
     """The team's folder, a submodule left empty (ADR-013 §3.4): a warning, which ``validate --strict``
-    fails — for a project whose team's version reads what it holds."""
+    fails — for a project whose team's version reads what it holds. A submodule by the ``.gitmodules``
+    beside it, or by git's index: a CI checkout without its submodules, the project in a subdirectory of
+    its repository."""
     folder = Path(project.team_dir)
-    if project_before_team(project) or not folder.is_dir() or not is_submodule(folder, project.team_folder):
+    if project_before_team(project) or not folder.is_dir() or \
+            not (is_submodule(folder, project.team_folder) or gitlink(folder)):
         return None
     try:
         empty = not any(folder.iterdir())
@@ -921,7 +941,8 @@ def synced_record(project: config.Project, reads: str) -> Optional[Dict[str, str
 
 
 def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
-          claude_access: Optional[bool], notes: bool, locked: bool = False, announce: bool = True) -> None:
+          claude_access: Optional[bool], notes: bool, locked: bool = False, announce: bool = True,
+          said: Collection[str] = ()) -> None:
     if source is None:
         # A version newer than this cortex, said before any key is checked (ADR-013 §3.8) — `--from`
         # checks no version, as before.
@@ -932,7 +953,9 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     against_locks(project, {"sync": mode, "claude_access": claude_access})
     if announce:
         out.write(f"Project: {display(root)}\n")
-    for note in version_notes(project):
+    for note in version_notes(project, locked):
+        if note in said:
+            continue                        # said by `cortex upgrade`, before this sync
         # A locked key set otherwise is a warning (ADR-013 §3.5): its value is not read.
         err.write(f"{'warning' if ' is locked by ' in note else 'note'}: {note}\n")
     if claude_access is not None:
@@ -957,7 +980,11 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         err.write(f"warning: the spec is the checkout at {display(str(spec_source))}, not Cortex {version}: "
                   "no version is checked (--from)\n")
     else:
-        how = the_store.ensure(version, origin=origin)
+        developer = project.developer_version
+        # This developer's cortex.toml, uncommitted beside the team's file: a pin no command writes.
+        by_hand = not locked and origin == config.PROJECT_FILE and developer is not None \
+            and developer.origin == config.PROJECT_FILE
+        how = the_store.ensure(version, origin=origin, by_hand=by_hand)
         spec_source = the_store.path(version)
         said = {"stored": "in the store", "written": "written to the store, from this cortex",
                 "downloaded": "downloaded to the store, checked against its SHA256SUMS",
@@ -969,11 +996,12 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if source is None and where is None:
         digest = the_store.digest(version)      # a local try: no lock, nor checked again (ADR-013 §3.4)
     elif source is None:
-        # During a try, a plain sync reads the try and leaves the committed lock: `cortex upgrade` writes it.
+        # During a try, a plain sync reads the try and leaves the committed lock: `cortex upgrade` writes it —
+        # named with the version, which resumes it, where a plain one would move a project that pins its own.
         ahead = project.version != project.team_version
         digest, lock = check_lock(where[0], version, the_store, out, locked, where[1],
-                                  "`cortex upgrade`, which a try leaves to it," if locked and ahead else "`cortex sync`",
-                                  project.team_folder)
+                                  f"`cortex upgrade {version}`, which a try leaves to it," if locked and ahead
+                                  else "`cortex sync`", project.team_folder)
     # CI reads what the team committed: a folder cortex.toml names, not checked out, reads nothing of it —
     # missing, or a submodule left empty (ADR-013 §3.4); the default agents/ left empty stays a warning.
     folder_note = _team_folder_note(project)
@@ -1134,7 +1162,7 @@ committed = config.committed                   # ADR-013 §3.1
 
 def ignored(root: Path, name: str) -> Optional[bool]:
     """Whether git ignores ``name`` in the project: asked of git when the project is a repository
-    of it; ``None`` when there is no repository to ask about."""
+    of it; ``None`` when there is no repository to ask about — no ``.git`` at the root or above it."""
     git = shutil.which("git")
     if git is not None:
         try:
@@ -1144,11 +1172,11 @@ def ignored(root: Path, name: str) -> Optional[bool]:
             proc = None
         if proc is not None and proc.returncode in (0, 1):
             return proc.returncode == 0
-        if proc is not None:
-            return None                                    # no repository here
-    if not (root / ".git").exists():
+    if in_no_repository(root):
         return None
-    # No git to ask: .gitignore's own lines. A link is a file to git — `cortex/` does not match it.
+    # No git to ask, or git refusing the repository — its owner, say: .gitignore's own lines, the root's — in a
+    # subdirectory of a repository too, where git reads that file as well. A link is a file to git — `cortex/` does
+    # not match it.
     directory = (root / name).is_dir() and not is_link(root / name)
     wanted = {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if directory else set())
     try:

@@ -220,12 +220,15 @@ def committed(root) -> bool:
     """Whether ``cortex.toml`` at ``root`` is committed (ADR-013 §3.1): git tracks it — ADR-011 §3.5's
     test. Without git on ``PATH``, or with a git that refuses — a repository another user owns, say —
     a ``.git`` at or above the root counts. A ``cortex.toml`` git does not track, in a repository, is
-    not committed: the developer's own."""
+    not committed: the developer's own. Git is asked of the root's own repository, as from a shell
+    that sets none of git's variables — a hook exports ``GIT_DIR``, which would make it another's —
+    and of the file's name as written, no pattern."""
     git = shutil.which("git")
     if git is not None:
+        environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
         try:
-            proc = subprocess.run([git, "-C", str(root), "ls-files", "--error-unmatch", "--", PROJECT_FILE],
-                                  capture_output=True, timeout=30)
+            proc = subprocess.run([git, "-C", str(root), "ls-files", "--error-unmatch", "--",
+                                   f":(literal){PROJECT_FILE}"], capture_output=True, timeout=30, env=environment)
         except (OSError, subprocess.SubprocessError):
             proc = None
         if proc is not None and proc.returncode in (0, 1):
@@ -301,13 +304,16 @@ def team_folder(root: str, known: Optional[bool] = None) -> Tuple[str, Optional[
 
 def loose_team_folder(root: str) -> str:
     """The team's folder read loosely — what a too-new version is said from, ``cortex prune`` and the
-    registry read: a committed ``cortex.toml``'s ``agents`` whose text reads, else ``agents``. Never
-    a refusal: ``load`` says it."""
+    registry read: a committed ``cortex.toml``'s ``agents``, else ``agents``. Read before its text is
+    checked (ADR-013 §3.8, step 1): a folder this version refuses for its name — ``.team`` — a later
+    one may take, and its team's file may pin that version; only what names no folder inside the
+    workspace, nor one any version reads, leaves ``agents``. Never a refusal: ``load`` says it, once
+    the version passed the gate."""
     written = cascade.loose_agents(root)
     if written is None:
         return TEAM_FOLDER
     try:
-        folder = project.check_agents(written)
+        folder = project.check_agents(written, loose=True)
     except project.ProjectFileError:
         return TEAM_FOLDER
     return folder if committed(root) else TEAM_FOLDER
@@ -378,6 +384,16 @@ def loose_team(root: str) -> Optional[Tuple[str, Version]]:
     return None if chosen is None else (chosen[0], Version(chosen[1]))
 
 
+def developers_toml(root: str, name: str = PROJECT_FILE) -> bool:
+    """Whether the version ``name`` holds is this developer's ``cortex.toml``'s, read loosely: not
+    committed, beside a team's file that pins one — a 2.B root (ADR-013 §3.1). No command writes it:
+    a pin of no release there is moved by hand (``store.pin_remedy``)."""
+    if name != PROJECT_FILE:
+        return False
+    found = cascade.loose_versions(root, loose_team_folder(root))
+    return "project" in found and "team" in found and not committed(root)
+
+
 def too_new(root: str, own: Version) -> Optional[str]:
     """Why this cortex is too old for the project at ``root`` — or ``None`` — from the versions read
     before any other key (ADR-013 §3.8, steps 1–2): a key of a later version is then said as the
@@ -390,10 +406,12 @@ def too_new(root: str, own: Version) -> Optional[str]:
     name, version = found
     if store.development(version):          # no self-update installs it: the pin moves (ADR-009 §9)
         return (f"this project uses Cortex {version}, which its {name} pins — a build of no release, newer than "
-                f"this cortex, {own}: pin a release:\n    {store.pin_command(name)}")
+                f"this cortex, {own}: {store.pin_remedy(name, developers_toml(root, name), block=True)}")
     teams = loose_team(root)
-    other = (f"\nor drop the try: cortex upgrade --local {teams[1] if teams else own}" if name == LOCAL_FILE else
-             f"\nor move the team's pin: cortex upgrade --team {own}" if name.endswith(f"/{TEAM_FILE}") else "")
+    # A build of no release names no version of its own to move to: no teammate can download it (ADR-009 §9).
+    down = "VERSION" if store.development(own) else str(own)
+    other = (f"\nor drop the try: cortex upgrade --local {teams[1] if teams else down}" if name == LOCAL_FILE else
+             f"\nor move the team's pin: cortex upgrade --team {down}" if name.endswith(f"/{TEAM_FILE}") else "")
     return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
             f"    {store.update_command(version)}{other}")
 

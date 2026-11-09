@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterator, Optional
 
 from cortex_core.project import DEFAULT_RELEASES_URL  # noqa: F401 — part of this module's API
-from cortex_core.project import LOCAL_FILE, TEAM_FILE
+from cortex_core.project import LOCAL_FILE, PROJECT_FILE, TEAM_FILE
 
 from . import machine, net
 from .semver import FIRST_SPEC_ARCHIVE, Version
@@ -143,11 +143,22 @@ def pin_command(origin: Optional[str] = None) -> str:
     return "cortex upgrade VERSION"
 
 
-def no_release(version: Version, origin: Optional[str] = None) -> str:
-    """Why a build of no release's version, other than this cortex's own, is not served — and the
-    command that pins a release in its place, in the file ``origin`` that pins it."""
-    return (f"Cortex {version} is a build of no release, which no release serves — pin a release: "
-            f"`{pin_command(origin)}`")
+def pin_remedy(origin: Optional[str] = None, by_hand: bool = False, block: bool = False) -> str:
+    """*Pin a release*, and how: the command that moves the pin the file ``origin`` holds — on a line
+    of its own, ``block`` — or, ``by_hand``, the edit of a ``cortex.toml`` whose version is this
+    developer's: uncommitted beside a team's file, at a 2.B root (ADR-013 §3.1), which no command
+    writes — a plain ``cortex upgrade`` resumes the team's version, and ``--local`` writes a try below it."""
+    if by_hand:
+        return (f"pin a release by hand: set {PROJECT_FILE}'s version to one, or remove it to read the team's — "
+                "uncommitted beside the team's file, it is this developer's, which no command writes")
+    command = pin_command(origin)
+    return f"pin a release:\n    {command}" if block else f"pin a release: `{command}`"
+
+
+def no_release(version: Version, origin: Optional[str] = None, by_hand: bool = False) -> str:
+    """Why a build of no release's version, other than this cortex's own, is not served — and how a
+    release is pinned in its place, in the file ``origin`` that pins it (``pin_remedy``)."""
+    return f"Cortex {version} is a build of no release, which no release serves — {pin_remedy(origin, by_hand)}"
 
 
 # --------------------------------------------------------------------------- #
@@ -379,13 +390,13 @@ class Store:
             except OSError:
                 pass
 
-    def check_served(self, version: Version, origin: Optional[str] = None) -> None:
+    def check_served(self, version: Version, origin: Optional[str] = None, by_hand: bool = False) -> None:
         """Refuse a version this binary does not serve: a build of no release's, but its own or an
         older one the store holds — no release serves it (ADR-009 §9), and ``origin``, the file that
-        pins it, names the command that pins a release; newer than itself — the tool is newer than
+        pins it, names the command that pins a release (``pin_remedy``); newer than itself — the tool is newer than
         the data it reads, never older; or older than the first spec archive."""
         if development(version) and version != self.own and (version > self.own or not self.has(version)):
-            raise StoreError(no_release(version, origin))
+            raise StoreError(no_release(version, origin, by_hand))
         if version > self.own:
             raise StoreError(f"this project uses Cortex {version}, newer than this cortex, {self.own} — update it:\n"
                              f"    {update_command(version)}")
@@ -393,12 +404,13 @@ class Store:
             raise StoreError(f"Cortex {version} has no spec archive: the first one is {FIRST_SPEC_ARCHIVE}, "
                              "the release that ships the cortex command — pin that version or a later one")
 
-    def ensure(self, version: Version, put_back: bool = True, origin: Optional[str] = None) -> str:
+    def ensure(self, version: Version, put_back: bool = True, origin: Optional[str] = None,
+               by_hand: bool = False) -> str:
         """Make sure ``version`` is in the store; say how it got there — ``"stored"``,
         ``"written"`` from this binary, ``"downloaded"``, or ``"put back"``: it could not be
         downloaded, and a ``replace`` cut short had left it aside. ``origin`` is the file that pins
-        it, which a refusal names."""
-        self.check_served(version, origin)
+        it, which a refusal names — edited by hand, ``by_hand`` (``pin_remedy``)."""
+        self.check_served(version, origin, by_hand)
         if self.has(version):
             try:
                 self._tidy(version)

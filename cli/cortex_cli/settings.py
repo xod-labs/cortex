@@ -18,7 +18,7 @@ from typing import List, Optional, TextIO
 
 from cortex_core import cascade, project
 
-from . import config, machine, store, sync
+from . import config, machine, net, store, sync
 from .paths import display, working_directory
 from .semver import Version
 
@@ -61,11 +61,18 @@ def _origin(setting: cascade.Setting, newer: Optional[str], found: Optional[casc
     if setting.locked:
         said += " — locked"
     if setting.key == "version" and newer is not None and store.development(Version(str(setting.value))):
-        said += f" — a build of no release, newer than this cortex, {newer}: pin a release, " \
-                f"`{store.pin_command(setting.origin)}`"
+        said += f" — a build of no release, newer than this cortex, {newer}: " \
+                f"{store.pin_remedy(setting.origin, _by_hand(found, setting.origin))}"
     elif setting.key == "version" and newer is not None:
         said += f" — newer than this cortex, {newer}: {store.update_command(Version(str(setting.value)))}"
     return said
+
+
+def _by_hand(found: Optional[cascade.Resolution], origin: str) -> bool:
+    """Whether the version from ``origin`` is this developer's ``cortex.toml``'s, which no command writes
+    (``store.pin_remedy``)."""
+    developer = found.developer_version if found is not None else None
+    return origin == config.PROJECT_FILE and developer is not None and developer.origin == config.PROJECT_FILE
 
 
 def _too_new(found: cascade.Resolution) -> Optional[str]:
@@ -73,6 +80,18 @@ def _too_new(found: cascade.Resolution) -> Optional[str]:
     own = store.own_version()
     if "version" in found and store.too_old_for(Version(str(found.value("version"))), own):
         return str(own)
+    return None
+
+
+def _refused_url(found: cascade.Resolution) -> Optional[str]:
+    """Why a download would refuse ``releases_url`` — ``None`` when it would not. Said, never an
+    error: ``cortex config`` prints every setting, and ``cortex config version`` is read in CI."""
+    if "releases_url" not in found:
+        return None
+    try:
+        net.check_url(str(found.value("releases_url")).rstrip("/"))
+    except net.DownloadError as error:
+        return f"{found['releases_url'].origin}: {error} — a download refuses it"
     return None
 
 
@@ -86,7 +105,8 @@ def _loosely(root: str, error: config.ConfigError) -> cascade.Resolution:
     found = machine.resolution(store.cortex_home)
     version = cascade.Setting("version", str(pinned[1]), pinned[0])
     return cascade.Resolution({"version": version, **found.settings}, committed=sync.committed(root),
-                              warnings=found.warnings)
+                              warnings=found.warnings,
+                              developer_version=version if config.developers_toml(root, pinned[0]) else None)
 
 
 def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO) -> int:
@@ -109,6 +129,11 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
     if not as_json:
         for note in found.notes:
             sys.stderr.write(f"note: {note}\n")
+    warnings = list(found.warnings)
+    refused = _refused_url(found)
+    if refused is not None:
+        warnings.append(refused)
+        sys.stderr.write(f"warning: {refused}\n")
     if as_json:
         keys = [key] if key is not None else list(found.settings)
         out.write(json.dumps({
@@ -118,7 +143,7 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
             "locked": locked,
             "cortex": str(store.own_version()),
             "too_new": newer is not None,
-            "warnings": list(found.warnings),
+            "warnings": warnings,
             "settings": {name: {"value": found[name].value, "origin": found[name].origin,
                                 "overridden": [{"origin": origin, "value": value} for origin, value in found[name].overridden],
                                 "locked": found[name].locked}
@@ -132,8 +157,9 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
         value = found.value(key)
         out.write(("" if value is None else _shown(value)) + "\n")
         if key == "version" and newer is not None and store.development(Version(str(value))):
+            origin = found["version"].origin
             sys.stderr.write(f"note: Cortex {value} is a build of no release, newer than this cortex, {newer} — "
-                             f"pin a release:\n    {store.pin_command(found['version'].origin)}\n")
+                             f"{store.pin_remedy(origin, _by_hand(found, origin), block=True)}\n")
         elif key == "version" and newer is not None:
             sys.stderr.write(f"note: Cortex {value} is newer than this cortex, {newer} — update it:\n"
                              f"    {store.update_command(Version(str(value)))}\n")

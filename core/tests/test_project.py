@@ -58,7 +58,8 @@ class FileTests(unittest.TestCase):
         project.check_local({"spec": "/x", "claude_access": False, "claude_entry": "/home/x/.cortex/versions/1.0.0"})
         for data, fragment in (({"claude_entry": 1}, '"claude_entry" must be a string'),
                                ({"claude_entry": ""}, '"claude_entry" is empty'),
-                               ({"claude_access": "yes"}, '"claude_access" must be true or false')):
+                               ({"claude_access": "yes"}, '"claude_access" must be true or false'),
+                               ({"claude_access": 1}, '"claude_access" must be true or false')):     # TOML's 1 is no true
             with self.subTest(data=data):
                 with self.assertRaisesRegex(project.ProjectFileError, fragment):
                     project.check_local(data)

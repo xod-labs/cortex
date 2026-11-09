@@ -52,9 +52,16 @@ class TemplateTests(unittest.TestCase):
             with self.subTest(template=name):
                 self.assertEqual(init.markers(text), [(name, 3)])
                 self.assertIsNotNone(init.END_MARKER.search(text))
-                for rule in (b"**The team's folder** is the folder `agents` names in `cortex.toml`, else `agents/`",
+                for rule in (b"**The team's folder** is the folder `synced`, in `cortex.local.toml`, records as `agents`, "
+                             b"else `agents/`", b"**`cortex.toml` names another folder**",
                              b"`cortex.team.toml`", b"**A version moved**", b"never order versions",
                              b"**A checkout**", b"**No `synced`**", b"below 1.8.0, run `cortex self-update`",
+                             # A pre-release or a development build of 1.8.0 is 1.8.0 (ADR-009), and each
+                             # self-update is followed by one sync only: no loop when nothing newer is out.
+                             b"read the numbers before any `-`: `1.7.3` is below it, `1.8.0-rc.1` and `1.8.0-dev.2` "
+                             b"are not", b"run `cortex self-update`, then `cortex sync`, once each. No `synced` still",
+                             b"then `cortex sync` again, once; when it still says so, tell the user, and go no further",
+                             b"`cortex sync`, once each; otherwise, or when it still refuses, tell the user",
                              b"**It names a missing team's folder**",
                              b"the team's file's own when its `locked` lists `theme`",
                              b"in `cortex.local.toml` or in the team's file, of your own accord"):
@@ -378,6 +385,16 @@ class TryTests(TeamTestCase):
         root = self.tried("own-only", toml='version = "9.9.8"\ntheme = "h2g2"\n')
         (root / "CLAUDE.md").write_bytes(written(FORMAT_2) + OURS)
         self.assertFalse((self.home / "versions" / "9.9.8").exists())           # the try is what was synced
+        # Without the lock of the team's version, which the sync leaves to it, the resume writes that lock: it needs
+        # the version, and says it could not get it — nothing written (ADR-013 §3.4).
+        proc = self.cortex(root, "upgrade", "9.9.8", CORTEX_RELEASES_URL="http://127.0.0.1:9")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("Cortex 9.9.8", proc.err)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), written(FORMAT_2) + OURS)
+        self.assertFalse((root / "cortex.lock").exists())
+        # The lock committed, as a team's project has it: the developer's own bootstrap needs no team's version.
+        (root / "cortex.lock").write_text(config.render_lock(store.Version("9.9.8"), "sha256:" + "0" * 64),
+                                          encoding="utf-8")
         proc = self.cortex(root, "upgrade", "9.9.8", CORTEX_RELEASES_URL="http://127.0.0.1:9")
         self.assert_ok(proc)
         self.assertNotIn("not in the store", proc.err)

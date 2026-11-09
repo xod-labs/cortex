@@ -78,6 +78,7 @@ class Outcome:
     clean: bool = False                                 # --commit: the files are as committed already
     left: List[Path] = field(default_factory=list)      # --commit, nothing written: files git sees changed still
     outside: List[Path] = field(default_factory=list)   # --commit: of the files, those outside the git work tree
+    team: Optional[str] = None                          # --team: the team's folder, where --commit commits its files
 
     def names(self) -> List[str]:
         """The files to commit in the project — those outside its git work tree, ``elsewhere``."""
@@ -516,6 +517,39 @@ def out_of_step(root: Path, project: config.Project, the_store: store.Store) -> 
     return None
 
 
+def try_lock(project: config.Project) -> Optional[Tuple[Tuple[str, str, str], str]]:
+    """During a try, the lock of the team's version — which the sync, reading the try, leaves alone
+    (ADR-013 §3.4) — when it does not name that version: where it is, and what it names. ``None``
+    without a try, or when it names it: a lock of that version whose digest differs is the sync's to
+    refuse. ``cortex upgrade`` writes the lock of the version it moves; its resume checks that lock."""
+    if project.version == project.team_version:
+        return None
+    where = config.lock_of(project, project.team_origin)
+    if where is None:
+        return None
+    lock = config.load_lock(where[0], where[1])
+    if lock is not None and lock.version == project.team_version:
+        return None
+    return where, f"there is no {where[2]}" if lock is None else f"{where[2]} names Cortex {lock.version}"
+
+
+def _write_try_lock(where: Tuple[str, str, str], version: Version, the_store: store.Store, out: TextIO,
+                    err: TextIO) -> None:
+    """Write the lock ``where`` names — the team's version's, which a try leaves — from ``version`` in
+    the store: the team's under a lock of its folder, as the sync writes it (ADR-013 §3.4)."""
+    directory, name, shown_name = where
+    team = name == config.TEAM_LOCK_FILE
+    folder = shown_name.rpartition("/")[0] if team else config.TEAM_FOLDER     # the team's folder, as the root names it
+    digest, said = sync.check_lock(directory, version, the_store, out, name=name, folder=folder)
+    if team:
+        with sync.project_lock(Path(directory), err):
+            config.write_lock(directory, version, digest, name)
+    else:
+        config.write_lock(directory, version, digest, name)
+    team = f" in {folder}/" if team else ""
+    out.write(f"{shown_name}: {said}{'' if sync.in_no_repository(directory) else ' — commit it' + team}\n")
+
+
 # --------------------------------------------------------------------------- #
 # The command
 # --------------------------------------------------------------------------- #
@@ -802,7 +836,9 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     if not team_file.is_file():
         raise UpgradeError(f"no {name} — the team creates it, by a commit in its repository. Nothing was changed")
     if not project.team_file:
+        # Moved to 1.8.0 first, the project reads the team's file, whose version --team then moves.
         raise UpgradeError(f"{name} is not read: this project pins Cortex {project.team_version}, before "
+                           f"{grammar.FIRST_TEAM_VERSION} — move it there first: cortex upgrade "
                            f"{grammar.FIRST_TEAM_VERSION}. Nothing was changed")
     the_store = store.Store()
     pinned = team_pin(project)
@@ -819,7 +855,8 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     agents = project.team_dir
     unchanged = _pinned_and_locked(agents, pinned, target, the_store, out, folder)
     said = f"Cortex {target}, pinned and locked already — nothing to move" if unchanged else \
-        f"Cortex {pinned} → {target}" if pinned is not None else f"Cortex {target}, a version added"
+        f"Cortex {target}, pinned already — its lock {'would be' if dry_run else 'is'} written" if target == pinned \
+        else f"Cortex {pinned} → {target}" if pinned is not None else f"Cortex {target}, a version added"
     out.write(f"{name}: {said}\n")
     if project.follows and checked is None and not unchanged:
         if _overlays(root, target, the_store.path(target), force, dry_run, out, err):
@@ -827,16 +864,18 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     elif not project.follows:
         out.write(f"This project pins its own version, Cortex {project.team_version}, in its committed "
                   f"{config.PROJECT_FILE}: it does not follow {name}, and its overlays are not checked\n")
+    team_files = [team_file, team_file.with_name(config.TEAM_LOCK_FILE)]
+    # At the pin, its lock missing or stale, the lock alone is written: the file names the version already.
+    writes = team_files[1:] if target == pinned else team_files
     if dry_run:
         out.write("--dry-run: nothing of the project was changed\n")
-        return Outcome(root, pinned, target)
-    team_files = [team_file, team_file.with_name(config.TEAM_LOCK_FILE)]
+        return Outcome(root, pinned, target, files=[] if unchanged else writes, team=agents)
     asked = branch is not None or message is not None
     # At the pin nothing is written: what a run before this one left of the two files — its commit refused,
     # or not asked — --commit commits, as that run would have; otherwise no branch is made, as an upgrade
     # already on its target makes none, and what is left is said.
     left = _team_left(agents, team_files) if unchanged and asked else []
-    files = team_files if not unchanged else left if message is not None else []
+    files = writes if not unchanged else left if message is not None else []
     if unchanged and not files:
         if branch is not None and _on_branch(agents) != branch:
             out.write(f"git: no branch {branch} is made — nothing was written\n")
@@ -850,13 +889,13 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     try:
         if not unchanged:
             with sync.project_lock(Path(agents), err):
-                config.write_text(str(team_file), config.render_team(root, {"version": str(target)}, folder))
                 if target == pinned:        # checked again, under the folder's lock
                     digest, written = sync.check_lock(agents, target, the_store, out, name=config.TEAM_LOCK_FILE,
                                                       folder=folder)
                     if written is not None:
                         config.write_lock(agents, target, digest, config.TEAM_LOCK_FILE)
                 else:
+                    config.write_text(str(team_file), config.render_team(root, {"version": str(target)}, folder))
                     config.write_lock(agents, target, the_store.digest(target), config.TEAM_LOCK_FILE)
         if project.follows:
             sync.sync(root, None, None, out, err, announce=False)
@@ -868,7 +907,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
                 _put(path, content)
         err.write(f"note: {name} and its lock are as they were\n")
         raise
-    outcome = Outcome(root, pinned, target, files=list(files))
+    outcome = Outcome(root, pinned, target, files=list(files), team=agents)
     outcome.left = [] if files else left
     if project.follows:
         current_path = None
@@ -894,7 +933,14 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
         outcome.files += _committed(mine, nowhere=False)
         if developer is not None and Version(str(developer.value)) > target:
             out.write(f"This machine reads Cortex {developer.value}, {developer.origin}'s — the try, above {target}.\n")
-    if message is not None and top is not None:
+    theirs = _team_theirs(agents, team_file, target, name) if message is not None and top is not None \
+        and team_file in files else None
+    if theirs is not None:
+        outcome.uncommitted = theirs
+        err.write(f"note: nothing is committed in {folder}/ — {theirs}\n")
+    elif message is not None and files and top is None:
+        outcome.uncommitted = f"{folder}/ is in no git work tree"
+    elif message is not None and top is not None:
         paths = [os.path.relpath(path, agents) for path in files]
         try:
             _git_ok(agents, "add", "--", *paths)
@@ -902,11 +948,35 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
                 _git_ok(agents, "commit", "-q", "-m", message, "--", *paths)
                 outcome.committed = f"{_on_branch(agents) or 'HEAD'}, " \
                     f"{_git_ok(agents, 'rev-parse', '--short', 'HEAD').stdout.strip()}"
+                superproject = _git(agents, "rev-parse", "--show-superproject-working-tree").stdout.strip()
+                if superproject:
+                    err.write(f"note: {folder}/ is a submodule of {display(superproject)}, which now shows "
+                              "it changed — commit it there too\n")
+            else:
+                outcome.uncommitted = f"{_and([_shown_path(path, root) for path in files])} " \
+                    f"{'are' if len(files) > 1 else 'is'} {AS_COMMITTED}"
         except UpgradeError as error:
             outcome.code, outcome.uncommitted = 1, str(error)
             out.flush()
             err.write(f"cortex upgrade: {error} — the upgrade is done, and nothing was committed\n")
     return outcome
+
+
+def _team_theirs(agents: str, team_file: Path, target: Version, name: str = config.TEAM_NAME) -> Optional[str]:
+    """Why ``--team --commit`` is to commit nothing in the team's folder — ``None`` when nothing stops it:
+    the team's file holds more than the version ``--team`` writes over the one committed — a developer's
+    own change, which would ride in the team's commit, as a plain ``--commit`` refuses (``_theirs``). The
+    lock does not count: written whole, it is the same whatever it held. Line endings aside."""
+    try:
+        proc = _git(agents, "show", f"HEAD:./{config.TEAM_FILE}")
+        committed = proc.stdout if proc.returncode == 0 else None       # not committed yet: the version alone
+        expected = config.set_keys(committed, {"version": str(target)}, name, "")
+        found = team_file.read_bytes().decode("utf-8")
+    except (UpgradeError, config.ConfigError, OSError, UnicodeDecodeError) as error:
+        return f"it could not be told whether {name} held changes of yours — {error}"
+    if found.replace("\r\n", "\n") == expected.replace("\r\n", "\n"):
+        return None
+    return f"{name} holds changes of yours besides its version — commit by hand what is the team's"
 
 
 def _served(the_store: store.Store, target: Version, again: str, origin: Optional[str] = None) -> None:
@@ -949,8 +1019,8 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         name, newer = pinned
         if store.development(newer):
             raise UpgradeError(f"this project uses Cortex {newer}, which its {name} pins — a build of no release, "
-                               f"newer than this cortex, {the_store.own}: nothing was changed. Pin a release: "
-                               f"`{store.pin_command(name)}`")
+                               f"newer than this cortex, {the_store.own}: nothing was changed — "
+                               f"{store.pin_remedy(name, config.developers_toml(root, name))}")
         down = "" if store.development(the_store.own) else \
             f"\nor move the project down to this cortex's version by naming it: cortex upgrade {the_store.own}"
         raise UpgradeError(f"this project uses Cortex {newer}, which its {name} pins, newer than this cortex, "
@@ -995,14 +1065,15 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
                                f"{_and(uses)} — nothing was changed")
     if announce:
         out.write(f"Project: {display(root)}\n")
-    for note in sync.version_notes(project):
+    said = tuple(sync.version_notes(project))
+    for note in said:
         err.write(f"note: {note}\n")
     files = _instructions_files(Path(root), named)
     personality = project.team_theme != "none"
 
     if target == current:
         out.write(f"Cortex {current}: already on it — nothing to move\n")
-        return _resume(root, project, the_store, files, personality, dry_run, out, err, prepare)
+        return _resume(root, project, the_store, files, personality, dry_run, out, err, prepare, said)
 
     the_store.ensure(target)
     target_path = the_store.path(target)
@@ -1081,7 +1152,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
             # writes it, and says so, as before.
             config.write_lock(root, target, the_store.digest(target))
             out.write(f"{config.LOCK_FILE}: Cortex {target}{'' if sync.in_no_repository(root) else ' — commit it'}\n")
-        sync.sync(root, None, None, out, err, announce=False)
+        sync.sync(root, None, None, out, err, announce=False, said=said)
 
     _write(rewrites + mine, committed, root, err, switch)
     for path, content in rewrites:
@@ -1095,12 +1166,15 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
 
 def _resume(root: str, project: config.Project, the_store: store.Store, files: List[Path], personality: bool,
             dry_run: bool, out: TextIO, err: TextIO,
-            prepare: Optional[Callable[[List[Path]], None]] = None) -> Outcome:
+            prepare: Optional[Callable[[List[Path]], None]] = None, said: Tuple[str, ...] = ()) -> Outcome:
     """On the pinned version, finish what an upgrade cut short, or a pin moved by hand, left: a
     bootstrap file nobody changed, of another version, written again; this machine and the lock,
-    when they are not on the pin, synced (ADR-010 §3.5, step 1)."""
+    when they are not on the pin, synced (ADR-010 §3.5, step 1). During a try, the lock of the team's
+    version, which the sync leaves alone, is written from the store when it does not name it (ADR-013
+    §3.4)."""
     current = project.team_version         # what the committed bootstrap follows (ADR-013 §3.10)
     behind = out_of_step(Path(root), project, the_store)
+    stale = try_lock(project)
     rewrites: List[Tuple[Path, bytes]] = []
     mine: List[Tuple[Path, bytes]] = []
     theirs, own = _theirs_only(files, current)
@@ -1124,11 +1198,16 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     if behind is not None:
         out.write(f"{behind}, and {project.version_origin} pins Cortex {project.version} — an upgrade cut short, or a "
                   f"pin moved by hand: {'the sync would put them on it' if dry_run else 'syncing'}\n")
+    if stale is not None:
+        out.write(f"{stale[1]}, and {project.team_origin} pins Cortex {current} — the sync reads the try and leaves "
+                  f"it to `cortex upgrade`: {'it would be written' if dry_run else 'writing it'}\n")
     where = config.lock_of(project)
     lock = Path(where[0]) / where[1] if where is not None else Path(root) / config.LOCK_FILE
     relock = behind is not None and where is not None and \
         getattr(config.load_lock(where[0], where[1], where[2]), "version", None) != project.version
-    team = ([lock] if relock else []) + [path for path, _ in rewrites] + _committed(mine)
+    team_lock = Path(stale[0][0]) / stale[0][1] if stale is not None else None
+    locks = ([lock] if relock else []) + ([team_lock] if team_lock is not None and team_lock != lock else [])
+    team = locks + [path for path, _ in rewrites] + _committed(mine)
     if prepare is not None and team:
         prepare(team)
     if dry_run:
@@ -1137,21 +1216,28 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
                       f"{_nobody(content)}\n")
         for path, content in mine:
             out.write(_again(path, root, project.version, content, differs, would=True))
-        if rewrites or mine or behind is not None:
+        if rewrites or mine or behind is not None or stale is not None:
             out.write("--dry-run: nothing of the project was changed\n")
         return Outcome(root, current, current, files=team)
-    if not rewrites and not mine and behind is None:
+    if not rewrites and not mine and behind is None and stale is None:
         return Outcome(root, current, current)
-    locked = lock.read_bytes() if lock.is_file() else None
-    _write(rewrites + mine, {lock: locked} if behind is not None else {}, root, err,
-           (lambda: sync.sync(root, None, None, out, err, announce=False)) if behind is not None else (lambda: None))
+    kept = {path: path.read_bytes() if path.is_file() else None
+            for path in ([lock] if behind is not None else []) + ([team_lock] if team_lock is not None else [])}
+
+    def then() -> None:
+        if stale is not None:
+            the_store.ensure(current)
+            _write_try_lock(stale[0], current, the_store, out, err)
+        if behind is not None:
+            sync.sync(root, None, None, out, err, announce=False, said=said)
+
+    _write(rewrites + mine, kept, root, err, then)
     for path, content in rewrites:
         out.write(f"{_shown_path(path, root)}: written again from Cortex {current}'s template — {_nobody(content)}\n")
     for path, content in mine:
         out.write(_again(path, root, project.version, content, differs))
-    relocked = lock.is_file() and lock.read_bytes() != locked
-    return Outcome(root, current, current, files=([lock] if relocked else []) + [path for path, _ in rewrites]
-                   + _committed(mine))
+    relocked = [path for path, before in kept.items() if path.is_file() and path.read_bytes() != before]
+    return Outcome(root, current, current, files=relocked + [path for path, _ in rewrites] + _committed(mine))
 
 
 def _write(rewrites: List[Tuple[Path, bytes]], committed: Dict[Path, Optional[bytes]], root: str, err: TextIO,
@@ -1614,6 +1700,7 @@ def _each(entries: List[registry.Entry], options: _Options, out: TextIO, err: Te
     the state it was skipped for, or its being interrupted."""
     made: Dict[str, Tuple[str, str]] = {}
     moved: Dict[str, Optional[str]] = {}    # --all --team: each team's folder, once — None moved, or why refused
+    targets: Dict[str, Version] = {}        # --all --team: the version each team's folder moved to, or would
     followers = _followers(entries) if options.which == "team" else []
     for entry in entries:
         out.write(("\n" if done else "") + f"{entry.name}: {entry.path}\n")
@@ -1625,7 +1712,7 @@ def _each(entries: List[registry.Entry], options: _Options, out: TextIO, err: Te
                 out.write(f"skipped: {found.state} — {why}\n")
                 done.append((entry, None, f"skipped: {found.state}"))
                 continue
-            outcome = _each_move(entry, options, out, err, made, moved, followers)
+            outcome = _each_move(entry, options, out, err, made, moved, followers, targets)
             if isinstance(outcome, str):
                 out.write(f"skipped: {outcome}\n")
                 done.append((entry, None, f"skipped: {outcome}"))
@@ -1677,11 +1764,12 @@ def _followers(entries: List[registry.Entry], other_than: Optional[Version] = No
 
 def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextIO,
                made: Dict[str, Tuple[str, str]], moved: Dict[str, Optional[str]],
-               followers: List[Tuple[str, str]] = ()):
+               followers: List[Tuple[str, str]] = (), targets: Optional[Dict[str, Version]] = None):
     """One project of ``--all``: its outcome, or why it is skipped (ADR-013 §3.11) — a project that
     follows its team's file, a developer's ``cortex.toml`` included, which ``--all`` does not move;
     under ``--team``, one with no team's file, or that does not follow it. ``--all --team`` moves each
-    team's folder once, and runs step 5 in each follower."""
+    team's folder once, and runs step 5 in each follower — ``targets``, each folder's target."""
+    targets = {} if targets is None else targets
     project = config.load(entry.path)
     if options.which != "team":
         if project.follows:
@@ -1695,7 +1783,15 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
         why = moved[folder]
         if why is not None:                 # refused once for every follower: never tried again
             return Outcome(entry.path, project.team_version, None, 1, why)
-        return _move(entry.path, _Options(None, options.dry_run, options.force), out, err, announce=False, made=made)
+        target = targets.get(folder)
+        if options.dry_run and target is not None and target != project.team_version:
+            # The dry run moved nothing: this follower would follow the file to its target, which it cannot resume.
+            out.write(f"{project.team_name}: Cortex {project.team_version} → {target}, moved once, above — the sync "
+                      "would put this project on it\n--dry-run: nothing of the project was changed\n")
+            return Outcome(entry.path, project.team_version, target)
+        outcome = _move(entry.path, _Options(None, options.dry_run, options.force), out, err, announce=False, made=made)
+        outcome.team = project.team_dir     # its files are its own: --team commits none
+        return outcome
     # Every follower of this folder, checked against the target team_move will use, before it moves.
     the_store = store.Store()
     try:
@@ -1726,7 +1822,26 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
     outcome = team_move(entry.path, options.wanted, options.dry_run, options.force, out, err, options.branch,
                         options.message, checked=folder)
     moved[folder] = None if outcome.why is None else outcome.why
+    targets[folder] = target
     return outcome
+
+
+def _what_is_committed(outcome: Outcome, committing: bool) -> str:
+    """The files of ``outcome`` to commit, and, ``committing``, what ``--commit`` did of them. Under ``--team``,
+    the team's files are committed in the team's folder, and the project's own — a bootstrap written again — are
+    left to the project: said apart (ADR-013 §3.11)."""
+    def said(why: Optional[str]) -> str:
+        return "" if not committing else f" — committed on {outcome.committed}" if outcome.committed else \
+            f" — not committed{': ' + _first(why) if why else ''}"
+    if outcome.team is None:
+        return f"{_and(outcome.names())}{said(outcome.uncommitted)}" if outcome.names() else ""
+    team = [path for path in outcome.files if path not in outcome.outside and _inside(outcome.team, path)]
+    own = [path for path in outcome.files if path not in outcome.outside and path not in team]
+    parts = [f"{_and([_shown_path(path, outcome.root) for path in team])}{said(outcome.uncommitted)}"] if team else []
+    if own:
+        left = " — not committed: --team commits in the team's folder only" if committing else ""
+        parts.append(f"{_and([_shown_path(path, outcome.root) for path in own])}{left}")
+    return "; ".join(parts)
 
 
 def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]], target: Version,
@@ -1779,10 +1894,8 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
             why = why_nothing(outcome)
             out.write(f"  {entry.name:<{width}}  {entry.path}: nothing — {why}\n")
             continue
-        said = "" if not committing else f" — committed on {outcome.committed}" if outcome.committed else \
-            f" — not committed: {_first(outcome.uncommitted)}"
         here = f"nothing — {outcome.uncommitted}" if outcome.clean else f"{_and(outcome.names())} committed nowhere — in no git work tree" \
-            if outcome.nowhere else f"{_and(outcome.names())}{said}" if outcome.names() else ""
+            if outcome.nowhere else _what_is_committed(outcome, committing)
         line = "; ".join(part for part in (here, outcome.elsewhere()) if part)
         out.write(f"  {entry.name:<{width}}  {entry.path}: {line}\n")
     from_before()

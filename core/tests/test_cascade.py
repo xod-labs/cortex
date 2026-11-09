@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -55,6 +56,16 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual((found.value("update_check"), found["update_check"].origin), (False, "m"))
         self.assertEqual((found.value("register"), found["register"].origin), (True, cascade.DEFAULT))
 
+    def test_a_variable_that_reads_as_no_still_turns_its_key_off(self):
+        # Set and not empty is off, whatever it says — as since they were variables only: "0" or
+        # "false" turns no key back on.
+        for raw in ("0", "false", "no"):
+            with self.subTest(raw=raw):
+                found = cascade.resolve(PROJECT, None, {}, {"CORTEX_NO_UPDATE_CHECK": raw, "CORTEX_NO_REGISTER": raw})
+                self.assertEqual((found.value("update_check"), found["update_check"].origin),
+                                 (False, "CORTEX_NO_UPDATE_CHECK"))
+                self.assertEqual((found.value("register"), found["register"].origin), (False, "CORTEX_NO_REGISTER"))
+
     def test_outside_a_project_the_machine_s_keys_only(self):
         found = cascade.resolve(None, None, {}, {})
         self.assertEqual(list(found.settings), list(project.MACHINE_KEYS))
@@ -97,6 +108,14 @@ class MachineFileTests(unittest.TestCase):
         self.assertIn('config.toml: "update_check" must be true or false', warnings[0])
         self.assertIn('config.toml: unknown key "endpoints", not read', warnings[1])
 
+    def test_a_number_is_no_boolean(self):
+        # TOML's 1 and 0 are integers, and Python's True is one: an integer is refused all the same.
+        self.path.write_text("update_check = 1\nregister = 0\n", encoding="utf-8")
+        values, warnings = cascade.read_machine(str(self.path), "config.toml")
+        self.assertEqual(values, {})
+        self.assertEqual([warning.split(" must")[0] for warning in warnings],
+                         ['config.toml: "update_check"', 'config.toml: "register"'])
+
     def test_a_file_that_cannot_be_read_is_a_warning(self):
         self.path.write_bytes(b"releases_url = [\n")
         values, warnings = cascade.read_machine(str(self.path), "config.toml")
@@ -116,6 +135,13 @@ class MachineFileTests(unittest.TestCase):
             values, warnings = cascade.read_machine(str(home / "config.toml"), "config.toml")
             self.assertEqual(values, {})
             self.assertIn("config.toml cannot be read", warnings[0])
+
+    @unittest.skipIf(os.name == "nt", "a link to a device")
+    def test_a_device_or_a_pipe_is_not_a_file(self):
+        # Read, a pipe would block the command until something writes to it: what is not a regular
+        # file is not opened. A link to the null device stands for both, and never blocks.
+        os.symlink(os.devnull, self.path)
+        self.assertEqual(cascade.read_machine(str(self.path), "config.toml"), ({}, ["config.toml is not a file, and is not read"]))
 
     def test_a_byte_order_mark_and_an_empty_url(self):
         self.path.write_bytes('﻿releases_url = ""\n'.encode("utf-8"))
@@ -218,6 +244,14 @@ class TeamTests(unittest.TestCase):
         found = cascade.resolve({}, None, {}, {}, team_data=TEAM, committed=True)       # a cortex.toml of nothing
         self.assertEqual((found.value("theme"), found.value("version")), ("team-theme", "1.8.0"))
 
+    def test_a_locked_key_set_to_the_team_s_value_is_no_override(self):
+        # ADR-013 §3.5: what is set otherwise above a lock is said; the lock's own value, set again, is not.
+        team = {**TEAM, "claude_access": False, "locked": ["claude_access"]}
+        found = cascade.resolve({"theme": "h2g2", "claude_access": False}, {"claude_access": False}, {}, {},
+                                team_data=team, committed=True)
+        self.assertEqual(found.notes, ())
+        self.assertTrue(found["claude_access"].locked)
+
     def test_the_team_s_resolution_leaves_out_an_uncommitted_cortex_toml_s_keys_the_team_s_file_sets(self):
         found = cascade.resolve({"version": "1.7.0", "theme": "mine", "sync": "copy"}, None, {}, {}, team_data=TEAM,
                                 committed=False, locked=True)
@@ -254,6 +288,17 @@ class TeamTests(unittest.TestCase):
             (Path(tmp) / "agents").mkdir()
             (Path(tmp) / "agents" / "cortex.team.toml").write_text("oops =\n", encoding="utf-8")
             self.assertIsInstance(cascade.read_team(tmp), cascade.Unreadable)
+
+    def test_a_team_s_file_that_cannot_be_opened_is_refused_only_where_it_is_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "agents").mkdir()
+            (Path(tmp) / "agents" / "cortex.team.toml").write_text('version = "1.8.0"\n', encoding="utf-8")
+            with mock.patch.object(cascade, "_toml", side_effect=PermissionError(13, "Permission denied")):
+                found = cascade.read_team(tmp)
+        self.assertEqual(found, cascade.Unreadable(f"{NAME}: cannot be read — Permission denied"))
+        self.assertEqual(cascade.resolve(PROJECT, None, {}, {}, team_data=found, committed=True).value("version"), "1.7.0")
+        with self.assertRaisesRegex(project.ProjectFileError, "cannot be read — Permission denied"):
+            cascade.resolve({**PROJECT, "version": "1.8.0"}, None, {}, {}, team_data=found, committed=True)
 
     def test_a_synced_that_does_not_read_is_dropped_on_the_lenient_read(self):
         for text in ('synced = "garbage"\n', 'synced = { pinned = "1.8.0", reads = "1.8.0", when = "now" }\n',

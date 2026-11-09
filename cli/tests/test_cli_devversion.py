@@ -60,6 +60,11 @@ class BaseTests(unittest.TestCase):
         self.assertEqual(prepared(changelog("### Removed\n- a thing\n", "4.0.0-rc.2", "3.0.0")), "4.0.0")
         self.assertEqual(prepared(changelog("", "1.0.0-rc.1")), "1.0.0")                   # no release yet
 
+    def test_a_pre_release_is_a_floor_wherever_its_section_is(self):
+        # A section carried up from an older line written first: the floor below it still counts.
+        self.assertEqual(prepared(changelog("### Fixed\n- a fix\n", "2.9.5", "3.1.0-rc.1", "3.0.0")), "3.1.0")
+        self.assertEqual(prepared(changelog("### Fixed\n- a fix\n", "3.0.0", "3.1.0-rc.1")), "3.1.0")
+
     def test_a_pre_release_below_a_release_is_no_base(self):
         self.assertEqual(prepared(changelog("### Added\n- a thing\n", "2.0.0", "2.0.0-rc.1", "1.9.0")), "2.1.0")
 
@@ -129,6 +134,33 @@ class BumpTests(unittest.TestCase):
         self.assertEqual(devversion.unreleased(text), {"Added": ["a thing"]})
         self.assertEqual(prepared(text.replace("## [Unreleased]", "## [unreleased]")), "2.4.0")
 
+    def test_a_heading_is_three_hashes_and_a_space(self):
+        # `####` is a heading of its own, under the kind; `###Added`, no heading at all (CommonMark).
+        for unreleased in ("### Fixed\n- a fix\n#### Added notes\n- a note\n", "### Fixed\n- a fix\n###Added\n- a note\n",
+                           "### Fixed\n- a fix\n####Removed\n- a note\n"):
+            with self.subTest(unreleased=unreleased):
+                self.assertEqual(prepared(changelog(unreleased, "2.3.4")), "2.3.5")
+
+    def test_a_heading_marked_breaking_is_a_major(self):
+        for heading in ("### 💥 Breaking", "### Breaking changes", "### 💥 Changed", "### BREAKING"):
+            with self.subTest(heading=heading):
+                self.assertEqual(prepared(changelog(f"{heading}\n- a thing\n", "2.3.4")), "3.0.0")
+        self.assertEqual(devversion.unreleased(changelog("### 💥 Changed\n- a thing\n")), {"Breaking": ["a thing"]})
+
+    def test_markdown_s_headings_entries_and_line_ends(self):
+        # A heading indented up to three spaces is one; four make it code, no heading.
+        self.assertEqual(prepared(changelog("   ### Added\n- a thing\n", "2.3.4")), "2.4.0")
+        self.assertEqual(prepared(changelog("### Fixed\n- a fix\n    ### Removed\n- a thing\n", "2.3.4")), "2.3.5")
+        self.assertEqual(prepared(HEAD + "## [Unreleased]\n\n### Fixed\n- a fix\n\n  ## [2.3.4] - 2026-11-01\n"), "2.3.5")
+        # An entry starts with -, * or +.
+        self.assertEqual(devversion.unreleased(changelog("### Added\n+ a thing\n")), {"Added": ["a thing"]})
+        # A line ends at a line feed or a carriage return alone: not at U+2028, U+0085, a form feed.
+        for separator in ("\u2028", "\u0085", "\x0c", "\x1e"):
+            with self.subTest(separator=repr(separator)):
+                text = changelog(f"### Fixed\n- a fix{separator}## [99.0.0] - not a section\n", "2.3.4")
+                self.assertEqual(prepared(text), "2.3.5")
+        self.assertEqual(prepared(changelog("### Added\r- a thing\r", "2.3.4")), "2.4.0")
+
     def test_a_byte_order_mark_is_no_part_of_the_text(self):
         text = "\ufeff## [Unreleased]\n\n### Added\n- a thing\n\n## [2.3.4] - 2026-11-01 — A Name _(Released)_\n"
         self.assertEqual(prepared(text), "2.4.0")
@@ -189,6 +221,10 @@ class CheckoutTests(unittest.TestCase):
         self.assertEqual(self.version(CORTEX_SOURCE_VERSION="9.9.9"), "cortex 9.9.9")    # what its tests stand for
 
     def test_without_a_changelog_it_says_0_0_0_dev(self):
+        self.assertEqual(self.version(), "cortex 0.0.0-dev")
+
+    def test_a_changelog_that_is_no_utf_8_is_none(self):
+        (self.tmp / "CHANGELOG.md").write_bytes(b"## [Unreleased]\n\n### Added\n- caf\xe9\n\n## [1.2.3] - 2026-01-01\n")
         self.assertEqual(self.version(), "cortex 0.0.0-dev")
 
 
