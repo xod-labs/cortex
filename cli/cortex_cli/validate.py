@@ -84,10 +84,12 @@ def roots(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]]]:
     root = config.find_project(cwd)
     if root is not None:
         # A version newer than this cortex, said before any key is checked (ADR-013 §3.8) — but of a
-        # spec that names no version, a checkout's, there is nothing to compare.
+        # spec that names no version, a checkout's, there is nothing to compare. A spec that is not
+        # there is no checkout: the version is said first.
         old = config.too_new(root, store.own_version())
         spec = config.local_spec(root)
-        if old is not None and (spec is None or _synced_version(root, spec, _spec_path(root, spec)) != ""):
+        if old is not None and (spec is None or not os.path.isdir(_spec_path(root, spec))
+                                or _synced_version(root, spec, _spec_path(root, spec)) != ""):
             raise RootsError(old)
         try:
             project = config.load(root)

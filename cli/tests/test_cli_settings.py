@@ -190,6 +190,7 @@ class CommittedTests(SettingsTestCase):
         self.assertIs(self.settings(project, PATH=path)["committed"], True)
 
 
+
 class MachineFileTests(SettingsTestCase):
     @DOWNLOADS
     def test_the_file_s_releases_url_downloads_and_the_variable_goes_over_it(self):
@@ -268,6 +269,22 @@ class TooNewTests(SettingsTestCase):
                 self.assertEqual(proc.returncode, code, proc.err)
                 self.assertIn(self.WHY, proc.err)
                 self.assertIn("cortex self-update 99.0.0", proc.err)
+                self.assertNotIn("unknown key", proc.err)
+
+    @DEVELOPMENT
+    def test_validate_of_a_synced_project_or_of_a_spec_not_there_says_the_version(self):
+        # Only a spec that names no version — a checkout's — passes the gate: the store's version does
+        # not, nor a spec that is not there.
+        project = self.project("99.0.0", extra='agents = "team"\n')
+        stored = self.home / "versions" / "99.0.0"
+        for tree in ("agents", "templates", "docs"):
+            shutil.copytree(harness.REPO / tree, stored / tree)
+        for spec in (display(stored), "cortex"):
+            with self.subTest(spec=spec):
+                (project / "cortex.local.toml").write_text(f'spec = "{spec}"\n', encoding="utf-8")
+                proc = self.cortex(project, "validate")
+                self.assertEqual(proc.returncode, 2, proc.err)
+                self.assertIn(self.WHY, proc.err)
                 self.assertNotIn("unknown key", proc.err)
 
     def test_upgrade_says_the_version_not_the_key(self):
