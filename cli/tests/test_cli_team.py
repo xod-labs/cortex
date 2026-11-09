@@ -28,6 +28,7 @@ import subprocess  # noqa: E402
 
 import cli_harness as harness  # noqa: E402
 from cortex_cli import config, init, store, sync, upgrade, validate  # noqa: E402
+from cortex_cli.semver import Version  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
 OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
@@ -40,9 +41,9 @@ DEV_SOURCE = "9.9.10-dev.7"
 # --team with no VERSION from a build of no release, X.Y.Z-dev.N, names a version first, whatever the pin
 # (ADR-013 §3.11, ADR-009 §9).
 DEV_OWN = re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-dev(\.[0-9]+)?", OWN) is not None
-# A version that reads the team's file and that this cortex serves: 1.8.0 — or a build of no release's own,
-# 1.8.0-dev.N say, which has 1.8.0's features and is older than 1.8.0 (ADR-009 §9).
-TEAM_PIN = OWN if DEV_OWN else "1.8.0"
+# A version that reads the team's file and that this cortex serves: 1.8.0 — or a pre-release's own, a candidate's
+# 1.8.0-rc.1 or a build of no release's 1.8.0-dev.N, which has 1.8.0's features and is older than 1.8.0 (ADR-009 §9).
+TEAM_PIN = OWN if Version(OWN).pre else "1.8.0"
 GIT = shutil.which("git")
 NEEDS_GIT = unittest.skipIf(GIT is None or os.name == "nt", "needs git")
 GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
