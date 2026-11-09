@@ -63,11 +63,12 @@ def lock_warnings(project: config.Project, base: str, files: Optional[Dict[str, 
         lock = config.load_lock(project.root)
     except config.ConfigError as error:
         return [(config.LOCK_FILE, "LOCK_INVALID", str(error))]
+    commit = "" if sync.in_no_repository(project.root) else ", then commit it"     # committed nowhere (ADR-008 §9)
     if lock is None:
-        return [(config.LOCK_FILE, "LOCK_MISSING", "no cortex.lock — run `cortex sync`, then commit it")]
+        return [(config.LOCK_FILE, "LOCK_MISSING", f"no cortex.lock — run `cortex sync`{commit}")]
     if lock.version != project.version:
         return [(config.LOCK_FILE, "LOCK_STALE", f"cortex.lock names Cortex {lock.version}, and cortex.toml pins "
-                 f"{project.version} — run `cortex sync`, then commit it")]
+                 f"{project.version} — run `cortex sync`{commit}")]
     try:
         actual = store.digest_of(files) if files is not None else store.digest(Path(base))
     except store.StoreError as error:      # a version removed from the store meanwhile

@@ -203,6 +203,24 @@ class UpgradeTests(UpgradeTestCase):
                       f"nowhere: each developer moves their own (ADR-008 §9); {where} — outside its git work tree: "
                       "commit it where it is.\n", proc.out)
 
+    @unittest.skipIf(os.name == "nt", "a link to a file needs a privilege on Windows")
+    def test_outside_a_repository_with_only_a_file_linked_into_one_written_nothing_is_said_committed_nowhere(self):
+        # On the version pinned, the bootstrap alone is written again — and it is the team's, to commit where it is:
+        # no list of files committed nowhere, empty, is said.
+        project = self.project(OWN)
+        team = self.tmp / "team"
+        (team / ".git").mkdir(parents=True)
+        older = TEMPLATE.replace(b"\n\n", b"\n\nAn older wording.\n\n", 1)
+        self.assertNotEqual(older, TEMPLATE)
+        (team / "CLAUDE.md").write_bytes(init.stamped(init.instructions(older, True)))
+        (project / "CLAUDE.md").symlink_to(team / "CLAUDE.md")
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertEqual((team / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)))
+        where = os.path.realpath(team / "CLAUDE.md").replace(os.sep, "/")
+        self.assertTrue(proc.out.endswith(f"\n{where} — outside its git work tree: commit it where it is.\n"), proc.out)
+        self.assertNotIn("committed nowhere", proc.out)
+
     def test_a_bootstrap_nobody_changed_is_written_again(self):
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))
