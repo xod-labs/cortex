@@ -197,7 +197,7 @@ def folded(name: str) -> str:
 
 def check_agents(value: object, name: str = PROJECT_FILE, loose: bool = False) -> str:
     """Refuse an ``agents`` that names no folder inside the workspace (ADR-013 §3.6), from its text
-    alone: a relative path with ``/`` — no ``\\``, no absolute path of any platform, no ``..`` nor a
+    alone: a relative path with ``/`` — no ``\\`` nor ``:``, no absolute path of any platform, no ``..`` nor a
     component that starts with ``.`` or ends with ``.`` or a space, neither the project root itself nor
     ``cortex/``, the spec, nor what it holds. ``cortex`` is told in any case: the file is committed, and
     read where names ignore case too, macOS and Windows — which drops a final ``.`` or space, ``cortex.``
@@ -214,6 +214,10 @@ def check_agents(value: object, name: str = PROJECT_FILE, loose: bool = False) -
         raise ProjectFileError(f"{name}: agents {shown(value)} is not {rule}")
     if value.startswith("/") or re.match(r"^[A-Za-z]:", value):
         raise ProjectFileError(f"{name}: agents {shown(value)} is an absolute path — it must be {rule}")
+    if ":" in value:
+        # NTFS reads "cortex::$INDEX_ALLOCATION" as cortex/, a stream of the folder: another alias of a name.
+        raise ProjectFileError(f"{name}: agents {shown(value)} holds a \":\", which Windows reads as a stream — it "
+                               f"must be {rule}")
     written = value                     # quoted as written in every refusal
     while value.startswith("./"):
         value = value[2:]               # ./team-agents names team-agents

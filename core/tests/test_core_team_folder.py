@@ -26,7 +26,7 @@ class AgentsTextTests(unittest.TestCase):
     def test_what_names_no_folder_inside_the_workspace_is_refused(self):
         for value in ("../x", "a/../b", "/x", "C:\\x", "C:/x", "C:x", "C:", "\\\\server\\x", "a\\b", ".", "./", "././",
                       "a//b", ".team", "a/.b", "a/./b", "cortex", "Cortex", "cortex/x", "", 3, "a\nb", "a\tb", "a\x7fb",
-                      "cortex.", "cortex ", "team.", "a/b ", " "):
+                      "cortex.", "cortex ", "team.", "a/b ", " ", "cortex::$INDEX_ALLOCATION", "team:x", "a/b:c"):
             with self.subTest(value=value), self.assertRaises(project.ProjectFileError) as caught:
                 project.check_agents(value)
             self.assertIn("agents", str(caught.exception))
@@ -36,7 +36,8 @@ class AgentsTextTests(unittest.TestCase):
         for value, folder in ((".team", ".team"), ("./.team/", ".team"), ("a/.b", "a/.b"), ("team-agents", "team-agents")):
             with self.subTest(value=value):
                 self.assertEqual(project.check_agents(value, loose=True), folder)
-        for value in ("../x", "/x", "C:x", "a\\b", "a\nb", ".", "a/./b", "cortex", "cortex.", "team ", "", 3):
+        for value in ("../x", "/x", "C:x", "a\\b", "a\nb", ".", "a/./b", "cortex", "cortex.", "team ", "", 3,
+                      "cortex::$INDEX_ALLOCATION", ".team:x"):
             with self.subTest(value=value), self.assertRaises(project.ProjectFileError):
                 project.check_agents(value, loose=True)
 
