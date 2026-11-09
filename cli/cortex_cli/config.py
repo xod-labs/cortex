@@ -301,13 +301,16 @@ def team_folder(root: str, known: Optional[bool] = None) -> Tuple[str, Optional[
 
 def loose_team_folder(root: str) -> str:
     """The team's folder read loosely — what a too-new version is said from, ``cortex prune`` and the
-    registry read: a committed ``cortex.toml``'s ``agents`` whose text reads, else ``agents``. Never
-    a refusal: ``load`` says it."""
+    registry read: a committed ``cortex.toml``'s ``agents``, else ``agents``. Read before its text is
+    checked (ADR-013 §3.8, step 1): a folder this version refuses for its name — ``.team`` — a later
+    one may take, and its team's file may pin that version; only what names no folder inside the
+    workspace, nor one any version reads, leaves ``agents``. Never a refusal: ``load`` says it, once
+    the version passed the gate."""
     written = cascade.loose_agents(root)
     if written is None:
         return TEAM_FOLDER
     try:
-        folder = project.check_agents(written)
+        folder = project.check_agents(written, loose=True)
     except project.ProjectFileError:
         return TEAM_FOLDER
     return folder if committed(root) else TEAM_FOLDER

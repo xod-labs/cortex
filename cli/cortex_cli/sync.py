@@ -140,8 +140,9 @@ def is_submodule(path: Path, relative: Optional[str] = None) -> bool:
     superproject's ``.git/modules/`` or, as older git made them, in the ``.git`` it holds. ``relative``,
     the folder as the project root names it — a team's folder, ``team/agents`` — the ``.gitmodules`` read
     is the root's."""
-    top = path.parent if relative is None else Path(str(path)[:-len(relative)] if str(path).endswith(relative)
-                                                    else path.parent)
+    # The root, as many folders up as ``relative`` has names: a Windows path, written with backslashes, never
+    # ends with its text.
+    top = path.parent if relative is None else path.parents[len(relative.split("/")) - 1]
     name = path.name if relative is None else relative
     try:
         lines = (top / ".gitmodules").read_text(encoding="utf-8", errors="replace").splitlines()
