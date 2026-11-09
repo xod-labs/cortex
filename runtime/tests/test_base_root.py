@@ -339,6 +339,16 @@ class TeamVersionTests(SyncedProjectTestCase):
                                                 r"read agents/cortex\.team\.toml instead of a cortex\.toml not committed$"):
             pin()
 
+    def test_below_1_8_0_beside_a_team_s_file_a_file_a_sync_refuses_too_says_so(self):
+        # The team's file gives no theme out of the store, nor a key 1.7.0 did not know: `cortex sync` refuses
+        # these whatever it reads, so naming it would send the user round in a circle.
+        for text in ('version = "1.7.0"\ntheme = "../../x"\n', 'version = "1.7.0"\ntheme = "h2g2"\ntypo = "x"\n',
+                     'version = "1.7.0"\nsync = "x"\n'):
+            with self.subTest(text=text):
+                pin = self.files(text, team='version = "1.8.0"\ntheme = "h2g2"\n')
+                with self.assertRaisesRegex(ValueError, "— cortex sync refuses this file too$"):
+                    pin()
+
     def test_a_synced_that_is_none_names_its_remedy_once(self):
         pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local='synced = { pinned = "9.9.9" }\n')
         with self.assertRaisesRegex(ValueError, r'"synced": "reads" is required') as caught:

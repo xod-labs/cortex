@@ -93,6 +93,7 @@ class UpgradeTestCase(unittest.TestCase):
 
 @DOWNLOADS
 class UpgradeTests(UpgradeTestCase):
+    @harness.outside_a_repository
     def test_it_moves_the_project_to_this_cortex_and_says_what_changes(self):
         project = self.project("9.9.8")
         proc = self.upgrade(project)
@@ -170,6 +171,7 @@ class UpgradeTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertIn('version = "9.9.8"', self.pinned(project))
 
+    @harness.outside_a_repository
     def test_the_ending_says_what_to_commit_in_a_repository_and_outside_one_that_nothing_is(self):
         # At a root that is no work tree — a 2.B workspace — cortex init says the files are committed nowhere,
         # and cortex upgrade said to commit them. A .git above the root makes it a work tree, git or not here.
@@ -189,6 +191,7 @@ class UpgradeTests(UpgradeTestCase):
                       "they pull.\n", proc.out)
 
     @unittest.skipIf(os.name == "nt", "a link to a file needs a privilege on Windows")
+    @harness.outside_a_repository
     def test_outside_a_repository_a_bootstrap_linked_into_one_is_to_commit_where_it_is(self):
         # A 2.B root whose CLAUDE.md links to the team's repository: that file is to commit there.
         project = self.project("9.9.8")
@@ -204,6 +207,7 @@ class UpgradeTests(UpgradeTestCase):
                       "commit it where it is.\n", proc.out)
 
     @unittest.skipIf(os.name == "nt", "a link to a file needs a privilege on Windows")
+    @harness.outside_a_repository
     def test_outside_a_repository_with_only_a_file_linked_into_one_written_nothing_is_said_committed_nowhere(self):
         # On the version pinned, the bootstrap alone is written again — and it is the team's, to commit where it is:
         # no list of files committed nowhere, empty, is said.
@@ -221,6 +225,7 @@ class UpgradeTests(UpgradeTestCase):
         self.assertTrue(proc.out.endswith(f"\n{where} — outside its git work tree: commit it where it is.\n"), proc.out)
         self.assertNotIn("committed nowhere", proc.out)
 
+    @harness.outside_a_repository
     def test_a_bootstrap_nobody_changed_is_written_again(self):
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))
@@ -305,6 +310,7 @@ class DigestTests(UpgradeTestCase):
         self.release.replace_spec(version, {f"templates/{name}": template})
         return init.stamped(init.instructions(template, True))
 
+    @harness.outside_a_repository
     def test_an_untouched_bootstrap_of_the_same_format_is_written_again(self):
         written = self.marked()
         project = self.project("9.9.8")
@@ -329,6 +335,7 @@ class DigestTests(UpgradeTestCase):
         rule.write_bytes(content)
         return rule
 
+    @harness.outside_a_repository
     def test_a_cursor_rule_is_written_again_with_the_frontmatter_that_applies_it(self):
         # Written before 1.6.0 with no frontmatter: read, by inference from Cursor's documentation, only where a
         # chat mentions it (#306; #137 is to see it in a real conversation).
@@ -529,6 +536,7 @@ class DigestTests(UpgradeTestCase):
         self.assertEqual((project / "CLAUDE.md").read_bytes(),
                          b"\xef\xbb\xbf" + init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n"))
 
+    @harness.outside_a_repository
     def test_the_team_s_part_follows_the_target_s_block_byte_for_byte(self):
         # ADR-012 §3.4: Cortex's block as Cortex wrote it is written again; what is below the end marker stays.
         older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
@@ -985,6 +993,7 @@ class ResumeTests(UpgradeTestCase):
     """On the pinned version, a machine or a lock not on the pin — an upgrade cut short, a pin moved
     by hand — is synced (ADR-010 §3.5, step 1)."""
 
+    @harness.outside_a_repository
     def test_a_pin_moved_by_hand_is_synced_and_the_lock_to_commit_said(self):
         project = self.project("9.9.8")
         (project / "cortex.toml").write_text(self.pinned(project).replace('"9.9.8"', f'"{OWN}"'), encoding="utf-8")

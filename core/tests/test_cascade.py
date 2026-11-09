@@ -2,6 +2,7 @@
 for the command and the runtime — and the machine's file, ADR-013 §3.7."""
 
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -97,6 +98,7 @@ class ResolveTests(unittest.TestCase):
 class MachineFileTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="cortex-cascade-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)    # last: after a mode is given back
         self.path = self.tmp / "config.toml"
 
     def test_what_reads_and_what_only_warns(self):
@@ -153,6 +155,7 @@ class MachineFileTests(unittest.TestCase):
 class ProjectFileTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="cortex-cascade-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
 
     def test_both_files_read_and_checked(self):
         (self.root / "cortex.toml").write_text('version = "1.7.0"\ntheme = "h2g2"\n', encoding="utf-8")
