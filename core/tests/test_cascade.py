@@ -56,6 +56,16 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual((found.value("update_check"), found["update_check"].origin), (False, "m"))
         self.assertEqual((found.value("register"), found["register"].origin), (True, cascade.DEFAULT))
 
+    def test_a_variable_that_reads_as_no_still_turns_its_key_off(self):
+        # Set and not empty is off, whatever it says — as since they were variables only: "0" or
+        # "false" turns no key back on.
+        for raw in ("0", "false", "no"):
+            with self.subTest(raw=raw):
+                found = cascade.resolve(PROJECT, None, {}, {"CORTEX_NO_UPDATE_CHECK": raw, "CORTEX_NO_REGISTER": raw})
+                self.assertEqual((found.value("update_check"), found["update_check"].origin),
+                                 (False, "CORTEX_NO_UPDATE_CHECK"))
+                self.assertEqual((found.value("register"), found["register"].origin), (False, "CORTEX_NO_REGISTER"))
+
     def test_outside_a_project_the_machine_s_keys_only(self):
         found = cascade.resolve(None, None, {}, {})
         self.assertEqual(list(found.settings), list(project.MACHINE_KEYS))
@@ -98,6 +108,14 @@ class MachineFileTests(unittest.TestCase):
         self.assertIn('config.toml: "update_check" must be true or false', warnings[0])
         self.assertIn('config.toml: unknown key "endpoints", not read', warnings[1])
 
+    def test_a_number_is_no_boolean(self):
+        # TOML's 1 and 0 are integers, and Python's True is one: an integer is refused all the same.
+        self.path.write_text("update_check = 1\nregister = 0\n", encoding="utf-8")
+        values, warnings = cascade.read_machine(str(self.path), "config.toml")
+        self.assertEqual(values, {})
+        self.assertEqual([warning.split(" must")[0] for warning in warnings],
+                         ['config.toml: "update_check"', 'config.toml: "register"'])
+
     def test_a_file_that_cannot_be_read_is_a_warning(self):
         self.path.write_bytes(b"releases_url = [\n")
         values, warnings = cascade.read_machine(str(self.path), "config.toml")
@@ -117,6 +135,13 @@ class MachineFileTests(unittest.TestCase):
             values, warnings = cascade.read_machine(str(home / "config.toml"), "config.toml")
             self.assertEqual(values, {})
             self.assertIn("config.toml cannot be read", warnings[0])
+
+    @unittest.skipIf(os.name == "nt", "a link to a device")
+    def test_a_device_or_a_pipe_is_not_a_file(self):
+        # Read, a pipe would block the command until something writes to it: what is not a regular
+        # file is not opened. A link to the null device stands for both, and never blocks.
+        os.symlink(os.devnull, self.path)
+        self.assertEqual(cascade.read_machine(str(self.path), "config.toml"), ({}, ["config.toml is not a file, and is not read"]))
 
     def test_a_byte_order_mark_and_an_empty_url(self):
         self.path.write_bytes('﻿releases_url = ""\n'.encode("utf-8"))

@@ -790,7 +790,8 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
     if locked:
         why = (f"no {shown_name}" if lock is None else
                f"{shown_name} names Cortex {lock.version}, and {pins} pins {version}")
-        raise SyncError(f"--locked: {why} — {writer} writes it, then commit it. Nothing of the project was changed")
+        commit = "" if in_no_repository(root) else ", then commit it"     # committed nowhere (ADR-008 §9)
+        raise SyncError(f"--locked: {why} — {writer} writes it{commit}. Nothing of the project was changed")
     return digest, ("written" if lock is None else f"Cortex {version}, where it named {lock.version}")
 
 
@@ -1084,7 +1085,7 @@ committed = config.committed                   # ADR-013 §3.1
 
 def ignored(root: Path, name: str) -> Optional[bool]:
     """Whether git ignores ``name`` in the project: asked of git when the project is a repository
-    of it; ``None`` when there is no repository to ask about."""
+    of it; ``None`` when there is no repository to ask about — no ``.git`` at the root or above it."""
     git = shutil.which("git")
     if git is not None:
         try:
@@ -1094,11 +1095,11 @@ def ignored(root: Path, name: str) -> Optional[bool]:
             proc = None
         if proc is not None and proc.returncode in (0, 1):
             return proc.returncode == 0
-        if proc is not None:
-            return None                                    # no repository here
-    if not (root / ".git").exists():
+    if in_no_repository(root):
         return None
-    # No git to ask: .gitignore's own lines. A link is a file to git — `cortex/` does not match it.
+    # No git to ask, or git refusing the repository — its owner, say: .gitignore's own lines, the root's — in a
+    # subdirectory of a repository too, where git reads that file as well. A link is a file to git — `cortex/` does
+    # not match it.
     directory = (root / name).is_dir() and not is_link(root / name)
     wanted = {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if directory else set())
     try:
