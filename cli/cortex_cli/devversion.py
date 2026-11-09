@@ -39,7 +39,8 @@ KINDS = re.compile(r"\b(added|changed|deprecated|removed|fixed|security)\b", re.
 ENTRY = re.compile(r"[-*+][ \t]+(?P<text>.*)")
 BREAKING = re.compile(r"(?:\*\*)?💥")
 # A heading marked breaking, `### 💥 Breaking`, `### Breaking changes`: its entries are, whatever kind it names.
-BREAKING_KIND = re.compile(r"💥|\bbreaking\b", re.IGNORECASE)
+# The word first, or the mark: `### Fixed (no breaking change)` and `### Non-breaking` are not.
+BREAKING_KIND = re.compile(r"💥|^\W*breaking\b", re.IGNORECASE)
 MAJOR = frozenset({"Removed", "Breaking"})
 MINOR = frozenset({"Added", "Changed", "Deprecated"})
 

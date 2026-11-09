@@ -54,8 +54,12 @@ class TemplateTests(unittest.TestCase):
                 self.assertIsNotNone(init.END_MARKER.search(text))
                 for rule in (b"**The team's folder** is the folder `synced`, in `cortex.local.toml`, records as `agents`, "
                              b"else `agents/`", b"**`cortex.toml` names another folder**",
+                             # `./x/` names x (ADR-013 §9): no sync on every conversation for its spelling.
+                             b"compared without a leading `./` or a final `/`",
+                             b"on a checkout, below, tell the user instead, and go no further",
                              b"`cortex.team.toml`", b"**A version moved**", b"never order versions",
-                             b"**A checkout**", b"**No `synced`**", b"below 1.8.0, run `cortex self-update`",
+                             b"**A checkout**", b"**No `synced`**",
+                             b"below 1.8.0, read as above \xe2\x80\x94 the numbers before any `-` \xe2\x80\x94 run `cortex self-update`",
                              # A pre-release or a development build of 1.8.0 is 1.8.0 (ADR-009), and each
                              # self-update is followed by one sync only: no loop when nothing newer is out.
                              b"read the numbers before any `-`: `1.7.3` is below it, `1.8.0-rc.1` and `1.8.0-dev.2` "

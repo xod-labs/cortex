@@ -71,9 +71,10 @@ def read_pin(root: Path) -> Optional[Pin]:
                 and project.before_team(data["version"]):
             # Below 1.8.0 nothing of ADR-013 is read (§3.8), and `cortex sync` records no `synced` (§3.1): the
             # version is cortex.toml's alone, as 1.7.0 read it — a 422 there no sync could ever clear (§9).
-            if os.path.lexists(Path(root) / cascade.TEAM_NAME):
+            if os.path.lexists(Path(root) / cascade.TEAM_NAME) and _gives_what_it_lacks(data):
                 # Mid-adoption: of a cortex.toml no commit holds, `cortex sync` reads the team's file instead (§3.3),
-                # which may give what this one lacks — or refuses it too, committed.
+                # which may give what this one lacks — or refuses it too, committed. A file it would refuse
+                # whatever the team's gives — a theme out of the store, a key it does not know — keeps the remedy.
                 remedy = (f"run `cortex sync` in the project, which may read {cascade.TEAM_NAME} instead of a "
                           f"{project.PROJECT_FILE} not committed")
             project.check_project(data)
@@ -96,6 +97,12 @@ def read_pin(root: Path) -> Optional[Pin]:
             raise ValueError(f"{project.PROJECT_FILE}: agents {project.shown(folder)} is not the team's folder "
                              f"`cortex sync` recorded in {project.LOCAL_FILE} — run `cortex sync` in the project, "
                              f"which reads it from a committed {project.PROJECT_FILE} only")
+        recorded = synced.get("agents") if isinstance(synced, dict) else None
+        if folder == project.TEAM_FOLDER and recorded is not None and recorded != folder:
+            # The folder sync recorded is gone from cortex.toml: the template reads the recorded one (§3.10), and
+            # the runtime would serve another — a sync tells which, once more.
+            raise ValueError(f"{project.LOCAL_FILE}: the team's folder `cortex sync` recorded, {project.shown(recorded)}, "
+                             f"is not the one {project.PROJECT_FILE} names, {folder}/ — run `cortex sync` in the project")
         name = cascade.team_name(folder)
         try:
             team = cascade.read_team(str(root), folder)
@@ -114,6 +121,16 @@ def read_pin(root: Path) -> Optional[Pin]:
     team_version = None if not found.team or team is None else team.get("version")
     version = _team_version(data.get("version"), team_version, local, name)
     return Pin(version=version, theme=str(found.value("theme")), theme_locked=found["theme"].locked, team_folder=folder)
+
+
+def _gives_what_it_lacks(data: Mapping[str, Any]) -> bool:
+    """Whether ``cortex.toml`` fails 1.7.0's grammar only for a key the team's file may give instead — the one
+    case a sync that reads the team's file clears (ADR-013 §3.12)."""
+    try:
+        project.check_project(data, project.PROJECT_REQUIRED)
+    except project.ProjectFileError:
+        return False
+    return True
 
 
 def _local(root: Path) -> Mapping[str, Any]:

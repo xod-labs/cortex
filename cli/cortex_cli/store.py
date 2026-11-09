@@ -155,6 +155,14 @@ def pin_remedy(origin: Optional[str] = None, by_hand: bool = False, block: bool 
     return f"pin a release:\n    {command}" if block else f"pin a release: `{command}`"
 
 
+def no_release_pinned(version: Version, name: str, by_hand: bool = False) -> str:
+    """What is said of a build of no release's version written in ``name``, a file only this machine
+    reads — an uncommitted ``cortex.toml``, a try: no teammate can download it (ADR-009 §9), and the
+    release to pin in its place is named (``pin_remedy``)."""
+    return (f"{name} pins Cortex {version}, a build of no release, which no teammate can download — "
+            f"{pin_remedy(name, by_hand)}")
+
+
 def no_release(version: Version, origin: Optional[str] = None, by_hand: bool = False) -> str:
     """Why a build of no release's version, other than this cortex's own, is not served — and how a
     release is pinned in its place, in the file ``origin`` that pins it (``pin_remedy``)."""

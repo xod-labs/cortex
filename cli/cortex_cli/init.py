@@ -209,8 +209,17 @@ def applies_always(content: bytes) -> bool:
 
 
 def bootstrap_of_cortex(content: bytes) -> bool:
-    """A file the templates wrote: their heading, or their personality block."""
-    return without_frontmatter(content).startswith(TITLE) or PERSONALITY_BEGIN in content
+    """A file the templates wrote: their heading — below a line a team wrote above it too — or their personality
+    block."""
+    return title_line(content) is not None or PERSONALITY_BEGIN in content
+
+
+def title_line(content: bytes) -> Optional[bytes]:
+    """The templates' heading in a bootstrap: the first line of Cortex's block that is one, once a frontmatter is
+    set aside — the first line, or one below a line a team wrote above it; ``None`` in a file without it. One
+    reading for every caller: whether a file is Cortex's, and the layout it was written for (ADR-010 §3.1)."""
+    lines = without_frontmatter(parts(normalised(content))[0]).split(b"\n")
+    return next((line for line in lines if line.startswith(TITLE)), None)
 
 
 def reads_the_local_file(content: bytes) -> bool:
@@ -246,8 +255,7 @@ def written_for_workspace(content: bytes) -> bool:
     layouts = {layout for layout, _ in markers(content)}
     if len(layouts) == 1:
         return layouts == {"workspace"}
-    lines = without_frontmatter(parts(content)[0]).split(b"\n")
-    return b"Workspace Mode" in next((line for line in lines if line.startswith(TITLE)), b"")
+    return b"Workspace Mode" in (title_line(content) or b"")
 
 
 def normalised(content: bytes) -> bytes:
@@ -323,8 +331,10 @@ def kept_bootstrap(kept: bytes, template: bytes) -> Optional[Kept]:
         if not reads_the_local_file(kept):
             return Kept(f"is an older Cortex bootstrap: it does not read {config.LOCAL_FILE}, which names the spec now",
                         f"an older Cortex bootstrap, which does not read {config.LOCAL_FILE}")
-        if without_frontmatter(kept).split(b"\n", 1)[0] != template.split(b"\n", 1)[0]:
-            return _other_layout("workspace" if b"Workspace Mode" in template.split(b"\n", 1)[0] else "single")
+        # The layout its title says — below a line a team wrote above it too — as cortex init --force reads it.
+        writes_workspace = written_for_workspace(template)
+        if written_for_workspace(kept) != writes_workspace:
+            return _other_layout("workspace" if writes_workspace else "single")
         return None
     if len(found) > 1:
         return Kept("holds several bootstrap markers, so none is read", "it holds several bootstrap markers, so none is read")
@@ -344,6 +354,13 @@ def kept_bootstrap(kept: bytes, template: bytes) -> Optional[Kept]:
 
 
 NO_BOOTSTRAP = Kept("holds no Cortex bootstrap: the tool will not find Cortex", "it holds no Cortex bootstrap")
+
+
+def forced(path: Path, template: bytes, personality: bool, current: Optional[bytes]) -> bytes:
+    """What ``cortex init --force`` writes at ``path`` from ``template`` over ``current``, the file there or
+    ``None``: the team's part stays (ADR-012 §3.3)."""
+    wanted = stamped(for_tool(path, instructions(template, personality)))
+    return wanted if current is None else with_team_part(wanted, current)
 
 
 def _other_layout(wanted: str) -> Kept:
@@ -481,14 +498,16 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                             "templates/ and docs/")
         described = f"the checkout at {display(str(spec))}"
     else:
-        the_store.ensure(version)
+        # A refusal names the file that pins the version, and its command — as cortex sync names them.
+        origin = project.version_origin if project else config.TEAM_NAME if team_pins else None
+        the_store.ensure(version, origin=origin, by_hand=bool(project) and project.by_hand(origin))
         spec = the_store.path(version)
         described = f"Cortex {version}"
     # The bootstrap is committed: it follows the team's version, never a developer's try (ADR-013 §3.10).
     pinned = project.team_version if project else version
     templates_spec = spec
     if not options.source and pinned != version:
-        the_store.ensure(pinned)
+        the_store.ensure(pinned, origin=project.team_origin, by_hand=project.by_hand(project.team_origin))
         templates_spec = the_store.path(pinned)
     team_theme = team_data.get("theme") if team_data else None
     chosen = options.theme is not None or options.no_personality
@@ -548,8 +567,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         if "version" in values and store.development(version):
             # This build's own version, pinned as any binary pins its own — said, not refused: CONTRIBUTING's loop
             # makes throwaway projects from a checkout (ADR-009 §9, 2026-11-09).
-            err.write(f"warning: {config.PROJECT_FILE} pins Cortex {version}, the version this build of no release "
-                      "prepares, which no teammate can download — pin a release to share it: cortex upgrade VERSION\n")
+            err.write(f"warning: {store.no_release_pinned(version, config.PROJECT_FILE, config.developers_toml(str(root)))}\n")
     elif values:
         shown = ", ".join(f"{key} = {config.toml_value(value)}" for key, value in values.items())
         out.write(f"✓ {config.PROJECT_FILE}: {shown} — the rest kept, at Cortex {pinned}\n")
@@ -611,11 +629,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             err.write(f"note: {display(str(instructions_file))} has no `alwaysApply: true` line in a frontmatter, "
                       f"as Cursor's documentation writes it: Cursor may not apply it in every conversation — {again}\n")
     else:
-        wanted = stamped(for_tool(instructions_file, instructions(template, personality)))
         replaced = instructions_file.exists()
         current = instructions_file.read_bytes() if replaced else None
-        if current is not None:
-            wanted = with_team_part(wanted, current)    # ADR-012 §3.3: the team's part stays
+        wanted = forced(instructions_file, template, personality, current)
         if current == wanted:
             out.write(f"✓ {display(str(instructions_file))} is what --force would write: left as it is\n")
         else:
@@ -639,11 +655,17 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             other = root / rel
             if other == instructions_file or not other.is_file():
                 continue
-            found = kept_bootstrap(other.read_bytes(), (templates / layout).read_bytes())
+            content = other.read_bytes()
+            found = kept_bootstrap(content, (templates / layout).read_bytes())
             if found is None:
                 continue
             if not found.force:
                 again = "kept as it is"
+            elif found.layout and not workspace and content == forced(
+                    other, (templates / "bootstrap-instructions-workspace.md").read_bytes(), personality, content):
+                # A workspace's file as --force, which keeps its layout (#329), would write it: no command to name.
+                err.write(f"note: {rel} is there and was kept: {found.phrase}, up to date as one\n")
+                continue
             elif found.layout:
                 # Never "remove it": at a root in no repository, its team's part would be lost with it (#329).
                 again = f"cortex init --tool {name} --workspace --force writes a workspace's" if workspace else \

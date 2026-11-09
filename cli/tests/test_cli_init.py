@@ -325,6 +325,22 @@ class OptionTests(InitTestCase):
                 self.assertIn("no theme name", proc.err)
                 self.assertEqual(list(self.project.iterdir()), [])
 
+    @unittest.skipUnless(HAS_GIT, "needs git")
+    def test_a_hook_s_git_dir_names_no_repository_for_a_root_in_none(self):
+        # A hook exports GIT_DIR: git asked of the root by its folder, not of that repository — a root in no repository
+        # is said to be in none, and gets no .gitignore, which would keep nothing out of any commit.
+        if not init_command.sync.in_no_repository(self.project.parent):
+            self.skipTest("needs a temporary directory in no git repository — set TMPDIR outside one")
+        other = self.tmp / "other"
+        subprocess.run(["git", "init", "-q", str(other)], check=True)
+        self.env = dict(self.env, PATH=os.path.dirname(shutil.which("git")), GIT_DIR=str(other / ".git"))
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("is in no git repository", proc.err)
+        self.assertFalse((self.project / ".gitignore").exists())
+        self.assertFalse((other / ".gitignore").exists())
+
+    @harness.outside_a_repository
     def test_a_root_that_is_no_repository_is_said_and_gets_no_gitignore(self):
         proc = self.init()
         self.assertEqual(proc.returncode, 0, proc.err)
@@ -344,6 +360,17 @@ class OptionTests(InitTestCase):
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertNotIn("is in no git repository", proc.err)
         self.assertIn("cortex.local.toml", self.read(".gitignore").splitlines())
+
+    def test_without_git_a_gitignore_s_byte_order_mark_hides_none_of_its_lines(self):
+        # Read as add_to_gitignore reads it: the line is there — no note that git does not ignore it, nothing added.
+        (self.project.parent / ".git").mkdir(parents=True, exist_ok=True)
+        self.project.mkdir(exist_ok=True)
+        gitignore = "\ufeffcortex.local.toml\n/cortex\n".encode("utf-8")
+        (self.project / ".gitignore").write_bytes(gitignore)
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("git does not ignore", proc.err)
+        self.assertEqual((self.project / ".gitignore").read_bytes(), gitignore)
 
     @unittest.skipUnless(HAS_GIT, "needs git")
     def test_a_repository_git_refuses_above_the_root_still_gets_the_gitignore(self):
@@ -466,19 +493,28 @@ class OptionTests(InitTestCase):
         self.assertEqual(self.init("--tool", "agents").returncode, 0)                   # a single project's AGENTS.md
         team = "\n## Workspace services\n\n| @alias | Folder | Description |\n|---|---|---|\n| `@svc` | svc/ | x |\n"
         (self.project / "CLAUDE.md").write_text(self.read("CLAUDE.md") + team, encoding="utf-8")
+        # Up to date as a workspace's: --force, which keeps its layout, would write it as it is — no command is named,
+        # never one that writes nothing, and the note says so on every run.
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("note: CLAUDE.md is there and was kept: a bootstrap written for a workspace, up to date as one\n",
+                      proc.err)
+        self.assertNotIn("--force", proc.err)
+        self.assertIn("is what --force would write: left as it is", self.init("--tool", "claude", "--force").out)
+        proc = self.init("--workspace")
+        self.assertIn("note: AGENTS.md is there and was kept: a bootstrap written for a single project — cortex init "
+                      "--tool agents --workspace --force writes a workspace's, and keeps it as .bak", proc.err)
+        self.assertNotIn("remove it", proc.err)
+        # An older one: --force writes it again — the note names it, and, followed, it keeps the team's part and
+        # the layout.
+        before = self.read("CLAUDE.md").replace("<!-- cortex:bootstrap layout=workspace format=3",
+                                                "<!-- cortex:bootstrap layout=workspace format=1", 1)
+        (self.project / "CLAUDE.md").write_text(before, encoding="utf-8")
         proc = self.init()
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn("note: CLAUDE.md is there and was kept: a bootstrap written for a workspace — cortex init --tool "
                       "claude --force writes it again, a workspace's as it was written, and keeps it as .bak", proc.err)
         self.assertNotIn("remove it", proc.err)
-        proc = self.init("--workspace")
-        self.assertIn("note: AGENTS.md is there and was kept: a bootstrap written for a single project — cortex init "
-                      "--tool agents --workspace --force writes a workspace's, and keeps it as .bak", proc.err)
-        self.assertNotIn("remove it", proc.err)
-        # Followed, the note keeps the team's part and the layout.
-        before = self.read("CLAUDE.md").replace("<!-- cortex:bootstrap layout=workspace format=3",
-                                                "<!-- cortex:bootstrap layout=workspace format=1", 1)
-        (self.project / "CLAUDE.md").write_text(before, encoding="utf-8")
         proc = self.init("--tool", "claude", "--force")
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn("<!-- cortex:bootstrap layout=workspace format=3 digest=", self.read("CLAUDE.md"))
@@ -532,6 +568,7 @@ class OptionTests(InitTestCase):
         proc = self.init("--tool", "claude", "--force")
         self.assertIn("CLAUDE.md.bak: the file --force replaces, as it was — git does not ignore it", proc.out)
 
+    @harness.outside_a_repository
     def test_outside_a_repository_an_existing_gitignore_is_said_to_do_nothing(self):
         (self.project / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
         proc = self.init()
@@ -1568,6 +1605,28 @@ class BootstrapMarkerTests(unittest.TestCase):
 
     def test_a_kept_file_of_the_same_layout_and_format_is_a_bootstrap_of_this_version(self):
         self.assertIsNone(init_command.kept_bootstrap(self.template(), self.template()))
+
+    def unmarked(self, layout="workspace"):
+        """A template of a version before the bootstrap marker — 1.3.0's, say."""
+        title = "# Cortex AI Team — Workspace Mode" if layout == "workspace" else "# Cortex AI Team"
+        return f"{title}\n\nRead cortex.local.toml first.\n".encode("utf-8")
+
+    def test_a_line_above_the_title_hides_neither_the_bootstrap_nor_its_layout(self):
+        # One reading of the title for every caller: below a line a team wrote above it, a workspace's file is a
+        # workspace's to init, to init --force and to upgrade alike — CRLF and a byte order mark hide nothing either.
+        for line in (b"<!-- our notes -->\n", b"\xef\xbb\xbf<!-- our notes -->\r\n"):
+            for layout, other in (("workspace", "single"), ("single", "workspace")):
+                with self.subTest(line=line, layout=layout):
+                    kept = line + self.unmarked(layout)
+                    self.assertTrue(init_command.bootstrap_of_cortex(kept))
+                    self.assertEqual(init_command.written_for_workspace(kept), layout == "workspace")
+                    self.assertIsNone(init_command.kept_bootstrap(kept, self.unmarked(layout)))
+                    self.assertEqual(init_command.kept_bootstrap(kept, self.unmarked(other)).sentence,
+                                     f"was written for {'a workspace' if layout == 'workspace' else 'a single project'}")
+                    # Against a version that writes the marker: an older bootstrap, never "no Cortex bootstrap".
+                    self.assertEqual(init_command.kept_bootstrap(kept, self.template(layout, 2)).sentence,
+                                     "is an older Cortex bootstrap, written before the bootstrap marker")
+        self.assertIsNone(init_command.title_line(b"<!-- our notes -->\nRead cortex.local.toml first.\n"))
 
     def test_the_marker_says_the_layout_whatever_the_title(self):
         retitled = self.template().replace("Workspace Mode".encode(), "Workspace Mode (Acme)".encode())

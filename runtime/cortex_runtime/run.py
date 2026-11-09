@@ -81,7 +81,7 @@ def _service_inside(service: Optional[str], team_folder: str = "agents") -> Opti
         if parts[:len(team)] == team:
             raise ValueError(f"service must be a folder of the workspace other than {team_folder}/, the team's "
                              f"folder, got {service!r}")
-        if parts + ("agents",) == team:    # its agents/ the team's folder: the same overlays, twice
+        if parts + (folded("agents"),) == team:    # its agents/ the team's folder: the same overlays, twice
             raise ValueError(f"service must not be the folder whose agents/ is the team's folder, {team_folder}/, "
                              f"got {service!r}")
     return str(path)
