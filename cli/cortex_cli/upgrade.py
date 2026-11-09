@@ -908,8 +908,9 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
 
 def _served(the_store: store.Store, target: Version, again: str) -> None:
     """Refuse a target this cortex does not serve: one newer than it, naming ``cortex self-update``,
-    then ``again``; one before the first spec archive."""
-    if target > the_store.own:
+    then ``again`` — a build of no release's is said as the store says it; one before the first spec
+    archive."""
+    if target > the_store.own and not store.development(target):
         raise UpgradeError(f"Cortex {target} is newer than this cortex, {the_store.own} — update this cortex first, "
                            f"then run `{again}` again:\n    {store.update_command(target)}")
     the_store.check_served(target)
@@ -1573,6 +1574,8 @@ def upgrade_all(options: _Options, out: TextIO, err: TextIO) -> int:
         _served(the_store, target, f"cortex upgrade --all {target}")       # every project would refuse it
     elif options.which == "team" and store.development(the_store.own) and _followers(entries):
         raise _no_release(the_store, "cortex upgrade --all --team")         # every team's file would refuse it
+    elif options.which != "team" and store.development(the_store.own) and _movers(entries, the_store.own):
+        raise _no_release(the_store, "cortex upgrade --all")                # no project moves to it unnamed
     newer = _asking(options.wanted)
     done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]] = []
     try:
@@ -1634,6 +1637,19 @@ def _each(entries: List[registry.Entry], options: _Options, out: TextIO, err: Te
 
 def folder_of(root: str) -> str:
     return os.path.normcase(os.path.realpath(os.path.join(root, config.loose_team_folder(root))))
+
+
+def _movers(entries: List[registry.Entry], own: Version) -> bool:
+    """Whether a plain ``--all`` would move a registered project to ``own``: one that follows no
+    team's file, pinned below it."""
+    for entry in entries:
+        try:
+            project = config.load(entry.path)
+        except (config.ConfigError, OSError):
+            continue
+        if not project.follows and project.team_version is not None and Version(str(project.team_version)) < own:
+            return True
+    return False
 
 
 def _followers(entries: List[registry.Entry]) -> List[Tuple[str, str]]:

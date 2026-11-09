@@ -127,8 +127,16 @@ def too_old_for(version: Version, own: Version) -> bool:
 
 
 def update_command(version: Version) -> str:
-    """The command that moves this binary to ``version`` (ADR-010 §3.7)."""
+    """The command that moves this binary to ``version`` (ADR-010 §3.7) — none for a build of no
+    release, which no self-update installs: the project is moved to a release instead (ADR-009 §9)."""
+    if development(version):
+        return f"cortex upgrade VERSION, to a release — no self-update installs Cortex {version}, a build of no release"
     return f"cortex self-update {version}"
+
+
+def no_release(version: Version) -> str:
+    """Why a build of no release's version, other than this cortex's own, is not served."""
+    return f"Cortex {version} is a build of no release, which no release serves — pin a release: `cortex upgrade VERSION`"
 
 
 # --------------------------------------------------------------------------- #
@@ -361,8 +369,11 @@ class Store:
                 pass
 
     def check_served(self, version: Version) -> None:
-        """Refuse a version this binary does not serve: newer than itself — the tool is newer than
-        the data it reads, never older — or older than the first spec archive."""
+        """Refuse a version this binary does not serve: a build of no release's, but its own or one
+        the store holds — no release serves it (ADR-009 §9); newer than itself — the tool is newer
+        than the data it reads, never older; or older than the first spec archive."""
+        if development(version) and version != self.own and not self.has(version):
+            raise StoreError(no_release(version))
         if version > self.own:
             raise StoreError(f"this project uses Cortex {version}, newer than this cortex, {self.own} — update it:\n"
                              f"    {update_command(version)}")

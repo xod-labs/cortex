@@ -64,6 +64,28 @@ class EmbeddedTests(StoreTestCase):
                 the_store = store.Store(self.home, own_version=own, checkout=REPO, fetch=self.no_network)
                 self.assertEqual(the_store.ensure(Version(own)), "written")
 
+    def test_another_dev_version_is_served_from_the_store_only(self):
+        # No release serves a build of no release's version: the network is never asked for it (ADR-009 §9).
+        the_store = store.Store(self.home, own_version="1.8.1-dev.5", checkout=REPO, fetch=self.no_network)
+        for version in ("1.8.0-dev.3", "1.8.2-dev"):                     # older, and newer, than this cortex
+            with self.subTest(version=version):
+                with self.assertRaises(store.StoreError) as raised:
+                    the_store.ensure(Version(version))
+                self.assertEqual(str(raised.exception), f"Cortex {version} is a build of no release, which no "
+                                 "release serves — pin a release: `cortex upgrade VERSION`")
+        held = the_store.path(Version("1.8.0-dev.3"))                    # written by that build, still there
+        for tree in store.SPEC_TREES:
+            (held / tree).mkdir(parents=True)
+        self.assertEqual(the_store.ensure(Version("1.8.0-dev.3")), "stored")
+
+    def test_no_self_update_is_named_for_a_dev_version(self):
+        self.assertEqual(store.update_command(Version("1.8.0")), "cortex self-update 1.8.0")
+        self.assertEqual(store.update_command(Version("1.8.0-rc.1")), "cortex self-update 1.8.0-rc.1")
+        for version in ("1.8.1-dev", "1.8.1-dev.3"):
+            with self.subTest(version=version):
+                self.assertEqual(store.update_command(Version(version)), "cortex upgrade VERSION, to a release — no "
+                                 f"self-update installs Cortex {version}, a build of no release")
+
     @unittest.skipIf(AS_ROOT, "root writes any file")
     def test_it_is_read_only_once_written(self):
         the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)

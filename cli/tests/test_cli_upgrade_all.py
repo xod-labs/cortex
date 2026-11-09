@@ -6,6 +6,7 @@ a sync from registering one. As in ``test_cli_upgrade``, the command stands for 
 repository's own: no system file, an empty global one.
 """
 
+import contextlib
 import functools
 import io
 import os
@@ -360,9 +361,15 @@ class AllInProcessTests(AllTestCase):
                                          "project cut short, and moves those not reached; what the one cut short has "
                                          "left to commit, `git status` there says\n")
 
+    @contextlib.contextmanager
     def in_process(self, asks=True):
-        return mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home), "CORTEX_RELEASES_URL": self.release.url,
-                                            "CORTEX_NO_UPDATE_CHECK": "" if asks else "1"})
+        # The module stands for the suite's release, 9.9.9 — not for the checkout's version, nor a build's of no
+        # release, to which --all moves no project unnamed (ADR-009 §9).
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home), "CORTEX_RELEASES_URL": self.release.url,
+                                          "CORTEX_NO_UPDATE_CHECK": "" if asks else "1"}), \
+                mock.patch.object(store.Store, "__init__", functools.partialmethod(store.Store.__init__,
+                                                                                   own_version="9.9.9")):
+            yield
 
 
 class AllReleaseTests(AllTestCase):
