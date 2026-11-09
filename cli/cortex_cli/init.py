@@ -542,6 +542,11 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         given = [key for key in ("version", "theme") if key not in values]
         out.write(f"✓ {config.PROJECT_FILE}: Cortex {version}, theme {theme}"
                   + (f" — {' and '.join(given)} from {config.TEAM_NAME}" if given else "") + "\n")
+        if "version" in values and store.development(version):
+            # This build's own version, pinned as any binary pins its own — said, not refused: CONTRIBUTING's loop
+            # makes throwaway projects from a checkout (ADR-009 §9, 2026-11-09).
+            err.write(f"warning: {config.PROJECT_FILE} pins Cortex {version}, the version this build of no release "
+                      "prepares, which no teammate can download — pin a release to share it: cortex upgrade VERSION\n")
     elif values:
         shown = ", ".join(f"{key} = {config.toml_value(value)}" for key, value in values.items())
         out.write(f"✓ {config.PROJECT_FILE}: {shown} — the rest kept, at Cortex {pinned}\n")

@@ -369,6 +369,23 @@ class DevelopmentBuildTests(SettingsTestCase):
         self.assertIn(why, proc.err)
         self.assertNotIn("move the project down", proc.err)     # to a version no teammate downloads
 
+    def test_init_says_it_pins_its_own_version(self):
+        # Pinned as any binary pins its own — not refused: CONTRIBUTING's loop makes throwaway projects from a checkout.
+        project = self.tmp / "new"
+        project.mkdir()
+        proc = self.cortex(project, "init", "--tool", "claude")
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+        self.assertIn(f'version = "{OWN_DEV}"', (project / "cortex.toml").read_text(encoding="utf-8"))
+        self.assertIn(f"warning: cortex.toml pins Cortex {OWN_DEV}, the version this build of no release prepares, "
+                      "which no teammate can download — pin a release to share it: cortex upgrade VERSION\n", proc.err)
+        project = self.project("1.7.0")                                    # a pin of its own: kept, and not said
+        stored = self.home / "versions" / "1.7.0"
+        for tree in ("agents", "templates", "docs"):
+            shutil.copytree(harness.REPO / tree, stored / tree)
+        proc = self.cortex(project, "init", "--tool", "claude")
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+        self.assertNotIn("build of no release", proc.err)
+
     def test_upgrade_all_names_the_version_once(self):
         project = self.project("1.7.0")
         (self.home / "projects.toml").write_text(f'format = 1\n\n[[project]]\nname = "app"\npath = "{display(project)}"\n',
