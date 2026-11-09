@@ -527,7 +527,7 @@ def try_lock(project: config.Project) -> Optional[Tuple[Tuple[str, str, str], st
     where = config.lock_of(project, project.team_origin)
     if where is None:
         return None
-    lock = config.load_lock(where[0], where[1])
+    lock = config.load_lock(where[0], where[1], where[2])
     if lock is not None and lock.version == project.team_version:
         return None
     return where, f"there is no {where[2]}" if lock is None else f"{where[2]} names Cortex {lock.version}"

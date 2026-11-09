@@ -482,6 +482,18 @@ class CodeReviewFolderTests(FolderTestCase):
         self.assertFalse((root / "agents").exists())
         self.assert_ok(self.cortex(root, "sync", "--locked"))
 
+    @SOURCE
+    def test_a_team_s_lock_that_is_none_during_a_try_is_named_in_its_folder(self):
+        root = self.named(team='version = "9.9.8"\n', local=f'version = "{OWN}"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        (root / FOLDER / "cortex.team.lock").write_text("<<<<<<< HEAD\n", encoding="utf-8")
+        for args in (("upgrade", "--dry-run"), ("upgrade", "9.9.8", "--dry-run")):
+            with self.subTest(args=args):
+                proc = self.cortex(root, *args)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"cortex upgrade: {FOLDER}/cortex.team.lock: Invalid", proc.err)
+                self.assertNotIn(" agents/cortex.team.lock", proc.err)
+
     @NEEDS_GIT
     def test_team_commit_names_the_folder_of_the_developer_s_own_change(self):
         env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
