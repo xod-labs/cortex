@@ -601,7 +601,7 @@ class ReviewTests(TeamTestCase):
         root = self.project('version = "9.9.8"\ntheme = "h2g2"\n', local=f'version = "{OWN}"\n')
         proc = self.cortex(root, "sync", "--locked")
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("`cortex upgrade`, which a try leaves to it, writes it", proc.err)
+        self.assertIn("`cortex upgrade 9.9.8`, which a try leaves to it, writes it", proc.err)
 
 
 @unittest.skipIf(os.name == "nt", "a link to a directory needs a privilege on Windows")
@@ -1029,6 +1029,47 @@ class SecondReviewTests(TeamTestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertIn("`cortex upgrade --local VERSION` the try", proc.err)
         self.assertNotIn("--team", proc.err)
+
+
+class CodeReviewTests(TeamTestCase):
+    """What the counter-review of the 1.8.0 stack's code found (2026-11-09)."""
+
+    def registered(self, *roots):
+        (self.home / "projects.toml").write_text("format = 1\n" + "".join(
+            f'\n[[project]]\nname = "{root.name}"\npath = "{harness_path(root)}"\n' for root in roots), encoding="utf-8")
+
+    @SOURCE
+    @DOWNLOADS
+    def test_a_resume_during_a_try_writes_the_lock_locked_names(self):
+        # ADR-013 §3.4: the sync reads the try and leaves the lock of the team's version; --locked names the upgrade
+        # that writes it, and that upgrade, a resume, writes it — the team's lock too.
+        for follows in (False, True):
+            with self.subTest(follows=follows):
+                if follows:
+                    root = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n', local=f'version = "{OWN}"\n',
+                                        name="follows")
+                    lock, name, commit = root / "agents" / "cortex.team.lock", "agents/cortex.team.lock", " in agents/"
+                else:
+                    root = self.project('version = "9.9.8"\ntheme = "h2g2"\n', local=f'version = "{OWN}"\n', name="pins")
+                    lock, name, commit = root / "cortex.lock", "cortex.lock", ""
+                lock.write_text(config.render_lock(store.Version("9.9.7"), "sha256:" + "0" * 64), encoding="utf-8")
+                self.assert_ok(self.cortex(root, "sync"))
+                proc = self.cortex(root, "sync", "--locked")
+                self.assertEqual(proc.returncode, 1)
+                self.assertIn(f"--locked: {name} names Cortex 9.9.7", proc.err)
+                self.assertIn("`cortex upgrade 9.9.8`, which a try leaves to it, writes it", proc.err)
+                before = lock.read_bytes()
+                proc = self.cortex(root, "upgrade", "9.9.8", "--dry-run")
+                self.assert_ok(proc)
+                self.assertIn(f"{name} names Cortex 9.9.7, and ", proc.out)
+                self.assertIn("it would be written", proc.out)
+                self.assertEqual(lock.read_bytes(), before)
+                proc = self.cortex(root, "upgrade", "9.9.8")
+                self.assert_ok(proc)
+                self.assertIn(f"{name}: Cortex 9.9.8, where it named 9.9.7 — commit it{commit}\n", proc.out)
+                self.assertEqual(str(config.load_lock(str(lock.parent), lock.name).version), "9.9.8")
+                self.assert_ok(self.cortex(root, "sync", "--locked"))
+                self.assertEqual(self.local(root)["synced"]["reads"], "9.9.8")
 
 
 def newer_refused(pin):

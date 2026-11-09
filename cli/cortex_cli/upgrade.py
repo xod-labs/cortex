@@ -342,6 +342,37 @@ def out_of_step(root: Path, project: config.Project, the_store: store.Store) -> 
     return None
 
 
+def try_lock(project: config.Project) -> Optional[Tuple[Tuple[str, str, str], str]]:
+    """During a try, the lock of the team's version — which the sync, reading the try, leaves alone
+    (ADR-013 §3.4) — when it does not name that version: where it is, and what it names. ``None``
+    without a try, or when it names it: a lock of that version whose digest differs is the sync's to
+    refuse. ``cortex upgrade`` writes the lock of the version it moves; its resume checks that lock."""
+    if project.version == project.team_version:
+        return None
+    where = config.lock_of(project, project.team_origin)
+    if where is None:
+        return None
+    lock = config.load_lock(where[0], where[1])
+    if lock is not None and lock.version == project.team_version:
+        return None
+    return where, f"there is no {where[2]}" if lock is None else f"{where[2]} names Cortex {lock.version}"
+
+
+def _write_try_lock(where: Tuple[str, str, str], version: Version, the_store: store.Store, out: TextIO,
+                    err: TextIO) -> None:
+    """Write the lock ``where`` names — the team's version's, which a try leaves — from ``version`` in
+    the store: the team's under a lock of its folder, as the sync writes it (ADR-013 §3.4)."""
+    directory, name, shown_name = where
+    digest, said = sync.check_lock(directory, version, the_store, out, name=name)
+    if shown_name == config.TEAM_LOCK_NAME:
+        with sync.project_lock(Path(directory), err):
+            config.write_lock(directory, version, digest, name)
+    else:
+        config.write_lock(directory, version, digest, name)
+    team = f" in {config.TEAM_FOLDER}/" if shown_name == config.TEAM_LOCK_NAME else ""
+    out.write(f"{shown_name}: {said}{'' if sync.in_no_repository(directory) else ' — commit it' + team}\n")
+
+
 # --------------------------------------------------------------------------- #
 # The command
 # --------------------------------------------------------------------------- #
@@ -884,9 +915,12 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
             prepare: Optional[Callable[[List[Path]], None]] = None) -> Outcome:
     """On the pinned version, finish what an upgrade cut short, or a pin moved by hand, left: a
     bootstrap file nobody changed, of another version, written again; this machine and the lock,
-    when they are not on the pin, synced (ADR-010 §3.5, step 1)."""
+    when they are not on the pin, synced (ADR-010 §3.5, step 1). During a try, the lock of the team's
+    version, which the sync leaves alone, is written from the store when it does not name it (ADR-013
+    §3.4)."""
     current = project.team_version         # what the committed bootstrap follows (ADR-013 §3.10)
     behind = out_of_step(Path(root), project, the_store)
+    stale = try_lock(project)
     rewrites: List[Tuple[Path, bytes]] = []
     if files:
         try:
@@ -898,29 +932,42 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     if behind is not None:
         out.write(f"{behind}, and {project.version_origin} pins Cortex {project.version} — an upgrade cut short, or a "
                   f"pin moved by hand: {'the sync would put them on it' if dry_run else 'syncing'}\n")
+    if stale is not None:
+        out.write(f"{stale[1]}, and {project.team_origin} pins Cortex {current} — the sync reads the try and leaves "
+                  f"it to `cortex upgrade`: {'it would be written' if dry_run else 'writing it'}\n")
     where = config.lock_of(project)
     lock = Path(where[0]) / where[1] if where is not None else Path(root) / config.LOCK_FILE
     relock = behind is not None and where is not None and \
         getattr(config.load_lock(where[0], where[1]), "version", None) != project.version
-    team = ([lock] if relock else []) + [path for path, _ in rewrites]
+    team_lock = Path(stale[0][0]) / stale[0][1] if stale is not None else None
+    locks = ([lock] if relock else []) + ([team_lock] if team_lock is not None and team_lock != lock else [])
+    team = locks + [path for path, _ in rewrites]
     if prepare is not None and team:
         prepare(team)
     if dry_run:
         for path, content in rewrites:
             out.write(f"{_shown_path(path, root)}: would be written again from Cortex {current}'s template — "
                       f"{_nobody(content)}\n")
-        if rewrites or behind is not None:
+        if rewrites or behind is not None or stale is not None:
             out.write("--dry-run: nothing of the project was changed\n")
         return Outcome(root, current, current, files=team)
-    if not rewrites and behind is None:
+    if not rewrites and behind is None and stale is None:
         return Outcome(root, current, current)
-    locked = lock.read_bytes() if lock.is_file() else None
-    _write(rewrites, {lock: locked} if behind is not None else {}, root, err,
-           (lambda: sync.sync(root, None, None, out, err, announce=False)) if behind is not None else (lambda: None))
+    kept = {path: path.read_bytes() if path.is_file() else None
+            for path in ([lock] if behind is not None else []) + ([team_lock] if team_lock is not None else [])}
+
+    def then() -> None:
+        if stale is not None:
+            the_store.ensure(current)
+            _write_try_lock(stale[0], current, the_store, out, err)
+        if behind is not None:
+            sync.sync(root, None, None, out, err, announce=False)
+
+    _write(rewrites, kept, root, err, then)
     for path, content in rewrites:
         out.write(f"{_shown_path(path, root)}: written again from Cortex {current}'s template — {_nobody(content)}\n")
-    relocked = lock.is_file() and lock.read_bytes() != locked
-    return Outcome(root, current, current, files=([lock] if relocked else []) + [path for path, _ in rewrites])
+    relocked = [path for path, before in kept.items() if path.is_file() and path.read_bytes() != before]
+    return Outcome(root, current, current, files=relocked + [path for path, _ in rewrites])
 
 
 def _write(rewrites: List[Tuple[Path, bytes]], committed: Dict[Path, Optional[bytes]], root: str, err: TextIO,

@@ -907,10 +907,12 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if source is None and where is None:
         digest = the_store.digest(version)      # a local try: no lock, nor checked again (ADR-013 §3.4)
     elif source is None:
-        # During a try, a plain sync reads the try and leaves the committed lock: `cortex upgrade` writes it.
+        # During a try, a plain sync reads the try and leaves the committed lock: `cortex upgrade` writes it —
+        # named with the version, which resumes it, where a plain one would move a project that pins its own.
         ahead = project.version != project.team_version
         digest, lock = check_lock(where[0], version, the_store, out, locked, where[1],
-                                  "`cortex upgrade`, which a try leaves to it," if locked and ahead else "`cortex sync`")
+                                  f"`cortex upgrade {version}`, which a try leaves to it," if locked and ahead
+                                  else "`cortex sync`")
     folder_note = _team_folder_note(project)
     if folder_note is not None:
         err.write(f"warning: {folder_note}\n")
