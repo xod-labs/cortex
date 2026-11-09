@@ -345,6 +345,17 @@ class OptionTests(InitTestCase):
         self.assertNotIn("is in no git repository", proc.err)
         self.assertIn("cortex.local.toml", self.read(".gitignore").splitlines())
 
+    def test_without_git_a_gitignore_s_byte_order_mark_hides_none_of_its_lines(self):
+        # Read as add_to_gitignore reads it: the line is there — no note that git does not ignore it, nothing added.
+        (self.project.parent / ".git").mkdir(parents=True, exist_ok=True)
+        self.project.mkdir(exist_ok=True)
+        gitignore = "\ufeffcortex.local.toml\n/cortex\n".encode("utf-8")
+        (self.project / ".gitignore").write_bytes(gitignore)
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("git does not ignore", proc.err)
+        self.assertEqual((self.project / ".gitignore").read_bytes(), gitignore)
+
     @unittest.skipUnless(HAS_GIT, "needs git")
     def test_a_repository_git_refuses_above_the_root_still_gets_the_gitignore(self):
         # git asked, and refusing — here a worktree whose repository is gone — is no "no repository": .gitignore's own
