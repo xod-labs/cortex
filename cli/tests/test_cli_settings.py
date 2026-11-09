@@ -402,26 +402,68 @@ class DevelopmentPinTests(SettingsTestCase):
     """A project pinned to a build of no release's version — a CI artifact's, which `cortex init` pins —
     is told to pin a release: no self-update installs that version, no release serves it (ADR-009 §9)."""
 
+    NEWER = "{}.{}.{}-dev.3".format(*Version(OWN).core[:2], Version(OWN).core[2] + 1)
+
     def test_newer_than_this_cortex(self):
-        newer = "{}.{}.{}-dev.3".format(*Version(OWN).core[:2], Version(OWN).core[2] + 1)
-        project = self.project(newer)
+        project = self.project(self.NEWER)
+        for args in (("sync",), ("upgrade",)):
+            with self.subTest(args=args):
+                proc = self.cortex(project, *args)
+                self.assertEqual(proc.returncode, 1, proc.err)
+                self.assertIn(f"this project uses Cortex {self.NEWER}, which its cortex.toml pins — a build of no "
+                              f"release, newer than this cortex, {OWN}", proc.err)
+                self.assertIn("pin a release", proc.err.lower())
+                self.assertIn("cortex upgrade VERSION", proc.err)
+                self.assertNotIn("self-update", proc.err)
+        proc = self.cortex(project, "config", "version")
+        self.assert_ok(proc)
+        self.assertIn(f"note: Cortex {self.NEWER} is a build of no release, newer than this cortex, {OWN} — pin a "
+                      "release:\n    cortex upgrade VERSION\n", proc.err)
+        proc = self.cortex(project, "config")
+        self.assert_ok(proc)
+        self.assertIn(f"cortex.toml — a build of no release, newer than this cortex, {OWN}: pin a release, "
+                      "`cortex upgrade VERSION`", proc.out)
+
+    def test_a_try_is_moved_by_local(self):
+        project = self.project(extra="")
+        (project / "cortex.local.toml").write_text(f'version = "{self.NEWER}"\n', encoding="utf-8")
         proc = self.cortex(project, "sync")
         self.assertEqual(proc.returncode, 1, proc.err)
-        self.assertIn(f"this project uses Cortex {newer}, which its cortex.toml pins, newer than this cortex, {OWN} — "
-                      f"update it:\n    cortex upgrade VERSION, to a release — no self-update installs Cortex {newer}, "
-                      "a build of no release", proc.err)
-        self.assertNotIn("cortex self-update", proc.err)
+        self.assertIn(f"which its cortex.local.toml pins — a build of no release, newer than this cortex, {OWN}: pin a "
+                      "release:\n    cortex upgrade --local VERSION", proc.err)
+
+    def test_the_team_s_pin_is_moved_by_team(self):
+        root = self.tmp / "team"
+        (root / "agents").mkdir(parents=True)
+        (root / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")         # it follows the team's file
+        (root / "agents" / "cortex.team.toml").write_text('version = "1.8.0-dev.3"\n', encoding="utf-8")
+        for args in (("sync",), ("upgrade",)):                              # a follower resumes the team's pin
+            with self.subTest(args=args):
+                proc = self.cortex(root, *args)
+                self.assertEqual(proc.returncode, 1, proc.err)
+                self.assertIn("Cortex 1.8.0-dev.3 is a build of no release, which no release serves — pin a release: "
+                              "`cortex upgrade --team VERSION`", proc.err)
 
     def test_named_to_upgrade(self):
-        newer = "{}.{}.{}-dev.3".format(*Version(OWN).core[:2], Version(OWN).core[2] + 1)
         project = self.project()
         before = (project / "cortex.toml").read_bytes()
-        proc = self.cortex(project, "upgrade", newer)
-        self.assertEqual(proc.returncode, 1, proc.err)
-        self.assertIn(f"Cortex {newer} is a build of no release, which no release serves — pin a release: "
-                      "`cortex upgrade VERSION`", proc.err)
-        self.assertNotIn("cortex self-update", proc.err)
-        self.assertEqual((project / "cortex.toml").read_bytes(), before)
+        for held in (False, True):                                          # in the store too: newer all the same
+            if held:
+                for tree in ("agents", "templates", "docs"):
+                    (self.home / "versions" / self.NEWER / tree).mkdir(parents=True)
+            with self.subTest(held=held):
+                proc = self.cortex(project, "upgrade", self.NEWER)
+                self.assertEqual(proc.returncode, 1, proc.err)
+                self.assertIn(f"Cortex {self.NEWER} is a build of no release, which no release serves — pin a "
+                              "release: `cortex upgrade VERSION`", proc.err)
+                self.assertNotIn("self-update", proc.err)
+                self.assertEqual((project / "cortex.toml").read_bytes(), before)
+
+    def test_a_move_from_it_says_no_remedy_in_its_note(self):
+        project = self.project("1.7.1-dev.3")
+        proc = self.cortex(project, "upgrade", OWN, "--dry-run")
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+        self.assertIn("note: what changes is not said — Cortex 1.7.1-dev.3 is a build of no release\n", proc.err)
 
     def test_older_than_this_cortex(self):
         project = self.project("1.7.1-dev.3")

@@ -710,6 +710,30 @@ class SecondReviewTests(TeamTestCase):
                 self.assertNotIn("in each registered project", proc.out)
                 self.assertEqual((root / TEAM).read_bytes(), before)
 
+    @SOURCE
+    def test_a_development_build_s_own_pin_is_no_move(self):
+        root = self.project('theme = "h2g2"\n', team=f'version = "{DEV_SOURCE}"\n')
+        self.registered(root)
+        for args in (("upgrade", "--team", "--dry-run"), ("upgrade", "--all", "--team", "--dry-run")):
+            with self.subTest(args=args):
+                proc = self.cortex(self.tmp if "--all" in args else root, *args, CORTEX_SOURCE_VERSION=DEV_SOURCE)
+                self.assert_ok(proc)
+                self.assertNotIn("name the version to move to", proc.err)
+
+    @SOURCE
+    def test_a_team_s_pin_of_no_release_is_moved_by_team(self):
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.10-dev.3"\n')
+        before = (root / TEAM).read_bytes()
+        for args in (("upgrade", "--team"), ("sync",)):
+            with self.subTest(args=args):
+                proc = self.cortex(root, *args)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"Cortex 9.9.10-dev.3, a build of no release, newer than this cortex, {OWN}"
+                              if args == ("upgrade", "--team") else "pins — a build of no release", proc.err)
+                self.assertIn("cortex upgrade --team VERSION", proc.err)
+                self.assertNotIn("self-update", proc.err)
+                self.assertEqual((root / TEAM).read_bytes(), before)
+
     def test_another_fault_of_a_version_less_cortex_toml_is_said_as_it_is(self):
         for text, said in (('theme = "h2g2"\nbogus = 1\n', 'cortex.toml: unknown key "bogus"'),
                            ('Version = "1.8.0"\ntheme = "h2g2"\n', 'cortex.toml: unknown key "Version"'),

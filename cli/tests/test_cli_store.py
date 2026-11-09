@@ -77,14 +77,23 @@ class EmbeddedTests(StoreTestCase):
         for tree in store.SPEC_TREES:
             (held / tree).mkdir(parents=True)
         self.assertEqual(the_store.ensure(Version("1.8.0-dev.3")), "stored")
+        newer = the_store.path(Version("1.8.2-dev.1"))                    # held, but newer than this cortex
+        for tree in store.SPEC_TREES:
+            (newer / tree).mkdir(parents=True)
+        with self.assertRaises(store.StoreError) as raised:
+            the_store.ensure(Version("1.8.2-dev.1"), origin="agents/cortex.team.toml")
+        self.assertEqual(str(raised.exception), "Cortex 1.8.2-dev.1 is a build of no release, which no release "
+                         "serves — pin a release: `cortex upgrade --team VERSION`")
 
-    def test_no_self_update_is_named_for_a_dev_version(self):
-        self.assertEqual(store.update_command(Version("1.8.0")), "cortex self-update 1.8.0")
+    def test_the_pin_is_moved_where_a_file_holds_it(self):
+        for origin, command in ((None, "cortex upgrade VERSION"), ("cortex.toml", "cortex upgrade VERSION"),
+                                ("agents/cortex.team.toml", "cortex upgrade --team VERSION"),
+                                ("team-agents/cortex.team.toml", "cortex upgrade --team VERSION"),
+                                ("team-agents\\cortex.team.toml", "cortex upgrade --team VERSION"),
+                                ("cortex.local.toml", "cortex upgrade --local VERSION")):
+            with self.subTest(origin=origin):
+                self.assertEqual(store.pin_command(origin), command)
         self.assertEqual(store.update_command(Version("1.8.0-rc.1")), "cortex self-update 1.8.0-rc.1")
-        for version in ("1.8.1-dev", "1.8.1-dev.3"):
-            with self.subTest(version=version):
-                self.assertEqual(store.update_command(Version(version)), "cortex upgrade VERSION, to a release — no "
-                                 f"self-update installs Cortex {version}, a build of no release")
 
     @unittest.skipIf(AS_ROOT, "root writes any file")
     def test_it_is_read_only_once_written(self):
