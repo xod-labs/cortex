@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 from typing import Dict, List, Mapping, Tuple
 
 PROJECT_FILE = "cortex.toml"
@@ -183,10 +184,15 @@ AGENTS_UNCOMMITTED = (f'{PROJECT_FILE}: "agents" is read from a committed {PROJE
 
 
 def folded(name: str) -> str:
-    """A name of the workspace as file systems that ignore case compare it — NTFS, APFS: each character
-    lowered on its own, a character whose lower case is longer kept as written. ``str.casefold`` folds
-    further, ``ß`` as ``ss``, and would take two folders of the disk for one."""
-    return "".join(char.lower() if len(char.lower()) == 1 else char for char in name)
+    """A name of the workspace, folded to compare it in any case — the common names as file systems that
+    ignore case fold them: composed first (NFC), as APFS takes a name decomposed for the same one, then
+    each character upper-cased on its own, as NTFS's table does, a character whose upper case is longer
+    kept as written. ``ς`` and ``σ`` are one, ``ß`` is not ``ss``; the Kelvin sign, composed, is ``K``.
+    ``str.casefold`` folds further, ``ß`` as ``ss``, and would take two folders of the disk for one. It
+    is no file system's own table: a name that differs from another only past these may be one folder on
+    one disk and two on another. Compare what it gives with what it gives, never with a literal."""
+    return "".join(upper if len(upper := char.upper()) == 1 else char
+                   for char in unicodedata.normalize("NFC", name))
 
 
 def check_agents(value: object, name: str = PROJECT_FILE, loose: bool = False) -> str:
@@ -225,7 +231,7 @@ def check_agents(value: object, name: str = PROJECT_FILE, loose: bool = False) -
         if part.startswith(".") and not loose:
             raise ProjectFileError(f"{name}: agents {shown(written)} names a folder that starts with \".\" — it must be "
                                    f"{rule}")
-    if folded(parts[0]) == "cortex":
+    if folded(parts[0]) == folded("cortex"):
         raise ProjectFileError(f"{name}: agents {shown(written)} is in cortex/, the spec's place — it must be {rule}")
     # Only agents itself is the default: Agents names a folder of its own, as written (§9).
     return "/".join(parts)

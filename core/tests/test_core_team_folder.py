@@ -41,9 +41,18 @@ class AgentsTextTests(unittest.TestCase):
                 project.check_agents(value, loose=True)
 
     def test_names_fold_as_file_systems_fold_them(self):
-        self.assertEqual(project.folded("Team-Agents"), "team-agents")
-        self.assertNotEqual(project.folded("straße"), project.folded("strasse"))     # two folders on NTFS and APFS
-        self.assertEqual(project.folded("STRASSE"), "strasse")
+        f = project.folded
+        self.assertEqual(f("Team-Agents"), f("team-agents"))
+        self.assertNotEqual(f("straße"), f("strasse"))                  # two folders on NTFS and APFS
+        self.assertEqual(f("STRASSE"), f("strasse"))
+        self.assertEqual(f("ΟΜΑΔΕΣ"), f("ομαδες"))                       # a final sigma is a sigma
+        self.assertEqual(f("ομαδεσ"), f("ομαδες"))
+        self.assertEqual(f("\u212aeys"), f("keys"))                     # the Kelvin sign is K composed: one on APFS
+        self.assertEqual(f("\u00e9quipe"), f("e\u0301quipe"))          # composed or not, one name on APFS
+        self.assertEqual(f("\u00c9QUIPE"), f("e\u0301quipe"))
+        for value in ("cortex", "Cortex", "CORTEX", "Cortex/x"):
+            with self.subTest(value=value), self.assertRaises(project.ProjectFileError):
+                project.check_agents(value)
 
     def test_cortex_toml_takes_it_and_the_other_files_refuse_it(self):
         project.check_project({**TEAM, "agents": "team-agents"})
