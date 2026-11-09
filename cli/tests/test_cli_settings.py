@@ -230,6 +230,22 @@ class MachineFileTests(SettingsTestCase):
         self.assertIn(f"{display(self.home / 'config.toml')}: ", proc.err)
         self.assertIn("https", proc.err)
 
+    def test_config_says_a_releases_url_a_download_refuses_and_exits_0(self):
+        # cortex config prints every setting, and CI reads `cortex config version`: a warning, never an error.
+        self.machine('releases_url = "http://example.com/releases"\n')
+        project = self.project()
+        where = display(self.home / "config.toml")
+        proc = self.cortex(project, "config", "version", CORTEX_RELEASES_URL="")
+        self.assert_ok(proc)
+        self.assertEqual(proc.out, f"{OWN}\n")
+        self.assertIn(f"warning: {where}: http://example.com/releases: only https is downloaded from", proc.err)
+        found = self.settings(project, CORTEX_RELEASES_URL="")
+        self.assertEqual(len([warning for warning in found["warnings"] if "a download refuses it" in warning]), 1)
+        proc = self.cortex(project, "config", CORTEX_RELEASES_URL="ftp://mirror.example/r")    # the variable's
+        self.assert_ok(proc)
+        self.assertIn("warning: CORTEX_RELEASES_URL: ftp://mirror.example/r: only https", proc.err)
+        self.assertNotIn("a download refuses it", self.cortex(project, "config").err)        # the fake release's
+
     def test_register_and_update_check_off_in_the_file(self):
         self.machine("register = false\nupdate_check = false\n")
         project = self.project()
