@@ -146,6 +146,11 @@ class BumpTests(unittest.TestCase):
             with self.subTest(heading=heading):
                 self.assertEqual(prepared(changelog(f"{heading}\n- a thing\n", "2.3.4")), "3.0.0")
         self.assertEqual(devversion.unreleased(changelog("### 💥 Changed\n- a thing\n")), {"Breaking": ["a thing"]})
+        # The word first, or the mark: a heading that says a change is not breaking is its kind.
+        for heading, bumped in (("### Fixed (no breaking change)", "2.3.5"), ("### Non-breaking changes", "2.3.5"),
+                                ("### Changed (non-breaking)", "2.4.0"), ("### ✨ Breaking", "3.0.0")):
+            with self.subTest(heading=heading):
+                self.assertEqual(prepared(changelog(f"{heading}\n- a thing\n", "2.3.4")), bumped)
 
     def test_markdown_s_headings_entries_and_line_ends(self):
         # A heading indented up to three spaces is one; four make it code, no heading.
