@@ -218,6 +218,14 @@ class TeamTests(unittest.TestCase):
         found = cascade.resolve({}, None, {}, {}, team_data=TEAM, committed=True)       # a cortex.toml of nothing
         self.assertEqual((found.value("theme"), found.value("version")), ("team-theme", "1.8.0"))
 
+    def test_a_locked_key_set_to_the_team_s_value_is_no_override(self):
+        # ADR-013 §3.5: what is set otherwise above a lock is said; the lock's own value, set again, is not.
+        team = {**TEAM, "claude_access": False, "locked": ["claude_access"]}
+        found = cascade.resolve({"theme": "h2g2", "claude_access": False}, {"claude_access": False}, {}, {},
+                                team_data=team, committed=True)
+        self.assertEqual(found.notes, ())
+        self.assertTrue(found["claude_access"].locked)
+
     def test_the_team_s_resolution_leaves_out_an_uncommitted_cortex_toml_s_keys_the_team_s_file_sets(self):
         found = cascade.resolve({"version": "1.7.0", "theme": "mine", "sync": "copy"}, None, {}, {}, team_data=TEAM,
                                 committed=False, locked=True)

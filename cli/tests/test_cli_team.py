@@ -1160,6 +1160,71 @@ class CodeReviewTests(TeamTestCase):
             self.assertIsNone(sync._team_folder_note(config.load(str(old))))
 
 
+    @SOURCE
+    @DOWNLOADS
+    def test_a_follower_upgraded_to_the_version_it_reads_resumes(self):
+        # Decision 22: with the team's version, or the version read — a try's — a follower's upgrade resumes.
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n', local=f'version = "{OWN}"\n')
+        for wanted in (OWN, "9.9.8"):
+            with self.subTest(wanted=wanted):
+                proc = self.cortex(root, "upgrade", wanted)
+                self.assert_ok(proc)
+                self.assertIn("Cortex 9.9.8: already on it — nothing to move", proc.out)
+
+    def test_a_flag_that_agrees_with_a_lock_is_taken(self):
+        root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', team='sync = "store"\nclaude_access = false\n'
+                            'locked = ["sync", "claude_access"]\n')
+        proc = self.cortex(root, "sync", "--store", "--no-claude-access")
+        self.assert_ok(proc)
+        self.assertNotIn("locked", proc.err)
+
+    @DOWNLOADS
+    def test_validate_refuses_a_try_edited_and_not_synced(self):
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n', local=f'version = "{OWN}"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        self.assert_ok(self.cortex(root, "validate"))
+        local = root / "cortex.local.toml"
+        local.write_text(local.read_text(encoding="utf-8").replace(f'version = "{OWN}"', 'version = "9.9.8"'),
+                         encoding="utf-8")
+        proc = self.cortex(root, "validate")
+        self.assertEqual(proc.returncode, 2, proc.out + proc.err)
+        self.assertIn(f"cortex.local.toml pins Cortex 9.9.8, and `cortex sync` recorded {OWN} — run `cortex sync`",
+                      proc.err)
+
+    @SOURCE
+    def test_all_team_checks_the_followers_of_the_folder_it_moves_only(self):
+        alpha = self.project('theme = "h2g2"\n', team='version = "1.8.0"\n', name="alpha")
+        beta = self.project('theme = "h2g2"\n', team='version = "1.8.0"\n', name="beta")
+        overlay = beta / "agents" / "roles" / "engineering" / "architect.md"
+        overlay.parent.mkdir(parents=True)
+        overlay.write_text("<!-- OVERLAY\n     Base: cortex/agents/roles/engineering/nowhere.md\n     Scope: workspace\n"
+                           "-->\n\n# x\n", encoding="utf-8")
+        self.registered(alpha, beta)
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team", OWN)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)           # beta's overlays stop beta's folder
+        self.assertEqual(tomllib.loads((alpha / TEAM).read_text(encoding="utf-8"))["version"], OWN)
+        self.assertEqual(tomllib.loads((beta / TEAM).read_text(encoding="utf-8"))["version"], "1.8.0")
+        self.assertNotIn(f"The overlays of {harness_path(alpha)}", proc.out)
+
+    @DEVELOPMENT
+    def test_at_a_2b_root_a_team_s_pin_too_new_is_said_as_the_team_s(self):
+        # ADR-013 §3.1: at a 2.B root, cortex.toml's version is the developer's, and the team's file's is the team's.
+        root = self.project('version = "1.8.0"\ntheme = "h2g2"\n', team='version = "99.0.0"\n', committed=False)
+        proc = self.cortex(root, "sync")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(f"this project uses Cortex 99.0.0, which its {TEAM} pins, newer than this cortex", proc.err)
+
+    @SOURCE
+    def test_local_at_a_2b_root_removes_no_try_cortex_toml_holds(self):
+        # cortex.toml's version is the developer's at a 2.B root, but no try of cortex.local.toml's: nothing to remove.
+        root = self.project('version = "9.9.7"\ntheme = "h2g2"\n', team='version = "9.9.8"\n', committed=False)
+        proc = self.cortex(root, "upgrade", "--local", "9.9.8")
+        self.assert_ok(proc)
+        self.assertIn("Cortex 9.9.8 is at or below the team's 9.9.8 (agents/cortex.team.toml): there is no try to remove "
+                      "— nothing to move", proc.out)
+        self.assertFalse((root / "cortex.local.toml").exists())
+
+
 def newer_refused(pin):
     """What --team with no VERSION says of a team's pin newer than this cortex."""
     return (f"this cortex is a development build, {OWN}, which serves no release" if DEV_OWN else
