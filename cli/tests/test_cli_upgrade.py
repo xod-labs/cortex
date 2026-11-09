@@ -1014,7 +1014,11 @@ class PinAfterThisCortexTests(UpgradeTestCase):
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertIn(f"this project uses Cortex 9.10.0, which its cortex.toml pins, newer than this cortex, {OWN} — "
                       "nothing was changed. Update this cortex to serve it:\n    cortex self-update 9.10.0\n", proc.err)
-        self.assertIn(f"cortex upgrade {OWN}", proc.err)
+        if store.development(Version(OWN)):     # a build of no release names no move down to itself (ADR-009 §9)
+            self.assertNotIn("move the project down", proc.err)
+        else:
+            self.assertIn(f"or move the project down to this cortex's version by naming it: cortex upgrade {OWN}",
+                          proc.err)
         self.assertEqual(snapshot(project), before)
 
     def test_it_moves_down_to_the_version_named(self):

@@ -24,9 +24,14 @@ The first writes, as JSON, the checksum of the spec archive of every release pub
 read from their ``SHA256SUMS``; the second embeds that table in the binary, which then refuses a
 spec archive of those versions that changed since (§3.3).
 
+    python cli/build.py --development-version N
+
+prints the version a build of no release is stamped with: ``X.Y.Z-dev.N``, ``N`` the CI run's
+number, ``X.Y.Z`` the version ``CHANGELOG.md`` says the branch prepares (ADR-009 §9).
+
 The version is stamped into the binary for the duration of the build, in ``cortex_cli/_stamp.py``:
-the release's, as the release workflow names it (ADR-009 §3.3), or a pre-release — ``0.0.0-dev.N`` —
-for a build of no release. So is the target: ``cortex self-update`` downloads the asset of the build
+the release's, as the release workflow names it (ADR-009 §3.3), or a pre-release — ``X.Y.Z-dev.N``
+— for a build of no release. So is the target: ``cortex self-update`` downloads the asset of the build
 it replaces, whatever the machine says it is — Windows on ARM runs the x86_64 build, and tells a
 process it emulates that it is ARM64.
 """
@@ -55,6 +60,7 @@ STAMP = CLI / "cortex_cli" / "_stamp.py"
 KNOWN_SPECS = CLI / "cortex_cli" / "_known_specs.py"
 sys.path[:0] = [str(REPO / "core"), str(CLI)]     # run from anywhere, or loaded by the tests
 from cortex_core.project import is_version  # noqa: E402 — the grammar the command and the runtime read
+from cortex_cli.devversion import development  # noqa: E402
 from cortex_cli.semver import FIRST_SPEC_ARCHIVE, Version  # noqa: E402
 # (operating system, machine) as Python names them -> the target's name in the release (§3.1)
 SPEC_TREES = ("agents", "templates", "docs")
@@ -206,6 +212,13 @@ def checksums(directory: Path) -> Path:
     return sums
 
 
+def build_number(value: str) -> int:
+    """A CI run's number, as ``--development-version`` takes it: digits only."""
+    if not (value.isascii() and value.isdigit()):
+        raise argparse.ArgumentTypeError(f"not a build number: {value!r}")
+    return int(value)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the cortex binary (ADR-008 §3.1).")
     action = parser.add_mutually_exclusive_group(required=True)
@@ -214,6 +227,9 @@ def main() -> int:
     action.add_argument("--checksums", metavar="DIR", type=Path, help="write DIR/SHA256SUMS over the assets in DIR")
     action.add_argument("--fetch-known-specs", nargs=2, metavar=("REPOSITORY", "FILE"),
                         help="write FILE, the checksums of the spec archives REPOSITORY has released")
+    action.add_argument("--development-version", metavar="N", type=build_number,
+                        help="print X.Y.Z-dev.N, the version of a build of no release: X.Y.Z, the one CHANGELOG.md "
+                             "says the branch prepares; N, the CI run's number")
     parser.add_argument("--known-specs", metavar="FILE", type=Path,
                         help="with --version: the checksums of the earlier spec archives, to embed")
     args = parser.parse_args()
@@ -232,6 +248,9 @@ def main() -> int:
         return 0
     if args.checksums:
         print(checksums(args.checksums).read_text(encoding="utf-8"), end="")
+        return 0
+    if args.development_version is not None:
+        print(development((REPO / "CHANGELOG.md").read_text(encoding="utf-8"), args.development_version))
         return 0
     if not is_version(args.version):
         parser.error(f"not a version: {args.version!r}")

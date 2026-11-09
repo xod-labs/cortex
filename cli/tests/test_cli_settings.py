@@ -23,6 +23,7 @@ sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).res
 
 import cli_harness as harness  # noqa: E402
 from cortex_cli import machine, store  # noqa: E402
+from cortex_cli.devversion import development  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
@@ -31,13 +32,11 @@ DOWNLOADS = unittest.skipIf(harness.BINARY, "a build of no release downloads no 
 GIT = shutil.which("git")
 NEEDS_GIT = unittest.skipIf(GIT is None, "needs git")
 POSIX = unittest.skipIf(os.name == "nt", "a git stand-in written as a shell script")
-# A development build — a dispatch of the binary workflow, 0.0.0-dev.N — passes the version gate, as a
-# source checkout does: what the gate refuses is tested from source, or with a release's build; that a
-# development build passes, from source with no CORTEX_SOURCE_VERSION, or with such a build.
-DEV_BUILD = re.compile(r"0\.0\.0-dev(\.[0-9]+)?")
-DEVELOPMENT = unittest.skipIf(harness.BINARY is not None and DEV_BUILD.fullmatch(harness.EXPECTED_VERSION or "0.0.0-dev"),
-                              "a development build passes the version gate")
-OWN_DEV = harness.EXPECTED_VERSION if harness.BINARY else "0.0.0-dev"
+# A build of no release — a source checkout, X.Y.Z-dev, or a CI build, X.Y.Z-dev.N — takes the version
+# its branch prepares (ADR-009 §9): from source with no CORTEX_SOURCE_VERSION, the changelog's.
+DEV_BUILD = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+-dev(\.[0-9]+)?")
+OWN_DEV = harness.EXPECTED_VERSION if harness.BINARY else \
+    development((harness.REPO / "CHANGELOG.md").read_text(encoding="utf-8"))
 RELEASE_BUILD = unittest.skipIf(harness.BINARY is not None and not DEV_BUILD.fullmatch(harness.EXPECTED_VERSION or ""),
                                 "a release's build, which is no development build")
 
@@ -260,7 +259,6 @@ class TooNewTests(SettingsTestCase):
 
     WHY = f"this project uses Cortex 99.0.0, which its cortex.toml pins, newer than this cortex, {OWN}"
 
-    @DEVELOPMENT
     def test_sync_init_and_validate_say_the_version_not_the_key(self):
         project = self.project("99.0.0", extra='agents = "team"\n')      # a key this cortex does not know
         for args, code in ((("sync",), 1), (("init", "--tool", "claude"), 1), (("validate",), 2)):
@@ -272,14 +270,13 @@ class TooNewTests(SettingsTestCase):
                 self.assertNotIn("unknown key", proc.err)
 
     def test_upgrade_says_the_version_not_the_key(self):
-        # Never down to this cortex's version without naming it — a development build's too, as in 1.7.0.
+        # Never down to this cortex's version without naming it.
         proc = self.cortex(self.project("99.0.0", extra='agents = "team"\n'), "upgrade")
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn(self.WHY, proc.err)
         self.assertIn("cortex self-update 99.0.0", proc.err)
         self.assertNotIn("unknown key", proc.err)
 
-    @DEVELOPMENT
     def test_config_prints_the_version_and_says_so(self):
         known = self.project("99.0.0", name="known")                      # every key known to this cortex
         project = self.project("99.0.0", extra='agents = "team"\n')      # one it does not know
@@ -292,7 +289,6 @@ class TooNewTests(SettingsTestCase):
                               proc.out.splitlines()[0])
                 self.assertIn("register", proc.out)
 
-    @DEVELOPMENT
     def test_a_known_key_of_a_project_too_new_says_the_version_and_an_unknown_one_is_unknown(self):
         project = self.project("99.0.0", extra='agents = "team"\n')
         proc = self.cortex(project, "config", "theme")
@@ -327,14 +323,22 @@ class TooNewTests(SettingsTestCase):
 
 @RELEASE_BUILD
 class DevelopmentBuildTests(SettingsTestCase):
-    """A source checkout, 0.0.0-dev, or a development build, 0.0.0-dev.N, passes the version gate — or it
-    would refuse what 1.7.0 accepted."""
+    """A source checkout, X.Y.Z-dev, or a CI build of no release, X.Y.Z-dev.N, is the version its branch
+    prepares (ADR-009 §9, 2026-11-09): the version gate compares it as any other — no exception — and a
+    plain upgrade never moves a project to it unnamed."""
+
+    PREPARED = "{}.{}.{}".format(*Version(OWN_DEV).core)      # the release it prepares: newer than it
 
     def setUp(self):
         super().setUp()
         del self.env["CORTEX_SOURCE_VERSION"]
 
-    def test_validate_from_a_development_build_checks_a_project_pinned_to_a_release(self):
+    def test_it_says_the_version_it_prepares(self):
+        proc = self.cortex(self.tmp, "--version")
+        self.assertEqual(proc.out, f"cortex {OWN_DEV}\n")
+        self.assertTrue(store.development(Version(OWN_DEV)), OWN_DEV)
+
+    def test_validate_from_a_development_build_checks_a_project_pinned_to_an_older_release(self):
         project = self.project("1.7.0")
         stored = self.home / "versions" / "1.7.0"
         for tree in ("agents", "templates", "docs"):
@@ -346,18 +350,36 @@ class DevelopmentBuildTests(SettingsTestCase):
         found = self.settings(project)
         self.assertIs(found["too_new"], False)
         self.assertEqual(found["cortex"], OWN_DEV)
-        proc = self.cortex(project, "upgrade")                            # never down to 0.0.0-dev, as 1.7.0
+        before = (project / "cortex.toml").read_bytes()
+        proc = self.cortex(project, "upgrade")                    # never up to a version no teammate downloads
         self.assertEqual(proc.returncode, 1, proc.err)
-        self.assertIn("move the project down to this cortex's version by naming it", proc.err)
+        self.assertIn(f", {OWN_DEV}, the version its branch prepares, which no teammate can download — name the "
+                      "version to move to: `cortex upgrade VERSION`. Nothing was changed", proc.err)
+        self.assertEqual((project / "cortex.toml").read_bytes(), before)
+
+    def test_the_release_it_prepares_is_too_new_for_it(self):
+        project = self.project(self.PREPARED)
+        why = f"this project uses Cortex {self.PREPARED}, which its cortex.toml pins, newer than this cortex, {OWN_DEV}"
+        proc = self.cortex(project, "validate")
+        self.assertEqual(proc.returncode, 2, proc.err)
+        self.assertIn(why, proc.err)
+        self.assertIs(self.settings(project)["too_new"], True)
+        proc = self.cortex(project, "upgrade")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn(why, proc.err)
+        self.assertNotIn("move the project down", proc.err)     # to a version no teammate downloads
 
     def test_what_a_development_build_is(self):
-        for text in ("0.0.0-dev", "0.0.0-dev.7"):
+        for text in ("0.0.0-dev", "1.8.0-dev", "1.8.0-dev.7", "2.0.0-dev.0", OWN_DEV):
             self.assertTrue(store.development(Version(text)), text)
-            self.assertFalse(store.too_old_for(Version("1.7.0"), Version(text)), text)
-        for text in ("0.0.0-dev.x", "0.0.0-dev.1.2", "0.0.1-dev", "1.0.0-dev", "0.0.0-rc.1"):
+        for text in ("1.8.0-dev.x", "1.8.0-dev.1.2", "1.8.0-devx", "1.8.0-rc.1", "1.8.0", "1.8.0-alpha.dev"):
             self.assertFalse(store.development(Version(text)), text)
-        self.assertTrue(store.too_old_for(Version("1.7.0"), Version("1.6.0")))
-        self.assertFalse(store.too_old_for(Version("1.7.0"), Version("1.7.0")))
+        for version, own in (("1.8.0", "1.8.0-dev.7"), ("1.8.0-dev.8", "1.8.0-dev.7"), ("1.7.0", "0.0.0-dev"),
+                             ("1.7.0", "1.6.0"), ("1.8.0-rc.1", "1.8.0-dev")):
+            self.assertTrue(store.too_old_for(Version(version), Version(own)), (version, own))
+        for version, own in (("1.7.0", "1.8.0-dev"), ("1.8.0-dev.7", "1.8.0-dev.7"), ("1.8.0", "1.8.1-dev.3"),
+                             ("1.7.0", "1.7.0")):
+            self.assertFalse(store.too_old_for(Version(version), Version(own)), (version, own))
 
 
 class NoHomeTests(unittest.TestCase):
@@ -397,6 +419,7 @@ class NoHomeCommandTests(SettingsTestCase):
         os.chdir(project)
         environ = {key: value for key, value in os.environ.items() if key != "CORTEX_HOME"}
         with mock.patch.dict(os.environ, {**environ, "PWD": str(project)}, clear=True), \
+                mock.patch.object(store, "VERSION", OWN), \
                 mock.patch.object(Path, "home", side_effect=no_home), \
                 mock.patch("sys.stderr", io.TextIOWrapper(io.BytesIO(), encoding="utf-8")), \
                 mock.patch("sys.stdout", io.TextIOWrapper(io.BytesIO(), encoding="utf-8")):        # validate writes bytes

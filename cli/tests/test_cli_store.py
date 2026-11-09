@@ -59,8 +59,10 @@ class EmbeddedTests(StoreTestCase):
                          (REPO / "agents" / "roles" / "prompt-manager.md").read_bytes())
 
     def test_a_dev_version_serves_itself(self):
-        the_store = store.Store(self.home, own_version="0.0.0-dev.7", checkout=REPO, fetch=self.no_network)
-        self.assertEqual(the_store.ensure(Version("0.0.0-dev.7")), "written")
+        for own in ("1.8.0-dev", "1.8.0-dev.7"):               # a source checkout's, a CI build's (ADR-009 §9)
+            with self.subTest(own=own):
+                the_store = store.Store(self.home, own_version=own, checkout=REPO, fetch=self.no_network)
+                self.assertEqual(the_store.ensure(Version(own)), "written")
 
     @unittest.skipIf(AS_ROOT, "root writes any file")
     def test_it_is_read_only_once_written(self):

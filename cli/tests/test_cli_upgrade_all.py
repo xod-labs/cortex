@@ -1174,6 +1174,7 @@ class CommitInProcessTests(GitTestCase):
                        "GIT_CONFIG_GLOBAL": self.env["GIT_CONFIG_GLOBAL"]}
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.dict(os.environ, environment), mock.patch.object(upgrade, "_changed", blind_before), \
+                mock.patch.object(store, "VERSION", OWN), \
                 mock.patch.object(store.Store, "__init__", functools.partialmethod(store.Store.__init__, own_version=OWN)):
             code = upgrade.upgrade(str(alpha), None, False, False, None, out, err, message=self.MESSAGE)
         self.assertEqual(code, 0, err.getvalue())
