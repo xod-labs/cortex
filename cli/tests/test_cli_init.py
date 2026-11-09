@@ -1569,6 +1569,28 @@ class BootstrapMarkerTests(unittest.TestCase):
     def test_a_kept_file_of_the_same_layout_and_format_is_a_bootstrap_of_this_version(self):
         self.assertIsNone(init_command.kept_bootstrap(self.template(), self.template()))
 
+    def unmarked(self, layout="workspace"):
+        """A template of a version before the bootstrap marker — 1.3.0's, say."""
+        title = "# Cortex AI Team — Workspace Mode" if layout == "workspace" else "# Cortex AI Team"
+        return f"{title}\n\nRead cortex.local.toml first.\n".encode("utf-8")
+
+    def test_a_line_above_the_title_hides_neither_the_bootstrap_nor_its_layout(self):
+        # One reading of the title for every caller: below a line a team wrote above it, a workspace's file is a
+        # workspace's to init, to init --force and to upgrade alike — CRLF and a byte order mark hide nothing either.
+        for line in (b"<!-- our notes -->\n", b"\xef\xbb\xbf<!-- our notes -->\r\n"):
+            for layout, other in (("workspace", "single"), ("single", "workspace")):
+                with self.subTest(line=line, layout=layout):
+                    kept = line + self.unmarked(layout)
+                    self.assertTrue(init_command.bootstrap_of_cortex(kept))
+                    self.assertEqual(init_command.written_for_workspace(kept), layout == "workspace")
+                    self.assertIsNone(init_command.kept_bootstrap(kept, self.unmarked(layout)))
+                    self.assertEqual(init_command.kept_bootstrap(kept, self.unmarked(other)).sentence,
+                                     f"was written for {'a workspace' if layout == 'workspace' else 'a single project'}")
+                    # Against a version that writes the marker: an older bootstrap, never "no Cortex bootstrap".
+                    self.assertEqual(init_command.kept_bootstrap(kept, self.template(layout, 2)).sentence,
+                                     "is an older Cortex bootstrap, written before the bootstrap marker")
+        self.assertIsNone(init_command.title_line(b"<!-- our notes -->\nRead cortex.local.toml first.\n"))
+
     def test_the_marker_says_the_layout_whatever_the_title(self):
         retitled = self.template().replace("Workspace Mode".encode(), "Workspace Mode (Acme)".encode())
         self.assertIsNone(init_command.kept_bootstrap(retitled, self.template()))

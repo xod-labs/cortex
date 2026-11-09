@@ -207,8 +207,17 @@ def applies_always(content: bytes) -> bool:
 
 
 def bootstrap_of_cortex(content: bytes) -> bool:
-    """A file the templates wrote: their heading, or their personality block."""
-    return without_frontmatter(content).startswith(TITLE) or PERSONALITY_BEGIN in content
+    """A file the templates wrote: their heading — below a line a team wrote above it too — or their personality
+    block."""
+    return title_line(content) is not None or PERSONALITY_BEGIN in content
+
+
+def title_line(content: bytes) -> Optional[bytes]:
+    """The templates' heading in a bootstrap: the first line of Cortex's block that is one, once a frontmatter is
+    set aside — the first line, or one below a line a team wrote above it; ``None`` in a file without it. One
+    reading for every caller: whether a file is Cortex's, and the layout it was written for (ADR-010 §3.1)."""
+    lines = without_frontmatter(parts(normalised(content))[0]).split(b"\n")
+    return next((line for line in lines if line.startswith(TITLE)), None)
 
 
 def reads_the_local_file(content: bytes) -> bool:
@@ -244,8 +253,7 @@ def written_for_workspace(content: bytes) -> bool:
     layouts = {layout for layout, _ in markers(content)}
     if len(layouts) == 1:
         return layouts == {"workspace"}
-    lines = without_frontmatter(parts(content)[0]).split(b"\n")
-    return b"Workspace Mode" in next((line for line in lines if line.startswith(TITLE)), b"")
+    return b"Workspace Mode" in (title_line(content) or b"")
 
 
 def normalised(content: bytes) -> bytes:
@@ -321,8 +329,10 @@ def kept_bootstrap(kept: bytes, template: bytes) -> Optional[Kept]:
         if not reads_the_local_file(kept):
             return Kept(f"is an older Cortex bootstrap: it does not read {config.LOCAL_FILE}, which names the spec now",
                         f"an older Cortex bootstrap, which does not read {config.LOCAL_FILE}")
-        if without_frontmatter(kept).split(b"\n", 1)[0] != template.split(b"\n", 1)[0]:
-            return _other_layout("workspace" if b"Workspace Mode" in template.split(b"\n", 1)[0] else "single")
+        # The layout its title says — below a line a team wrote above it too — as cortex init --force reads it.
+        writes_workspace = written_for_workspace(template)
+        if written_for_workspace(kept) != writes_workspace:
+            return _other_layout("workspace" if writes_workspace else "single")
         return None
     if len(found) > 1:
         return Kept("holds several bootstrap markers, so none is read", "it holds several bootstrap markers, so none is read")
