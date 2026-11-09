@@ -509,13 +509,14 @@ def write_spec(root: str, spec: str) -> None:
     write_local_text(root, render_spec(root, spec))
 
 
-def load_lock(root: str, name: str = LOCK_FILE) -> Optional[Lock]:
+def load_lock(root: str, name: str = LOCK_FILE, *, writer: str = "`cortex sync`") -> Optional[Lock]:
     """The project's ``cortex.lock`` — or the lock ``name`` names under ``root``, the team's in its
-    folder — checked with the core's grammar; ``None`` when there is none."""
+    folder — checked with the core's grammar; ``None`` when there is none. ``writer`` is the command a
+    lock that is no lock is deleted for: the sync, or — the lock a try leaves — `cortex upgrade`."""
     path = os.path.join(root, name)
     if not os.path.isfile(path):
         return None
-    again = "delete it, and `cortex sync` writes it again"     # a merge left conflict markers in it, say
+    again = f"delete it, and {writer} writes it again"     # a merge left conflict markers in it, say
     shown_name = TEAM_LOCK_NAME if name == TEAM_LOCK_FILE else name
     try:
         data = _read(path, shown_name)

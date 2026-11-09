@@ -1457,6 +1457,21 @@ class CodeReviewFixTests(TeamTestCase):
         self.assertNotIn("changes of yours", proc.err)
         self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "init")
 
+    @SOURCE
+    def test_a_try_s_lock_that_is_no_lock_names_the_upgrade_that_writes_it(self):
+        # During a try the sync leaves the team's lock: deleted, `cortex upgrade` writes it again.
+        root, lock = self.stale_team_lock()
+        lock.write_text("<<<<<<< HEAD\nversion = 1\n", encoding="utf-8")
+        self.assert_ok(self.cortex(root, "sync"))
+        proc = self.cortex(root, "upgrade")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("agents/cortex.team.lock", proc.err)
+        self.assertIn("delete it, and `cortex upgrade` writes it again", proc.err)
+        self.assertNotIn("`cortex sync` writes it again", proc.err)
+        lock.unlink()
+        self.assert_ok(self.cortex(root, "upgrade"))
+        self.assertEqual(str(config.load_lock(str(lock.parent), lock.name).version), "9.9.8")
+
     def test_team_checks_no_overlay_of_a_project_that_pins_its_own_version(self):
         # It does not follow the team's file: its overlays are its own pin's, not the team's to check.
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', team=f'version = "{OWN}"\n')
