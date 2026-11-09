@@ -529,3 +529,10 @@ Carried by [#333](https://github.com/xod-labs/cortex/issues/333) to [#336](https
 - **§3.6 — the runtime** reads the team's version without asking git: `synced`'s, once each file's `version` is what `cortex sync` recorded, a `422` naming `cortex sync` otherwise; without `synced`, a `cortex.toml` before 1.8.0 alone, else `cortex.toml`'s or the team's file's, a `422` when they differ. A try this machine reads is a `422` naming it; `CORTEX_THEME` yields to a theme the team's file locks; the team's folder is the one `cortex.toml` names (ADR-013 §3.12).
 - **§9 — the 2.B pin** (Phase 4, found in review): *pinning is then per developer* holds only without a team's file. With one, the team's repository pins the version for every teammate, its lock beside it, and `cortex upgrade --team` moves it (ADR-013 §3.4, §3.11).
 - **§9 — `claude_access`** (the maintainer's arbitration of 2026-09-27): *whose value wins* is narrowed by the team's file, which may lock `claude_access` to `false` only — a team may forbid a permission, never grant one on a developer's machine (ADR-013 §3.5, decision 25).
+
+### 2026-11-09 — ADR-009, development versions
+
+Carried by [#342](https://github.com/xod-labs/cortex/issues/342), for 1.8.0.
+
+- **§9 — a build of no release** is no longer `0.0.0-dev.N`, nor a source checkout `0.0.0-dev`: each takes the version its branch prepares, `X.Y.Z-dev.N` and `X.Y.Z-dev`, from its `CHANGELOG.md` ([ADR-009](ADR-009-release-cycle.md) §9). Only the release workflow stamps a released version, as before.
+- **§9 — `CORTEX_SOURCE_VERSION`** still names the version a checkout's tests stand for, now in place of the one its changelog prepares.
