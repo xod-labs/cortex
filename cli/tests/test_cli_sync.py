@@ -937,6 +937,7 @@ class CortexLockTests(SyncTestCase):
         (project / "cortex.lock").write_text(f'format = 1\nversion = "{version}"\ndigest = "{digest_ or self.OTHER}"\n{extra}',
                                              encoding="utf-8")
 
+    @harness.outside_a_repository
     def test_in_no_repository_the_lock_is_not_said_to_commit(self):
         # A 2.B workspace root: cortex init says cortex.toml is committed nowhere, and so is the lock — nor does
         # `sync --locked` or `validate` say to commit it.
@@ -965,6 +966,7 @@ class CortexLockTests(SyncTestCase):
         proc = self.validate(project)
         self.assertIn(f"pins {OWN} — run `cortex sync`, then commit it", proc.out)
 
+    @harness.outside_a_repository
     def test_a_repository_is_a_git_at_the_root_or_above_it_as_written_or_resolved(self):
         repo = self.tmp / "repo"
         (repo / ".git").mkdir(parents=True)
@@ -1268,6 +1270,7 @@ class RegisterTests(SyncTestCase):
                 self.assertNotIn("registered", proc.out + proc.err)
                 self.assertEqual(self.written(), before)
 
+    @harness.outside_a_repository
     def test_a_listed_project_waits_for_no_other_write_of_the_registry(self):
         sync, version = in_process()
         from cortex_cli import registry
@@ -1383,6 +1386,7 @@ class RegisterTests(SyncTestCase):
         self.assertTrue((project / "cortex.lock").is_file())
         self.assertEqual(self.registry.read_bytes(), before)
 
+    @harness.outside_a_repository
     def test_cortex_no_register_set_neither_reads_nor_writes_the_registry_and_empty_counts_as_unset(self):
         project = self.project("acme")
         for value in ("1", "yes"):

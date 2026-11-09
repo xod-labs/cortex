@@ -325,6 +325,7 @@ class OptionTests(InitTestCase):
                 self.assertIn("no theme name", proc.err)
                 self.assertEqual(list(self.project.iterdir()), [])
 
+    @harness.outside_a_repository
     def test_a_root_that_is_no_repository_is_said_and_gets_no_gitignore(self):
         proc = self.init()
         self.assertEqual(proc.returncode, 0, proc.err)
@@ -552,6 +553,7 @@ class OptionTests(InitTestCase):
         proc = self.init("--tool", "claude", "--force")
         self.assertIn("CLAUDE.md.bak: the file --force replaces, as it was — git does not ignore it", proc.out)
 
+    @harness.outside_a_repository
     def test_outside_a_repository_an_existing_gitignore_is_said_to_do_nothing(self):
         (self.project / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
         proc = self.init()
