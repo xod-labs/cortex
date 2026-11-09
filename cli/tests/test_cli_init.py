@@ -338,10 +338,24 @@ class OptionTests(InitTestCase):
 
     def test_a_root_inside_a_repository_is_not_said_to_be_in_none(self):
         # The repository is a .git at the root or above it, git or not on the PATH — as cortex upgrade tells it.
+        # Without git to ask, .gitignore's own lines say what is ignored, in a subdirectory too: it is written.
         (self.project.parent / ".git").mkdir(parents=True)
         proc = self.init()
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertNotIn("is in no git repository", proc.err)
+        self.assertIn("cortex.local.toml", self.read(".gitignore").splitlines())
+
+    @unittest.skipUnless(HAS_GIT, "needs git")
+    def test_a_repository_git_refuses_above_the_root_still_gets_the_gitignore(self):
+        # git asked, and refusing — here a worktree whose repository is gone — is no "no repository": .gitignore's own
+        # lines say what is ignored, and the file is written.
+        self.project.parent.mkdir(parents=True, exist_ok=True)
+        (self.project.parent / ".git").write_text("gitdir: ../nowhere\n", encoding="utf-8")
+        self.env = dict(self.env, PATH=os.pathsep.join([os.path.dirname(shutil.which("git")), self.env["PATH"]]))
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("is in no git repository", proc.err)
+        self.assertIn("cortex.local.toml", self.read(".gitignore").splitlines())
 
     @unittest.skipUnless(HAS_GIT, "needs git")
     def test_a_copy_turned_into_a_link_is_ignored_as_a_link(self):
