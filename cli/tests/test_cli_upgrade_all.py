@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a p
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 from cortex_cli import init, self_update, store, sync, upgrade  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
+import cli_harness as harness  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 from test_cli_upgrade import DOWNLOADS, MARKED, OLD_BOOTSTRAP, OVERLAY, OWN, UpgradeTestCase, snapshot  # noqa: E402
 
@@ -181,6 +182,7 @@ class AllTests(AllTestCase):
         self.assertEqual(proc.out, "")
         self.assertEqual(snapshot(self.code), before)
 
+    @harness.outside_a_repository
     def test_projects_in_no_work_tree_have_nothing_to_commit(self):
         # 2.B workspaces: their files are committed nowhere, as cortex init says of them (ADR-008 §9).
         alpha, beta = self.make("alpha"), self.make("beta", tree=True)
@@ -201,6 +203,7 @@ class AllTests(AllTestCase):
                                           f"  beta   {display(beta)}: in no git work tree\n"), proc.out)
 
     @unittest.skipIf(os.name == "nt", "a link to a file needs a privilege on Windows")
+    @harness.outside_a_repository
     def test_a_project_in_no_work_tree_still_says_the_file_linked_into_a_repository(self):
         # Its own files are committed nowhere, and the team's bootstrap is to commit where it is: the project has
         # something to commit, said with that file — never "nothing".
@@ -468,6 +471,7 @@ class GitCommandLineTests(GitTestCase):
 @DOWNLOADS
 @NEEDS_GIT
 class BranchTests(GitTestCase):
+    @harness.outside_a_repository
     def test_the_branch_is_made_in_each_git_project_and_refused_where_it_exists(self):
         alpha, beta, gamma = self.make("alpha"), self.make("beta"), self.make("gamma")
         first = self.repository(alpha)
@@ -677,6 +681,7 @@ class CommitTests(GitTestCase):
                       f"CLAUDE.md — committed on {self.branch(alpha)}, {commit}\n"
                       "Nothing was pushed. Teammates run `cortex sync` after they pull.\n", proc.out)
 
+    @harness.outside_a_repository
     def test_a_project_outside_git_is_said_and_nothing_is_committed_there(self):
         alpha, gamma = self.make("alpha"), self.make("gamma")
         self.repository(alpha)
