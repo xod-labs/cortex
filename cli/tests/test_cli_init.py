@@ -480,6 +480,28 @@ class OptionTests(InitTestCase):
         self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
         self.assertIn("was written for a workspace, and is written for one again", proc.err)
 
+    def test_force_without_workspace_finds_the_title_below_a_line_a_team_wrote_above_it(self):
+        # A file of before the marker, opened by the team's own line: the title is still the templates' — it was
+        # written single, in silence.
+        old = "<!-- our notes -->\n# Cortex AI Team — Workspace Mode\n\nRead cortex.local.toml first.\n"
+        (self.project / "CLAUDE.md").write_text(old, encoding="utf-8")
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("was written for a workspace, and is written for one again", proc.err)
+        self.assertEqual(self.read("CLAUDE.md.bak"), old)
+
+    def test_force_with_workspace_says_nothing_of_a_layout_read_from_the_file(self):
+        # The note is of the layout read from the file, without the option: with --workspace, the option chose it.
+        self.assertEqual(self.init("--tool", "claude", "--workspace").returncode, 0)
+        before = self.read("CLAUDE.md").replace("<!-- cortex:bootstrap layout=workspace format=2",
+                                                "<!-- cortex:bootstrap layout=workspace format=1", 1)
+        (self.project / "CLAUDE.md").write_text(before, encoding="utf-8")          # an older format, to write again
+        proc = self.init("--tool", "claude", "--workspace", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertNotIn("was written for a workspace", proc.err)
+
     def test_force_keeps_a_single_project_single_and_workspace_still_moves_it(self):
         self.assertEqual(self.init("--tool", "claude").returncode, 0)
         proc = self.init("--tool", "claude", "--force", "--no-personality")
@@ -1708,6 +1730,10 @@ class BootstrapMarkerTests(unittest.TestCase):
         rule = b"---\nalwaysApply: true\n---\n" + old
         self.assertTrue(init_command.written_for_workspace(rule))                 # WS4: after a frontmatter
         self.assertFalse(init_command.written_for_workspace("# Workspace Mode notes\n".encode("utf-8")))
+        above = b"<!-- our notes -->\n" + old                                    # a line of the team's above the title
+        self.assertTrue(init_command.written_for_workspace(above))
+        self.assertTrue(init_command.written_for_workspace(b"---\nalwaysApply: true\n---\n" + above))
+        self.assertFalse(init_command.written_for_workspace(b"<!-- our notes -->\n" + said))
 
     def test_a_version_whose_templates_carry_no_marker_keeps_its_checks(self):
         # A project pinned to 1.3: its templates have no marker, and its bootstrap is not "older".
