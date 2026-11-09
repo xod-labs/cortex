@@ -1071,6 +1071,67 @@ class CodeReviewTests(TeamTestCase):
                 self.assert_ok(self.cortex(root, "sync", "--locked"))
                 self.assertEqual(self.local(root)["synced"]["reads"], "9.9.8")
 
+    def team_repository(self, version="1.8.0"):
+        """A follower whose work tree holds its team's folder, pinned at ``version``, all committed."""
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        root = self.project('theme = "h2g2"\n', team=f'version = "{version}"\n', committed=False)
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "init")
+        return root, env
+
+    @NEEDS_GIT
+    def test_team_commit_never_commits_the_developer_s_own_change_of_the_team_s_file(self):
+        root, env = self.team_repository()
+        team = root / TEAM
+        team.write_text(team.read_text(encoding="utf-8") + 'theme = "mine"\n', encoding="utf-8")     # theirs, not committed
+        for run in ("a move", "at the pin"):
+            with self.subTest(run=run):
+                proc = self.cortex(root, "upgrade", "--team", OWN, "--commit", "--message", "move", **env)
+                self.assert_ok(proc)
+                self.assertIn(f"note: nothing is committed in agents/ — {TEAM} holds changes of yours besides its "
+                              "version — commit by hand what is the team's", proc.err)
+                self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "init")
+        self.assertIn('theme = "mine"', team.read_text(encoding="utf-8"))
+        # Without the developer's own change, what --team writes is committed — the version alone.
+        self.git(root, "checkout", "-q", "--", TEAM)
+        proc = self.cortex(root, "upgrade", "--team", OWN, "--commit", "--message", "move", **env)
+        self.assert_ok(proc)
+        self.assertIn("Committed in agents/", proc.out)
+        self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "move")
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_all_team_commit_says_what_it_committed_and_what_it_left(self):
+        # The team's files are committed in the team's folder; a follower's bootstrap written again is the project's.
+        marked = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes().replace(
+            b"# Cortex AI Team", b"# Cortex AI Team, as 9.9.8 wrote it", 1)
+        team = self.tmp / "team"
+        team.mkdir()
+        (team / "cortex.team.toml").write_text('version = "9.9.8"\n', encoding="utf-8")
+        self.git(team, "init", "-q")
+        self.git(team, "add", "-A")
+        self.git(team, "commit", "-q", "-m", "init")
+        roots = []
+        for name in ("alpha", "beta"):
+            root = self.project('theme = "h2g2"\n', name=name)
+            (root / "agents").symlink_to(team, target_is_directory=True)
+            (root / "CLAUDE.md").write_bytes(init.stamped(init.instructions(marked, True)))  # nobody's change: its marker
+            roots.append(root)
+        self.registered(*roots)
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team", OWN, "--commit", "--message", "move", **env)
+        self.assert_ok(proc)
+        self.assertEqual(self.git(team, "log", "-1", "--format=%s").stdout.strip(), "move")
+        self.assertRegex(proc.out, rf"alpha  {re.escape(harness_path(roots[0]))}: agents/cortex.team.toml and "
+                                   r"agents/cortex.team.lock — committed on \S+, [0-9a-f]+; CLAUDE.md — not committed: "
+                                   r"--team commits in the team's folder only\n")
+        self.assertIn(f"beta   {harness_path(roots[1])}: CLAUDE.md — not committed: --team commits in the team's folder "
+                      "only\n", proc.out)
+        self.assertNotIn("None", proc.out)
+
 
 def newer_refused(pin):
     """What --team with no VERSION says of a team's pin newer than this cortex."""

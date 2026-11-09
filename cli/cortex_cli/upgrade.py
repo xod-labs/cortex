@@ -78,6 +78,7 @@ class Outcome:
     clean: bool = False                                 # --commit: the files are as committed already
     left: List[Path] = field(default_factory=list)      # --commit, nothing written: files git sees changed still
     outside: List[Path] = field(default_factory=list)   # --commit: of the files, those outside the git work tree
+    team: Optional[str] = None                          # --team: the team's folder, where --commit commits its files
 
     def names(self) -> List[str]:
         """The files to commit in the project — those outside its git work tree, ``elsewhere``."""
@@ -712,7 +713,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
                 _put(path, content)
         err.write(f"note: {config.TEAM_NAME} and its lock are as they were\n")
         raise
-    outcome = Outcome(root, pinned, target, files=list(files))
+    outcome = Outcome(root, pinned, target, files=list(files), team=agents)
     outcome.left = [] if files else left
     if project.follows:
         current_path = None
@@ -730,7 +731,14 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
             outcome.files.append(path)
         if developer is not None and Version(str(developer.value)) > target:
             out.write(f"This machine reads Cortex {developer.value}, {developer.origin}'s — the try, above {target}.\n")
-    if message is not None and top is not None:
+    theirs = _team_theirs(agents, team_file, target) if message is not None and top is not None \
+        and team_file in files else None
+    if theirs is not None:
+        outcome.uncommitted = theirs
+        err.write(f"note: nothing is committed in {config.TEAM_FOLDER}/ — {theirs}\n")
+    elif message is not None and files and top is None:
+        outcome.uncommitted = f"{config.TEAM_FOLDER}/ is in no git work tree"
+    elif message is not None and top is not None:
         paths = [os.path.relpath(path, agents) for path in files]
         try:
             _git_ok(agents, "add", "--", *paths)
@@ -738,11 +746,31 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
                 _git_ok(agents, "commit", "-q", "-m", message, "--", *paths)
                 outcome.committed = f"{_on_branch(agents) or 'HEAD'}, " \
                     f"{_git_ok(agents, 'rev-parse', '--short', 'HEAD').stdout.strip()}"
+            else:
+                outcome.uncommitted = f"{_and([_shown_path(path, root) for path in files])} " \
+                    f"{'are' if len(files) > 1 else 'is'} {AS_COMMITTED}"
         except UpgradeError as error:
             outcome.code, outcome.uncommitted = 1, str(error)
             out.flush()
             err.write(f"cortex upgrade: {error} — the upgrade is done, and nothing was committed\n")
     return outcome
+
+
+def _team_theirs(agents: str, team_file: Path, target: Version) -> Optional[str]:
+    """Why ``--team --commit`` is to commit nothing in the team's folder — ``None`` when nothing stops it:
+    the team's file holds more than the version ``--team`` writes over the one committed — a developer's
+    own change, which would ride in the team's commit, as a plain ``--commit`` refuses (``_theirs``). The
+    lock does not count: written whole, it is the same whatever it held. Line endings aside."""
+    try:
+        proc = _git(agents, "show", f"HEAD:./{config.TEAM_FILE}")
+        committed = proc.stdout if proc.returncode == 0 else None       # not committed yet: the version alone
+        expected = config.set_keys(committed, {"version": str(target)}, config.TEAM_NAME, "")
+        found = team_file.read_bytes().decode("utf-8")
+    except (UpgradeError, config.ConfigError, OSError, UnicodeDecodeError) as error:
+        return f"it could not be told whether {config.TEAM_NAME} held changes of yours — {error}"
+    if found.replace("\r\n", "\n") == expected.replace("\r\n", "\n"):
+        return None
+    return (f"{config.TEAM_NAME} holds changes of yours besides its version — commit by hand what is the team's")
 
 
 def _served(the_store: store.Store, target: Version, again: str) -> None:
@@ -1495,7 +1523,9 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
         why = moved[folder]
         if why is not None:                 # refused once for every follower: never tried again
             return Outcome(entry.path, project.team_version, None, 1, why)
-        return _move(entry.path, _Options(None, options.dry_run, options.force), out, err, announce=False, made=made)
+        outcome = _move(entry.path, _Options(None, options.dry_run, options.force), out, err, announce=False, made=made)
+        outcome.team = os.path.join(entry.path, config.TEAM_FOLDER)     # its files are its own: --team commits none
+        return outcome
     # Every follower of this folder, checked against the target team_move will use, before it moves.
     the_store = store.Store()
     try:
@@ -1527,6 +1557,24 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
                         options.message, checked=folder)
     moved[folder] = None if outcome.why is None else outcome.why
     return outcome
+
+
+def _what_is_committed(outcome: Outcome, committing: bool) -> str:
+    """The files of ``outcome`` to commit, and, ``committing``, what ``--commit`` did of them. Under ``--team``,
+    the team's files are committed in the team's folder, and the project's own — a bootstrap written again — are
+    left to the project: said apart (ADR-013 §3.11)."""
+    def said(why: Optional[str]) -> str:
+        return "" if not committing else f" — committed on {outcome.committed}" if outcome.committed else \
+            f" — not committed{': ' + _first(why) if why else ''}"
+    if outcome.team is None:
+        return f"{_and(outcome.names())}{said(outcome.uncommitted)}" if outcome.names() else ""
+    team = [path for path in outcome.files if path not in outcome.outside and _inside(outcome.team, path)]
+    own = [path for path in outcome.files if path not in outcome.outside and path not in team]
+    parts = [f"{_and([_shown_path(path, outcome.root) for path in team])}{said(outcome.uncommitted)}"] if team else []
+    if own:
+        left = " — not committed: --team commits in the team's folder only" if committing else ""
+        parts.append(f"{_and([_shown_path(path, outcome.root) for path in own])}{left}")
+    return "; ".join(parts)
 
 
 def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]], target: Version,
@@ -1579,10 +1627,8 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
             why = why_nothing(outcome)
             out.write(f"  {entry.name:<{width}}  {entry.path}: nothing — {why}\n")
             continue
-        said = "" if not committing else f" — committed on {outcome.committed}" if outcome.committed else \
-            f" — not committed: {_first(outcome.uncommitted)}"
         here = f"nothing — {outcome.uncommitted}" if outcome.clean else f"{_and(outcome.names())} committed nowhere — in no git work tree" \
-            if outcome.nowhere else f"{_and(outcome.names())}{said}" if outcome.names() else ""
+            if outcome.nowhere else _what_is_committed(outcome, committing)
         line = "; ".join(part for part in (here, outcome.elsewhere()) if part)
         out.write(f"  {entry.name:<{width}}  {entry.path}: {line}\n")
     from_before()
