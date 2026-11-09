@@ -444,6 +444,22 @@ class DevelopmentPinTests(SettingsTestCase):
                 self.assertIn("Cortex 1.8.0-dev.3 is a build of no release, which no release serves — pin a release: "
                               "`cortex upgrade --team VERSION`", proc.err)
 
+    def test_config_names_the_command_of_the_file_that_pins_it(self):
+        project = self.project(extra="")
+        (project / "cortex.local.toml").write_text(f'version = "{self.NEWER}"\n', encoding="utf-8")
+        team = self.tmp / "team"
+        (team / "agents").mkdir(parents=True)
+        (team / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")
+        (team / "agents" / "cortex.team.toml").write_text(f'version = "{self.NEWER}"\n', encoding="utf-8")
+        for root, command in ((project, "cortex upgrade --local VERSION"), (team, "cortex upgrade --team VERSION")):
+            with self.subTest(command=command):
+                proc = self.cortex(root, "config", "version")
+                self.assert_ok(proc)
+                self.assertIn(f"pin a release:\n    {command}\n", proc.err)
+                proc = self.cortex(root, "config")
+                self.assert_ok(proc)
+                self.assertIn(f"newer than this cortex, {OWN}: pin a release: `{command}`", proc.out)
+
     def test_named_to_upgrade(self):
         project = self.project()
         before = (project / "cortex.toml").read_bytes()

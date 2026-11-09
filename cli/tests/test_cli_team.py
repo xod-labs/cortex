@@ -747,6 +747,34 @@ class SecondReviewTests(TeamTestCase):
                 self.assertEqual((root / TEAM).read_bytes(), before)
 
     @SOURCE
+    def test_all_from_a_development_build_is_refused_for_a_move_up_only(self):
+        # Refused once when a project would move up to the build's version unnamed: one pinned below it,
+        # that follows no team's file. A pin newer than the build, or a follower, moves none.
+        newer = self.project('version = "99.0.0"\ntheme = "h2g2"\n', name="a-newer")
+        follower = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n', name="b-follower")
+        for roots in ((newer,), (follower,), (newer, follower)):
+            with self.subTest(roots=[root.name for root in roots]):
+                self.registered(*roots)
+                proc = self.cortex(self.tmp, "upgrade", "--all", "--dry-run", CORTEX_SOURCE_VERSION=DEV_SOURCE)
+                self.assertNotIn("name the version to move to", proc.err)
+                self.assertIn("in each registered project", proc.out)
+        mover = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', name="c-mover")
+        self.registered(newer, follower, mover)                             # the one that moves, last
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--dry-run", CORTEX_SOURCE_VERSION=DEV_SOURCE)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("name the version to move to: `cortex upgrade --all VERSION`", proc.err)
+        self.assertNotIn("in each registered project", proc.out)
+
+    @SOURCE
+    def test_all_team_from_a_development_build_reads_every_project(self):
+        alone = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', name="a-alone")       # no team's file
+        follower = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n', name="b-follower")
+        self.registered(alone, follower)                                    # the follower, last
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team", "--dry-run", CORTEX_SOURCE_VERSION=DEV_SOURCE)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("name the version to move to: `cortex upgrade --all --team VERSION`", proc.err)
+
+    @SOURCE
     def test_a_development_build_s_own_pin_is_no_move(self):
         root = self.project('theme = "h2g2"\n', team=f'version = "{DEV_SOURCE}"\n')
         self.registered(root)

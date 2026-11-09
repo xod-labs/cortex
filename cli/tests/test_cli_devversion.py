@@ -60,6 +60,11 @@ class BaseTests(unittest.TestCase):
         self.assertEqual(prepared(changelog("### Removed\n- a thing\n", "4.0.0-rc.2", "3.0.0")), "4.0.0")
         self.assertEqual(prepared(changelog("", "1.0.0-rc.1")), "1.0.0")                   # no release yet
 
+    def test_a_pre_release_is_a_floor_wherever_its_section_is(self):
+        # A section carried up from an older line written first: the floor below it still counts.
+        self.assertEqual(prepared(changelog("### Fixed\n- a fix\n", "2.9.5", "3.1.0-rc.1", "3.0.0")), "3.1.0")
+        self.assertEqual(prepared(changelog("### Fixed\n- a fix\n", "3.0.0", "3.1.0-rc.1")), "3.1.0")
+
     def test_a_pre_release_below_a_release_is_no_base(self):
         self.assertEqual(prepared(changelog("### Added\n- a thing\n", "2.0.0", "2.0.0-rc.1", "1.9.0")), "2.1.0")
 
@@ -129,6 +134,13 @@ class BumpTests(unittest.TestCase):
         self.assertEqual(devversion.unreleased(text), {"Added": ["a thing"]})
         self.assertEqual(prepared(text.replace("## [Unreleased]", "## [unreleased]")), "2.4.0")
 
+    def test_a_heading_is_three_hashes_and_a_space(self):
+        # `####` is a heading of its own, under the kind; `###Added`, no heading at all (CommonMark).
+        for unreleased in ("### Fixed\n- a fix\n#### Added notes\n- a note\n", "### Fixed\n- a fix\n###Added\n- a note\n",
+                           "### Fixed\n- a fix\n####Removed\n- a note\n"):
+            with self.subTest(unreleased=unreleased):
+                self.assertEqual(prepared(changelog(unreleased, "2.3.4")), "2.3.5")
+
     def test_a_byte_order_mark_is_no_part_of_the_text(self):
         text = "\ufeff## [Unreleased]\n\n### Added\n- a thing\n\n## [2.3.4] - 2026-11-01 — A Name _(Released)_\n"
         self.assertEqual(prepared(text), "2.4.0")
@@ -189,6 +201,10 @@ class CheckoutTests(unittest.TestCase):
         self.assertEqual(self.version(CORTEX_SOURCE_VERSION="9.9.9"), "cortex 9.9.9")    # what its tests stand for
 
     def test_without_a_changelog_it_says_0_0_0_dev(self):
+        self.assertEqual(self.version(), "cortex 0.0.0-dev")
+
+    def test_a_changelog_that_is_no_utf_8_is_none(self):
+        (self.tmp / "CHANGELOG.md").write_bytes(b"## [Unreleased]\n\n### Added\n- caf\xe9\n\n## [1.2.3] - 2026-01-01\n")
         self.assertEqual(self.version(), "cortex 0.0.0-dev")
 
 
