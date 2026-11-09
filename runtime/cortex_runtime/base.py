@@ -96,6 +96,12 @@ def read_pin(root: Path) -> Optional[Pin]:
             raise ValueError(f"{project.PROJECT_FILE}: agents {project.shown(folder)} is not the team's folder "
                              f"`cortex sync` recorded in {project.LOCAL_FILE} — run `cortex sync` in the project, "
                              f"which reads it from a committed {project.PROJECT_FILE} only")
+        recorded = synced.get("agents") if isinstance(synced, dict) else None
+        if folder == project.TEAM_FOLDER and recorded is not None and recorded != folder:
+            # The folder sync recorded is gone from cortex.toml: the template reads the recorded one (§3.10), and
+            # the runtime would serve another — a sync tells which, once more.
+            raise ValueError(f"{project.LOCAL_FILE}: the team's folder `cortex sync` recorded, {project.shown(recorded)}, "
+                             f"is not the one {project.PROJECT_FILE} names, {folder}/ — run `cortex sync` in the project")
         name = cascade.team_name(folder)
         try:
             team = cascade.read_team(str(root), folder)

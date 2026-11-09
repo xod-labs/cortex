@@ -80,6 +80,21 @@ class PinTests(TeamFolderTestCase):
         with self.assertRaisesRegex(ValueError, "is not the team's folder `cortex sync` recorded"):
             read_pin(self.project)
 
+    def test_a_team_s_folder_sync_recorded_and_cortex_toml_no_longer_names_is_refused(self):
+        # A teammate dropped agents from cortex.toml: the template reads the folder synced records, the runtime
+        # agents/ — one sync puts them back on one folder (§3.12).
+        (self.project / "agents").mkdir()
+        for text in ('version = "9.9.9"\ntheme = "h2g2"\n', 'version = "9.9.9"\ntheme = "h2g2"\nagents = "agents"\n'):
+            with self.subTest(text=text):
+                (self.project / "cortex.toml").write_text(text, encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, rf'^cortex\.local\.toml: the team\'s folder `cortex sync` '
+                                                        rf'recorded, "{FOLDER}", is not the one cortex\.toml names, '
+                                                        rf"agents/ — run `cortex sync` in the project$"):
+                    read_pin(self.project)
+                self.synced(project="9.9.9", agents=None)
+                self.assertEqual(read_pin(self.project).team_folder, "agents")
+                self.synced(project="9.9.9")
+
     def test_what_cortex_sync_refuses_of_agents_the_runtime_refuses(self):
         (self.project / "other").mkdir()
         (self.project / "other" / "cortex.toml").write_text('version = "9.9.9"\n', encoding="utf-8")
