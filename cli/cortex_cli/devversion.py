@@ -3,13 +3,15 @@
 A source checkout reports ``X.Y.Z-dev``; a build of no release, ``X.Y.Z-dev.N``, ``N`` the CI
 run's number. ``X.Y.Z`` is the version the branch prepares, which ``CHANGELOG.md`` says:
 
-- the base is the highest version among its sections, by semver order — not the first section
+- the base is the highest release among its sections, by semver order — not the first section
   after ``[Unreleased]``: a fix carried up from an older line, ``1.7.1`` written above ``3.0.0``,
   never lowers it. A changelog that names none starts from ``0.0.0``;
-- a pre-release base, ``2.0.0-rc.1``, prepares its release, ``2.0.0``;
-- otherwise ``[Unreleased]`` gives the bump: an entry under ``Removed``, or one marked breaking
-  (``💥``), a major; one under ``Added``, ``Changed`` or ``Deprecated``, a minor; anything else —
-  ``Fixed`` and ``Security`` only, or no entry yet — a patch.
+- ``[Unreleased]`` gives the bump: an entry under ``Removed``, or one marked breaking (``💥``), a
+  major; one under ``Added``, ``Changed`` or ``Deprecated``, a minor; anything else — ``Fixed``
+  and ``Security`` only, or no entry yet — a patch. A kind is read in any case, an emoji or a note
+  around it: ``### ✨ Added``, ``### Fixed (CLI)``;
+- a pre-release above the base, ``3.1.0-rc.1``, is a floor: the version is the higher of its
+  release and the bump's — ``3.1.0`` after a fix or an addition, ``4.0.0`` after a removal.
 
 Once a release's section is written, the branch prepares the next one: the release job stamps
 ``X.Y.Z`` itself. ``cli/build.py --development-version N`` prints it for the CI's builds.
@@ -22,12 +24,14 @@ from typing import Dict, List, Optional
 
 from .semver import Version
 
-UNRELEASED = "Unreleased"
+UNRELEASED = "unreleased"
 # A second-level section: `## [1.7.0] - 2026-11-06 — …`, `## [Unreleased]`.
 SECTION = re.compile(r"## \[(?P<label>[^\]]+)\].*")
 KIND = re.compile(r"### (?P<kind>.+?)\s*")
+# The kinds of Keep a Changelog, as a heading names one: `### Added`, `### ✨ Added`, `### fixed (CLI)`.
+KINDS = re.compile(r"\b(added|changed|deprecated|removed|fixed|security)\b", re.IGNORECASE)
 # An entry is a line of its own starting a list item; what follows it, indented, is its text.
-ENTRY = re.compile(r"[-*] +(?P<text>.*)")
+ENTRY = re.compile(r"[-*][ \t]+(?P<text>.*)")
 BREAKING = re.compile(r"(?:\*\*)?💥")
 MAJOR = frozenset({"Removed"})
 MINOR = frozenset({"Added", "Changed", "Deprecated"})
@@ -37,7 +41,7 @@ def released(text: str) -> List[Version]:
     """The version of every section the changelog holds, ``[Unreleased]`` and any label that is
     no version aside, in the file's order."""
     found = []
-    for line in text.splitlines():
+    for line in _lines(text):
         match = SECTION.fullmatch(line.rstrip())
         if match and Version.valid(match.group("label")):
             found.append(Version(match.group("label")))
@@ -46,20 +50,22 @@ def released(text: str) -> List[Version]:
 
 def unreleased(text: str) -> Dict[str, List[str]]:
     """The entries of ``[Unreleased]`` by kind, ``{"Added": [...], "Fixed": [...]}``: each entry's
-    first line, without its marker. A kind with no entry is left out."""
+    first line, without its marker. A kind with no entry is left out; a heading that names none of
+    Keep a Changelog's is a kind of its own, which asks nothing."""
     entries: Dict[str, List[str]] = {}
     inside, kind = False, None
-    for line in text.splitlines():
+    for line in _lines(text):
         line = line.rstrip()
         section = SECTION.fullmatch(line)
         if section:
-            inside = section.group("label") == UNRELEASED
+            inside = section.group("label").strip().lower() == UNRELEASED
             continue
         if not inside:
             continue
         heading = KIND.fullmatch(line)
         if heading:
-            kind = heading.group("kind")
+            named = KINDS.search(heading.group("kind"))
+            kind = named.group(1).capitalize() if named else heading.group("kind")
             continue
         entry = ENTRY.fullmatch(line)
         if entry and kind is not None:
@@ -79,16 +85,19 @@ def bump(entries: Dict[str, List[str]]) -> str:
 def prepared(text: str) -> Version:
     """The release the branch whose changelog is ``text`` prepares."""
     versions = released(text)
-    base = max(versions) if versions else Version("0.0.0")
+    releases = [version for version in versions if not version.pre]
+    base = max(releases) if releases else Version("0.0.0")
     major, minor, patch = base.core
-    if base.pre:
-        return Version(f"{major}.{minor}.{patch}")
     step = bump(unreleased(text))
-    if step == "major":
-        return Version(f"{major + 1}.0.0")
-    if step == "minor":
-        return Version(f"{major}.{minor + 1}.0")
-    return Version(f"{major}.{minor}.{patch + 1}")
+    bumped = Version(f"{major + 1}.0.0" if step == "major" else f"{major}.{minor + 1}.0" if step == "minor" else
+                     f"{major}.{minor}.{patch + 1}")
+    # A pre-release below the base is of a release at or below it: no floor above the bump.
+    floors = [Version("{}.{}.{}".format(*version.core)) for version in versions if version.pre]
+    return max([bumped, *floors])
+
+
+def _lines(text: str) -> List[str]:
+    return text.removeprefix("\ufeff").splitlines()
 
 
 def development(text: str, build: Optional[int] = None) -> str:

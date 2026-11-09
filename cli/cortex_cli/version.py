@@ -17,7 +17,7 @@ from pathlib import Path
 
 def _prepared() -> str:
     try:
-        text = (Path(__file__).resolve().parents[2] / "CHANGELOG.md").read_text(encoding="utf-8")
+        text = (Path(__file__).resolve().parents[2] / "CHANGELOG.md").read_text(encoding="utf-8-sig")
     except (OSError, UnicodeError):
         return "0.0.0-dev"
     from .devversion import development

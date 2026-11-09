@@ -250,7 +250,10 @@ def main() -> int:
         print(checksums(args.checksums).read_text(encoding="utf-8"), end="")
         return 0
     if args.development_version is not None:
-        print(development((REPO / "CHANGELOG.md").read_text(encoding="utf-8"), args.development_version))
+        # LF alone, on Windows too: `$(…)` strips a final "\n", not the "\r" print() writes before it there.
+        version = development((REPO / "CHANGELOG.md").read_text(encoding="utf-8-sig"), args.development_version)
+        sys.stdout.buffer.write(f"{version}\n".encode("ascii"))
+        sys.stdout.flush()
         return 0
     if not is_version(args.version):
         parser.error(f"not a version: {args.version!r}")

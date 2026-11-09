@@ -49,11 +49,16 @@ class BaseTests(unittest.TestCase):
         # The line 1.x, branched at 1.7.0: its changelog holds 1.x's sections only.
         self.assertEqual(prepared(changelog("### Fixed\n- a fix\n", "1.7.1", "1.7.0", "1.6.0")), "1.7.2")
 
-    def test_a_pre_release_base_prepares_its_release(self):
-        for unreleased in ("", "### Fixed\n- a fix\n", "### Added\n- a thing\n", "### Removed\n- a thing\n"):
+    def test_a_pre_release_above_the_base_is_a_floor(self):
+        # The higher of its release and the bump's: a removal after 3.1.0-rc.1 breaks 3.0.0's users.
+        for unreleased, expected in (("", "3.1.0"), ("### Fixed\n- a fix\n", "3.1.0"), ("### Added\n- a thing\n", "3.1.0"),
+                                     ("### Removed\n- a thing\n", "4.0.0"), ("### Changed\n- 💥 a break\n", "4.0.0")):
             with self.subTest(unreleased=unreleased):
-                self.assertEqual(prepared(changelog(unreleased, "3.1.0-rc.1", "3.0.0")), "3.1.0")
+                self.assertEqual(prepared(changelog(unreleased, "3.1.0-rc.1", "3.0.0")), expected)
         self.assertEqual(prepared(changelog("", "3.0.0-beta.2", "3.0.0-alpha.1", "2.9.0")), "3.0.0")
+        self.assertEqual(prepared(changelog("### Added\n- a thing\n", "3.0.1-rc.1", "3.0.0")), "3.1.0")
+        self.assertEqual(prepared(changelog("### Removed\n- a thing\n", "4.0.0-rc.2", "3.0.0")), "4.0.0")
+        self.assertEqual(prepared(changelog("", "1.0.0-rc.1")), "1.0.0")                   # no release yet
 
     def test_a_pre_release_below_a_release_is_no_base(self):
         self.assertEqual(prepared(changelog("### Added\n- a thing\n", "2.0.0", "2.0.0-rc.1", "1.9.0")), "2.1.0")
@@ -114,6 +119,20 @@ class BumpTests(unittest.TestCase):
         text = HEAD + "## [2.3.4] - 2026-11-01 — A Name _(Released)_\n\n### Removed\n- 💥 a thing\n"
         self.assertEqual(prepared(text), "2.3.5")                                # no [Unreleased]: nothing yet
 
+    def test_a_kind_is_read_in_any_case_an_emoji_or_a_note_around_it(self):
+        for heading, expected in (("### ✨ Added", "2.4.0"), ("### Added (CLI)", "2.4.0"), ("### added", "2.4.0"),
+                                  ("### 🔥 REMOVED", "3.0.0"), ("### Fixed — the CLI", "2.3.5"),
+                                  ("### Additions", "2.3.5")):                          # no kind of Keep a Changelog
+            with self.subTest(heading=heading):
+                self.assertEqual(prepared(changelog(f"{heading}\n- a thing\n", "2.3.4")), expected)
+        text = changelog("### ✨ Added\n-\ta thing\n", "2.3.4")
+        self.assertEqual(devversion.unreleased(text), {"Added": ["a thing"]})
+        self.assertEqual(prepared(text.replace("## [Unreleased]", "## [unreleased]")), "2.4.0")
+
+    def test_a_byte_order_mark_is_no_part_of_the_text(self):
+        text = "\ufeff## [Unreleased]\n\n### Added\n- a thing\n\n## [2.3.4] - 2026-11-01 — A Name _(Released)_\n"
+        self.assertEqual(prepared(text), "2.4.0")
+
     def test_entries_and_their_kinds(self):
         text = changelog("### Added\n- **One.** First line\n  and its second.\n* Two\n\n### Fixed\n- Three\n", "1.0.0")
         self.assertEqual(devversion.unreleased(text), {"Added": ["**One.** First line", "Two"], "Fixed": ["Three"]})
@@ -165,6 +184,8 @@ class CheckoutTests(unittest.TestCase):
     def test_it_reads_its_changelog(self):
         (self.tmp / "CHANGELOG.md").write_text(changelog("### Fixed\n- a fix\n", "1.7.1", "3.0.0"), encoding="utf-8")
         self.assertEqual(self.version(), "cortex 3.0.1-dev")
+        (self.tmp / "CHANGELOG.md").write_text(changelog("### Added\n- a thing\n", "3.0.0"), encoding="utf-8-sig")
+        self.assertEqual(self.version(), "cortex 3.1.0-dev")                                # a BOM first
         self.assertEqual(self.version(CORTEX_SOURCE_VERSION="9.9.9"), "cortex 9.9.9")    # what its tests stand for
 
     def test_without_a_changelog_it_says_0_0_0_dev(self):
@@ -182,7 +203,8 @@ class BuildTests(unittest.TestCase):
         expected = devversion.development((harness.REPO / "CHANGELOG.md").read_text(encoding="utf-8"), 57)
         proc = self.build("--development-version", "57")
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout.decode().strip(), expected)
+        # LF alone, on Windows too: `$(…)` keeps the "\r" of a CRLF, and the version is then refused.
+        self.assertEqual(proc.stdout, f"{expected}\n".encode("ascii"))
         self.assertTrue(expected.endswith("-dev.57"), expected)
 
     def test_what_is_no_build_number(self):
