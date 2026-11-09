@@ -550,6 +550,7 @@ class CodeReviewFolderTests(FolderTestCase):
 
     @LINKS
     @NEEDS_GIT
+    @TEAM_RELEASE
     def test_team_commit_names_the_folder_in_no_work_tree(self):
         # A renamed folder is read from a committed cortex.toml: it is in no work tree as a link out of it.
         root, shared = self.tmp / "ws", self.tmp / "shared"
@@ -569,6 +570,7 @@ class CodeReviewFolderTests(FolderTestCase):
         self.assertNotIn(" agents/ is in no", proc.out + proc.err)
 
     @NEEDS_GIT
+    @TEAM_RELEASE
     def test_team_commit_in_a_submodule_names_the_folder_and_the_superproject(self):
         team, root = self.tmp / "team", self.tmp / "ws"
         for where in (team, root):

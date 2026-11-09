@@ -1645,6 +1645,7 @@ class CodeReviewFixTests(TeamTestCase):
         return root, {"PATH": os.path.dirname(GIT), **GIT_ENV}
 
     @NEEDS_GIT
+    @TEAM_RELEASE
     def test_team_commit_reads_a_team_s_file_in_any_line_endings(self):
         # What --team writes over the committed file, line endings and a byte order mark aside, is the team's.
         for name, content in (("crlf", b'version = "1.8.0"\r\ntheme = "h2g2"\r\n'),
@@ -1657,6 +1658,7 @@ class CodeReviewFixTests(TeamTestCase):
                 self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "move")
 
     @NEEDS_GIT
+    @TEAM_RELEASE
     def test_team_commit_says_a_team_s_file_is_not_committed_yet(self):
         root, env = self.team_repository(b'version = "1.8.0"\ntheme = "h2g2"\n', commit=False)
         proc = self.cortex(root, "upgrade", "--team", OWN, "--commit", "--message", "move", **env)
