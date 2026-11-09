@@ -177,7 +177,19 @@ class TooNewTests(TeamTestCase):
         proc = self.cortex(root, "sync")
         self.assertEqual(proc.returncode, 1)
         self.assertIn(f"which its {TEAM} pins", proc.err)
-        self.assertIn(f"or move the team's pin: cortex upgrade --team {OWN}", proc.err)
+        # A build of no release names VERSION, never its own version: no teammate can download it (ADR-009 §9).
+        self.assertIn(f"or move the team's pin: cortex upgrade --team {'VERSION' if DEV_OWN else OWN}", proc.err)
+
+    @SOURCE
+    def test_from_a_build_of_no_release_the_team_s_pin_is_moved_to_a_version_named(self):
+        root = self.project('theme = "h2g2"\n', team='version = "99.0.0"\n')
+        for args in (("sync",), ("init", "--tool", "claude"), ("validate",)):
+            with self.subTest(args=args):
+                proc = self.cortex(root, *args, CORTEX_SOURCE_VERSION=DEV_SOURCE)
+                self.assertNotEqual(proc.returncode, 0, proc.err)
+                self.assertIn(f"Cortex 99.0.0, which its {TEAM} pins, newer than this cortex, {DEV_SOURCE}", proc.err)
+                self.assertIn("or move the team's pin: cortex upgrade --team VERSION", proc.err)
+                self.assertNotIn(f"--team {DEV_SOURCE}", proc.err)
 
     def test_upgrade_refuses_a_move_that_still_reads_a_version_too_new(self):
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', local='version = "99.0.0"\n')

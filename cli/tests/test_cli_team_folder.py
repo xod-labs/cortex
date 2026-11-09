@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_cli_format3 import FORMAT_2, OURS, TEMPLATE, written  # noqa: E402
-from test_cli_team import DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, TeamTestCase  # noqa: E402
+from test_cli_team import DEV_OWN, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, TeamTestCase  # noqa: E402
 
 FOLDER = "team-agents"
 NAMED = f'agents = "{FOLDER}"\ntheme = "h2g2"\n'
@@ -88,7 +88,7 @@ class FollowsTests(FolderTestCase):
         proc = self.cortex(root, "sync")
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn(f"Cortex 99.0.0, which its {FOLDER}/cortex.team.toml pins, newer than this cortex", proc.err)
-        self.assertIn(f"or move the team's pin: cortex upgrade --team {OWN}", proc.err)
+        self.assertIn(f"or move the team's pin: cortex upgrade --team {'VERSION' if DEV_OWN else OWN}", proc.err)
 
     def test_the_team_s_pair_init_scaffolds_is_in_the_folder(self):
         root = self.named()

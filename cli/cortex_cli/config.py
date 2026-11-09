@@ -392,8 +392,10 @@ def too_new(root: str, own: Version) -> Optional[str]:
         return (f"this project uses Cortex {version}, which its {name} pins — a build of no release, newer than "
                 f"this cortex, {own}: pin a release:\n    {store.pin_command(name)}")
     teams = loose_team(root)
-    other = (f"\nor drop the try: cortex upgrade --local {teams[1] if teams else own}" if name == LOCAL_FILE else
-             f"\nor move the team's pin: cortex upgrade --team {own}" if name.endswith(f"/{TEAM_FILE}") else "")
+    # A build of no release names no version of its own to move to: no teammate can download it (ADR-009 §9).
+    down = "VERSION" if store.development(own) else str(own)
+    other = (f"\nor drop the try: cortex upgrade --local {teams[1] if teams else down}" if name == LOCAL_FILE else
+             f"\nor move the team's pin: cortex upgrade --team {down}" if name.endswith(f"/{TEAM_FILE}") else "")
     return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
             f"    {store.update_command(version)}{other}")
 
