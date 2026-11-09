@@ -200,6 +200,23 @@ class AllTests(AllTestCase):
                                           f"  alpha  {display(alpha)}: in no git work tree\n"
                                           f"  beta   {display(beta)}: in no git work tree\n"), proc.out)
 
+    @unittest.skipIf(os.name == "nt", "a link to a file needs a privilege on Windows")
+    def test_a_project_in_no_work_tree_still_says_the_file_linked_into_a_repository(self):
+        # Its own files are committed nowhere, and the team's bootstrap is to commit where it is: the project has
+        # something to commit, said with that file — never "nothing".
+        alpha = self.make("alpha")
+        team = self.tmp / "team"
+        (team / ".git").mkdir(parents=True)
+        (team / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))   # 9.9.8's, nobody changed it
+        (alpha / "CLAUDE.md").symlink_to(team / "CLAUDE.md")
+        self.register(alpha)
+        proc = self.upgrade_all()
+        self.assert_ok(proc)
+        where = os.path.realpath(team / "CLAUDE.md").replace(os.sep, "/")
+        self.assertIn(f"  alpha  {display(alpha)}: cortex.toml and cortex.lock committed nowhere — in no git work tree; "
+                      f"{where} — outside its git work tree: commit it where it is\n", proc.out)
+        self.assertNotIn("nothing — in no git work tree", proc.out)
+
     def test_dry_run_changes_nothing_in_any_project_and_exits_as_the_run_would(self):
         alpha, beta = self.make("alpha", bootstrap=True, tree=True), self.make("beta")
         self.break_overlays(beta)
@@ -1135,6 +1152,18 @@ class CommitTests(GitTestCase):
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertEqual(self.git(alpha, "log", "-1", "--format=%s"), self.MESSAGE)
         self.assertIn("  beta   refused: git rev-parse failed — fatal: ", proc.out)
+        self.assertEqual(worktree(beta), before)
+
+    def test_a_repository_git_refuses_above_the_project_is_its_refusal_too(self):
+        # The project in a subdirectory of the work tree: the .git git refuses is above its root, not at it — no
+        # root in no work tree, whose files would be written and said committed nowhere.
+        beta = self.make("outer/beta")
+        (self.code / "outer" / ".git").write_text("gitdir: ../nowhere\n", encoding="utf-8")
+        before = worktree(beta)
+        proc = self.upgrade(beta, "--commit", "--message", self.MESSAGE)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("git rev-parse failed — fatal: ", proc.err)
+        self.assertNotIn("in no git work tree", proc.out + proc.err)
         self.assertEqual(worktree(beta), before)
 
     @unittest.skipIf(os.name == "nt", "a link to a file needs a privilege on Windows")
