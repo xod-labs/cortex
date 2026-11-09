@@ -829,11 +829,23 @@ def version_notes(project: config.Project) -> List[str]:
     return said
 
 
+def gitlink(path: Path) -> bool:
+    """git's index holds ``path`` as a submodule — mode 160000 — wherever the project sits in its
+    repository: in a subdirectory, the ``.gitmodules`` that names it is at the repository's top, and
+    names it by its path from there. ``False`` without git to ask."""
+    proc = _git(str(path.parent), "ls-files", "--stage", "-z", "--", path.name)
+    if proc is None or proc.returncode != 0:
+        return False
+    return any(entry.startswith("160000 ") and entry.partition("\t")[2] == path.name for entry in proc.stdout.split("\0"))
+
+
 def _team_folder_note(project: config.Project) -> Optional[str]:
     """The default team's folder, a submodule left empty (ADR-013 §3.4): a warning, which
-    ``validate --strict`` fails — for a project whose team's version reads what it holds."""
+    ``validate --strict`` fails — for a project whose team's version reads what it holds. A submodule
+    by the ``.gitmodules`` beside it, or by git's index: a CI checkout without its submodules, the
+    project in a subdirectory of its repository."""
     folder = Path(project.root) / config.TEAM_FOLDER
-    if project_before_team(project) or not folder.is_dir() or not is_submodule(folder):
+    if project_before_team(project) or not folder.is_dir() or not (is_submodule(folder) or gitlink(folder)):
         return None
     try:
         empty = not any(folder.iterdir())

@@ -1133,6 +1133,33 @@ class CodeReviewTests(TeamTestCase):
         self.assertNotIn("None", proc.out)
 
 
+    @NEEDS_GIT
+    def test_an_empty_default_agents_submodule_warns_in_a_subdirectory_of_its_repository(self):
+        # The usual CI checkout, without its submodules: .gitmodules is at the repository's top, git's index holds
+        # the submodule — and validate --strict fails.
+        top = self.tmp / "repo"
+        root = top / "svc"
+        (root / "agents").mkdir(parents=True)
+        (root / "cortex.toml").write_text(f'version = "{OWN}"\ntheme = "h2g2"\n', encoding="utf-8")
+        (top / ".gitmodules").write_text('[submodule "team"]\n\tpath = svc/agents\n\turl = ../team\n', encoding="utf-8")
+        self.git(top, "init", "-q")
+        self.git(top, "update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},svc/agents")
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        said = "warning: agents/ is empty — a submodule not checked out: `git submodule update --init`"
+        proc = self.cortex(root, "sync", **env)
+        self.assert_ok(proc)
+        self.assertIn(said, proc.err)
+        proc = self.cortex(root, "validate", "--strict", **env)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("TEAM_FOLDER_EMPTY", proc.out + proc.err)
+        # A project kept before 1.8.0 reads nothing of its team's folder: nothing is said of it.
+        old = self.project('version = "1.7.0"\ntheme = "h2g2"\n', name="old")
+        (old / "agents").mkdir()
+        (old / ".gitmodules").write_text('[submodule "agents"]\n\tpath = agents\n\turl = ../agents\n', encoding="utf-8")
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}):
+            self.assertIsNone(sync._team_folder_note(config.load(str(old))))
+
+
 def newer_refused(pin):
     """What --team with no VERSION says of a team's pin newer than this cortex."""
     return (f"this cortex is a development build, {OWN}, which serves no release" if DEV_OWN else
