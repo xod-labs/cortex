@@ -26,7 +26,7 @@ class AgentsTextTests(unittest.TestCase):
     def test_what_names_no_folder_inside_the_workspace_is_refused(self):
         for value in ("../x", "a/../b", "/x", "C:\\x", "C:/x", "C:x", "C:", "\\\\server\\x", "a\\b", ".", "./", "././",
                       "a//b", ".team", "a/.b", "a/./b", "cortex", "Cortex", "cortex/x", "", 3, "a\nb", "a\tb", "a\x7fb",
-                      "cortex.", "cortex ", "team.", "a/b ", " "):
+                      "cortex.", "cortex ", "team.", "a/b ", " ", "cortex::$INDEX_ALLOCATION", "team:x", "a/b:c"):
             with self.subTest(value=value), self.assertRaises(project.ProjectFileError) as caught:
                 project.check_agents(value)
             self.assertIn("agents", str(caught.exception))
@@ -36,14 +36,24 @@ class AgentsTextTests(unittest.TestCase):
         for value, folder in ((".team", ".team"), ("./.team/", ".team"), ("a/.b", "a/.b"), ("team-agents", "team-agents")):
             with self.subTest(value=value):
                 self.assertEqual(project.check_agents(value, loose=True), folder)
-        for value in ("../x", "/x", "C:x", "a\\b", "a\nb", ".", "a/./b", "cortex", "cortex.", "team ", "", 3):
+        for value in ("../x", "/x", "C:x", "a\\b", "a\nb", ".", "a/./b", "cortex", "cortex.", "team ", "", 3,
+                      "cortex::$INDEX_ALLOCATION", ".team:x"):
             with self.subTest(value=value), self.assertRaises(project.ProjectFileError):
                 project.check_agents(value, loose=True)
 
     def test_names_fold_as_file_systems_fold_them(self):
-        self.assertEqual(project.folded("Team-Agents"), "team-agents")
-        self.assertNotEqual(project.folded("straße"), project.folded("strasse"))     # two folders on NTFS and APFS
-        self.assertEqual(project.folded("STRASSE"), "strasse")
+        f = project.folded
+        self.assertEqual(f("Team-Agents"), f("team-agents"))
+        self.assertNotEqual(f("straße"), f("strasse"))                  # two folders on NTFS and APFS
+        self.assertEqual(f("STRASSE"), f("strasse"))
+        self.assertEqual(f("ΟΜΑΔΕΣ"), f("ομαδες"))                       # a final sigma is a sigma
+        self.assertEqual(f("ομαδεσ"), f("ομαδες"))
+        self.assertEqual(f("\u212aeys"), f("keys"))                     # the Kelvin sign is K composed: one on APFS
+        self.assertEqual(f("\u00e9quipe"), f("e\u0301quipe"))          # composed or not, one name on APFS
+        self.assertEqual(f("\u00c9QUIPE"), f("e\u0301quipe"))
+        for value in ("cortex", "Cortex", "CORTEX", "Cortex/x"):
+            with self.subTest(value=value), self.assertRaises(project.ProjectFileError):
+                project.check_agents(value)
 
     def test_cortex_toml_takes_it_and_the_other_files_refuse_it(self):
         project.check_project({**TEAM, "agents": "team-agents"})

@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_cli_format3 import FORMAT_2, OURS, TEMPLATE, written  # noqa: E402
-from test_cli_team import (DEV_OWN, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, SOURCE, TEAM_RELEASE,  # noqa: E402
+from test_cli_team import (AS_ROOT, DEV_OWN, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, SOURCE, TEAM_RELEASE,  # noqa: E402
                            TeamTestCase, harness_path)
 
 import cli_harness as harness  # noqa: E402
@@ -362,6 +362,7 @@ class CounterReviewTests(FolderTestCase):
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn("Cortex 99.0.0, which its .team/cortex.team.toml pins, newer than this cortex", proc.err)
         self.assertNotIn('starts with "."', proc.err)
+        self.assertNotIn("--team", proc.err)                            # a move this cortex would refuse
         proc = self.cortex(root, "config", "version")                   # the CI recipe
         self.assert_ok(proc)
         self.assertEqual(proc.out.strip(), "99.0.0")
@@ -495,6 +496,40 @@ class CodeReviewFolderTests(FolderTestCase):
         self.assertFalse((root / "agents").exists())
         self.assert_ok(self.cortex(root, "sync", "--locked"))
 
+    @SOURCE
+    def test_a_team_s_lock_that_is_none_during_a_try_is_named_in_its_folder(self):
+        root = self.named(team='version = "9.9.8"\n', local=f'version = "{OWN}"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        (root / FOLDER / "cortex.team.lock").write_text("<<<<<<< HEAD\n", encoding="utf-8")
+        for args in (("upgrade", "--dry-run"), ("upgrade", "9.9.8", "--dry-run")):
+            with self.subTest(args=args):
+                proc = self.cortex(root, *args)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"cortex upgrade: {FOLDER}/cortex.team.lock: Invalid", proc.err)
+                self.assertIn("delete it, and `cortex upgrade` writes it again", proc.err)
+                self.assertNotIn(" agents/cortex.team.lock", proc.err)
+
+    @SOURCE
+    @DOWNLOADS
+    @AS_ROOT
+    def test_a_resume_during_a_try_warns_of_the_folder_it_cannot_write(self):
+        # As in agents/: a warning naming the folder cortex.toml names, the lock not updated, the rest done.
+        root = self.named(team='version = "9.9.8"\n', local=f'version = "{OWN}"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        lock = root / FOLDER / "cortex.team.lock"
+        lock.write_text(config.render_lock(store.Version("9.9.7"), "sha256:" + "0" * 64), encoding="utf-8")
+        before = lock.read_bytes()
+        os.chmod(root / FOLDER, 0o555)
+        self.addCleanup(os.chmod, root / FOLDER, 0o755)
+        proc = self.cortex(root, "upgrade", "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn(f"{FOLDER}/ cannot be written here — it would be a warning, the lock not updated", proc.out)
+        proc = self.cortex(root, "upgrade")
+        self.assert_ok(proc)
+        self.assertIn(f"warning: {FOLDER}/cortex.team.lock cannot be written — ", proc.err)
+        self.assertEqual(lock.read_bytes(), before)
+        self.assertFalse((root / "agents").exists())
+
     @NEEDS_GIT
     @TEAM_RELEASE
     def test_team_commit_names_the_folder_of_the_developer_s_own_change(self):
@@ -512,6 +547,45 @@ class CodeReviewFolderTests(FolderTestCase):
                       "besides its version", proc.err)
         self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "init")
         self.assertFalse((root / "agents").exists())
+
+    @LINKS
+    @NEEDS_GIT
+    def test_team_commit_names_the_folder_in_no_work_tree(self):
+        # A renamed folder is read from a committed cortex.toml: it is in no work tree as a link out of it.
+        root, shared = self.tmp / "ws", self.tmp / "shared"
+        for where in (root, shared):
+            where.mkdir()
+        (shared / "cortex.team.toml").write_text('version = "1.8.0"\n', encoding="utf-8")
+        (root / FOLDER).symlink_to(shared, target_is_directory=True)
+        (root / "cortex.toml").write_text(NAMED, encoding="utf-8")
+        (root / ".gitignore").write_text(f"cortex.local.toml\ncortex\n{FOLDER}\n", encoding="utf-8")
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "ws")
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        proc = self.cortex(root, "upgrade", "--team", OWN, "--commit", "--message", "move", **env)
+        self.assert_ok(proc)
+        self.assertIn(f"{FOLDER}/ is in no git work tree", proc.out + proc.err)
+        self.assertNotIn(" agents/ is in no", proc.out + proc.err)
+
+    @NEEDS_GIT
+    def test_team_commit_in_a_submodule_names_the_folder_and_the_superproject(self):
+        team, root = self.tmp / "team", self.tmp / "ws"
+        for where in (team, root):
+            where.mkdir()
+            self.git(where, "init", "-q")
+        (team / "cortex.team.toml").write_text('version = "1.8.0"\n', encoding="utf-8")
+        self.git(team, "add", "-A")
+        self.git(team, "commit", "-q", "-m", "t")
+        (root / "cortex.toml").write_text(NAMED, encoding="utf-8")
+        self.git(root, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(team), FOLDER)
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "ws")
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        proc = self.cortex(root, "upgrade", "--team", OWN, "--commit", "--message", "move", **env)
+        self.assert_ok(proc)
+        self.assertIn(f"note: {FOLDER}/ is a submodule of {harness_path(root)}, which now shows it changed — commit "
+                      "it there too", proc.err)
 
     def test_validate_names_the_folder_whose_lock_this_user_cannot_write(self):
         root = self.named()

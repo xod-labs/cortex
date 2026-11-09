@@ -33,6 +33,7 @@ nothing at all when ``cortex.toml``, or a bootstrap file it wrote, held the deve
 from __future__ import annotations
 
 import argparse
+import errno
 import io
 import os
 import shutil
@@ -79,6 +80,7 @@ class Outcome:
     left: List[Path] = field(default_factory=list)      # --commit, nothing written: files git sees changed still
     outside: List[Path] = field(default_factory=list)   # --commit: of the files, those outside the git work tree
     team: Optional[str] = None                          # --team: the team's folder, where --commit commits its files
+    team_files: List[Path] = field(default_factory=list)  # --team: the team's files, which --commit commits there
 
     def names(self) -> List[str]:
         """The files to commit in the project — those outside its git work tree, ``elsewhere``."""
@@ -527,7 +529,7 @@ def try_lock(project: config.Project) -> Optional[Tuple[Tuple[str, str, str], st
     where = config.lock_of(project, project.team_origin)
     if where is None:
         return None
-    lock = config.load_lock(where[0], where[1])
+    lock = config.load_lock(where[0], where[1], where[2], writer="`cortex upgrade`")     # the sync leaves it
     if lock is not None and lock.version == project.team_version:
         return None
     return where, f"there is no {where[2]}" if lock is None else f"{where[2]} names Cortex {lock.version}"
@@ -536,14 +538,23 @@ def try_lock(project: config.Project) -> Optional[Tuple[Tuple[str, str, str], st
 def _write_try_lock(where: Tuple[str, str, str], version: Version, the_store: store.Store, out: TextIO,
                     err: TextIO) -> None:
     """Write the lock ``where`` names — the team's version's, which a try leaves — from ``version`` in
-    the store: the team's under a lock of its folder, as the sync writes it (ADR-013 §3.4)."""
+    the store: the team's under a lock of its folder, as the sync writes it (ADR-013 §3.4). A team's
+    folder this user cannot write is a warning, as it is to the sync on a developer's machine: the
+    lock is not updated here."""
     directory, name, shown_name = where
     team = name == config.TEAM_LOCK_FILE
     folder = shown_name.rpartition("/")[0] if team else config.TEAM_FOLDER     # the team's folder, as the root names it
     digest, said = sync.check_lock(directory, version, the_store, out, name=name, folder=folder)
     if team:
-        with sync.project_lock(Path(directory), err):
-            config.write_lock(directory, version, digest, name)
+        try:
+            with sync.project_lock(Path(directory), err):
+                config.write_lock(directory, version, digest, name)
+        except OSError as error:
+            if error.errno not in (errno.EACCES, errno.EPERM, errno.EROFS):
+                raise
+            err.write(f"warning: {shown_name} cannot be written — {sync.os_error(error)}: the team's lock is not "
+                      "updated here\n")
+            return
     else:
         config.write_lock(directory, version, digest, name)
     team = f" in {folder}/" if team else ""
@@ -757,8 +768,9 @@ def _local_then_sync(root: str, values: Dict[str, object], out: TextIO, err: Tex
 def _team_git(agents: str, branch: Optional[str], out: TextIO, err: TextIO,
               folder: str = config.TEAM_FOLDER) -> Optional[str]:
     """The work tree of the team's folder ``folder``, for --branch and --commit, which act in the team's
-    repository (ADR-013 §3.11) — the branch made before anything is written."""
-    top = _work_tree(agents)
+    repository (ADR-013 §3.11) — the branch made before anything is written. Asked where the folder is: a
+    link out of the project's repository is in that other place's work tree, or in none (§3.6)."""
+    top = _work_tree(os.path.realpath(agents))
     if top is None:
         err.write(f"note: {folder}/ is in no git work tree — nothing is committed there\n")
         return None
@@ -832,7 +844,7 @@ def _team_left(agents: str, files: List[Path]) -> List[Path]:
     """Those of the team's ``files`` its work tree sees changed, when ``--team`` writes nothing: what a
     run before this one left — its commit refused, or not asked. Nothing when git cannot tell."""
     try:
-        top = _work_tree(agents)
+        top = _work_tree(os.path.realpath(agents))
         return _changed(agents, top, files) if top is not None else []
     except UpgradeError:
         return []
@@ -882,7 +894,8 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     writes = team_files[1:] if target == pinned else team_files
     if dry_run:
         out.write("--dry-run: nothing of the project was changed\n")
-        return Outcome(root, pinned, target, files=[] if unchanged else writes, team=agents)
+        return Outcome(root, pinned, target, files=[] if unchanged else writes, team=agents,
+                       team_files=[] if unchanged else list(writes))
     asked = branch is not None or message is not None
     # At the pin nothing is written: what a run before this one left of the two files — its commit refused,
     # or not asked — --commit commits, as that run would have; otherwise no branch is made, as an upgrade
@@ -920,7 +933,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
                 _put(path, content)
         err.write(f"note: {name} and its lock are as they were\n")
         raise
-    outcome = Outcome(root, pinned, target, files=list(files), team=agents)
+    outcome = Outcome(root, pinned, target, files=list(files), team=agents, team_files=list(files))
     outcome.left = [] if files else left
     if project.follows:
         current_path = None
@@ -989,7 +1002,10 @@ def _team_theirs(agents: str, team_file: Path, target: Version, name: str = conf
         return f"it could not be told whether {name} held changes of yours — {error}"
     if found.replace("\r\n", "\n") == expected.replace("\r\n", "\n"):
         return None
-    return f"{name} holds changes of yours besides its version — commit by hand what is the team's"
+    if committed is None:
+        return (f"{name} is not committed yet, and holds more than the version --team writes — commit by "
+                "hand what is the team's")
+    return (f"{name} holds changes of yours besides its version — commit by hand what is the team's")
 
 
 def _served(the_store: store.Store, target: Version, again: str, origin: Optional[str] = None) -> None:
@@ -1225,14 +1241,22 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
         out.write(f"{behind}, and {project.version_origin} pins Cortex {project.version} — an upgrade cut short, or a "
                   f"pin moved by hand: {'the sync would put them on it' if dry_run else 'syncing'}\n")
     if stale is not None:
+        would = "it would be written" + ("" if the_store.has(current) else f", once Cortex {current} is downloaded")
+        if stale[0][1] == config.TEAM_LOCK_FILE and not os.access(stale[0][0], os.W_OK):
+            # The team's folder, as the root names it — a renamed one included (ADR-013 §3.6).
+            would = f"{os.path.dirname(stale[0][2])}/ cannot be written here — it would be a warning, the lock not " \
+                "updated"
         out.write(f"{stale[1]}, and {project.team_origin} pins Cortex {current} — the sync reads the try and leaves "
-                  f"it to `cortex upgrade`: {'it would be written' if dry_run else 'writing it'}\n")
+                  f"it to `cortex upgrade`: {would if dry_run else 'writing it'}\n")
     where = config.lock_of(project)
     lock = Path(where[0]) / where[1] if where is not None else Path(root) / config.LOCK_FILE
     relock = behind is not None and where is not None and \
         getattr(config.load_lock(where[0], where[1], where[2]), "version", None) != project.version
     team_lock = Path(stale[0][0]) / stale[0][1] if stale is not None else None
-    locks = ([lock] if relock else []) + ([team_lock] if team_lock is not None and team_lock != lock else [])
+    # The try's lock may be the project's own `cortex.lock` — a committed pin of its own, read beside a
+    # try: it is left out only when the relock names it already.
+    locks = ([lock] if relock else [])
+    locks += [team_lock] if team_lock is not None and team_lock not in locks else []
     team = locks + [path for path, _ in rewrites] + _committed(mine)
     if prepare is not None and team:
         prepare(team)
@@ -1250,14 +1274,17 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     kept = {path: path.read_bytes() if path.is_file() else None
             for path in ([lock] if behind is not None else []) + ([team_lock] if team_lock is not None else [])}
 
+    synced: List[bool] = []
+
     def then() -> None:
         if stale is not None:
             the_store.ensure(current)
             _write_try_lock(stale[0], current, the_store, out, err)
         if behind is not None:
+            synced.append(True)
             sync.sync(root, None, None, out, err, announce=False, said=said)
 
-    _write(rewrites + mine, kept, root, err, then)
+    _write(rewrites + mine, kept, root, err, then, lambda: bool(synced))
     for path, content in rewrites:
         out.write(f"{_shown_path(path, root)}: written again from Cortex {current}'s template — {_nobody(content)}\n")
     for path, content in mine:
@@ -1267,25 +1294,37 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
 
 
 def _write(rewrites: List[Tuple[Path, bytes]], committed: Dict[Path, Optional[bytes]], root: str, err: TextIO,
-           then: Callable[[], None]) -> None:
+           then: Callable[[], None], synced: Callable[[], bool] = lambda: True) -> None:
     """Write the bootstrap files again, then run ``then`` — the switch: anything that fails puts back
     the files, and ``committed``, as they were. The bootstrap files go first: a run cut short after
     them leaves files whose digest the next `cortex upgrade` reads as nobody's change — and the
-    pinned version it finds then, it finishes."""
+    pinned version it finds then, it finishes. A file still as it was is not written back; one that
+    cannot be is said, and the others are put back all the same. ``synced`` tells whether the sync
+    had started, which moves this machine: only then does `cortex sync` put it back."""
     before = {**committed, **{path: path.read_bytes() for path, _ in rewrites}}
     try:
         for path, content in rewrites:
             _put(path, content)
         then()
     except BaseException:
+        back, lost = [], []
         for path, content in before.items():
-            if content is None:
-                path.unlink(missing_ok=True)
-            else:
-                _put(path, content)
-        names = _and([_shown_path(path, root) for path in before])
-        err.write(f"note: {names} {'are as they were' if len(before) > 1 else 'is as it was'}"
-                  f"{' — `cortex sync` puts this machine back on them' if committed else ''}\n")
+            try:
+                now = path.read_bytes() if path.is_file() else None
+                if now != content:
+                    if content is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        _put(path, content)
+                back.append(path)
+            except OSError as error:
+                lost.append(f"{_shown_path(path, root)} — {sync.os_error(error)}")
+        if back:
+            names = _and([_shown_path(path, root) for path in back])
+            err.write(f"note: {names} {'are as they were' if len(back) > 1 else 'is as it was'}"
+                      f"{' — `cortex sync` puts this machine back on them' if committed and synced() else ''}\n")
+        for what in lost:
+            err.write(f"warning: {what}: not put back as it was\n")
         raise
 
 
@@ -1300,7 +1339,7 @@ def _git(root: str, *args: str, timeout: Optional[float] = 30) -> subprocess.Com
         raise UpgradeError("git is not on PATH")
     try:
         return subprocess.run([git, "-C", root, *args], capture_output=True, encoding="utf-8", errors="replace",
-                              stdin=subprocess.DEVNULL, timeout=timeout)
+                              stdin=subprocess.DEVNULL, timeout=timeout, env=sync.git_environment())
     except (OSError, subprocess.SubprocessError) as error:
         raise UpgradeError(f"git {args[0]} could not run — {error}")
 
@@ -1861,7 +1900,9 @@ def _what_is_committed(outcome: Outcome, committing: bool) -> str:
             f" — not committed{': ' + _first(why) if why else ''}"
     if outcome.team is None:
         return f"{_and(outcome.names())}{said(outcome.uncommitted)}" if outcome.names() else ""
-    team = [path for path in outcome.files if path not in outcome.outside and _inside(outcome.team, path)]
+    # The team's files are those team_move commits — not whatever lies in the team's folder: a bootstrap linked
+    # into it is the project's, left uncommitted.
+    team = [path for path in outcome.files if path not in outcome.outside and path in outcome.team_files]
     own = [path for path in outcome.files if path not in outcome.outside and path not in team]
     parts = [f"{_and([_shown_path(path, outcome.root) for path in team])}{said(outcome.uncommitted)}"] if team else []
     if own:
