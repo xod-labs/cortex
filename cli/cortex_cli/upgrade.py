@@ -949,8 +949,8 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         name, newer = pinned
         if store.development(newer):
             raise UpgradeError(f"this project uses Cortex {newer}, which its {name} pins — a build of no release, "
-                               f"newer than this cortex, {the_store.own}: nothing was changed. Pin a release: "
-                               f"`{store.pin_command(name)}`")
+                               f"newer than this cortex, {the_store.own}: nothing was changed — "
+                               f"{store.pin_remedy(name, config.developers_toml(root, name))}")
         down = "" if store.development(the_store.own) else \
             f"\nor move the project down to this cortex's version by naming it: cortex upgrade {the_store.own}"
         raise UpgradeError(f"this project uses Cortex {newer}, which its {name} pins, newer than this cortex, "

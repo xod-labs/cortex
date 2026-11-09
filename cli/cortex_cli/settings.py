@@ -61,11 +61,18 @@ def _origin(setting: cascade.Setting, newer: Optional[str], found: Optional[casc
     if setting.locked:
         said += " — locked"
     if setting.key == "version" and newer is not None and store.development(Version(str(setting.value))):
-        said += f" — a build of no release, newer than this cortex, {newer}: pin a release, " \
-                f"`{store.pin_command(setting.origin)}`"
+        said += f" — a build of no release, newer than this cortex, {newer}: " \
+                f"{store.pin_remedy(setting.origin, _by_hand(found, setting.origin))}"
     elif setting.key == "version" and newer is not None:
         said += f" — newer than this cortex, {newer}: {store.update_command(Version(str(setting.value)))}"
     return said
+
+
+def _by_hand(found: Optional[cascade.Resolution], origin: str) -> bool:
+    """Whether the version from ``origin`` is this developer's ``cortex.toml``'s, which no command writes
+    (``store.pin_remedy``)."""
+    developer = found.developer_version if found is not None else None
+    return origin == config.PROJECT_FILE and developer is not None and developer.origin == config.PROJECT_FILE
 
 
 def _too_new(found: cascade.Resolution) -> Optional[str]:
@@ -86,7 +93,8 @@ def _loosely(root: str, error: config.ConfigError) -> cascade.Resolution:
     found = machine.resolution(store.cortex_home)
     version = cascade.Setting("version", str(pinned[1]), pinned[0])
     return cascade.Resolution({"version": version, **found.settings}, committed=sync.committed(root),
-                              warnings=found.warnings)
+                              warnings=found.warnings,
+                              developer_version=version if config.developers_toml(root, pinned[0]) else None)
 
 
 def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO) -> int:
@@ -132,8 +140,9 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
         value = found.value(key)
         out.write(("" if value is None else _shown(value)) + "\n")
         if key == "version" and newer is not None and store.development(Version(str(value))):
+            origin = found["version"].origin
             sys.stderr.write(f"note: Cortex {value} is a build of no release, newer than this cortex, {newer} — "
-                             f"pin a release:\n    {store.pin_command(found['version'].origin)}\n")
+                             f"{store.pin_remedy(origin, _by_hand(found, origin), block=True)}\n")
         elif key == "version" and newer is not None:
             sys.stderr.write(f"note: Cortex {value} is newer than this cortex, {newer} — update it:\n"
                              f"    {store.update_command(Version(str(value)))}\n")

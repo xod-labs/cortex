@@ -421,7 +421,7 @@ class DevelopmentPinTests(SettingsTestCase):
                       "release:\n    cortex upgrade VERSION\n", proc.err)
         proc = self.cortex(project, "config")
         self.assert_ok(proc)
-        self.assertIn(f"cortex.toml — a build of no release, newer than this cortex, {OWN}: pin a release, "
+        self.assertIn(f"cortex.toml — a build of no release, newer than this cortex, {OWN}: pin a release: "
                       "`cortex upgrade VERSION`", proc.out)
 
     def test_a_try_is_moved_by_local(self):

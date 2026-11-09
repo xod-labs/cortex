@@ -191,6 +191,30 @@ class TooNewTests(TeamTestCase):
                 self.assertIn("or move the team's pin: cortex upgrade --team VERSION", proc.err)
                 self.assertNotIn(f"--team {DEV_SOURCE}", proc.err)
 
+    @SOURCE
+    def test_a_pin_of_no_release_in_a_developer_s_cortex_toml_is_moved_by_hand(self):
+        # A 2.B root: cortex.toml, uncommitted beside the team's file, holds this developer's version, which no
+        # command writes — `cortex upgrade VERSION` resumes the team's, `--local` writes a try below it.
+        root = self.project('version = "9.9.10-dev.3"\ntheme = "h2g2"\n', team='version = "9.9.8"\n', committed=False)
+        by_hand = ("pin a release by hand: set cortex.toml's version to one, or remove it to read the team's — "
+                   "uncommitted beside the team's file, it is this developer's, which no command writes")
+        for args in (("sync",), ("upgrade",), ("validate",), ("config", "version"), ("config",)):
+            with self.subTest(args=args):
+                proc = self.cortex(root, *args)
+                self.assertEqual(proc.returncode != 0, args[0] != "config", proc.err)
+                self.assertIn(by_hand, proc.out + proc.err)
+                self.assertNotIn("cortex upgrade VERSION", proc.out + proc.err)
+        # Below a build of no release that the store does not hold: no release serves it either.
+        proc = self.cortex(root, "sync", CORTEX_SOURCE_VERSION=DEV_SOURCE)
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn(f"Cortex 9.9.10-dev.3 is a build of no release, which no release serves — {by_hand}", proc.err)
+        # Committed, the same pin is the team's, moved by a command.
+        (root / ".git").mkdir()
+        proc = self.cortex(root, "sync")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn("pin a release:\n    cortex upgrade VERSION", proc.err)
+        self.assertNotIn("by hand", proc.err)
+
     def test_upgrade_refuses_a_move_that_still_reads_a_version_too_new(self):
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', local='version = "99.0.0"\n')
         before = (root / "cortex.toml").read_bytes()

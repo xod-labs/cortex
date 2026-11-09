@@ -378,6 +378,16 @@ def loose_team(root: str) -> Optional[Tuple[str, Version]]:
     return None if chosen is None else (chosen[0], Version(chosen[1]))
 
 
+def developers_toml(root: str, name: str = PROJECT_FILE) -> bool:
+    """Whether the version ``name`` holds is this developer's ``cortex.toml``'s, read loosely: not
+    committed, beside a team's file that pins one — a 2.B root (ADR-013 §3.1). No command writes it:
+    a pin of no release there is moved by hand (``store.pin_remedy``)."""
+    if name != PROJECT_FILE:
+        return False
+    found = cascade.loose_versions(root, loose_team_folder(root))
+    return "project" in found and "team" in found and not committed(root)
+
+
 def too_new(root: str, own: Version) -> Optional[str]:
     """Why this cortex is too old for the project at ``root`` — or ``None`` — from the versions read
     before any other key (ADR-013 §3.8, steps 1–2): a key of a later version is then said as the
@@ -390,7 +400,7 @@ def too_new(root: str, own: Version) -> Optional[str]:
     name, version = found
     if store.development(version):          # no self-update installs it: the pin moves (ADR-009 §9)
         return (f"this project uses Cortex {version}, which its {name} pins — a build of no release, newer than "
-                f"this cortex, {own}: pin a release:\n    {store.pin_command(name)}")
+                f"this cortex, {own}: {store.pin_remedy(name, developers_toml(root, name), block=True)}")
     teams = loose_team(root)
     # A build of no release names no version of its own to move to: no teammate can download it (ADR-009 §9).
     down = "VERSION" if store.development(own) else str(own)
