@@ -233,8 +233,9 @@ UNREADABLE_SYNCED = Unreadable("synced")
 
 def read_team(root: str, folder: str = TEAM_FOLDER):
     """The team's file in the team's folder of the project at ``root``, as parsed — ``None`` when it
-    is not there, ``Unreadable`` when it does not parse. Its grammar is checked by ``resolve``, and a
-    parse error refused, once the team's version says it is read."""
+    is not there, ``Unreadable`` when it does not parse, or cannot be opened. Its grammar is checked by
+    ``resolve``, and such a file refused, once the team's version says it is read: a project before
+    1.8.0 reads nothing of it."""
     path = os.path.join(root, folder, TEAM_FILE)
     if not os.path.isfile(path):
         return None
@@ -242,6 +243,8 @@ def read_team(root: str, folder: str = TEAM_FOLDER):
         return _checked_toml(path, f"{folder}/{TEAM_FILE}")
     except project.ProjectFileError as error:
         return Unreadable(str(error))
+    except OSError as error:
+        return Unreadable(f"{folder}/{TEAM_FILE}: cannot be read — {error.strerror or error}")
 
 
 def read_project(root: str, local: bool = True, lenient: bool = False) -> Tuple[Mapping, Optional[Mapping]]:

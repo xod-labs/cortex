@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -262,6 +263,17 @@ class TeamTests(unittest.TestCase):
             (Path(tmp) / "agents").mkdir()
             (Path(tmp) / "agents" / "cortex.team.toml").write_text("oops =\n", encoding="utf-8")
             self.assertIsInstance(cascade.read_team(tmp), cascade.Unreadable)
+
+    def test_a_team_s_file_that_cannot_be_opened_is_refused_only_where_it_is_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "agents").mkdir()
+            (Path(tmp) / "agents" / "cortex.team.toml").write_text('version = "1.8.0"\n', encoding="utf-8")
+            with mock.patch.object(cascade, "_toml", side_effect=PermissionError(13, "Permission denied")):
+                found = cascade.read_team(tmp)
+        self.assertEqual(found, cascade.Unreadable(f"{NAME}: cannot be read — Permission denied"))
+        self.assertEqual(cascade.resolve(PROJECT, None, {}, {}, team_data=found, committed=True).value("version"), "1.7.0")
+        with self.assertRaisesRegex(project.ProjectFileError, "cannot be read — Permission denied"):
+            cascade.resolve({**PROJECT, "version": "1.8.0"}, None, {}, {}, team_data=found, committed=True)
 
     def test_a_synced_that_does_not_read_is_dropped_on_the_lenient_read(self):
         for text in ('synced = "garbage"\n', 'synced = { pinned = "1.8.0", reads = "1.8.0", when = "now" }\n',
