@@ -466,19 +466,28 @@ class OptionTests(InitTestCase):
         self.assertEqual(self.init("--tool", "agents").returncode, 0)                   # a single project's AGENTS.md
         team = "\n## Workspace services\n\n| @alias | Folder | Description |\n|---|---|---|\n| `@svc` | svc/ | x |\n"
         (self.project / "CLAUDE.md").write_text(self.read("CLAUDE.md") + team, encoding="utf-8")
+        # Up to date as a workspace's: --force, which keeps its layout, would write it as it is — no command is named,
+        # never one that writes nothing, and the note says so on every run.
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("note: CLAUDE.md is there and was kept: a bootstrap written for a workspace, up to date as one\n",
+                      proc.err)
+        self.assertNotIn("--force", proc.err)
+        self.assertIn("is what --force would write: left as it is", self.init("--tool", "claude", "--force").out)
+        proc = self.init("--workspace")
+        self.assertIn("note: AGENTS.md is there and was kept: a bootstrap written for a single project — cortex init "
+                      "--tool agents --workspace --force writes a workspace's, and keeps it as .bak", proc.err)
+        self.assertNotIn("remove it", proc.err)
+        # An older one: --force writes it again — the note names it, and, followed, it keeps the team's part and
+        # the layout.
+        before = self.read("CLAUDE.md").replace("<!-- cortex:bootstrap layout=workspace format=2",
+                                                "<!-- cortex:bootstrap layout=workspace format=1", 1)
+        (self.project / "CLAUDE.md").write_text(before, encoding="utf-8")
         proc = self.init()
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn("note: CLAUDE.md is there and was kept: a bootstrap written for a workspace — cortex init --tool "
                       "claude --force writes it again, a workspace's as it was written, and keeps it as .bak", proc.err)
         self.assertNotIn("remove it", proc.err)
-        proc = self.init("--workspace")
-        self.assertIn("note: AGENTS.md is there and was kept: a bootstrap written for a single project — cortex init "
-                      "--tool agents --workspace --force writes a workspace's, and keeps it as .bak", proc.err)
-        self.assertNotIn("remove it", proc.err)
-        # Followed, the note keeps the team's part and the layout.
-        before = self.read("CLAUDE.md").replace("<!-- cortex:bootstrap layout=workspace format=2",
-                                                "<!-- cortex:bootstrap layout=workspace format=1", 1)
-        (self.project / "CLAUDE.md").write_text(before, encoding="utf-8")
         proc = self.init("--tool", "claude", "--force")
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))

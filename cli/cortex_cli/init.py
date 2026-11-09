@@ -354,6 +354,13 @@ def kept_bootstrap(kept: bytes, template: bytes) -> Optional[Kept]:
 NO_BOOTSTRAP = Kept("holds no Cortex bootstrap: the tool will not find Cortex", "it holds no Cortex bootstrap")
 
 
+def forced(path: Path, template: bytes, personality: bool, current: Optional[bytes]) -> bytes:
+    """What ``cortex init --force`` writes at ``path`` from ``template`` over ``current``, the file there or
+    ``None``: the team's part stays (ADR-012 §3.3)."""
+    wanted = stamped(for_tool(path, instructions(template, personality)))
+    return wanted if current is None else with_team_part(wanted, current)
+
+
 def _other_layout(wanted: str) -> Kept:
     other = "a workspace" if wanted == "single" else "a single project"
     return Kept(f"was written for {other}", f"a bootstrap written for {other}", layout=True)
@@ -562,11 +569,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             err.write(f"note: {display(str(instructions_file))} has no `alwaysApply: true` line in a frontmatter, "
                       f"as Cursor's documentation writes it: Cursor may not apply it in every conversation — {again}\n")
     else:
-        wanted = stamped(for_tool(instructions_file, instructions(template, personality)))
         replaced = instructions_file.exists()
         current = instructions_file.read_bytes() if replaced else None
-        if current is not None:
-            wanted = with_team_part(wanted, current)    # ADR-012 §3.3: the team's part stays
+        wanted = forced(instructions_file, template, personality, current)
         if current == wanted:
             out.write(f"✓ {display(str(instructions_file))} is what --force would write: left as it is\n")
         else:
@@ -590,11 +595,17 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             other = root / rel
             if other == instructions_file or not other.is_file():
                 continue
-            found = kept_bootstrap(other.read_bytes(), template)
+            content = other.read_bytes()
+            found = kept_bootstrap(content, template)
             if found is None:
                 continue
             if not found.force:
                 again = "kept as it is"
+            elif found.layout and not workspace and content == forced(
+                    other, (templates / "bootstrap-instructions-workspace.md").read_bytes(), personality, content):
+                # A workspace's file as --force, which keeps its layout (#329), would write it: no command to name.
+                err.write(f"note: {rel} is there and was kept: {found.phrase}, up to date as one\n")
+                continue
             elif found.layout:
                 # Never "remove it": at a root in no repository, its team's part would be lost with it (#329).
                 again = f"cortex init --tool {name} --workspace --force writes a workspace's" if workspace else \
