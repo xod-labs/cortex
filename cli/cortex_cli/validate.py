@@ -78,11 +78,16 @@ def lock_warnings(project: config.Project, base: str, files: Optional[Dict[str, 
         lock = config.load_lock(directory, name, shown_name)
     except config.ConfigError as error:
         return [(shown_name, "LOCK_INVALID", str(error))]
+    commit = "" if sync.in_no_repository(directory) else ", then commit it"     # committed nowhere (ADR-008 §9)
+    # The team's lock in a folder this user cannot write: the sync only warns of it here (ADR-013 §3.4).
+    fix = (f"{project.team_folder}/ cannot be written here — a `cortex sync` where it can be writes it, committed in "
+           "the team's repository") if name == config.TEAM_LOCK_FILE and not os.access(directory, os.W_OK) \
+        else f"run `cortex sync`{commit}"
     if lock is None:
-        return [(shown_name, "LOCK_MISSING", f"no {shown_name} — run `cortex sync`, then commit it")]
+        return [(shown_name, "LOCK_MISSING", f"no {shown_name} — {fix}")]
     if lock.version != version:
         return [(shown_name, "LOCK_STALE", f"{shown_name} names Cortex {lock.version}, and {pins} pins "
-                 f"{version} — run `cortex sync`, then commit it")]
+                 f"{version} — {fix}")]
     try:
         actual = store.digest_of(files) if files is not None else store.digest(Path(base))
     except store.StoreError as error:      # a version removed from the store meanwhile
@@ -128,10 +133,12 @@ def roots_and_folder(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]], Op
     root = config.find_project(cwd)
     if root is not None:
         # A version newer than this cortex, said before any key is checked (ADR-013 §3.8) — but of a
-        # spec that names no version, a checkout's, there is nothing to compare.
+        # spec that names no version, a checkout's, there is nothing to compare. A spec that is not
+        # there is no checkout: the version is said first.
         old = config.too_new(root, store.own_version())
         spec = config.local_spec(root)
-        if old is not None and (spec is None or _synced_version(root, spec, _spec_path(root, spec)) != ""):
+        if old is not None and (spec is None or not os.path.isdir(_spec_path(root, spec))
+                                or _synced_version(root, spec, _spec_path(root, spec)) != ""):
             raise RootsError(old)
         try:
             project = config.load(root)

@@ -304,6 +304,78 @@ class TeamVersionTests(SyncedProjectTestCase):
         pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local='version = "9.9.8"\n')
         self.assertEqual(pin().version, "9.9.9")                                # below the team's: changes nothing
 
+    def test_a_version_a_file_gained_or_lost_since_the_sync_is_refused(self):
+        # Each candidate is compared both ways: one `cortex sync` recorded that its file no longer pins, and one a
+        # file pins that it did not record — a team's file added since, a try written by hand.
+        recorded = 'synced = { team = "9.9.9", project = "9.9.9", pinned = "9.9.9", reads = "9.9.9" }\n'
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', team='version = "9.9.9"\n', local=recorded)
+        self.assertEqual(pin().version, "9.9.9")
+        (self.project / "agents" / "cortex.team.toml").write_text('theme = "h2g2"\n', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, r"not those `cortex sync` recorded .* run `cortex sync`"):
+            pin()                                                                # lost: the team's file's version
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', team='version = "9.9.9"\n',
+                         local='synced = { project = "9.9.9", pinned = "9.9.9", reads = "9.9.9" }\n')
+        with self.assertRaisesRegex(ValueError, r"not those `cortex sync` recorded .* run `cortex sync`"):
+            pin()                                                                # gained: a team's file since
+        (self.project / "agents" / "cortex.team.toml").unlink()
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n',
+                         local='version = "9.9.9"\nsynced = { project = "9.9.9", pinned = "9.9.9", reads = "9.9.9" }\n')
+        with self.assertRaisesRegex(ValueError, r"not those `cortex sync` recorded .* run `cortex sync`"):
+            pin()                                                                # gained: a try not synced
+
+    def test_below_1_8_0_cortex_toml_is_checked_as_1_7_0_checked_it(self):
+        # Read alone, it is still read with the grammar `cortex sync` reads it with: no theme out of the store.
+        for text in ('version = "1.7.0"\ntheme = "../../x"\n', 'version = "1.7.0"\ntheme = "h2g2"\ntypo = "x"\n',
+                     'version = "1.7.0"\n'):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(ValueError, "— cortex sync refuses this file too$"):
+                    self.files(text)()
+
+    def test_below_1_8_0_beside_a_team_s_file_the_remedy_is_a_sync(self):
+        # Mid-adoption, at a root no repository holds: `cortex sync` reads the team's file over an uncommitted
+        # cortex.toml, and takes the theme this one lacks from it — it does not refuse this file.
+        pin = self.files('version = "1.7.0"\n', team='version = "1.8.0"\ntheme = "h2g2"\n')
+        with self.assertRaisesRegex(ValueError, r'"theme" is required — run `cortex sync` in the project, which may '
+                                                r"read agents/cortex\.team\.toml instead of a cortex\.toml not committed$"):
+            pin()
+
+    def test_a_synced_that_is_none_names_its_remedy_once(self):
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local='synced = { pinned = "9.9.9" }\n')
+        with self.assertRaisesRegex(ValueError, r'"synced": "reads" is required') as caught:
+            pin()
+        self.assertEqual(str(caught.exception).count("cortex sync"), 1, caught.exception)
+
+    def test_a_checkout_this_machine_reads_leaves_the_team_s_version(self):
+        # `cortex sync --from` records reads = "": a checkout is no try, and the runtime takes the team's version.
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n',
+                         local='synced = { project = "9.9.9", pinned = "9.9.9", reads = "" }\n')
+        self.assertEqual(pin().version, "9.9.9")
+
+    def test_a_try_is_one_above_the_team_s_version_in_semver_order(self):
+        for team, tried in (("9.9.9", "9.9.9"), ("1.10.0", "1.9.0"), ("9.9.9", "9.9.9-rc.1")):
+            with self.subTest(team=team, tried=tried):              # a tie, a lower version, a pre-release of it
+                pin = self.files(f'version = "{team}"\ntheme = "h2g2"\n', local=f'version = "{tried}"\n')
+                self.assertEqual(pin().version, team)
+        pin = self.files('version = "1.9.0"\ntheme = "h2g2"\n', local='version = "1.10.0"\n')
+        with self.assertRaisesRegex(ValueError, r"reads Cortex 1\.10\.0, cortex\.local\.toml's version — a try"):
+            pin()
+
+    def test_a_try_in_cortex_toml_is_named_as_cortex_toml_s(self):
+        # At a 2.B root, an uncommitted cortex.toml above the team's file is the developer's try.
+        recorded = 'synced = { team = "9.9.8", project = "9.9.9", pinned = "9.9.8", reads = "9.9.9" }\n'
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', team='version = "9.9.8"\n', local=recorded)
+        with self.assertRaisesRegex(ValueError, r"reads Cortex 9\.9\.9, cortex\.toml's version — a try — and the "
+                                                r"runtime the team's 9\.9\.8"):
+            pin()
+
+    def test_a_local_version_that_is_no_version_is_refused_naming_the_key(self):
+        for text in ('version = "x"\n', "version = 1\n", 'version = "1.0"\n'):
+            with self.subTest(text=text):
+                pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local=text)
+                with self.assertRaisesRegex(ValueError, r'^cortex\.local\.toml: "version" is no version — cortex sync '
+                                                        r"refuses this file too$"):
+                    pin()
+
     def test_a_cortex_local_toml_that_does_not_read_is_none_as_in_1_7_0(self):
         pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local="spec = [\n")
         self.assertEqual(pin().version, "9.9.9")

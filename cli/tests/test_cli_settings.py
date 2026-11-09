@@ -190,6 +190,36 @@ class CommittedTests(SettingsTestCase):
         subprocess.run([GIT, "-C", str(repo), "add", "projects/foo/cortex.toml"], check=True)
         self.assertIs(self.settings(project, PATH=path)["committed"], True)
 
+    @NEEDS_GIT
+    def test_git_s_variables_of_the_caller_do_not_name_another_repository(self):
+        # A hook exports GIT_DIR: asked of that repository, a root that is in none would read as
+        # committed, and a project its own repository tracks as not.
+        other, empty = self.tmp / "other", self.tmp / "empty"
+        other.mkdir()
+        (other / "cortex.toml").write_text(f'version = "{OWN}"\ntheme = "h2g2"\n', encoding="utf-8")
+        for repo in (other, empty):
+            subprocess.run([GIT, "init", "-q", str(repo)], check=True)
+        subprocess.run([GIT, "-C", str(other), "add", "cortex.toml"], check=True)
+        path = os.path.dirname(GIT)
+        project = self.project()                                         # in no repository
+        self.assertIs(self.settings(project, PATH=path, GIT_DIR=str(other / ".git"))["committed"], False)
+        self.assertIs(self.settings(other, PATH=path, GIT_DIR=str(empty / ".git"))["committed"], True)
+        self.assertIs(self.settings(other, PATH=path, GIT_INDEX_FILE=str(empty / "index"))["committed"], True)
+
+    @NEEDS_GIT
+    @DEVELOPMENT
+    def test_a_project_too_new_says_whether_it_is_committed(self):
+        repo = self.tmp / "repo"
+        repo.mkdir()
+        (repo / "cortex.toml").write_text('version = "99.0.0"\ntheme = "h2g2"\nagents = "team"\n', encoding="utf-8")
+        subprocess.run([GIT, "init", "-q", str(repo)], check=True)
+        path = os.path.dirname(GIT)
+        found = self.settings(repo, PATH=path)
+        self.assertEqual((found["too_new"], found["committed"]), (True, False))
+        subprocess.run([GIT, "-C", str(repo), "add", "cortex.toml"], check=True)
+        found = self.settings(repo, PATH=path)
+        self.assertEqual((found["too_new"], found["committed"]), (True, True))
+
 
 class MachineFileTests(SettingsTestCase):
     @DOWNLOADS
@@ -213,6 +243,22 @@ class MachineFileTests(SettingsTestCase):
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn(f"{display(self.home / 'config.toml')}: ", proc.err)
         self.assertIn("https", proc.err)
+
+    def test_config_says_a_releases_url_a_download_refuses_and_exits_0(self):
+        # cortex config prints every setting, and CI reads `cortex config version`: a warning, never an error.
+        self.machine('releases_url = "http://example.com/releases"\n')
+        project = self.project()
+        where = display(self.home / "config.toml")
+        proc = self.cortex(project, "config", "version", CORTEX_RELEASES_URL="")
+        self.assert_ok(proc)
+        self.assertEqual(proc.out, f"{OWN}\n")
+        self.assertIn(f"warning: {where}: http://example.com/releases: only https is downloaded from", proc.err)
+        found = self.settings(project, CORTEX_RELEASES_URL="")
+        self.assertEqual(len([warning for warning in found["warnings"] if "a download refuses it" in warning]), 1)
+        proc = self.cortex(project, "config", CORTEX_RELEASES_URL="ftp://mirror.example/r")    # the variable's
+        self.assert_ok(proc)
+        self.assertIn("warning: CORTEX_RELEASES_URL: ftp://mirror.example/r: only https", proc.err)
+        self.assertNotIn("a download refuses it", self.cortex(project, "config").err)        # the fake release's
 
     def test_register_and_update_check_off_in_the_file(self):
         self.machine("register = false\nupdate_check = false\n")
@@ -269,6 +315,22 @@ class TooNewTests(SettingsTestCase):
                 self.assertEqual(proc.returncode, code, proc.err)
                 self.assertIn(self.WHY, proc.err)
                 self.assertIn("cortex self-update 99.0.0", proc.err)
+                self.assertNotIn("unknown key", proc.err)
+
+    @DEVELOPMENT
+    def test_validate_of_a_synced_project_or_of_a_spec_not_there_says_the_version(self):
+        # Only a spec that names no version — a checkout's — passes the gate: the store's version does
+        # not, nor a spec that is not there.
+        project = self.project("99.0.0", extra='agents = "team"\n')
+        stored = self.home / "versions" / "99.0.0"
+        for tree in ("agents", "templates", "docs"):
+            shutil.copytree(harness.REPO / tree, stored / tree)
+        for spec in (display(stored), "cortex"):
+            with self.subTest(spec=spec):
+                (project / "cortex.local.toml").write_text(f'spec = "{spec}"\n', encoding="utf-8")
+                proc = self.cortex(project, "validate")
+                self.assertEqual(proc.returncode, 2, proc.err)
+                self.assertIn(self.WHY, proc.err)
                 self.assertNotIn("unknown key", proc.err)
 
     def test_upgrade_says_the_version_not_the_key(self):

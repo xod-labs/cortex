@@ -220,12 +220,15 @@ def committed(root) -> bool:
     """Whether ``cortex.toml`` at ``root`` is committed (ADR-013 §3.1): git tracks it — ADR-011 §3.5's
     test. Without git on ``PATH``, or with a git that refuses — a repository another user owns, say —
     a ``.git`` at or above the root counts. A ``cortex.toml`` git does not track, in a repository, is
-    not committed: the developer's own."""
+    not committed: the developer's own. Git is asked of the root's own repository, as from a shell
+    that sets none of git's variables — a hook exports ``GIT_DIR``, which would make it another's —
+    and of the file's name as written, no pattern."""
     git = shutil.which("git")
     if git is not None:
+        environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
         try:
-            proc = subprocess.run([git, "-C", str(root), "ls-files", "--error-unmatch", "--", PROJECT_FILE],
-                                  capture_output=True, timeout=30)
+            proc = subprocess.run([git, "-C", str(root), "ls-files", "--error-unmatch", "--",
+                                   f":(literal){PROJECT_FILE}"], capture_output=True, timeout=30, env=environment)
         except (OSError, subprocess.SubprocessError):
             proc = None
         if proc is not None and proc.returncode in (0, 1):

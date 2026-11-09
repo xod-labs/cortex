@@ -946,12 +946,32 @@ class CortexLockTests(SyncTestCase):
                                              encoding="utf-8")
 
     def test_in_no_repository_the_lock_is_not_said_to_commit(self):
-        # A 2.B workspace root: cortex init says cortex.toml is committed nowhere, and so is the lock.
+        # A 2.B workspace root: cortex init says cortex.toml is committed nowhere, and so is the lock — nor does
+        # `sync --locked` or `validate` say to commit it.
         project = self.project()
+        proc = self.sync(project, "--locked")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn("--locked: no cortex.lock — `cortex sync` writes it. Nothing of the project was changed", proc.err)
         proc = self.sync(project)
         self.assert_ok(proc)
         self.assertIn("cortex.lock: written\n", proc.out)
         self.assertNotIn("commit", proc.out.lower())
+        good = self.lock(project)
+        self.write_lock(project, version="9.9.8", digest_=digest(self.stored()))
+        proc = self.sync(project, "--locked")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn(f"cortex.toml pins {OWN} — `cortex sync` writes it. Nothing", proc.err)
+        for change, said in ((lambda: (project / "cortex.lock").unlink(), "no cortex.lock — run `cortex sync`\n"),
+                             (lambda: self.write_lock(project, version="9.9.8", digest_=digest(self.stored())),
+                              f"pins {OWN} — run `cortex sync`\n")):
+            (project / "cortex.lock").write_text(good, encoding="utf-8")
+            change()
+            proc = self.validate(project)
+            self.assertIn(said, proc.out)
+            self.assertNotIn("commit", proc.out.lower())
+        (project / ".git").mkdir()                                  # a repository: the lock is to commit
+        proc = self.validate(project)
+        self.assertIn(f"pins {OWN} — run `cortex sync`, then commit it", proc.out)
 
     def test_a_repository_is_a_git_at_the_root_or_above_it_as_written_or_resolved(self):
         repo = self.tmp / "repo"
@@ -1160,6 +1180,7 @@ class CortexLockTests(SyncTestCase):
     def test_locked_never_writes_the_lock(self):
         # A project's CI: `cortex sync --locked && cortex validate --strict`.
         project = self.project()
+        (project / ".git").mkdir()                                  # a repository, git or not on the PATH
         proc = self.sync(project, "--locked")
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn("--locked: no cortex.lock — `cortex sync` writes it, then commit it. Nothing of the project "

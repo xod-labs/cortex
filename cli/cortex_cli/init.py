@@ -57,6 +57,7 @@ TOOLS = {
 }
 ALIAS_PLACEHOLDER = b"<!-- @alias: my-project -->"
 PERSONALITY_BEGIN = b"<!-- PERSONALITY:BEGIN -->"
+TITLE = b"# Cortex AI Team"             # how the templates' heading begins, either layout's
 PERSONALITY_END = b"<!-- PERSONALITY:END -->"
 # What some editors put before the first line of a UTF-8 file: no part of what it says.
 BOM = b"\xef\xbb\xbf"
@@ -209,7 +210,7 @@ def applies_always(content: bytes) -> bool:
 
 def bootstrap_of_cortex(content: bytes) -> bool:
     """A file the templates wrote: their heading, or their personality block."""
-    return without_frontmatter(content).startswith(b"# Cortex AI Team") or PERSONALITY_BEGIN in content
+    return without_frontmatter(content).startswith(TITLE) or PERSONALITY_BEGIN in content
 
 
 def reads_the_local_file(content: bytes) -> bool:
@@ -238,13 +239,15 @@ def markers(content: bytes) -> List[Tuple[str, int]]:
 
 def written_for_workspace(content: bytes) -> bool:
     """Whether a bootstrap was written for a workspace: by its markers when they agree, or, written before the
-    marker or with markers that disagree, by its title — the first line once a frontmatter is set aside (ADR-010
-    §3.1). A file that is no bootstrap was written for none."""
+    marker or with markers that disagree, by its title (ADR-010 §3.1) — the templates' heading, the first line once
+    a frontmatter is set aside, or the first line of Cortex's block that is one when a team wrote a line above it.
+    A file without that heading or the markers was written for none."""
     content = normalised(content)
     layouts = {layout for layout, _ in markers(content)}
     if len(layouts) == 1:
         return layouts == {"workspace"}
-    return bootstrap_of_cortex(content) and b"Workspace Mode" in without_frontmatter(content).split(b"\n", 1)[0]
+    lines = without_frontmatter(parts(content)[0]).split(b"\n")
+    return b"Workspace Mode" in next((line for line in lines if line.startswith(TITLE)), b"")
 
 
 def normalised(content: bytes) -> bytes:
@@ -637,8 +640,10 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             if not found.force:
                 again = "kept as it is"
             elif found.layout:
-                again = f"remove it, then cortex init --tool {name}{' --workspace' if workspace else ''} writes " \
-                        f"{'a workspace' if workspace else 'a single project'}'s"
+                # Never "remove it": at a root in no repository, its team's part would be lost with it (#329).
+                again = f"cortex init --tool {name} --workspace --force writes a workspace's" if workspace else \
+                    f"cortex init --tool {name} --force writes it again, a workspace's as it was written"
+                again += ", and keeps it as .bak"
             else:
                 again = f"cortex init --tool {name} --force replaces it, and keeps it as .bak"
             err.write(f"note: {rel} is there and was kept: {found.phrase} — {again}\n")

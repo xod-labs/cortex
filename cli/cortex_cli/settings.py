@@ -18,7 +18,7 @@ from typing import List, Optional, TextIO
 
 from cortex_core import cascade, project
 
-from . import config, machine, store, sync
+from . import config, machine, net, store, sync
 from .paths import display, working_directory
 from .semver import Version
 
@@ -73,6 +73,18 @@ def _too_new(found: cascade.Resolution) -> Optional[str]:
     return None
 
 
+def _refused_url(found: cascade.Resolution) -> Optional[str]:
+    """Why a download would refuse ``releases_url`` — ``None`` when it would not. Said, never an
+    error: ``cortex config`` prints every setting, and ``cortex config version`` is read in CI."""
+    if "releases_url" not in found:
+        return None
+    try:
+        net.check_url(str(found.value("releases_url")).rstrip("/"))
+    except net.DownloadError as error:
+        return f"{found['releases_url'].origin}: {error} — a download refuses it"
+    return None
+
+
 def _loosely(root: str, error: config.ConfigError) -> cascade.Resolution:
     """A project whose files this cortex refuses, pinning a version newer than it: its version,
     read before any key is checked (§3.8), and the machine's keys — what a later version's keys are,
@@ -106,6 +118,11 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
     if not as_json:
         for note in found.notes:
             sys.stderr.write(f"note: {note}\n")
+    warnings = list(found.warnings)
+    refused = _refused_url(found)
+    if refused is not None:
+        warnings.append(refused)
+        sys.stderr.write(f"warning: {refused}\n")
     if as_json:
         keys = [key] if key is not None else list(found.settings)
         out.write(json.dumps({
@@ -115,7 +132,7 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
             "locked": locked,
             "cortex": str(store.own_version()),
             "too_new": newer is not None,
-            "warnings": list(found.warnings),
+            "warnings": warnings,
             "settings": {name: {"value": found[name].value, "origin": found[name].origin,
                                 "overridden": [{"origin": origin, "value": value} for origin, value in found[name].overridden],
                                 "locked": found[name].locked}
