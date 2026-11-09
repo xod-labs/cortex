@@ -1397,6 +1397,34 @@ class CodeReviewFixTests(TeamTestCase):
         self.assertNotIn("`cortex sync` puts this machine back", proc.err)
         self.assertEqual(lock.read_bytes(), before)
 
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_all_team_commit_says_committed_only_what_it_committed(self):
+        # A bootstrap linked into the team's folder is the project's, written again and left uncommitted: in the
+        # team's folder, it is not said committed with the team's files.
+        marked = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes().replace(
+            b"# Cortex AI Team", b"# Cortex AI Team, as 9.9.8 wrote it", 1)
+        team = self.tmp / "team"
+        team.mkdir()
+        (team / "cortex.team.toml").write_text('version = "9.9.8"\n', encoding="utf-8")
+        (team / "CLAUDE.md").write_bytes(init.stamped(init.instructions(marked, True)))
+        self.git(team, "init", "-q")
+        self.git(team, "add", "-A")
+        self.git(team, "commit", "-q", "-m", "init")
+        root = self.project('theme = "h2g2"\n', name="alpha")
+        (root / "agents").symlink_to(team, target_is_directory=True)
+        (root / "CLAUDE.md").symlink_to(team / "CLAUDE.md")
+        (self.home / "projects.toml").write_text(
+            f'format = 1\n\n[[project]]\nname = "alpha"\npath = "{harness_path(root)}"\n', encoding="utf-8")
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team", OWN, "--commit", "--message", "move", **env)
+        self.assert_ok(proc)
+        self.assertEqual(self.git(team, "status", "--short").stdout, " M CLAUDE.md\n")
+        self.assertRegex(proc.out, rf"alpha  {re.escape(harness_path(root))}: agents/cortex.team.toml and "
+                                   r"agents/cortex.team.lock — committed on \S+, [0-9a-f]+; CLAUDE.md — not committed: "
+                                   r"--team commits in the team's folder only\n")
+
     def test_team_checks_no_overlay_of_a_project_that_pins_its_own_version(self):
         # It does not follow the team's file: its overlays are its own pin's, not the team's to check.
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', team=f'version = "{OWN}"\n')

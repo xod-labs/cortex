@@ -80,6 +80,7 @@ class Outcome:
     left: List[Path] = field(default_factory=list)      # --commit, nothing written: files git sees changed still
     outside: List[Path] = field(default_factory=list)   # --commit: of the files, those outside the git work tree
     team: Optional[str] = None                          # --team: the team's folder, where --commit commits its files
+    team_files: List[Path] = field(default_factory=list)  # --team: the team's files, which --commit commits there
 
     def names(self) -> List[str]:
         """The files to commit in the project — those outside its git work tree, ``elsewhere``."""
@@ -691,7 +692,8 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     writes = team_files[1:] if target == pinned else team_files
     if dry_run:
         out.write("--dry-run: nothing of the project was changed\n")
-        return Outcome(root, pinned, target, files=[] if unchanged else writes, team=agents)
+        return Outcome(root, pinned, target, files=[] if unchanged else writes, team=agents,
+                       team_files=[] if unchanged else list(writes))
     asked = branch is not None or message is not None
     # At the pin nothing is written: what a run before this one left of the two files — its commit refused,
     # or not asked — --commit commits, as that run would have; otherwise no branch is made, as an upgrade
@@ -728,7 +730,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
                 _put(path, content)
         err.write(f"note: {config.TEAM_NAME} and its lock are as they were\n")
         raise
-    outcome = Outcome(root, pinned, target, files=list(files), team=agents)
+    outcome = Outcome(root, pinned, target, files=list(files), team=agents, team_files=list(files))
     outcome.left = [] if files else left
     if project.follows:
         current_path = None
@@ -1618,7 +1620,9 @@ def _what_is_committed(outcome: Outcome, committing: bool) -> str:
             f" — not committed{': ' + _first(why) if why else ''}"
     if outcome.team is None:
         return f"{_and(outcome.names())}{said(outcome.uncommitted)}" if outcome.names() else ""
-    team = [path for path in outcome.files if path not in outcome.outside and _inside(outcome.team, path)]
+    # The team's files are those team_move commits — not whatever lies in the team's folder: a bootstrap linked
+    # into it is the project's, left uncommitted.
+    team = [path for path in outcome.files if path not in outcome.outside and path in outcome.team_files]
     own = [path for path in outcome.files if path not in outcome.outside and path not in team]
     parts = [f"{_and([_shown_path(path, outcome.root) for path in team])}{said(outcome.uncommitted)}"] if team else []
     if own:
