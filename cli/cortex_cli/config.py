@@ -111,6 +111,11 @@ class Project:
     def developer_version(self) -> Optional[cascade.Setting]:
         return self._settings().developer_version
 
+    def by_hand(self, origin: Optional[str]) -> bool:
+        """Whether the version from ``origin`` is this developer's ``cortex.toml``'s, which no command
+        writes (``by_hand``)."""
+        return by_hand(self._settings(), origin)
+
     @property
     def team_file(self) -> bool:
         """The team's file is read: there, and the team's version 1.8.0 or later."""
@@ -384,14 +389,23 @@ def loose_team(root: str) -> Optional[Tuple[str, Version]]:
     return None if chosen is None else (chosen[0], Version(chosen[1]))
 
 
+def by_hand(found: Optional[cascade.Resolution], origin: Optional[str]) -> bool:
+    """Whether the version from ``origin`` is this developer's ``cortex.toml``'s: not committed, beside a
+    team's file that is read — pinning a version or none, at a 2.B root (ADR-013 §3.1). No command writes
+    it: a plain ``cortex upgrade`` moves no project that follows the team's file, ``--local`` writes a try
+    and ``--team`` the team's file — a pin of no release there is moved by hand (``store.pin_remedy``)."""
+    return found is not None and origin == PROJECT_FILE and found.team and not found.committed
+
+
+def loose_team_file(root: str) -> bool:
+    """Whether the team's file is there, in the team's folder read loosely (ADR-013 §3.8, step 1)."""
+    return os.path.isfile(os.path.join(root, loose_team_folder(root), TEAM_FILE))
+
+
 def developers_toml(root: str, name: str = PROJECT_FILE) -> bool:
-    """Whether the version ``name`` holds is this developer's ``cortex.toml``'s, read loosely: not
-    committed, beside a team's file that pins one — a 2.B root (ADR-013 §3.1). No command writes it:
-    a pin of no release there is moved by hand (``store.pin_remedy``)."""
-    if name != PROJECT_FILE:
-        return False
-    found = cascade.loose_versions(root, loose_team_folder(root))
-    return "project" in found and "team" in found and not committed(root)
+    """``by_hand``, read loosely — the files before any key is checked: ``name`` is ``cortex.toml``, not
+    committed, beside a team's file, which pins a version or none."""
+    return name == PROJECT_FILE and loose_team_file(root) and not committed(root)
 
 
 def too_new(root: str, own: Version) -> Optional[str]:

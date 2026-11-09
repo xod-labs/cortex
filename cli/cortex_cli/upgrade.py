@@ -727,6 +727,8 @@ def local_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out:
     the_store.ensure(target)
     out.write(f"Cortex {target}: a try, above the team's {team} ({project.team_origin}) — nothing committed is "
               "written\n")
+    if store.development(target):
+        err.write(f"warning: {store.no_release_pinned(target, config.LOCAL_FILE)}\n")
     if _overlays(root, target, the_store.path(target), force, dry_run, out, err):
         return Outcome(root, project.version, target, 1, f"the overlays fail against Cortex {target} — nothing was changed")
     if dry_run:
@@ -785,6 +787,15 @@ def _no_release(the_store: store.Store, command: str) -> UpgradeError:
                         f"can download — name the version to move to: `{command} VERSION`. Nothing was changed")
 
 
+def _shared(target: Version, name: str, team: Version) -> UpgradeError:
+    """A build of no release's version, named for a file every teammate reads — the team's file, or a
+    committed ``cortex.toml`` — refused: no teammate can download it (ADR-009 §9). Tried on this
+    machine, it is ``--local``'s, once the team's version reads a try."""
+    tried = "" if grammar.before_team(str(team)) else f"; tried on this machine: `cortex upgrade --local {target}`"
+    return UpgradeError(f"Cortex {target} is a build of no release, which no teammate can download, and every teammate "
+                        f"reads {name} — nothing was changed. Pin a release there{tried}")
+
+
 def team_target(pinned: Optional[Version], wanted: Optional[str], the_store: store.Store,
                 name: str = config.TEAM_NAME) -> Version:
     """The version ``--team`` moves the team's file — ``name``, as the project root names it — to:
@@ -802,6 +813,8 @@ def team_target(pinned: Optional[Version], wanted: Optional[str], the_store: sto
     if grammar.before_team(str(target)):
         raise UpgradeError(f"{name} reads Cortex {grammar.FIRST_TEAM_VERSION} or later, and {target} is "
                            "before it — nothing was changed")
+    if store.development(target) and target != pinned:    # at the pin already, nothing new is written
+        raise _shared(target, name, target)
     _served(the_store, target, f"cortex upgrade --team {target}")
     return target
 
@@ -1034,15 +1047,23 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         # It follows the team's file — an uncommitted cortex.toml included, at a 2.B root: a move is the
         # team's, or a try; without VERSION, or with the team's or the version read, it resumes.
         if wanted is not None and Version(wanted) not in (current, project.version):
-            raise UpgradeError(f"this project follows {project.team_name}, which pins Cortex {current} — moving it "
-                               f"is the team's: `cortex upgrade --team {wanted}`; trying it here: `cortex upgrade "
-                               f"--local {wanted}`. Nothing was changed")
+            # A team's file that pins none: the version is the uncommitted cortex.toml's, which no command
+            # writes — the team pins one in its file, or the developer edits their own.
+            pins = f"which pins Cortex {current} — moving it is the team's" \
+                if project.team_origin == project.team_name else \
+                f"which pins no version: Cortex {current} is its uncommitted {config.PROJECT_FILE}'s, which no " \
+                "command writes — set it there by hand, or pin the team's"
+            raise UpgradeError(f"this project follows {project.team_name}, {pins}: `cortex upgrade --team {wanted}`; "
+                               f"trying it here: `cortex upgrade --local {wanted}`. Nothing was changed")
         wanted = None
         target = current
     else:
         if wanted is None and store.development(the_store.own) and current != the_store.own:
             raise _no_release(the_store, "cortex upgrade")
         target = Version(wanted) if wanted else the_store.own
+        # Not a follower, the version is cortex.toml's: committed, every teammate reads it.
+        if target != current and store.development(target) and config.committed(root):
+            raise _shared(target, f"its committed {config.PROJECT_FILE}", current)
     # A follower's version is the team's pin, which its file names when it is refused.
     _served(the_store, target, f"cortex upgrade {target}", project.team_origin if project.follows else None)
     developer = project.developer_version
@@ -1078,7 +1099,12 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     the_store.ensure(target)
     target_path = the_store.path(target)
     direction = "an upgrade" if target > current else "a downgrade"
-    out.write(f"Cortex {current} → {target}: {direction} — the release notes: {store.releases_url()}/tag/{target}\n")
+    notes = "a build of no release, with no release notes" if store.development(target) else \
+        f"the release notes: {store.releases_url()}/tag/{target}"
+    out.write(f"Cortex {current} → {target}: {direction} — {notes}\n")
+    if store.development(target):
+        # Written where only this machine reads it — said, as cortex init says it (ADR-009 §9).
+        err.write(f"warning: {store.no_release_pinned(target, config.PROJECT_FILE, project.by_hand(config.PROJECT_FILE))}\n")
     current_path: Optional[Path] = None
     if current > the_store.own:
         # The move down the refusal names: this cortex has not the version to compare with.

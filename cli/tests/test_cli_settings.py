@@ -436,8 +436,8 @@ class DevelopmentBuildTests(SettingsTestCase):
         proc = self.cortex(project, "init", "--tool", "claude")
         self.assertEqual(proc.returncode, 0, proc.out + proc.err)
         self.assertIn(f'version = "{OWN_DEV}"', (project / "cortex.toml").read_text(encoding="utf-8"))
-        self.assertIn(f"warning: cortex.toml pins Cortex {OWN_DEV}, the version this build of no release prepares, "
-                      "which no teammate can download — pin a release to share it: cortex upgrade VERSION\n", proc.err)
+        self.assertIn(f"warning: cortex.toml pins Cortex {OWN_DEV}, a build of no release, which no teammate can download "
+                      "— pin a release: `cortex upgrade VERSION`\n", proc.err)
         project = self.project("1.7.0")                                    # a pin of its own: kept, and not said
         stored = self.home / "versions" / "1.7.0"
         for tree in ("agents", "templates", "docs"):
@@ -445,6 +445,42 @@ class DevelopmentBuildTests(SettingsTestCase):
         proc = self.cortex(project, "init", "--tool", "claude")
         self.assertEqual(proc.returncode, 0, proc.out + proc.err)
         self.assertNotIn("build of no release", proc.err)
+
+    def test_its_version_is_written_where_no_teammate_reads_it_only(self):
+        # The team's file and a committed cortex.toml are every teammate's: none can download this version.
+        project = self.project("1.7.0")
+        stored = self.home / "versions" / "1.7.0"
+        for tree in ("agents", "templates", "docs"):
+            shutil.copytree(harness.REPO / tree, stored / tree)
+        (project / ".git").mkdir()
+        before = (project / "cortex.toml").read_bytes()
+        proc = self.cortex(project, "upgrade", OWN_DEV)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"Cortex {OWN_DEV} is a build of no release, which no teammate can download, and every teammate "
+                      "reads its committed cortex.toml — nothing was changed. Pin a release there\n", proc.err)
+        self.assertEqual((project / "cortex.toml").read_bytes(), before)
+        (project / ".git").rmdir()                         # a throwaway project's: written, and said
+        proc = self.cortex(project, "upgrade", OWN_DEV)
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+        self.assertIn(f"warning: cortex.toml pins Cortex {OWN_DEV}, a build of no release", proc.err)
+        self.assertNotIn("/tag/", proc.out)
+        # The team's file, at a pre-release of the release this build prepares, held by the store: never moved to it.
+        pinned = "{}.{}.{}-alpha.1".format(*Version(OWN_DEV).core)
+        for tree in ("agents", "templates", "docs"):
+            shutil.copytree(harness.REPO / tree, self.home / "versions" / pinned / tree)
+        team = self.tmp / "team"
+        (team / "agents").mkdir(parents=True)
+        (team / ".git").mkdir()
+        (team / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")
+        (team / "agents" / "cortex.team.toml").write_text(f'version = "{pinned}"\n', encoding="utf-8")
+        before = (team / "agents" / "cortex.team.toml").read_bytes()
+        proc = self.cortex(team, "upgrade", "--team", OWN_DEV)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"Cortex {OWN_DEV} is a build of no release, which no teammate can download, and every teammate "
+                      f"reads agents/cortex.team.toml — nothing was changed. Pin a release there; tried on this machine: "
+                      f"`cortex upgrade --local {OWN_DEV}`", proc.err)
+        self.assertEqual((team / "agents" / "cortex.team.toml").read_bytes(), before)
+        self.assertFalse((team / "agents" / "cortex.team.lock").exists())
 
     def test_upgrade_all_names_the_version_once(self):
         project = self.project("1.7.0")

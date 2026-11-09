@@ -980,11 +980,8 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         err.write(f"warning: the spec is the checkout at {display(str(spec_source))}, not Cortex {version}: "
                   "no version is checked (--from)\n")
     else:
-        developer = project.developer_version
         # This developer's cortex.toml, uncommitted beside the team's file: a pin no command writes.
-        by_hand = not locked and origin == config.PROJECT_FILE and developer is not None \
-            and developer.origin == config.PROJECT_FILE
-        how = the_store.ensure(version, origin=origin, by_hand=by_hand)
+        how = the_store.ensure(version, origin=origin, by_hand=project.by_hand(origin))
         spec_source = the_store.path(version)
         said = {"stored": "in the store", "written": "written to the store, from this cortex",
                 "downloaded": "downloaded to the store, checked against its SHA256SUMS",

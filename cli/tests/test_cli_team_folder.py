@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_cli_format3 import FORMAT_2, OURS, TEMPLATE, written  # noqa: E402
-from test_cli_team import (DEV_OWN, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, SOURCE,  # noqa: E402
+from test_cli_team import (DEV_OWN, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, SOURCE, TEAM_RELEASE,  # noqa: E402
                            TeamTestCase, harness_path)
 
 import cli_harness as harness  # noqa: E402
@@ -448,6 +448,7 @@ class SharedRenamedFolderTests(FolderTestCase):
         self.assertNotIn(f"The overlays of {harness_path(beta)}", proc.out)
         self.assertIn("pins its own version, 9.9.8", proc.out + proc.err)
 
+    @TEAM_RELEASE
     def test_a_failing_follower_stops_the_shared_file_in_either_order(self):
         for failing in ("alpha", "beta"):
             with self.subTest(failing=failing):
@@ -463,6 +464,7 @@ class SharedRenamedFolderTests(FolderTestCase):
                 self.assertEqual((team / "cortex.team.toml").read_bytes(), before)
                 self.assertIn(f"The overlays of {harness_path(self.tmp / failing)}, checked against Cortex {OWN}:", proc.out)
 
+    @TEAM_RELEASE
     def test_the_shared_file_moves_once(self):
         team, roots = self.shared(None)
         proc = self.cortex(self.tmp, "upgrade", "--all", "--team", OWN)
@@ -494,6 +496,7 @@ class CodeReviewFolderTests(FolderTestCase):
         self.assert_ok(self.cortex(root, "sync", "--locked"))
 
     @NEEDS_GIT
+    @TEAM_RELEASE
     def test_team_commit_names_the_folder_of_the_developer_s_own_change(self):
         env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
         root = self.named(team='version = "1.8.0"\n', committed=False)
