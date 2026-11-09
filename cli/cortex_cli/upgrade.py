@@ -743,21 +743,24 @@ def team_pin(project: config.Project) -> Optional[Version]:
     return Version(str(named)) if named is not None else None
 
 
-def _no_release(the_store: store.Store) -> UpgradeError:
-    """``--team`` with no VERSION from a source checkout or a development build: its own version is no
-    release a teammate can download, and it serves none, every release being newer than it."""
+def _no_release(the_store: store.Store, command: str) -> UpgradeError:
+    """No VERSION from a build of no release: its own version is the one its branch prepares, which no
+    teammate can download (ADR-009 §9, 2026-11-09) — a project is moved to it only by naming it."""
     kind = "a development build" if store.embedded_archive() is not None else "a source checkout"
-    return UpgradeError(f"this cortex is {kind}, {the_store.own}, which serves no release — the team's pin is moved "
-                        "from a released cortex: `cortex upgrade --team [VERSION]` there. Nothing was changed")
+    return UpgradeError(f"this cortex is {kind}, {the_store.own}, the version its branch prepares, which no teammate "
+                        f"can download — name the version to move to: `{command} VERSION`. Nothing was changed")
 
 
 def team_target(pinned: Optional[Version], wanted: Optional[str], the_store: store.Store,
                 name: str = config.TEAM_NAME) -> Version:
     """The version ``--team`` moves the team's file — ``name``, as the project root names it — to:
-    ``wanted``, or this cortex's own — never down to it, nor to a source or development build's, which
-    names no release a teammate can download."""
-    if wanted is None and store.development(the_store.own):
-        raise _no_release(the_store)
+    ``wanted``, or this cortex's own — never down to it, nor, unnamed, to a build of no release's, which
+    no teammate can download."""
+    if wanted is None and store.development(the_store.own) and pinned != the_store.own:
+        raise _no_release(the_store, "cortex upgrade --team")
+    if wanted is None and pinned is not None and pinned > the_store.own and store.development(pinned):
+        raise UpgradeError(f"{name} pins Cortex {pinned}, a build of no release, newer than this cortex, "
+                           f"{the_store.own} — nothing was changed. Pin a release: `cortex upgrade --team VERSION`")
     if wanted is None and pinned is not None and pinned > the_store.own:
         raise UpgradeError(f"{name} pins Cortex {pinned}, newer than this cortex, {the_store.own} — nothing "
                            f"was changed. Update this cortex:\n    {store.update_command(pinned)}")
@@ -906,13 +909,14 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     return outcome
 
 
-def _served(the_store: store.Store, target: Version, again: str) -> None:
+def _served(the_store: store.Store, target: Version, again: str, origin: Optional[str] = None) -> None:
     """Refuse a target this cortex does not serve: one newer than it, naming ``cortex self-update``,
-    then ``again``; one before the first spec archive."""
-    if target > the_store.own:
+    then ``again`` — a build of no release's is said as the store says it, naming the command that
+    pins a release in ``origin``, the file that pins it; one before the first spec archive."""
+    if target > the_store.own and not store.development(target):
         raise UpgradeError(f"Cortex {target} is newer than this cortex, {the_store.own} — update this cortex first, "
                            f"then run `{again}` again:\n    {store.update_command(target)}")
-    the_store.check_served(target)
+    the_store.check_served(target, origin)
 
 
 def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: Optional[str],
@@ -930,8 +934,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     the_store = store.Store()
     pinned = config.loose_pin(root)
     if wanted is None and pinned is not None and pinned[1] > the_store.own and pinned[0] != config.PROJECT_FILE:
-        # A try, or the team's pin, newer than this cortex: said with its own remedy (ADR-013 §3.8) — a
-        # source or development build, which the gate lets by, never moves the project down to itself.
+        # A try, or the team's pin, newer than this cortex: said with its own remedy (ADR-013 §3.8).
         name, newer = pinned
         team = os.path.isfile(os.path.join(root, config.loose_team_folder(root), config.TEAM_FILE))
         raise UpgradeError(f"this project reads Cortex {newer}, which its {name} pins, newer than this cortex, "
@@ -941,14 +944,18 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     if wanted is None and pinned is not None and pinned[1] > the_store.own:
         # The default moves a project to this cortex's version, never down: a teammate's older binary
         # would otherwise undo the team's pin. Said from the version read before any key is checked,
-        # whatever key of a later version the file holds (ADR-013 §3.8). A source checkout or a
-        # development build is refused too, as in 1.7.0: passing, it would move the project down to
-        # its own 0.0.0-dev.
+        # whatever key of a later version the file holds (ADR-013 §3.8). A build of no release names
+        # no move down: its version is none a teammate can download.
         name, newer = pinned
+        if store.development(newer):
+            raise UpgradeError(f"this project uses Cortex {newer}, which its {name} pins — a build of no release, "
+                               f"newer than this cortex, {the_store.own}: nothing was changed. Pin a release: "
+                               f"`{store.pin_command(name)}`")
+        down = "" if store.development(the_store.own) else \
+            f"\nor move the project down to this cortex's version by naming it: cortex upgrade {the_store.own}"
         raise UpgradeError(f"this project uses Cortex {newer}, which its {name} pins, newer than this cortex, "
                            f"{the_store.own} — nothing was changed. Update this cortex to serve it:\n"
-                           f"    {store.update_command(newer)}\nor move the project down to this cortex's version by "
-                           f"naming it: cortex upgrade {the_store.own}")
+                           f"    {store.update_command(newer)}" + down)
     project = config.load(root)
     # The version a plain upgrade moves is cortex.toml's: the team's version, which what the team
     # commits follows — never a developer's try (ADR-013 §3.11).
@@ -963,8 +970,11 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         wanted = None
         target = current
     else:
+        if wanted is None and store.development(the_store.own) and current != the_store.own:
+            raise _no_release(the_store, "cortex upgrade")
         target = Version(wanted) if wanted else the_store.own
-    _served(the_store, target, f"cortex upgrade {target}")
+    # A follower's version is the team's pin, which its file names when it is refused.
+    _served(the_store, target, f"cortex upgrade {target}", project.team_origin if project.follows else None)
     developer = project.developer_version
     if developer is not None and target != current:
         after = max(target, Version(str(developer.value)))
@@ -1008,7 +1018,8 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
             say_changes(changes(the_store.path(current), target_path), out)
             current_path = the_store.path(current)
         except store.StoreError as error:
-            err.write(f"note: what changes is not said — Cortex {current} is not in the store: {error}\n")
+            why = "a build of no release" if store.development(current) else f"not in the store: {error}"
+            err.write(f"note: what changes is not said — Cortex {current} is {why}\n")
 
     code, report = check_overlays(root, target_path)
     stops = code != 0 and not force
@@ -1570,8 +1581,10 @@ def upgrade_all(options: _Options, out: TextIO, err: TextIO) -> int:
     target = Version(options.wanted) if options.wanted else the_store.own
     if options.wanted:
         _served(the_store, target, f"cortex upgrade --all {target}")       # every project would refuse it
-    elif options.which == "team" and store.development(the_store.own) and _followers(entries):
-        raise _no_release(the_store)                                        # every team's file would refuse it
+    elif options.which == "team" and store.development(the_store.own) and _followers(entries, the_store.own):
+        raise _no_release(the_store, "cortex upgrade --all --team")         # every team's file would refuse it
+    elif options.which != "team" and store.development(the_store.own) and _movers(entries, the_store.own):
+        raise _no_release(the_store, "cortex upgrade --all")                # no project moves to it unnamed
     newer = _asking(options.wanted)
     done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]] = []
     try:
@@ -1635,15 +1648,29 @@ def folder_of(root: str) -> str:
     return os.path.normcase(os.path.realpath(os.path.join(root, config.loose_team_folder(root))))
 
 
-def _followers(entries: List[registry.Entry]) -> List[Tuple[str, str]]:
-    """``(path, team's folder)`` of each registered project that follows its team's file."""
+def _movers(entries: List[registry.Entry], own: Version) -> bool:
+    """Whether a plain ``--all`` would move a registered project to ``own``: one that follows no
+    team's file, pinned below it."""
+    for entry in entries:
+        try:
+            project = config.load(entry.path)
+        except (config.ConfigError, OSError):
+            continue
+        if not project.follows and project.team_version is not None and Version(str(project.team_version)) < own:
+            return True
+    return False
+
+
+def _followers(entries: List[registry.Entry], other_than: Optional[Version] = None) -> List[Tuple[str, str]]:
+    """``(path, team's folder)`` of each registered project that follows its team's file — whose
+    team's pin is not ``other_than``, when it is given."""
     found = []
     for entry in entries:
         try:
             project = config.load(entry.path)
         except (config.ConfigError, OSError):
             continue
-        if project.follows:
+        if project.follows and (other_than is None or project.team_version != other_than):
             found.append((entry.path, folder_of(entry.path)))
     return found
 

@@ -93,15 +93,11 @@ def version_key(text: str) -> Tuple:
     return tuple(int(part) for part in match.group(1, 2, 3)), (0, pre) if pre else (1, ())
 
 
-# A source checkout's version, or a development build's — a dispatch of the binary workflow.
-DEVELOPMENT = re.compile(r"0\.0\.0-dev(?:\.[0-9]+)?", re.ASCII)
-
-
 def before_team(text: str) -> bool:
-    """Whether a version predates the team's file — 1.8.0, which first reads it. A source checkout's
-    or a development build's, ``0.0.0-dev`` or ``0.0.0-dev.N``, does not: built from a checkout of
-    1.8.0 or later, it reads what the checkout reads — as it passes the version gate (ADR-013 §3.8)."""
-    return DEVELOPMENT.fullmatch(text) is None and version_key(text) < version_key(FIRST_TEAM_VERSION)
+    """Whether a version predates the team's file — 1.8.0, which first reads it. A pre-release has
+    its release's features: ``1.8.0-rc.1``, a source checkout's ``1.8.0-dev`` and a development
+    build's ``1.8.0-dev.N`` read it (ADR-009 §9, 2026-11-09)."""
+    return version_key(text)[0] < version_key(FIRST_TEAM_VERSION)[0]
 
 
 def is_theme(value: object) -> bool:

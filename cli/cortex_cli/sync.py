@@ -957,7 +957,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         err.write(f"warning: the spec is the checkout at {display(str(spec_source))}, not Cortex {version}: "
                   "no version is checked (--from)\n")
     else:
-        how = the_store.ensure(version)
+        how = the_store.ensure(version, origin=origin)
         spec_source = the_store.path(version)
         said = {"stored": "in the store", "written": "written to the store, from this cortex",
                 "downloaded": "downloaded to the store, checked against its SHA256SUMS",

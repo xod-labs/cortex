@@ -26,6 +26,7 @@ on:
       - "core/**"
       - "install.sh"
       - "install.ps1"
+      - "CHANGELOG.md"
       - ".github/workflows/binary.yml"
   pull_request:
     branches: [main, "[0-9]+.x"]
@@ -90,13 +91,14 @@ jobs:
 
       # A release is built at the version release.yml gives: release-version checked it against
       # the changelog, the notes and the releases (ADR-009 §3.3, §3.7). Anything else is a build of
-      # no release.
+      # no release, X.Y.Z-dev.N: the version the branch's changelog prepares, N this run's number
+      # (ADR-009 §9).
       - name: The version to stamp
         id: version
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          version="${RELEASE_VERSION:-0.0.0-dev.$GITHUB_RUN_NUMBER}"
+          version="${RELEASE_VERSION:-$(python cli/build.py --development-version "$GITHUB_RUN_NUMBER")}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       # The checksum of every spec archive released so far, which the binary embeds: a release

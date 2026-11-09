@@ -28,18 +28,22 @@ import subprocess  # noqa: E402
 
 import cli_harness as harness  # noqa: E402
 from cortex_cli import config, init, store, sync, upgrade, validate  # noqa: E402
+from cortex_cli.semver import Version  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
 OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
 DOWNLOADS = unittest.skipIf(harness.BINARY, "a build of no release downloads no version")
-DEV_BUILD = re.compile(r"0\.0\.0-dev(\.[0-9]+)?")
-DEVELOPMENT = unittest.skipIf(harness.BINARY is not None and DEV_BUILD.fullmatch(harness.EXPECTED_VERSION or "0.0.0-dev"),
-                              "a development build passes the version gate")
 # The suite's own versions — 9.9.7 and 9.9.8 served, 9.9.9 this cortex's — which a build's version, 1.8.0 or a
 # development one, does not order as the source does.
 SOURCE = unittest.skipIf(harness.BINARY, "the suite's versions, ordered against this cortex's")
-# --team with no VERSION from a development build names a version first, whatever the pin (ADR-013 §3.11).
-DEV_OWN = DEV_BUILD.fullmatch(OWN) is not None
+# A source checkout of the branch that prepares the release after the suite's 9.9.9: a build of no release.
+DEV_SOURCE = "9.9.10-dev.7"
+# --team with no VERSION from a build of no release, X.Y.Z-dev.N, names a version first, whatever the pin
+# (ADR-013 §3.11, ADR-009 §9).
+DEV_OWN = re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-dev(\.[0-9]+)?", OWN) is not None
+# A version that reads the team's file and that this cortex serves: 1.8.0 — or a pre-release's own, a candidate's
+# 1.8.0-rc.1 or a build of no release's 1.8.0-dev.N, which has 1.8.0's features and is older than 1.8.0 (ADR-009 §9).
+TEAM_PIN = OWN if Version(OWN).pre else "1.8.0"
 GIT = shutil.which("git")
 NEEDS_GIT = unittest.skipIf(GIT is None or os.name == "nt", "needs git")
 GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
@@ -162,7 +166,6 @@ class VersionTests(TeamTestCase):
                       "is 1.7.0: the team moves to 1.8.0 first, or remove `version` from cortex.local.toml", proc.err)
 
 
-@DEVELOPMENT
 class TooNewTests(TeamTestCase):
     def test_the_refusal_names_the_file_and_its_remedy(self):
         root = self.project('version = "1.8.0"\ntheme = "h2g2"\n', local='version = "99.0.0"\n')
@@ -533,7 +536,7 @@ class ReviewTests(TeamTestCase):
         proc = self.cortex(root, "config", "version")
         self.assert_ok(proc)
         self.assertIn(f"{TEAM} is not read", proc.err)
-        (root / "cortex.toml").write_text('version = "1.8.0"\ntheme = "h2g2"\n', encoding="utf-8")
+        (root / "cortex.toml").write_text(f'version = "{TEAM_PIN}"\ntheme = "h2g2"\n', encoding="utf-8")
         proc = self.cortex(root, "config", "version")
         self.assertEqual(proc.returncode, 1)
         self.assertIn(TEAM, proc.err)
@@ -578,11 +581,10 @@ class ReviewTests(TeamTestCase):
         self.assertEqual((root / "cortex.local.toml").read_bytes(), before)
         self.assertIn("cortex.local.toml is as it was", err.getvalue())
 
-    @DEVELOPMENT
     def test_team_refuses_a_move_that_still_reads_a_try_too_new(self):
-        root = self.project('theme = "h2g2"\n', team='version = "1.8.0"\n', local='version = "99.0.0"\n')
+        root = self.project('theme = "h2g2"\n', team=f'version = "{TEAM_PIN}"\n', local='version = "99.0.0"\n')
         before = (root / TEAM).read_bytes()
-        proc = self.cortex(root, "upgrade", "--team", "1.8.0")
+        proc = self.cortex(root, "upgrade", "--team", TEAM_PIN)
         self.assertEqual(proc.returncode, 1)
         self.assertIn("after the move, this project would read Cortex 99.0.0", proc.err)
         self.assertEqual((root / TEAM).read_bytes(), before)
@@ -688,22 +690,48 @@ class SecondReviewTests(TeamTestCase):
     @SOURCE
     def test_a_development_build_skips_projects_without_a_team_s_file(self):
         self.registered(self.project(f'version = "{OWN}"\ntheme = "h2g2"\n'))
-        proc = self.cortex(self.tmp, "upgrade", "--all", "--team", CORTEX_SOURCE_VERSION="0.0.0-dev.7")
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team", CORTEX_SOURCE_VERSION=DEV_SOURCE)
         self.assert_ok(proc)
         self.assertIn("skipped: no team's file to move", proc.out)
 
     @SOURCE
     def test_a_development_build_names_the_version_for_the_team_s_pin(self):
-        root = self.project('theme = "h2g2"\n', team='version = "0.0.0-dev.7"\n')
+        # Its own version is the one its branch prepares, which no teammate can download (ADR-009 §9).
+        root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n')
         self.registered(root)
         before = (root / TEAM).read_bytes()
         for args in (("upgrade", "--team"), ("upgrade", "--all", "--team")):
             with self.subTest(args=args):
-                proc = self.cortex(self.tmp if "--all" in args else root, *args, CORTEX_SOURCE_VERSION="0.0.0-dev.7")
+                proc = self.cortex(self.tmp if "--all" in args else root, *args, CORTEX_SOURCE_VERSION=DEV_SOURCE)
                 self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-                self.assertIn("this cortex is a source checkout, 0.0.0-dev.7, which serves no release — the team's pin "
-                              "is moved from a released cortex: `cortex upgrade --team [VERSION]` there", proc.err)
+                self.assertIn(f"this cortex is a source checkout, {DEV_SOURCE}, the version its branch prepares, which no "
+                              f"teammate can download — name the version to move to: `cortex {' '.join(args)} VERSION`. "
+                              "Nothing was changed", proc.err)
                 self.assertNotIn("in each registered project", proc.out)
+                self.assertEqual((root / TEAM).read_bytes(), before)
+
+    @SOURCE
+    def test_a_development_build_s_own_pin_is_no_move(self):
+        root = self.project('theme = "h2g2"\n', team=f'version = "{DEV_SOURCE}"\n')
+        self.registered(root)
+        for args in (("upgrade", "--team", "--dry-run"), ("upgrade", "--all", "--team", "--dry-run")):
+            with self.subTest(args=args):
+                proc = self.cortex(self.tmp if "--all" in args else root, *args, CORTEX_SOURCE_VERSION=DEV_SOURCE)
+                self.assert_ok(proc)
+                self.assertNotIn("name the version to move to", proc.err)
+
+    @SOURCE
+    def test_a_team_s_pin_of_no_release_is_moved_by_team(self):
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.10-dev.3"\n')
+        before = (root / TEAM).read_bytes()
+        for args in (("upgrade", "--team"), ("sync",)):
+            with self.subTest(args=args):
+                proc = self.cortex(root, *args)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"Cortex 9.9.10-dev.3, a build of no release, newer than this cortex, {OWN}"
+                              if args == ("upgrade", "--team") else "pins — a build of no release", proc.err)
+                self.assertIn("cortex upgrade --team VERSION", proc.err)
+                self.assertNotIn("self-update", proc.err)
                 self.assertEqual((root / TEAM).read_bytes(), before)
 
     def test_another_fault_of_a_version_less_cortex_toml_is_said_as_it_is(self):
@@ -1033,7 +1061,7 @@ class SecondReviewTests(TeamTestCase):
 
 def newer_refused(pin):
     """What --team with no VERSION says of a team's pin newer than this cortex."""
-    return (f"this cortex is a development build, {OWN}, which serves no release" if DEV_OWN else
+    return (f"this cortex is a development build, {OWN}, the version its branch prepares" if DEV_OWN else
             f"{TEAM} pins Cortex {pin}, newer than this cortex, {OWN}")
 
 

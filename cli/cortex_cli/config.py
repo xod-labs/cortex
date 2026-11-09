@@ -388,6 +388,9 @@ def too_new(root: str, own: Version) -> Optional[str]:
     if found is None or not store.too_old_for(found[1], own):
         return None
     name, version = found
+    if store.development(version):          # no self-update installs it: the pin moves (ADR-009 §9)
+        return (f"this project uses Cortex {version}, which its {name} pins — a build of no release, newer than "
+                f"this cortex, {own}: pin a release:\n    {store.pin_command(name)}")
     teams = loose_team(root)
     other = (f"\nor drop the try: cortex upgrade --local {teams[1] if teams else own}" if name == LOCAL_FILE else
              f"\nor move the team's pin: cortex upgrade --team {own}" if name.endswith(f"/{TEAM_FILE}") else "")

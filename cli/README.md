@@ -30,5 +30,8 @@ cd cli && CORTEX_TEST_BINARY=build/dist/cortex python3 tests/parallel.py   # --w
 ## Version
 
 `cortex --version` prints the version of the release the binary was built from, stamped by the
-build with the version the release workflow names (ADR-009 §3.3). A source checkout is no release,
-and prints `0.0.0-dev`.
+build with the version the release workflow names (ADR-009 §3.3). A build of no release prints the
+version its branch prepares, as a pre-release (ADR-009 §9): `X.Y.Z-dev.N` from the CI, `N` its run's
+number, which `build.py --development-version N` gives; `X.Y.Z-dev` from a source checkout, read
+from its `CHANGELOG.md` — the highest release there, bumped by the `[Unreleased]` entries. The
+tests name another with `CORTEX_SOURCE_VERSION`.

@@ -2,8 +2,9 @@
 
 The command runs against a store of its own (``CORTEX_HOME``) and a release served from this
 machine (``release_fixture``). From source it stands for Cortex 9.9.9 (``CORTEX_SOURCE_VERSION``),
-so that it may download the fake releases 9.9.7 and 9.9.8. A built binary is a build of no
-release, 0.0.0-dev.N, and serves only its own version: the tests that download skip there.
+so that it may download the fake releases 9.9.7 and 9.9.8. A built binary — a release's, or a
+build of no release's, ``X.Y.Z-dev.N`` — is older than them, and serves only its own version: the
+tests that download skip there.
 """
 
 import errno

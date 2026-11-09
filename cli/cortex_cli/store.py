@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterator, Optional
 
 from cortex_core.project import DEFAULT_RELEASES_URL  # noqa: F401 — part of this module's API
+from cortex_core.project import LOCAL_FILE, TEAM_FILE
 
 from . import machine, net
 from .semver import FIRST_SPEC_ARCHIVE, Version
@@ -113,23 +114,40 @@ def own_version() -> Version:
 
 
 def development(version: Version) -> bool:
-    """A source checkout's version, ``0.0.0-dev``, or a development build's, ``0.0.0-dev.N`` — a
-    dispatch of the binary workflow builds one: no release, and no project pins it."""
-    return version.core == (0, 0, 0) and version.pre[:1] == ("dev",) and len(version.pre) <= 2 \
-        and all(part.isdigit() for part in version.pre[1:])
+    """A build of no release: a source checkout's ``X.Y.Z-dev``, or a CI build's ``X.Y.Z-dev.N`` —
+    the version its branch prepares (ADR-009 §9, 2026-11-09). No teammate can download it: a
+    project is moved to it only by naming it."""
+    return version.pre[:1] == ("dev",) and len(version.pre) <= 2 and all(part.isdigit() for part in version.pre[1:])
 
 
 def too_old_for(version: Version, own: Version) -> bool:
     """Whether a binary of version ``own`` is too old for a project of ``version``, as the commands say
-    it before any key is checked (ADR-013 §3.8): ``version`` newer than ``own`` — but a source checkout
-    or a development build passes, its commands then going as 1.7.0's went: the store serves it what it
-    can, ``Store.check_served`` refusing the rest."""
-    return version > own and not development(own)
+    it before any key is checked (ADR-013 §3.8): ``version`` newer than ``own``. A build of no release
+    is no exception: ``1.8.0-dev`` is older than 1.8.0, and newer than 1.7.0."""
+    return version > own
 
 
 def update_command(version: Version) -> str:
-    """The command that moves this binary to ``version`` (ADR-010 §3.7)."""
+    """The command that moves this binary to ``version`` (ADR-010 §3.7) — a release's: a build of no
+    release has none, and its pin is moved to a release instead (``pin_command``, ADR-009 §9)."""
     return f"cortex self-update {version}"
+
+
+def pin_command(origin: Optional[str] = None) -> str:
+    """The command that moves the pin the file ``origin`` holds (ADR-013 §3.11): the team's file's
+    with ``--team``, a try's with ``--local``, ``cortex.toml``'s — or a version named — plainly."""
+    if origin is not None and origin.replace("\\", "/").rsplit("/", 1)[-1] == TEAM_FILE:
+        return "cortex upgrade --team VERSION"
+    if origin == LOCAL_FILE:
+        return "cortex upgrade --local VERSION"
+    return "cortex upgrade VERSION"
+
+
+def no_release(version: Version, origin: Optional[str] = None) -> str:
+    """Why a build of no release's version, other than this cortex's own, is not served — and the
+    command that pins a release in its place, in the file ``origin`` that pins it."""
+    return (f"Cortex {version} is a build of no release, which no release serves — pin a release: "
+            f"`{pin_command(origin)}`")
 
 
 # --------------------------------------------------------------------------- #
@@ -361,9 +379,13 @@ class Store:
             except OSError:
                 pass
 
-    def check_served(self, version: Version) -> None:
-        """Refuse a version this binary does not serve: newer than itself — the tool is newer than
-        the data it reads, never older — or older than the first spec archive."""
+    def check_served(self, version: Version, origin: Optional[str] = None) -> None:
+        """Refuse a version this binary does not serve: a build of no release's, but its own or an
+        older one the store holds — no release serves it (ADR-009 §9), and ``origin``, the file that
+        pins it, names the command that pins a release; newer than itself — the tool is newer than
+        the data it reads, never older; or older than the first spec archive."""
+        if development(version) and version != self.own and (version > self.own or not self.has(version)):
+            raise StoreError(no_release(version, origin))
         if version > self.own:
             raise StoreError(f"this project uses Cortex {version}, newer than this cortex, {self.own} — update it:\n"
                              f"    {update_command(version)}")
@@ -371,11 +393,12 @@ class Store:
             raise StoreError(f"Cortex {version} has no spec archive: the first one is {FIRST_SPEC_ARCHIVE}, "
                              "the release that ships the cortex command — pin that version or a later one")
 
-    def ensure(self, version: Version, put_back: bool = True) -> str:
+    def ensure(self, version: Version, put_back: bool = True, origin: Optional[str] = None) -> str:
         """Make sure ``version`` is in the store; say how it got there — ``"stored"``,
         ``"written"`` from this binary, ``"downloaded"``, or ``"put back"``: it could not be
-        downloaded, and a ``replace`` cut short had left it aside."""
-        self.check_served(version)
+        downloaded, and a ``replace`` cut short had left it aside. ``origin`` is the file that pins
+        it, which a refusal names."""
+        self.check_served(version, origin)
         if self.has(version):
             try:
                 self._tidy(version)

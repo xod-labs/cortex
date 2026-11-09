@@ -60,7 +60,10 @@ def _origin(setting: cascade.Setting, newer: Optional[str], found: Optional[casc
         said += f" — above the team's {found.team_version.value} ({found.team_version.origin})"
     if setting.locked:
         said += " — locked"
-    if setting.key == "version" and newer is not None:
+    if setting.key == "version" and newer is not None and store.development(Version(str(setting.value))):
+        said += f" — a build of no release, newer than this cortex, {newer}: pin a release, " \
+                f"`{store.pin_command(setting.origin)}`"
+    elif setting.key == "version" and newer is not None:
         said += f" — newer than this cortex, {newer}: {store.update_command(Version(str(setting.value)))}"
     return said
 
@@ -128,7 +131,10 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
     if key is not None:
         value = found.value(key)
         out.write(("" if value is None else _shown(value)) + "\n")
-        if key == "version" and newer is not None:
+        if key == "version" and newer is not None and store.development(Version(str(value))):
+            sys.stderr.write(f"note: Cortex {value} is a build of no release, newer than this cortex, {newer} — "
+                             f"pin a release:\n    {store.pin_command(found['version'].origin)}\n")
+        elif key == "version" and newer is not None:
             sys.stderr.write(f"note: Cortex {value} is newer than this cortex, {newer} — update it:\n"
                              f"    {store.update_command(Version(str(value)))}\n")
         return 0
