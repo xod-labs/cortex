@@ -189,6 +189,22 @@ class CommittedTests(SettingsTestCase):
         subprocess.run([GIT, "-C", str(repo), "add", "projects/foo/cortex.toml"], check=True)
         self.assertIs(self.settings(project, PATH=path)["committed"], True)
 
+    @NEEDS_GIT
+    def test_git_s_variables_of_the_caller_do_not_name_another_repository(self):
+        # A hook exports GIT_DIR: asked of that repository, a root that is in none would read as
+        # committed, and a project its own repository tracks as not.
+        other, empty = self.tmp / "other", self.tmp / "empty"
+        other.mkdir()
+        (other / "cortex.toml").write_text(f'version = "{OWN}"\ntheme = "h2g2"\n', encoding="utf-8")
+        for repo in (other, empty):
+            subprocess.run([GIT, "init", "-q", str(repo)], check=True)
+        subprocess.run([GIT, "-C", str(other), "add", "cortex.toml"], check=True)
+        path = os.path.dirname(GIT)
+        project = self.project()                                         # in no repository
+        self.assertIs(self.settings(project, PATH=path, GIT_DIR=str(other / ".git"))["committed"], False)
+        self.assertIs(self.settings(other, PATH=path, GIT_DIR=str(empty / ".git"))["committed"], True)
+        self.assertIs(self.settings(other, PATH=path, GIT_INDEX_FILE=str(empty / "index"))["committed"], True)
+
 
 
 class MachineFileTests(SettingsTestCase):
