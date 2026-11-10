@@ -92,6 +92,7 @@ class OwnBootstrapTests(TeamTestCase):
         self.release.replace_spec("1.7.0", {"templates/bootstrap-instructions.md": FORMAT_2})
         self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": FORMAT_2})
 
+    @harness.outside_a_repository
     def test_sync_writes_format_3_back_over_the_developer_s_own_file_only(self):
         # What 1.7.0's own upgrade left — its format 2, the team's part kept — over the developer's own file.
         for case, committed, ignored in (("no repository", False, False), ("ignored", True, True),
@@ -130,6 +131,7 @@ class OwnBootstrapTests(TeamTestCase):
         self.assertEqual((root / "CLAUDE.md").read_bytes(), written(FORMAT_2))
         self.assertNotIn("CLAUDE.md", proc.out + proc.err)
 
+    @harness.outside_a_repository
     def test_a_sync_below_1_8_0_writes_an_untouched_format_3_file_in_its_version_s_format(self):
         root = self.project(toml='version = "1.7.0"\ntheme = "h2g2"\n', committed=False)
         (root / "CLAUDE.md").write_bytes(written(TEMPLATE) + OURS)
@@ -161,6 +163,7 @@ class OwnBootstrapTests(TeamTestCase):
         self.assertEqual((root / "CLAUDE.md").read_bytes(), changed)
         self.assertIn("CLAUDE.md is of format 3, which Cortex 1.8.0 or later reads, and not what Cortex wrote", proc.err)
 
+    @harness.outside_a_repository
     def test_upgrade_local_writes_the_developer_s_own_bootstrap_from_the_try_and_back(self):
         root = self.project(toml='version = "9.9.8"\ntheme = "h2g2"\n', committed=False)
         self.assert_ok(self.cortex(root, "sync"))
@@ -217,6 +220,7 @@ class OwnBootstrapTests(TeamTestCase):
                         self.assertEqual(upgrade.behind(str(root), project, None, fetch=False), [])
                 self.assertEqual((out.getvalue(), err.getvalue()), ("", ""))
 
+    @harness.outside_a_repository
     def test_a_changed_own_bootstrap_is_said_kept_when_its_version_writes_another(self):
         root = self.project(team=f'version = "{OWN}"\n', committed=False)
         self.assert_ok(self.cortex(root, "sync"))
@@ -242,6 +246,7 @@ class OwnBootstrapTests(TeamTestCase):
         self.assert_ok(proc)
         self.assertEqual((root / "CLAUDE.md").read_bytes(), written(FORMAT_2))
 
+    @harness.outside_a_repository
     def test_the_adoption_path_brings_a_teammate_on_1_7_0_to_the_team_s_version(self):
         # ADR-013 §5: at a 2.B root, the team's move announced; each teammate removes version and theme.
         root = self.project(toml='version = "1.7.0"\ntheme = "none"\n', committed=False,
@@ -344,6 +349,7 @@ class TryTests(TeamTestCase):
                               "follows the version this machine reads", proc.out)
                 self.assertEqual((root / "CLAUDE.md").read_bytes(), before + OURS)
 
+    @harness.outside_a_repository
     def test_at_a_2b_root_team_names_no_own_file_to_commit(self):
         root = self.project(toml="", team='version = "9.9.7"\ntheme = "h2g2"\n', local='theme = "none"\n',
                             committed=False, name="2b")
@@ -354,6 +360,7 @@ class TryTests(TeamTestCase):
         self.assertEqual((root / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(FORMAT_2, False)))
         self.assertIn("\nCommit agents/cortex.team.toml and agents/cortex.team.lock in agents/; teammates run", proc.out)
 
+    @harness.outside_a_repository
     def test_init_writes_the_developer_s_own_bootstrap_in_the_theme_that_still_wins(self):
         # --theme, or --no-personality, under a local theme that still wins: the next sync must not flip it.
         for option, local, personality in ((("--theme", "h2g2"), "none", False), (("--no-personality",), "h2g2", True)):
@@ -513,6 +520,7 @@ class BeforeTheTeamTests(TeamTestCase):
                     self.assertEqual((root / "CLAUDE.md").read_bytes(), before)
                     self.assertEqual([path.name for path in root.iterdir() if ".bak" in path.name], [])
 
+    @harness.outside_a_repository
     def test_a_sync_writes_an_own_format_3_file_back_with_the_team_s_theme(self):
         # As 1.7.0's own upgrade writes it: cortex.toml's theme, whatever cortex.local.toml's.
         root = self.project(toml='version = "1.7.0"\ntheme = "h2g2"\n', local='theme = "none"\n', committed=False)
