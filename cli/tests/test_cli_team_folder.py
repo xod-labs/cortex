@@ -753,5 +753,39 @@ class MovedByHandFolderTests(FolderTestCase):
         self.assertFalse((root / "agents").exists())
 
 
+    @SOURCE
+    def test_init_names_the_team_s_file_its_grammar_refuses_in_its_folder(self):
+        root = self.named(team='version = "9.9.8"\ncolour = "x"\n')
+        proc = self.cortex(root, "init", "--tool", "claude")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"cortex init reads {FOLDER}/cortex.team.toml: fix it", proc.err)
+        self.assertNotIn("remove it", proc.err)
+        (root / FOLDER / "cortex.team.toml").write_text(f'version = "{OWN}"\n', encoding="utf-8")     # as it says
+        self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_an_upgrade_already_on_it_names_the_team_s_files_left_in_the_folder(self):
+        # The folder of the project's repository: the sync wrote the lock of a team's file moved by hand; an upgrade
+        # with nothing to move names the two where cortex.toml names them.
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        root = self.named(team='version = "9.9.7"\n', committed=False, name="left")
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "init")
+        self.assert_ok(self.cortex(root, "sync", **env))                  # the lock, at 9.9.7, committed
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "lock")
+        (root / FOLDER / "cortex.team.toml").write_text('version = "9.9.8"\n', encoding="utf-8")
+        self.assert_ok(self.cortex(root, "sync", **env))
+        proc = self.cortex(root, "upgrade", "9.9.8", "--commit", "--message", "m", **env)
+        self.assert_ok(proc)
+        note = next(line for line in proc.err.splitlines() if "hold changes git has not committed" in line)
+        self.assertIn(f"{FOLDER}/cortex.team.lock", note)
+        self.assertIn(f"{FOLDER}/cortex.team.toml", note)
+        self.assertFalse((root / "agents").exists())
+
 if __name__ == "__main__":
     unittest.main()
