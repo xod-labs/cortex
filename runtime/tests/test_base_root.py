@@ -19,6 +19,24 @@ from cortex_runtime.base import base_root_for  # noqa: E402
 from cortex_runtime.runtime import build_runtime as build  # noqa: E402
 from cortex_runtime.run import RunRequest, resolve_run  # noqa: E402
 
+
+def _repository_above(directory):
+    """A ``.git`` at ``directory`` or above it, as written or resolved: the folder that holds it, or ``None``."""
+    for start in {directory, os.path.realpath(directory)}:
+        for folder in (start, *map(str, Path(start).parents)):
+            if os.path.lexists(os.path.join(folder, ".git")):
+                return folder
+    return None
+
+
+REPOSITORY_ABOVE_TEMP = _repository_above(tempfile.gettempdir())
+# The source's cortex runs here without git on its PATH: a project in a temporary directory inside a repository is
+# then one whose cortex.toml counts as committed, which these tests' projects are not. Skipped, saying why — as the
+# CLI's own tests are (cli/tests/cli_harness.py).
+outside_a_repository = unittest.skipIf(
+    REPOSITORY_ABOVE_TEMP is not None,
+    f"needs a temporary directory in no git repository: {REPOSITORY_ABOVE_TEMP} is one — set TMPDIR outside it")
+
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "host"
 
 try:
@@ -362,6 +380,7 @@ class TeamVersionTests(SyncedProjectTestCase):
                               cwd=self.project, env=env, capture_output=True)
 
     @unittest.skipIf(os.name == "nt", "the source's cortex run with an empty environment")
+    @outside_a_repository
     def test_below_1_8_0_a_cortex_toml_naming_a_team_s_folder_names_no_sync(self):
         # `agents` is read from a committed cortex.toml of 1.8.0 or later only: the sync refuses this file, with
         # its theme or without, whatever the team's file gives — naming it would send the user round in a circle.
@@ -377,6 +396,7 @@ class TeamVersionTests(SyncedProjectTestCase):
                 self.assertIn('"agents"', host.stderr.decode())
 
     @unittest.skipIf(os.name == "nt", "the source's cortex run with an empty environment")
+    @outside_a_repository
     def test_below_1_8_0_the_sync_is_named_only_where_it_reads_the_team_s_file(self):
         # `cortex sync` is named only where the host's cortex resolves these files — where the team's file pins
         # 1.8.0 or later and gives the theme cortex.toml lacks. A team's file that gives nothing in its place —
