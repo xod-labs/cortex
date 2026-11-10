@@ -164,12 +164,14 @@ def only_submodule(path: Path) -> bool:
     return paths == {path.name}
 
 
-# The variables that point git at one repository — what `git rev-parse --local-env-vars` lists, which a hook
-# exports — and those that change how a pathspec matches. Git asked about a project runs without them, from the
-# project's folder: a hook's GIT_DIR would make it answer of another repository. The others stay — the author's
-# name, the transport, a CI's configuration.
+# The variables that point git at one repository — a copy of what `git rev-parse --local-env-vars` lists (git
+# 2.43), which a hook exports — and those that change how a pathspec matches. Git asked about a project runs without
+# them, from the project's folder: a hook's GIT_DIR would make it answer of another repository. The configuration
+# given by GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS stays, as git keeps it itself on its way to another repository
+# (prepare_other_repo_env): a CI's identity, its safe.directory. The others stay too — the author's name, the
+# transport.
 GIT_LOCAL = frozenset({
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG",
     "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE",
     "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
     "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS",

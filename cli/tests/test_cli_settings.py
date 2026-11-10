@@ -209,6 +209,20 @@ class CommittedTests(SettingsTestCase):
             self.assertNotIn("GIT_DIR", environment)
 
     @NEEDS_GIT
+    def test_git_s_configuration_of_the_caller_is_kept(self):
+        # A CI gives git its identity, or a safe.directory, through GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS: git
+        # keeps them itself on its way to another repository (prepare_other_repo_env), and so does Cortex.
+        mine = self.tmp / "mine"
+        subprocess.run([GIT, "init", "-q", str(mine)], check=True)
+        given = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "cortex.counted", "GIT_CONFIG_VALUE_0": "kept",
+                 "GIT_CONFIG_PARAMETERS": "'cortex.given=kept'"}
+        with mock.patch.dict(os.environ, given):
+            for call in (sync._git, upgrade._git):
+                for key in ("cortex.counted", "cortex.given"):
+                    with self.subTest(call=call.__module__, key=key):
+                        self.assertEqual(call(str(mine), "config", "--get", key).stdout.strip(), "kept")
+
+    @NEEDS_GIT
     def test_git_s_variables_of_the_caller_do_not_name_another_repository(self):
         # A hook exports GIT_DIR: asked of that repository, a root that is in none would read as
         # committed, and a project its own repository tracks as not.
