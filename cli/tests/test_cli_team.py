@@ -1799,6 +1799,58 @@ class SecondCodeReviewTests(TeamTestCase):
                 self.assertIn(f"{TEAM}: cannot be read — Permission denied", proc.err)
         self.assertFalse((root / "cortex.local.toml").exists())
 
+    def moved_by_hand(self, name, own_repository, synced=False):
+        """A follower whose team's file, at 9.9.7 and committed — with its lock, ``synced`` — was moved to 9.9.8 by
+        hand: in a folder of the project's repository, or in the team's own. The repository, and git's environment."""
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.7"\n', committed=False, name=name)
+        where = root / "agents" if own_repository else root
+        (where / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        if synced:
+            self.assert_ok(self.cortex(root, "sync", **env))
+        self.git(where, "init", "-q")
+        self.git(where, "add", "-A")
+        self.git(where, "commit", "-q", "-m", "init")
+        (root / TEAM).write_text('version = "9.9.8"\n', encoding="utf-8")
+        return root, where, env
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_team_commit_at_a_pin_moved_by_hand_commits_the_file_with_its_lock(self):
+        # --team at the version the file was moved to by hand writes the lock, and commits the two: committed alone,
+        # the lock names 9.9.8 beside a committed file at 9.9.7, which a teammate's `sync --locked` refuses.
+        for own in (False, True):
+            with self.subTest(own_repository=own):
+                root, where, env = self.moved_by_hand(f"team{int(own)}", own)
+                proc = self.cortex(root, "upgrade", "--team", "9.9.8", "--commit", "--message", "move", **env)
+                self.assert_ok(proc)
+                self.assertIn(f"{TEAM}: Cortex 9.9.8, pinned already — its lock is written\n", proc.out)
+                self.assertEqual(self.git(where, "log", "-1", "--format=%s").stdout.strip(), "move")
+                self.assertEqual(self.git(where, "status", "--porcelain", "--", ".").stdout, "")
+                shown = "./cortex.team.toml" if own else TEAM
+                self.assertIn('version = "9.9.8"', self.git(where, "show", f"HEAD:{shown}").stdout)
+                # As a teammate's clean clone reads it: the lock names the version the file pins.
+                self.assert_ok(self.cortex(root, "sync", "--locked", **env))
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_a_resume_commit_leaves_a_team_s_file_moved_by_hand_and_its_lock(self):
+        # A follower's resume writes the team's lock of the version the file was moved to by hand: the file is a pin,
+        # the developer's change — committed alone, the lock would name 9.9.8 beside a committed file at 9.9.7.
+        root, where, env = self.moved_by_hand("resume", False, synced=True)
+        proc = self.cortex(root, "upgrade", "9.9.8", "--commit", "--message", "resume", **env)
+        self.assert_ok(proc)
+        self.assertIn(f"note: nothing is committed in {root} — {TEAM} held changes of yours before the upgrade — "
+                      "commit by hand what is the team's\n", proc.err)
+        self.assertEqual(self.git(where, "log", "-1", "--format=%s").stdout.strip(), "init")
+        self.assertEqual(str(config.load_lock(str(root / "agents"), config.TEAM_LOCK_FILE).version), "9.9.8")
+        # What the note says, done by hand: the two committed together, a teammate's clean checkout reads them.
+        self.git(where, "commit", "-q", "-m", "move", "--", TEAM, "agents/cortex.team.lock")
+        self.assertEqual(self.git(where, "status", "--porcelain", "--", "agents").stdout, "")
+        self.assert_ok(self.cortex(root, "sync", "--locked", **env))
+
 def newer_refused(pin):
     """What --team with no VERSION says of a team's pin newer than this cortex."""
     return (f"this cortex is a development build, {OWN}, which serves no release" if DEV_OWN else
