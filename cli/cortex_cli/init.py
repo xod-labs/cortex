@@ -503,10 +503,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     try:
         project = config.load(str(root)) if existing_project else None
     except config.ConfigError as error:
-        team = cascade.read_team(str(root))
-        if isinstance(team, cascade.Unreadable) and team.error in str(error):
-            # The team's file's own error: removing cortex.toml — the developer's own, at a 2.B root — loses it, and
-            # changes nothing of this.
+        if str(error).startswith(f"{config.TEAM_NAME}:"):
+            # The team's file's own error — it does not parse, or its grammar refuses it: removing cortex.toml — the
+            # developer's own, at a 2.B root — loses it, and changes nothing of this.
             raise InitError(f"{error}\ncortex init reads {config.TEAM_NAME}: fix it — a conflict a pull left in it, "
                             "say — then run cortex init again")
         raise InitError(f"{error}\ncortex init keeps an existing {config.PROJECT_FILE}: fix it, or remove it to "

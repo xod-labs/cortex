@@ -715,7 +715,10 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     # At the pin nothing is written: what a run before this one left of the two files — its commit refused,
     # or not asked — --commit commits, as that run would have; otherwise no branch is made, as an upgrade
     # already on its target makes none, and what is left is said.
-    left = _team_left(agents, team_files) if unchanged and asked else []
+    # The team's file only when it goes with its lock — a developer's edit of another key is theirs, never said
+    # left to commit (ADR-013 §3.11).
+    left = [path for path in _team_left(agents, team_files) if path != team_file or sync.team_file_moved(team_file)] \
+        if unchanged and asked else []
     files = writes if not unchanged else left if message is not None else []
     if unchanged and not files:
         if branch is not None and _on_branch(agents) != branch:
@@ -1008,8 +1011,9 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
         would = "it would be written" + ("" if the_store.has(current) else f", once Cortex {current} is downloaded")
         if unwritable:
             would = f"{config.TEAM_FOLDER}/ cannot be written here — it would be a warning, the lock not updated"
-        out.write(f"{stale[1]}, and {project.team_origin} pins Cortex {current} — the sync reads the try and leaves "
-                  f"it to `cortex upgrade`: {would if dry_run else 'writing it'}\n")
+        out.write(f"{stale[1]}, and {project.team_origin} pins Cortex {current} — the sync reads "
+                  f"{sync._read_above(project).replace('a try', 'the try')} and leaves it to `cortex upgrade`: "
+                  f"{would if dry_run else 'writing it'}\n")
     where = config.lock_of(project)
     lock = Path(where[0]) / where[1] if where is not None else Path(root) / config.LOCK_FILE
     relock = behind is not None and where is not None and \
@@ -1367,6 +1371,9 @@ def _left(root: str, top: str, named: Optional[str]) -> List[Path]:
     this one may have left to commit. Said, never committed; nothing when git cannot tell."""
     root_path = Path(root)
     files = [root_path / config.PROJECT_FILE, root_path / config.LOCK_FILE, *_instructions_files(root_path, named)]
+    # The team's lock a sync wrote, and the team's file when it goes with it — never a developer's edit of another key.
+    team_file = root_path / config.TEAM_FOLDER / config.TEAM_FILE
+    files += [team_file.with_name(config.TEAM_LOCK_FILE)] + ([team_file] if sync.team_file_moved(team_file) else [])
     try:
         return _changed(root, top, [path for path in files if _inside(top, path)])
     except UpgradeError:
