@@ -994,7 +994,8 @@ class CortexLockTests(SyncTestCase):
         (project / ".git").mkdir()                                  # a repository, git or not on the PATH
         proc = self.sync(project)
         self.assert_ok(proc)
-        self.assertIn("cortex.lock: written — commit it", proc.out)
+        # A build of no release's lock is not to commit: no teammate can download its version (ADR-009 §9).
+        self.assertIn("cortex.lock: written\n" if "-dev" in OWN else "cortex.lock: written — commit it\n", proc.out)
         self.assertTrue(self.lock(project).endswith(f'format = 1\nversion = "{OWN}"\ndigest = "{digest(self.stored())}"\n'))
         before = self.lock(project)
         proc = self.sync(project)

@@ -143,19 +143,25 @@ def pin_command(origin: Optional[str] = None) -> str:
     return "cortex upgrade VERSION"
 
 
-def pin_remedy(origin: Optional[str] = None, by_hand: bool = False, block: bool = False) -> str:
+# ``by_hand`` of a ``cortex.toml`` beside a team's file that pins no version: removed, its version is read nowhere.
+TEAM_PINS_NONE = "the team's file pins none"
+
+
+def pin_remedy(origin: Optional[str] = None, by_hand: object = False, block: bool = False) -> str:
     """*Pin a release*, and how: the command that moves the pin the file ``origin`` holds — on a line
     of its own, ``block`` — or, ``by_hand``, the edit of a ``cortex.toml`` whose version is this
     developer's: uncommitted beside a team's file, at a 2.B root (ADR-013 §3.1), which no command
-    writes — a plain ``cortex upgrade`` resumes the team's version, and ``--local`` writes a try below it."""
+    writes — a plain ``cortex upgrade`` resumes the team's version, and ``--local`` writes a try below it.
+    Removed, the version is the team's — unless ``by_hand`` is ``TEAM_PINS_NONE``: then none is read."""
     if by_hand:
-        return (f"pin a release by hand: set {PROJECT_FILE}'s version to one, or remove it to read the team's — "
+        remove = "" if by_hand == TEAM_PINS_NONE else ", or remove it to read the team's"
+        return (f"pin a release by hand: set {PROJECT_FILE}'s version to one{remove} — "
                 "uncommitted beside the team's file, it is this developer's, which no command writes")
     command = pin_command(origin)
     return f"pin a release:\n    {command}" if block else f"pin a release: `{command}`"
 
 
-def no_release_pinned(version: Version, name: str, by_hand: bool = False) -> str:
+def no_release_pinned(version: Version, name: str, by_hand: object = False) -> str:
     """What is said of a build of no release's version written in ``name``, a file only this machine
     reads — an uncommitted ``cortex.toml``, a try: no teammate can download it (ADR-009 §9), and the
     release to pin in its place is named (``pin_remedy``)."""
@@ -163,7 +169,7 @@ def no_release_pinned(version: Version, name: str, by_hand: bool = False) -> str
             f"{pin_remedy(name, by_hand)}")
 
 
-def no_release(version: Version, origin: Optional[str] = None, by_hand: bool = False) -> str:
+def no_release(version: Version, origin: Optional[str] = None, by_hand: object = False) -> str:
     """Why a build of no release's version, other than this cortex's own, is not served — and how a
     release is pinned in its place, in the file ``origin`` that pins it (``pin_remedy``)."""
     return f"Cortex {version} is a build of no release, which no release serves — {pin_remedy(origin, by_hand)}"
@@ -398,7 +404,7 @@ class Store:
             except OSError:
                 pass
 
-    def check_served(self, version: Version, origin: Optional[str] = None, by_hand: bool = False) -> None:
+    def check_served(self, version: Version, origin: Optional[str] = None, by_hand: object = False) -> None:
         """Refuse a version this binary does not serve: a build of no release's, but its own or an
         older one the store holds — no release serves it (ADR-009 §9), and ``origin``, the file that
         pins it, names the command that pins a release (``pin_remedy``); newer than itself — the tool is newer than
@@ -413,7 +419,7 @@ class Store:
                              "the release that ships the cortex command — pin that version or a later one")
 
     def ensure(self, version: Version, put_back: bool = True, origin: Optional[str] = None,
-               by_hand: bool = False) -> str:
+               by_hand: object = False) -> str:
         """Make sure ``version`` is in the store; say how it got there — ``"stored"``,
         ``"written"`` from this binary, ``"downloaded"``, or ``"put back"``: it could not be
         downloaded, and a ``replace`` cut short had left it aside. ``origin`` is the file that pins

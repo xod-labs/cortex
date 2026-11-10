@@ -81,6 +81,7 @@ class Outcome:
     outside: List[Path] = field(default_factory=list)   # --commit: of the files, those outside the git work tree
     team: Optional[str] = None                          # --team: the team's folder, where --commit commits its files
     team_files: List[Path] = field(default_factory=list)  # --team: the team's files, which --commit commits there
+    development: bool = False   # a build of no release's version: nothing written is to commit (ADR-009 §9)
 
     def names(self) -> List[str]:
         """The files to commit in the project — those outside its git work tree, ``elsewhere``."""
@@ -558,7 +559,7 @@ def _write_try_lock(where: Tuple[str, str, str], version: Version, the_store: st
     else:
         config.write_lock(directory, version, digest, name)
     team = f" in {folder}/" if team else ""
-    out.write(f"{shown_name}: {said}{'' if sync.in_no_repository(directory) else ' — commit it' + team}\n")
+    out.write(f"{shown_name}: {said}{sync.commit_it(directory, version, team)}\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -639,7 +640,9 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
         folder = config.loose_team_folder(outcome.root)
         agents = os.path.join(outcome.root, folder)
         team = [path for path in outcome.files if _inside(agents, path)]
-        if not dry_run and outcome.why is None and team:
+        if not dry_run and outcome.why is None and team and outcome.development:
+            out.write(f"\nNothing to commit: {_no_teammate(outcome.target)}.\n")
+        elif not dry_run and outcome.why is None and team:
             own = [path for path in outcome.files if path not in team]
             mine = f"; {_and([_shown_path(path, outcome.root) for path in own])} in the project" if own else ""
             out.write(f"\nCommit {_and([_shown_path(path, outcome.root) for path in team])} in {folder}/"
@@ -665,6 +668,11 @@ def _ending(outcome: Outcome, out: TextIO) -> None:
     """What the project must commit — or what ``--commit`` committed, and where; then what is to
     commit where it is, outside the project's git work tree."""
     names, elsewhere = ([] if outcome.clean else outcome.names()), outcome.elsewhere()
+    if outcome.development:
+        if outcome.target != outcome.pinned or outcome.files:
+            ready = f"Cortex {outcome.target} is ready on this machine. " if outcome.target != outcome.pinned else ""
+            out.write(f"\n{ready}Nothing to commit: {_no_teammate(outcome.target)}.\n")
+        return
     if outcome.nowhere:
         ready = f"Cortex {outcome.target} is ready. " if outcome.target != outcome.pinned else ""
         out.write(f"\n{ready}Written: {_and(names)} — in no git work tree, so committed nowhere: each developer "
@@ -734,7 +742,7 @@ def local_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out:
             _local_then_sync(root, {"version": None}, out, err)
         return Outcome(root, Version(str(tried.value)), team)
     the_store = store.Store()
-    _served(the_store, target, f"cortex upgrade --local {target}")
+    _served(the_store, target, f"cortex upgrade --local {target}", config.LOCAL_FILE)
     the_store.ensure(target)
     out.write(f"Cortex {target}: a try, above the team's {team} ({project.team_origin}) — nothing committed is "
               "written\n")
@@ -791,6 +799,11 @@ def team_pin(project: config.Project) -> Optional[Version]:
     return Version(str(named)) if named is not None else None
 
 
+def _no_teammate(version: Version) -> str:
+    """Why nothing written for ``version``, a build of no release's, is to commit (ADR-009 §9)."""
+    return f"Cortex {version} is a build of no release, which no teammate can download"
+
+
 def _no_release(the_store: store.Store, command: str) -> UpgradeError:
     """No VERSION from a build of no release: its own version is the one its branch prepares, which no
     teammate can download (ADR-009 §9, 2026-11-09) — a project is moved to it only by naming it."""
@@ -799,11 +812,14 @@ def _no_release(the_store: store.Store, command: str) -> UpgradeError:
                         f"can download — name the version to move to: `{command} VERSION`. Nothing was changed")
 
 
-def _shared(target: Version, name: str, team: Version) -> UpgradeError:
+def _shared(target: Version, name: str, team: Optional[Version], the_store: store.Store) -> UpgradeError:
     """A build of no release's version, named for a file every teammate reads — the team's file, or a
     committed ``cortex.toml`` — refused: no teammate can download it (ADR-009 §9). Tried on this
-    machine, it is ``--local``'s, once the team's version reads a try."""
-    tried = "" if grammar.before_team(str(team)) else f"; tried on this machine: `cortex upgrade --local {target}`"
+    machine, it is ``--local``'s — named when that try works: the team's version, ``team``, reads a try,
+    the target is above it, and this cortex serves it, its own or one the store holds below it."""
+    works = team is not None and not grammar.before_team(str(team)) and target > team and \
+        (target == the_store.own or (target < the_store.own and the_store.has(target)))
+    tried = f"; tried on this machine: `cortex upgrade --local {target}`" if works else ""
     return UpgradeError(f"Cortex {target} is a build of no release, which no teammate can download, and every teammate "
                         f"reads {name} — nothing was changed. Pin a release there{tried}")
 
@@ -826,8 +842,8 @@ def team_target(pinned: Optional[Version], wanted: Optional[str], the_store: sto
         raise UpgradeError(f"{name} reads Cortex {grammar.FIRST_TEAM_VERSION} or later, and {target} is "
                            "before it — nothing was changed")
     if store.development(target) and target != pinned:    # at the pin already, nothing new is written
-        raise _shared(target, name, target)
-    _served(the_store, target, f"cortex upgrade --team {target}")
+        raise _shared(target, name, pinned, the_store)
+    _served(the_store, target, f"cortex upgrade --team {target}", name)
     return target
 
 
@@ -868,13 +884,32 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     the_store = store.Store()
     pinned = team_pin(project)
     target = team_target(pinned, wanted, the_store, name)
+    development = store.development(target)     # at the pin already: a move to one is refused (team_target)
+    if development and (branch is not None or message is not None):
+        # Nothing of a build of no release's version is to commit, where every teammate reads it (ADR-009 §9).
+        what = (["no branch is made"] if branch is not None else []) + \
+            (["nothing is committed"] if message is not None else [])
+        err.write(f"note: {_no_teammate(target)} — {' and '.join(what)} in {folder}/\n")
+        branch = message = None
     developer = project.developer_version
-    if developer is not None and project.follows:
-        after = max(target, Version(str(developer.value)))
+    # A team's file that pins none: cortex.toml's version, uncommitted, is this developer's once the file pins one.
+    mine = developer if developer is not None or not project.follows or project.team_origin != config.PROJECT_FILE \
+        else config.cascade.Setting("version", str(project.team_version), config.PROJECT_FILE)
+    if mine is not None and project.follows:
+        after = max(target, Version(str(mine.value)))
         if store.too_old_for(after, the_store.own):
-            raise UpgradeError(f"after the move, this project would read Cortex {after}, {developer.origin}'s, newer "
+            raise UpgradeError(f"after the move, this project would read Cortex {after}, {mine.origin}'s, newer "
                                f"than this cortex, {the_store.own} — drop the try first: cortex upgrade --local "
                                f"{target}. Nothing was changed")
+        if after != target:
+            # The developer's version, still read over the team's after the move: one this cortex does not serve —
+            # a build of no release's — is refused now, with the remedy of the files as they are, not after the
+            # team's file is written and put back.
+            try:
+                the_store.check_served(after, mine.origin, project.by_hand(mine.origin))
+            except store.StoreError as error:
+                raise UpgradeError(f"after the move, this project would read Cortex {after}, {mine.origin}'s: "
+                                   f"{error}. Nothing was changed") from error
     out.write(f"Project: {display(root)}\n")
     the_store.ensure(target)
     agents = project.team_dir
@@ -895,7 +930,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     if dry_run:
         out.write("--dry-run: nothing of the project was changed\n")
         return Outcome(root, pinned, target, files=[] if unchanged else writes, team=agents,
-                       team_files=[] if unchanged else list(writes))
+                       team_files=[] if unchanged else list(writes), development=development)
     asked = branch is not None or message is not None
     # At the pin nothing is written: what a run before this one left of the two files — its commit refused,
     # or not asked — --commit commits, as that run would have; otherwise no branch is made, as an upgrade
@@ -933,7 +968,8 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
                 _put(path, content)
         err.write(f"note: {name} and its lock are as they were\n")
         raise
-    outcome = Outcome(root, pinned, target, files=list(files), team=agents, team_files=list(files))
+    outcome = Outcome(root, pinned, target, files=list(files), team=agents, team_files=list(files),
+                      development=development)
     outcome.left = [] if files else left
     if project.follows:
         current_path = None
@@ -1008,14 +1044,16 @@ def _team_theirs(agents: str, team_file: Path, target: Version, name: str = conf
     return (f"{name} holds changes of yours besides its version — commit by hand what is the team's")
 
 
-def _served(the_store: store.Store, target: Version, again: str, origin: Optional[str] = None) -> None:
+def _served(the_store: store.Store, target: Version, again: str, origin: Optional[str] = None,
+            by_hand: object = False) -> None:
     """Refuse a target this cortex does not serve: one newer than it, naming ``cortex self-update``,
     then ``again`` — a build of no release's is said as the store says it, naming the command that
-    pins a release in ``origin``, the file that pins it; one before the first spec archive."""
+    pins a release in ``origin``, the file that pins it — or the edit, ``by_hand``, of a developer's
+    ``cortex.toml`` (``store.pin_remedy``); one before the first spec archive."""
     if target > the_store.own and not store.development(target):
         raise UpgradeError(f"Cortex {target} is newer than this cortex, {the_store.own} — update this cortex first, "
                            f"then run `{again}` again:\n    {store.update_command(target)}")
-    the_store.check_served(target, origin)
+    the_store.check_served(target, origin, by_hand)
 
 
 def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: Optional[str],
@@ -1035,7 +1073,14 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     if wanted is None and pinned is not None and pinned[1] > the_store.own and pinned[0] != config.PROJECT_FILE:
         # A try, or the team's pin, newer than this cortex: said with its own remedy (ADR-013 §3.8).
         name, newer = pinned
-        team = os.path.isfile(os.path.join(root, config.loose_team_folder(root), config.TEAM_FILE))
+        folder = config.loose_team_folder(root)
+        if name == config.cascade.team_name(folder) and not config.takes_folder(folder):
+            # A folder only a later version may take, .team: no --team of this cortex moves its pin (§3.8, step 1).
+            raise UpgradeError(f"this project reads Cortex {newer}, which its {name} pins, newer than this cortex, "
+                               f"{the_store.own} — nothing was changed. "
+                               + (config.pin_a_release(root, name) if store.development(newer) else
+                                  f"Update this cortex to serve it:\n    {store.update_command(newer)}"))
+        team = os.path.isfile(os.path.join(root, folder, config.TEAM_FILE))
         raise UpgradeError(f"this project reads Cortex {newer}, which its {name} pins, newer than this cortex, "
                            f"{the_store.own} — nothing was changed. Name the version to move to: "
                            + ("`cortex upgrade --team VERSION` moves the team's pin, " if team else "")
@@ -1063,14 +1108,17 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         # It follows the team's file — an uncommitted cortex.toml included, at a 2.B root: a move is the
         # team's, or a try; without VERSION, or with the team's or the version read, it resumes.
         if wanted is not None and Version(wanted) not in (current, project.version):
-            # A team's file that pins none: the version is the uncommitted cortex.toml's, which no command
-            # writes — the team pins one in its file, or the developer edits their own.
-            pins = f"which pins Cortex {current} — moving it is the team's" \
+            # Each command named does what it says: a try is read above the team's version only, never below
+            # it. A team's file that pins none: the version is the uncommitted cortex.toml's, which no command
+            # writes — set by hand; above it, the team's pin or a try is read instead, the higher one winning.
+            above = Version(wanted) > current
+            tried = f"; trying it here: `cortex upgrade --local {wanted}`" if above else ""
+            pins = f"which pins Cortex {current} — moving it is the team's: `cortex upgrade --team {wanted}`{tried}" \
                 if project.team_origin == project.team_name else \
                 f"which pins no version: Cortex {current} is its uncommitted {config.PROJECT_FILE}'s, which no " \
-                "command writes — set it there by hand, or pin the team's"
-            raise UpgradeError(f"this project follows {project.team_name}, {pins}: `cortex upgrade --team {wanted}`; "
-                               f"trying it here: `cortex upgrade --local {wanted}`. Nothing was changed")
+                "command writes — set it there by hand" + \
+                (f", or pin the team's: `cortex upgrade --team {wanted}`{tried}" if above else "")
+            raise UpgradeError(f"this project follows {project.team_name}, {pins}. Nothing was changed")
         wanted = None
         target = current
     else:
@@ -1079,9 +1127,15 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         target = Version(wanted) if wanted else the_store.own
         # Not a follower, the version is cortex.toml's: committed, every teammate reads it.
         if target != current and store.development(target) and config.committed(root):
-            raise _shared(target, f"its committed {config.PROJECT_FILE}", current)
-    # A follower's version is the team's pin, which its file names when it is refused.
-    _served(the_store, target, f"cortex upgrade {target}", project.team_origin if project.follows else None)
+            raise _shared(target, f"its committed {config.PROJECT_FILE}", current, the_store)
+    # A follower's version is the team's pin, which its file names when it is refused — moved by hand in a
+    # developer's cortex.toml, as cortex sync says (store.pin_remedy).
+    origin = project.team_origin if project.follows else None
+    _served(the_store, target, f"cortex upgrade {target}", origin, project.by_hand(origin))
+    if prepare is not None and store.development(target):
+        # Nothing of a build of no release's version is to commit: no branch is made for it (ADR-009 §9).
+        err.write(f"note: {_no_teammate(target)} — no branch is made\n")
+        prepare = None
     developer = project.developer_version
     if developer is not None and target != current:
         after = max(target, Version(str(developer.value)))
@@ -1193,7 +1247,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
             # of the version moved is written here, from the store (ADR-013 §3.4). Otherwise the sync
             # writes it, and says so, as before.
             config.write_lock(root, target, the_store.digest(target))
-            out.write(f"{config.LOCK_FILE}: Cortex {target}{'' if sync.in_no_repository(root) else ' — commit it'}\n")
+            out.write(f"{config.LOCK_FILE}: Cortex {target}{sync.commit_it(root, target)}\n")
         sync.sync(root, None, None, out, err, announce=False, said=said)
 
     _write(rewrites + mine, committed, root, err, switch)
@@ -1654,7 +1708,9 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
             raise
         raise UpgradeError(f"{_refusal(error)} — the branch {options.branch} was made for it, and is checked out") \
             from error
-    if branching and not asked and not options.dry_run and outcome.why is None \
+    # A build of no release's version, which no teammate can download: nothing of it is to commit (ADR-009 §9).
+    outcome.development = outcome.why is None and outcome.target is not None and store.development(outcome.target)
+    if branching and not asked and not options.dry_run and outcome.why is None and not outcome.development \
             and _on_branch(root) != options.branch:
         out.write(f"git: no branch {options.branch} is made — nothing was written\n")
     if top is not None and outcome.why is None and outcome.files:
@@ -1664,6 +1720,11 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
         outcome.outside = [path for path in outcome.files
                            if not sync.in_no_repository(os.path.dirname(os.path.realpath(path)))]
         outcome.nowhere = bool(outcome.names())
+    if outcome.development:
+        if options.message is not None and not options.dry_run and outcome.files:
+            outcome.uncommitted = _no_teammate(outcome.target)
+            err.write(f"note: nothing is committed in {display(root)} — {outcome.uncommitted}\n")
+        return outcome
     if options.message is None or options.dry_run or outcome.why is not None:
         return outcome
     if top is None:
@@ -1932,11 +1993,11 @@ def _summary(done: List[Tuple[registry.Entry, Optional[Outcome], Optional[str]]]
     def nothing(outcome: Outcome) -> bool:
         """Nothing to commit for it: git ignores its files, or they are as committed already — and none
         was written outside its work tree, to commit where it is (#326)."""
-        return outcome.ignored or ((outcome.nowhere or outcome.clean) and not outcome.outside)
+        return outcome.development or outcome.ignored or ((outcome.nowhere or outcome.clean) and not outcome.outside)
 
     def why_nothing(outcome: Outcome) -> str:
-        return "in no git work tree" if outcome.nowhere else outcome.uncommitted if outcome.clean else \
-            f"git ignores {_and(outcome.names())}"
+        return _no_teammate(outcome.target) if outcome.development else "in no git work tree" if outcome.nowhere \
+            else outcome.uncommitted if outcome.clean else f"git ignores {_and(outcome.names())}"
 
     commits = [(entry, outcome) for entry, outcome in written if not nothing(outcome)]
     left = [(entry, outcome) for entry, outcome, _ in done if outcome is not None and outcome.left]

@@ -465,6 +465,7 @@ class DevelopmentBuildTests(SettingsTestCase):
         self.assertEqual(proc.returncode, 0, proc.out + proc.err)
         self.assertNotIn("build of no release", proc.err)
 
+    @harness.outside_a_repository
     def test_its_version_is_written_where_no_teammate_reads_it_only(self):
         # The team's file and a committed cortex.toml are every teammate's: none can download this version.
         project = self.project("1.7.0")
@@ -592,6 +593,7 @@ class DevelopmentPinTests(SettingsTestCase):
                 self.assert_ok(proc)
                 self.assertIn(f"newer than this cortex, {OWN}: pin a release: `{command}`", proc.out)
 
+    @harness.outside_a_repository
     def test_named_to_upgrade(self):
         project = self.project()
         before = (project / "cortex.toml").read_bytes()
