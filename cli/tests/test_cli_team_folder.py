@@ -561,6 +561,7 @@ class CodeReviewFolderTests(FolderTestCase):
     @DOWNLOADS
     @NEEDS_GIT
     @LINKS
+    @harness.outside_a_repository
     def test_team_ending_names_a_bootstrap_linked_into_the_folder_where_it_leads(self):
         # A bootstrap linked into the team's folder is named there, in the folder cortex.toml names.
         marked = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes().replace(
