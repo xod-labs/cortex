@@ -392,7 +392,6 @@ class TooNewTests(SettingsTestCase):
                 self.assertIn(self.WHY, proc.err)
                 self.assertNotIn("unknown key", proc.err)
 
-    @DEVELOPMENT
     def test_validate_of_a_checkout_s_copy_checks_no_version(self):
         # A copy of a checkout — its marker says no version — passes the gate: the key is said, not the version.
         project = self.project("99.0.0", extra='endpoints = "team"\n')        # a key no version takes yet
