@@ -954,7 +954,8 @@ def gitignore_lines(text: str) -> List[str]:
     editor may put at the start of the file left out, and each line's trailing spaces — not one a backslash escapes,
     nor a tab: what git leaves out of a pattern, and nothing more. One reading, to tell what is ignored and what to
     add alike."""
-    lines = [line[:-1] if line.endswith("\r") else line for line in text.lstrip("\ufeff").split("\n")]
+    text = text[1:] if text.startswith("\ufeff") else text            # one, as git skips: a second is text
+    lines = [line[:-1] if line.endswith("\r") else line for line in text.split("\n")]
     return [re.sub(r"(?<!\\) +$", "", line) for line in lines]
 
 
