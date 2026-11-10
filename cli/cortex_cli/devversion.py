@@ -33,7 +33,7 @@ from .semver import Version
 UNRELEASED = "unreleased"
 # A second-level section: `## [1.7.0] - 2026-11-06 — …`, `## [Unreleased]` — indented up to three spaces, as
 # Markdown has a heading.
-SECTION = re.compile(r" {0,3}## \[(?P<label>[^\]]+)\].*")
+SECTION = re.compile(r" {0,3}##[ \t]+\[(?P<label>[^\]]+)\].*")
 KIND = re.compile(r" {0,3}###[ \t]+(?P<kind>.+?)\s*")
 # The kinds of Keep a Changelog, as a heading names one — its first word, after an emoji or a mark: `### Added`,
 # `### ✨ Added`, `### fixed (CLI)`; `### Notes: nothing removed` names none.
@@ -115,21 +115,30 @@ def prepared(text: str) -> Version:
 
 def _lines(text: str) -> List[str]:
     """The lines Markdown reads as such, those of a fenced code block left out — an example of a changelog in one
-    is none of its sections. Markdown's line endings alone: ``splitlines`` would also break at U+2028, U+0085 or a
-    form feed in an entry."""
+    is none of its sections. A fence never closed hides nothing: opened in a list item, Markdown closes it with
+    the item, and its lines are read. Markdown's line endings alone: ``splitlines`` would also break at U+2028,
+    U+0085 or a form feed in an entry."""
+    lines = re.split(r"\r\n|\r|\n", text.removeprefix("\ufeff"))
     kept: List[str] = []
-    fence: Optional[str] = None
-    for line in re.split(r"\r\n|\r|\n", text.removeprefix("\ufeff")):
-        found = FENCE.fullmatch(line.rstrip())
-        if fence is None and found and not (found.group("fence")[0] == "`" and "`" in found.group("info")):
+    index = 0
+    while index < len(lines):
+        found = FENCE.fullmatch(lines[index].rstrip())
+        if found and not (found.group("fence")[0] == "`" and "`" in found.group("info")):
             fence = found.group("fence")
-        elif fence is not None:
-            if found and found.group("fence")[0] == fence[0] and len(found.group("fence")) >= len(fence) \
-                    and not found.group("info").strip():
-                fence = None
-        else:
-            kept.append(line)
+            close = next((later for later in range(index + 1, len(lines)) if _closes(lines[later], fence)), None)
+            if close is not None:
+                index = close + 1
+                continue
+        kept.append(lines[index])
+        index += 1
     return kept
+
+
+def _closes(line: str, fence: str) -> bool:
+    """Whether ``line`` closes a block ``fence`` opened: its character, as many or more, and nothing after it."""
+    found = FENCE.fullmatch(line.rstrip())
+    return found is not None and found.group("fence")[0] == fence[0] and len(found.group("fence")) >= len(fence) \
+        and not found.group("info").strip()
 
 
 def development(text: str, build: Optional[int] = None) -> str:

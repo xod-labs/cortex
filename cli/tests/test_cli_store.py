@@ -84,6 +84,13 @@ class EmbeddedTests(StoreTestCase):
             the_store.ensure(Version("1.8.2-dev.1"), origin="agents/cortex.team.toml")
         self.assertEqual(str(raised.exception), "Cortex 1.8.2-dev.1 is a build of no release, which no release "
                          "serves — pin a release: `cortex upgrade --team VERSION`")
+        # From a build that prepares 1.8.0, every release that reads the team's file is newer: a self-update first.
+        early = store.Store(self.home, own_version="1.8.0-dev.5", checkout=REPO, fetch=self.no_network)
+        with self.assertRaises(store.StoreError) as raised:
+            early.ensure(Version("1.8.0-dev.4"), origin="agents/cortex.team.toml")
+        self.assertEqual(str(raised.exception), "Cortex 1.8.0-dev.4 is a build of no release, which no release serves "
+                         "— update this cortex to a release, then pin one: `cortex self-update VERSION`, "
+                         "`cortex upgrade --team VERSION`")
 
     def test_the_pin_is_moved_where_a_file_holds_it(self):
         for origin, command in ((None, "cortex upgrade VERSION"), ("cortex.toml", "cortex upgrade VERSION"),

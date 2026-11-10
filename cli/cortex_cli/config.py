@@ -493,12 +493,13 @@ def _in_a_refused_folder(name: str, root: Optional[str] = None) -> Optional[str]
 
 def _team_pin_refused(root: str, folder: str) -> Optional[str]:
     """Why ``cortex upgrade --team`` refuses to move the pin of the team's file in ``folder``, which the version gate
-    read — ``None`` when it moves it: ``cortex.toml``'s ``agents`` refused, or naming another folder."""
+    read — ``None`` when it moves it: ``cortex.toml``'s ``agents`` refused. Taken, it names the folder the gate read:
+    both read the same ``agents``, committed or not (``loose_team_folder``)."""
     try:
-        named = team_folder(root)[0]
+        team_folder(root)
     except ConfigError as error:
         return str(error)
-    return None if named == folder else f"the team's folder is {named}/"
+    return None
 
 
 def moves_team_pin(root: str, folder: str, own: Version) -> bool:
@@ -506,7 +507,7 @@ def moves_team_pin(root: str, folder: str, own: Version) -> bool:
     gate read — to a version this cortex serves (ADR-013 §3.8, steps 1–2): ``--team`` takes that folder, none of
     ``cortex.toml``'s ``agents`` refused, and a release that reads the team's file is this cortex's or below it — none
     from a build of no release that prepares 1.8.0, below 1.8.0 and its candidates (ADR-009 §9)."""
-    if store.development(own) and Version("{}.{}.{}".format(*own.core)) <= Version(project.FIRST_TEAM_VERSION):
+    if store.prepares_before_team(own):
         return False
     return takes_folder(folder) and _team_pin_refused(root, folder) is None
 
