@@ -193,11 +193,11 @@ def _read(path: str, name: Optional[str] = None) -> Dict:
 
 
 # The variables that point git at one repository — a copy of what `git rev-parse --local-env-vars` lists (git
-# 2.43), which a hook exports, less GIT_CONFIG_PARAMETERS and GIT_CONFIG_COUNT, which git itself keeps when it
-# runs in another repository (a submodule's): `-c` and GIT_CONFIG_KEY_n are the caller's configuration, a CI's
-# identity or its safe.directory — and those that change how a pathspec matches. Git asked about a project runs
-# without them, from the project's folder: a hook's GIT_DIR would make it answer of another repository. The
-# others stay — the author's name, the transport, a CI's configuration.
+# 2.43), which a hook exports — and those that change how a pathspec matches. Git asked about a project runs without
+# them, from the project's folder: a hook's GIT_DIR would make it answer of another repository. The configuration
+# given by GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS stays, as git keeps it itself on its way to another repository
+# (prepare_other_repo_env): a CI's identity, its safe.directory. The others stay too — the author's name, the
+# transport.
 GIT_LOCAL = frozenset({
     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG",
     "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE",
