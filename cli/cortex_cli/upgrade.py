@@ -907,6 +907,17 @@ def _team_left(agents: str, files: List[Path]) -> List[Path]:
         return []
 
 
+def _first_team_release() -> str:
+    """The version to move a project to before 1.8.0 for it to read the team's file: 1.8.0 — or this
+    cortex's own, a release candidate of it, which reads the team's file and is served, where 1.8.0
+    is not out yet. A build of no release names 1.8.0: no teammate can download it (ADR-009 §9)."""
+    own = store.own_version()
+    first = Version(grammar.FIRST_TEAM_VERSION)
+    if own < first and not grammar.before_team(str(own)) and not store.development(own):
+        return str(own)
+    return grammar.FIRST_TEAM_VERSION
+
+
 def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: TextIO, err: TextIO,
               branch: Optional[str] = None, message: Optional[str] = None, checked: Optional[str] = None) -> Outcome:
     """``cortex upgrade --team [VERSION]`` (ADR-013 §3.11): the team's file's version and its lock, in the
@@ -921,7 +932,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
         # Moved to 1.8.0 first, the project reads the team's file, whose version --team then moves.
         raise UpgradeError(f"{name} is not read: this project pins Cortex {project.team_version}, before "
                            f"{grammar.FIRST_TEAM_VERSION} — move it there first: cortex upgrade "
-                           f"{grammar.FIRST_TEAM_VERSION}. Nothing was changed")
+                           f"{_first_team_release()}. Nothing was changed")
     the_store = store.Store()
     pinned = team_pin(project)
     target = team_target(pinned, wanted, the_store, name, project.team_version)

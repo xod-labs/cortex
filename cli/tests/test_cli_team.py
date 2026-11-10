@@ -1723,11 +1723,38 @@ class CodeReviewTests(TeamTestCase):
         self.assertNotIn("run `cortex sync`, then commit it", found[0][2])
 
     def test_team_on_a_project_before_1_8_0_names_the_move_first(self):
+        # 1.8.0 — or, from a release candidate of it, its own version: 1.8.0 is not out yet, which `cortex upgrade
+        # 1.8.0` would ask this cortex to self-update to. A build of no release names 1.8.0, which no teammate lacks.
+        own = Version(OWN)
+        first = OWN if own < Version("1.8.0") and own.core == (1, 8, 0) and not DEV_OWN else "1.8.0"
         root = self.project('version = "1.7.0"\ntheme = "h2g2"\n', team='theme = "h2g2"\n', committed=False)
         proc = self.cortex(root, "upgrade", "--team", OWN)
         self.assertEqual(proc.returncode, 1)
         self.assertIn(f"{TEAM} is not read: this project pins Cortex 1.7.0, before 1.8.0 — move it there first: cortex "
-                      "upgrade 1.8.0", proc.err)
+                      f"upgrade {first}. Nothing was changed", proc.err)
+        if first == OWN:                    # the command named, served by this cortex: then --team moves the pin
+            self.assert_ok(self.cortex(root, "upgrade", first))
+            self.assert_ok(self.cortex(root, "upgrade", "--team", OWN))
+            self.assertIn(f'version = "{OWN}"', (root / TEAM).read_text(encoding="utf-8"))
+
+    @SOURCE
+    def test_team_before_1_8_0_from_a_release_candidate_names_its_own_version(self):
+        # From 1.8.0-rc.1, before 1.8.0 is out: `cortex upgrade 1.8.0` would ask for a self-update to a release not
+        # published yet. The candidate reads the team's file, and is served: the move named is to it.
+        rc = {"CORTEX_SOURCE_VERSION": "1.8.0-rc.1"}
+        root = self.project('version = "1.7.0"\ntheme = "h2g2"\n', team='theme = "h2g2"\n', committed=False)
+        proc = self.cortex(root, "upgrade", "--team", "1.8.0-rc.1", **rc)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("move it there first: cortex upgrade 1.8.0-rc.1. Nothing was changed", proc.err)
+        self.assert_ok(self.cortex(root, "upgrade", "1.8.0-rc.1", **rc))          # the command named
+        self.assert_ok(self.cortex(root, "upgrade", "--team", "1.8.0-rc.1", **rc))
+        self.assertIn('version = "1.8.0-rc.1"', (root / TEAM).read_text(encoding="utf-8"))
+        # A build of no release names 1.8.0: its own version no teammate can download.
+        dev = self.project('version = "1.7.0"\ntheme = "h2g2"\n', team='theme = "h2g2"\n', committed=False,
+                           name="dev")
+        proc = self.cortex(dev, "upgrade", "--team", "1.8.0-dev.5", CORTEX_SOURCE_VERSION="1.8.0-dev.5")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("move it there first: cortex upgrade 1.8.0. Nothing was changed", proc.err)
 
 
 class CodeReviewFixTests(TeamTestCase):
