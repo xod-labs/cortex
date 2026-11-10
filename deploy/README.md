@@ -59,8 +59,8 @@ setting it: compose asks Docker not to create a missing `versions/`, which it wo
 but Docker Desktop creates it all the same.
 
 The theme is the team's — the one `cortex.toml` names, else the team's file's, `agents/cortex.team.toml`;
-the team's file's first where `cortex sync` recorded it winning over a `cortex.toml` no commit holds, at a
-root that is no repository ([ADR-013 §3.12](../docs/adr/ADR-013-configuration-cascade.md)) — unless
+the team's file's first where `cortex sync` recorded it winning over a `cortex.toml` no commit holds — in
+a repository git does not track it in, or at a root that is none ([ADR-013 §3.12](../docs/adr/ADR-013-configuration-cascade.md)) — unless
 `CORTEX_THEME` sets another; a team's file that locks `theme` wins over `CORTEX_THEME` too.
 
 **Explore the API**: Swagger UI at `https://cortex.local.dev/docs`, ReDoc at `/redoc`. A
