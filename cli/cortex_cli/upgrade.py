@@ -1114,8 +1114,9 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         # A try, or the team's pin, newer than this cortex: said with its own remedy (ADR-013 §3.8).
         name, newer = pinned
         folder = config.loose_team_folder(root)
-        if name == config.cascade.team_name(folder) and not config.takes_folder(folder):
-            # A folder only a later version may take, .team: no --team of this cortex moves its pin (§3.8, step 1).
+        if name == config.cascade.team_name(folder) and not config.moves_team_pin(root, folder, the_store.own):
+            # No --team of this cortex moves the pin: a folder only a later version may take, .team, or one cortex.toml's
+            # agents makes --team refuse (§3.8, step 1) — or no release it serves reads the team's file (ADR-009 §9).
             pin = config.pin_a_release(root, name)
             raise UpgradeError(f"this project reads Cortex {newer}, which its {name} pins, newer than this cortex, "
                                f"{the_store.own} — nothing was changed. "
@@ -1156,7 +1157,11 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
             # hand; above it, the team's pin or a try is read instead, the higher one winning. Neither: said why.
             target = Version(wanted)
             moves = not store.development(target) and not grammar.before_team(wanted) and _serves(the_store, target)
-            tried = f"; trying it here: `cortex upgrade --local {wanted}`" if _tries(the_store, target, current) else ""
+            # A try is read above the team's version and this developer's cortex.toml's, at a 2.B root: the higher wins.
+            mine = project.inputs[0].get("version") if project.inputs is not None and project.inputs[0] is not None \
+                and project.by_hand(config.PROJECT_FILE) else None
+            read = max(current, Version(str(mine))) if mine is not None else current
+            tried = f"; trying it here: `cortex upgrade --local {wanted}`" if _tries(the_store, target, read) else ""
             pins = (f"which pins Cortex {current} — moving it is the team's"
                     + (f": `cortex upgrade --team {wanted}`" if moves else f", {_unmoved(the_store, target)}") + tried) \
                 if project.team_origin == project.team_name else \

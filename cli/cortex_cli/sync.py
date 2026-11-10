@@ -849,8 +849,11 @@ def version_notes(project: config.Project, locked: bool = False) -> List[str]:
         if mine > team and locked:
             said.append(f"{found.origin}'s version, {mine}, is not read: --locked checks the team's {team} ({origin})")
         elif mine > team:
+            # A build of no release is downloaded by no one: the store holds it from the build itself (ADR-009 §9).
             said.append(f"Cortex {mine} is read — {found.origin}'s, above the team's {team} ({origin})"
-                        + (": it is not locked, its release checked against its SHA256SUMS when downloaded"
+                        + ((": it is not locked, a build of no release, which no SHA256SUMS checks"
+                            if store.development(mine) else
+                            ": it is not locked, its release checked against its SHA256SUMS when downloaded")
                            if found.origin == config.LOCAL_FILE else ""))
         else:
             remedy = f"remove it: cortex upgrade --local {team}" if found.origin == config.LOCAL_FILE else \

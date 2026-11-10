@@ -450,9 +450,10 @@ def too_new(root: str, own: Version) -> Optional[str]:
     teams = loose_team(root)
     # A build of no release names no version of its own to move to: no teammate can download it (ADR-009 §9).
     down = "VERSION" if store.development(own) else str(own)
+    folder = name[:-len(TEAM_FILE) - 1] if name.endswith(f"/{TEAM_FILE}") else None
     other = (f"\nor drop the try: cortex upgrade --local {teams[1] if teams else down}" if name == LOCAL_FILE else
              f"\nor move the team's pin: cortex upgrade --team {down}"
-             if name.endswith(f"/{TEAM_FILE}") and takes_folder(name[:-len(TEAM_FILE) - 1]) else "")
+             if folder is not None and moves_team_pin(root, folder, own) else "")
     return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
             f"    {store.update_command(version)}{other}")
 
@@ -460,23 +461,54 @@ def too_new(root: str, own: Version) -> Optional[str]:
 def pin_a_release(root: str, name: str) -> str:
     """How the pin of no release ``name`` holds is moved to a release, on a line of its own: by a command, or by
     hand — a developer's ``cortex.toml`` (``developers_toml``), or a team's file in a folder this cortex does not
-    take (``release_remedy``)."""
-    return _in_a_refused_folder(name) or store.pin_remedy(name, developers_toml(root, name), block=True)
+    take, or one ``--team`` refuses for ``cortex.toml``'s ``agents`` (``release_remedy``)."""
+    return _in_a_refused_folder(name, root) or store.pin_remedy(name, developers_toml(root, name), block=True)
 
 
-def release_remedy(found: Optional[cascade.Resolution], origin: str, block: bool = False) -> str:
+def release_remedy(found: Optional[cascade.Resolution], origin: str, block: bool = False,
+                   root: Optional[str] = None) -> str:
     """``pin_a_release`` of the resolution ``found``: the pin of no release ``origin`` holds moved by a command
     (``store.pin_remedy``), or by hand — a developer's ``cortex.toml`` (``by_hand``), or a team's file in a folder
-    this cortex does not take, ``.team``, read for its version alone: no ``--team`` of it moves the pin (§3.8)."""
-    return _in_a_refused_folder(origin) or store.pin_remedy(origin, by_hand(found, origin), block)
+    this cortex does not take, ``.team``, read for its version alone: no ``--team`` of it moves the pin (§3.8) — nor,
+    ``root`` given, of one ``cortex.toml``'s ``agents`` makes ``--team`` refuse, as a resolution read loosely has."""
+    return _in_a_refused_folder(origin, root) or store.pin_remedy(origin, by_hand(found, origin), block)
 
 
-def _in_a_refused_folder(name: str) -> Optional[str]:
+def _in_a_refused_folder(name: str, root: Optional[str] = None) -> Optional[str]:
+    """The edit that pins a release in ``name``, a team's file no ``--team`` of this cortex moves: in a folder it does
+    not take by its name, ``.team``, which only a later release may take — a release this cortex serves would be
+    refused there too — or, ``root`` given, in the folder the version gate read where ``cortex.toml``'s ``agents`` is
+    refused: inside a service, naming no folder inside the workspace, or not committed (§3.8, step 1)."""
     folder = name[:-len(TEAM_FILE) - 1] if name.endswith(f"/{TEAM_FILE}") else None
-    if folder is None or takes_folder(folder):
+    if folder is None:
         return None
-    return (f"pin a release by hand: set {name}'s version to one — this cortex does not take the folder {folder}/, "
-            "so no command of it moves the team's pin")
+    if not takes_folder(folder):
+        return (f"pin a release by hand: set {name}'s version to a release newer than this cortex, one that takes the "
+                f"folder {folder}/ — this cortex does not take it, so no command of it moves the team's pin")
+    why = None if root is None else _team_pin_refused(root, folder)
+    if why is None:
+        return None
+    return f"pin a release by hand: set {name}'s version to one — no command of this cortex moves the team's pin: {why}"
+
+
+def _team_pin_refused(root: str, folder: str) -> Optional[str]:
+    """Why ``cortex upgrade --team`` refuses to move the pin of the team's file in ``folder``, which the version gate
+    read — ``None`` when it moves it: ``cortex.toml``'s ``agents`` refused, or naming another folder."""
+    try:
+        named = team_folder(root)[0]
+    except ConfigError as error:
+        return str(error)
+    return None if named == folder else f"the team's folder is {named}/"
+
+
+def moves_team_pin(root: str, folder: str, own: Version) -> bool:
+    """Whether ``cortex upgrade --team VERSION`` moves the pin of the team's file in ``folder`` — the one the version
+    gate read — to a version this cortex serves (ADR-013 §3.8, steps 1–2): ``--team`` takes that folder, none of
+    ``cortex.toml``'s ``agents`` refused, and a release that reads the team's file is this cortex's or below it — none
+    from a build of no release that prepares 1.8.0, below 1.8.0 and its candidates (ADR-009 §9)."""
+    if store.development(own) and Version("{}.{}.{}".format(*own.core)) <= Version(project.FIRST_TEAM_VERSION):
+        return False
+    return takes_folder(folder) and _team_pin_refused(root, folder) is None
 
 
 def takes_folder(folder: str) -> bool:
