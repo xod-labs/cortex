@@ -56,9 +56,10 @@ class TemplateTests(unittest.TestCase):
                              b"else `agents/`", b"**`cortex.toml` names another folder**",
                              # `./x/` names x (ADR-013 §9): no sync on every conversation for its spelling.
                              b"compared with every leading `./` and every final `/` dropped",
-                             # A cortex before 1.8.0 refuses the key: its rule, a self-update, is reached.
-                             b"When the sync refuses a key, follow the rules below for what `cortex sync` says; when it "
-                             b"ran and the folders still differ, tell the user, and go no further.",
+                             # A sync that fails — a cortex before 1.8.0 refuses the key, a release candidate or a
+                             # development build is too old for the team's version — reaches its rule, a self-update.
+                             b"When the sync fails, follow the rules below for what it says; when it ran and the "
+                             b"folders still differ, tell the user, and go no further.",
                              b"on a checkout, below, tell the user instead, and go no further",
                              b"`cortex.team.toml`", b"**A version moved**", b"never order versions",
                              b"**A checkout**", b"**No `synced`**",
@@ -77,8 +78,9 @@ class TemplateTests(unittest.TestCase):
                 # A checkout is said before a version moved, a missing team's folder before a missing version.
                 self.assertLess(text.index(b"**A checkout**"), text.index(b"**A version moved**"))
                 self.assertLess(text.index(b"**It names a missing team's folder**"), text.index(b"**It refuses"))
-                self.assertLess(text.index(b"When the sync refuses a key, follow the rules below"),
-                                text.index(b"**It refuses `cortex.toml` or `cortex.local.toml` for a key"))
+                for later in (b"**`cortex sync` says this cortex is too old", b"**It refuses `cortex.toml` or "
+                              b"`cortex.local.toml` for a key"):
+                    self.assertLess(text.index(b"When the sync fails, follow the rules below"), text.index(later))
                 self.assertIn(b"**No `synced`** in `cortex.local.toml`, and `cortex/` a link \xe2\x86\x92 nothing to "
                               b"compare", text)
 
