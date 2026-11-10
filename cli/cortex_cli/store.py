@@ -33,7 +33,7 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Dict, Iterator, Optional
+from typing import Callable, Dict, Iterator, Optional, Union
 
 from cortex_core.project import DEFAULT_RELEASES_URL  # noqa: F401 — part of this module's API
 from cortex_core.project import FIRST_TEAM_VERSION, LOCAL_FILE, PROJECT_FILE, TEAM_FILE
@@ -135,10 +135,20 @@ def too_old_for(version: Version, own: Version) -> bool:
     return version > own
 
 
-def update_command(version: Version) -> str:
-    """The command that moves this binary to ``version`` (ADR-010 §3.7) — a release's: a build of no
-    release has none, and its pin is moved to a release instead (``pin_command``, ADR-009 §9)."""
+def update_command(version: Union[Version, str]) -> str:
+    """The command that moves this binary to ``version`` (ADR-010 §3.7) — a release's, or ``VERSION`` where none is
+    named: a build of no release has none, and its pin is moved to a release instead (``pin_command``, ADR-009 §9)."""
     return f"cortex self-update {version}"
+
+
+def update_first(command: str, block: bool = False) -> str:
+    """From a build that prepares 1.8.0 or below (``prepares_before_team``), where every ``--team VERSION`` it runs is
+    refused — newer than it, before the team's file, or its own, which no teammate can download: this cortex updated
+    first, to a release that reads the team's file, then ``command`` — on lines of their own, ``block``."""
+    update = update_command("VERSION")
+    lead = (f"update this cortex to a release that reads the team's file — {FIRST_TEAM_VERSION} or a candidate of it "
+            "— then pin one")
+    return f"{lead}:\n    {update}\n    {command}" if block else f"{lead}: `{update}`, `{command}`"
 
 
 def pin_command(origin: Optional[str] = None) -> str:
@@ -169,11 +179,7 @@ def pin_remedy(origin: Optional[str] = None, by_hand: object = False, block: boo
                 "uncommitted beside the team's file, it is this developer's, which no command writes")
     command = pin_command(origin)
     if command == "cortex upgrade --team VERSION" and prepares_before_team(own):
-        # From a build that prepares 1.8.0 or below, every VERSION --team names is refused: newer than this cortex,
-        # before the team's file, or this build's own, which no teammate can download.
-        update = "cortex self-update VERSION"
-        return (f"update this cortex to a release, then pin one:\n    {update}\n    {command}" if block else
-                f"update this cortex to a release, then pin one: `{update}`, `{command}`")
+        return update_first(command, block)
     return f"pin a release:\n    {command}" if block else f"pin a release: `{command}`"
 
 

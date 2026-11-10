@@ -43,7 +43,7 @@ import sys
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, TextIO, Tuple
+from typing import Callable, Dict, List, Optional, TextIO, Tuple, Union
 
 from cortex_core import validate as overlay_validator
 from cortex_core import project as grammar
@@ -759,11 +759,12 @@ def local_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out:
     mine = _developers_version(project)
     if mine is not None and mine > target:
         # The higher version is read (§3.1), a try on a tie: below the developer's own cortex.toml, it never would be.
-        # Its version removed, the team's is read — below the target, at or below which the try was refused already.
+        # Its version removed, the team's is read, or a try above it — then this one, above the team's (a try at or
+        # below it is removed, above), is written and read.
         raise UpgradeError(f"{config.PROJECT_FILE}, not committed, pins Cortex {mine} — your own, read above a try of "
                            f"{target}, which would never be read. Nothing was changed. To read {target}, remove "
-                           f"{config.PROJECT_FILE}'s version — the team's {team} is read then — and run "
-                           f"`cortex upgrade --local {target}` again")
+                           f"{config.PROJECT_FILE}'s version — the team's {team} is read then, or a try above it — and "
+                           f"run `cortex upgrade --local {target}` again")
     the_store = store.Store()
     _served(the_store, target, f"cortex upgrade --local {target}", config.LOCAL_FILE)
     the_store.ensure(target)
@@ -854,8 +855,8 @@ def _no_release(the_store: store.Store, command: str) -> UpgradeError:
         # the pin from this cortex — a release of one does (``config.moves_team_pin``).
         return UpgradeError(f"this cortex is {kind}, {the_store.own}, the version its branch prepares, which no "
                             "teammate can download, and every release that reads the team's file is newer than it — "
-                            f"update this cortex to one first: `cortex self-update VERSION`, then `{command} VERSION`. "
-                            "Nothing was changed")
+                            f"update this cortex to one first: `{store.update_command('VERSION')}`, then "
+                            f"`{command} VERSION`. Nothing was changed")
     return UpgradeError(f"this cortex is {kind}, {the_store.own}, the version its branch prepares, which no teammate "
                         f"can download — name the version to move to: `{command} VERSION`. Nothing was changed")
 
@@ -877,14 +878,33 @@ def _tries(the_store: store.Store, target: Version, team: Optional[Version]) -> 
     return team is not None and not grammar.before_team(str(team)) and target > team and _serves(the_store, target)
 
 
-def _shared(target: Version, name: str, team: Optional[Version], the_store: store.Store) -> UpgradeError:
-    """A build of no release's version, named for a file every teammate reads — the team's file, or a
-    committed ``cortex.toml`` — refused: no teammate can download it (ADR-009 §9). Tried on this
-    machine, it is ``--local``'s — named when that try works (``_tries``), ``team`` the version it is
-    compared with."""
-    tried = f"; tried on this machine: `cortex upgrade --local {target}`" if _tries(the_store, target, team) else ""
-    return UpgradeError(f"Cortex {target} is a build of no release, which no teammate can download, and every teammate "
-                        f"reads {name} — nothing was changed. Pin a release there{tried}")
+class _SharedRefusal(UpgradeError):
+    """``_shared``'s refusal, of a folder's file: the try it names — ``--local``, on this machine — is a project's,
+    named where it works there (``_tries``, ``floor`` the version the project reads a try above)."""
+
+    def __init__(self, target: Version, untried: str, the_store: store.Store, floor: Optional[Version]):
+        self.target, self.untried, self.the_store = target, untried, the_store
+        super().__init__(self.named(floor))
+
+    def named(self, floor: Optional[Version]) -> str:
+        """The refusal as told to a project whose try is read above ``floor``."""
+        tried = f"; tried on this machine: `cortex upgrade --local {self.target}`" \
+            if _tries(self.the_store, self.target, floor) else ""
+        return self.untried + tried
+
+
+def _shared(target: Version, name: str, team: Optional[Version], the_store: store.Store,
+            team_file: bool = False) -> UpgradeError:
+    """A build of no release's version, named for a file every teammate reads — the team's file, ``team_file``, or a
+    committed ``cortex.toml`` — refused: no teammate can download it (ADR-009 §9). Tried on this machine, it is
+    ``--local``'s — named when that try works (``_tries``), ``team`` the version it is compared with. From a build
+    that prepares 1.8.0 or below, no release this cortex serves is pinned in the team's file: it is updated first."""
+    pin = "Pin a release there"
+    if team_file and store.prepares_before_team(the_store.own):
+        first = store.update_first("cortex upgrade --team VERSION")
+        pin = first[0].upper() + first[1:]
+    return _SharedRefusal(target, f"Cortex {target} is a build of no release, which no teammate can download, and "
+                                  f"every teammate reads {name} — nothing was changed. {pin}", the_store, team)
 
 
 def _unmoved(the_store: store.Store, target: Version) -> str:
@@ -916,7 +936,7 @@ def team_target(pinned: Optional[Version], wanted: Optional[str], the_store: sto
         raise UpgradeError(f"{name} reads Cortex {grammar.FIRST_TEAM_VERSION} or later, and {target} is "
                            "before it — nothing was changed")
     if store.development(target) and target != pinned:    # at the pin already, nothing new is written
-        raise _shared(target, name, read if read is not None else pinned, the_store)
+        raise _shared(target, name, read if read is not None else pinned, the_store, team_file=True)
     _served(the_store, target, f"cortex upgrade --team {target}", name)
     return target
 
@@ -1970,7 +1990,9 @@ def _each(entries: List[registry.Entry], options: _Options, out: TextIO, err: Te
     """Each project's upgrade, in turn, added to ``done``: what it did — or, when it did nothing, why:
     the state it was skipped for, or its being interrupted."""
     made: Dict[str, Tuple[str, str]] = {}
-    moved: Dict[str, Optional[str]] = {}    # --all --team: each team's folder, once — None moved, or why refused
+    # --all --team: each team's folder, once — None moved, or why refused: a build of no release's refusal told to each
+    # follower with its own try (_SharedRefusal).
+    moved: Dict[str, Union[None, str, _SharedRefusal]] = {}
     targets: Dict[str, Version] = {}        # --all --team: the version each team's folder moved to, or would
     followers = _followers(entries) if options.which == "team" else []
     for entry in entries:
@@ -2034,7 +2056,7 @@ def _followers(entries: List[registry.Entry], other_than: Optional[Version] = No
 
 
 def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextIO,
-               made: Dict[str, Tuple[str, str]], moved: Dict[str, Optional[str]],
+               made: Dict[str, Tuple[str, str]], moved: Dict[str, Union[None, str, "_SharedRefusal"]],
                followers: List[Tuple[str, str]] = (), targets: Optional[Dict[str, Version]] = None):
     """One project of ``--all``: its outcome, or why it is skipped (ADR-013 §3.11) — a project that
     follows its team's file, a developer's ``cortex.toml`` included, which ``--all`` does not move;
@@ -2052,6 +2074,8 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
     folder = folder_of(entry.path)
     if folder in moved:
         why = moved[folder]
+        if isinstance(why, _SharedRefusal):     # the folder's refusal, with this follower's own try
+            return Outcome(entry.path, project.team_version, None, 1, why.named(_read_floor(project)))
         if why is not None:                 # refused once for every follower: never tried again
             return Outcome(entry.path, project.team_version, None, 1, why)
         target = targets.get(folder)
@@ -2068,7 +2092,7 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
     try:
         target = team_target(team_pin(project), options.wanted, the_store, project.team_name, _read_floor(project))
     except UpgradeError as error:
-        moved[folder] = str(error)
+        moved[folder] = error if isinstance(error, _SharedRefusal) else str(error)
         out.write(f"refused: {error}\n")
         return Outcome(entry.path, project.team_version, None, 1, str(error))
     the_store.ensure(target)

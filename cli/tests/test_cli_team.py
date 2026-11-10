@@ -2315,7 +2315,7 @@ class CodeReviewThirdFixTests(TeamTestCase):
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertIn("cortex.toml, not committed, pins Cortex 9.9.9 — your own, read above a try of 9.9.8, which would "
                       "never be read. Nothing was changed. To read 9.9.8, remove cortex.toml's version — the team's "
-                      "9.9.7 is read then — and run `cortex upgrade --local 9.9.8` again", proc.err)
+                      "9.9.7 is read then, or a try above it — and run `cortex upgrade --local 9.9.8` again", proc.err)
         self.assertFalse((root / "cortex.local.toml").exists())
         # At its version, a try is read — the higher one wins, a try on a tie: written.
         self.assert_ok(self.cortex(root, "upgrade", "--local", "9.9.9"))
@@ -2439,8 +2439,12 @@ class CounterReviewRoundTwoTests(TeamTestCase):
                 with self.subTest(root=root.name, args=args):
                     proc = self.cortex(root, *args, **dev)
                     text = (proc.out + proc.err).replace("\r\n", "\n")
-                    self.assertIn("pdate this cortex to a release, then pin one", text)
-                    self.assertIn("cortex self-update VERSION", text)
+                    first = ("pdate this cortex to a release that reads the team's file — 1.8.0 or a candidate of it — "
+                             "then pin one")
+                    # Too new, on lines of their own; not served, in the sentence.
+                    self.assertIn(f"{first}:\n    cortex self-update VERSION\n    cortex upgrade --team VERSION\n"
+                                  if root is newer else
+                                  f"{first}: `cortex self-update VERSION`, `cortex upgrade --team VERSION`", text)
                     self.assertNotIn("pin a release:\n    cortex upgrade --team", text)
                     self.assertNotIn("pin a release: `cortex upgrade --team", text)
         # Followed: this cortex a release that reads the team's file — the self-update — its --team moves the pin.
@@ -2506,7 +2510,7 @@ class CounterReviewRoundTwoTests(TeamTestCase):
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertIn("cortex.toml, not committed, pins Cortex 9.9.7 — your own, read above a try of 9.9.6, which "
                       "would never be read. Nothing was changed. To read 9.9.6, remove cortex.toml's version — the "
-                      "team's 9.9.5 is read then — and run `cortex upgrade --local 9.9.6` again", proc.err)
+                      "team's 9.9.5 is read then, or a try above it — and run `cortex upgrade --local 9.9.6` again", proc.err)
         self.assertEqual(self.local(root)["version"], OWN)
         (root / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")                # followed
         self.assert_ok(self.cortex(root, "upgrade", "--local", "9.9.6", **env))
@@ -2535,6 +2539,59 @@ class CounterReviewRoundTwoTests(TeamTestCase):
         proc = self.cortex(root, "upgrade", "--team", "9.9.8-dev.1")
         self.assertIn("tried on this machine: `cortex upgrade --local 9.9.8-dev.1`", proc.err)
         self.assert_ok(self.cortex(root, "upgrade", "--local", "9.9.8-dev.1"))
+
+    @SOURCE
+    @harness.outside_a_repository
+    def test_all_team_to_a_build_of_no_release_names_each_follower_its_own_try(self):
+        # One team's folder, pin 9.9.7, linked by two 2.B roots: one reads it, the other its developer's own cortex.toml
+        # at 9.9.8. The folder is refused once; the try is each follower's — named where it works there, in either
+        # order, and it works.
+        seed = self.project('version = "9.9.8-dev.1"\ntheme = "h2g2"\n', committed=False, name="seed")
+        self.assert_ok(self.cortex(seed, "sync", CORTEX_SOURCE_VERSION="9.9.8-dev.1"))
+        for plain, own in (("alpha", "beta"), ("zeta", "aaa")):
+            with self.subTest(first=min(plain, own)):
+                team = self.tmp / f"team-{plain}"
+                team.mkdir()
+                (team / "cortex.team.toml").write_text('version = "9.9.7"\n', encoding="utf-8")
+                roots = {}
+                for name, toml in ((plain, 'theme = "h2g2"\n'), (own, 'version = "9.9.8"\ntheme = "h2g2"\n')):
+                    roots[name] = self.project(toml, committed=False, name=name)
+                    (roots[name] / "agents").symlink_to(team, target_is_directory=True)
+                    self.assert_ok(self.cortex(roots[name], "sync"))
+                (self.home / "projects.toml").write_text("format = 1\n" + "".join(
+                    f'\n[[project]]\nname = "{name}"\npath = "{harness_path(root)}"\n' for name, root in roots.items()),
+                    encoding="utf-8")
+                proc = self.cortex(self.tmp, "upgrade", "--all", "--team", "9.9.8-dev.1")
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                said = {name: next(line for line in proc.out.splitlines() if line.split()[:2] == [name, "refused:"])
+                        for name in roots}
+                for line in said.values():
+                    self.assertIn("is a build of no release, which no teammate can download", line)
+                self.assertIn("tried on this machine: `cortex upgrade --local 9.9.8-dev.1`", said[plain])
+                self.assertNotIn("--local", said[own])
+                self.assertEqual((team / "cortex.team.toml").read_text(encoding="utf-8"), 'version = "9.9.7"\n')
+                self.assert_ok(self.cortex(roots[plain], "upgrade", "--local", "9.9.8-dev.1"))   # named: it works
+                self.assertEqual(self.value(roots[plain], "version"), "9.9.8-dev.1")
+                self.assertEqual(self.cortex(roots[own], "upgrade", "--local", "9.9.8-dev.1").returncode, 1)  # not
+
+    @SOURCE
+    def test_team_to_its_own_version_from_a_build_that_prepares_1_8_0_names_an_update_first(self):
+        # From 1.8.0-dev.5, a team's file is pinned to no release it serves: refused, the remedy is this cortex updated
+        # to a release that reads the team's file — not "pin a release there", which it cannot.
+        release = FakeRelease(("1.7.0", "1.8.0-rc.1"))
+        self.addCleanup(release.close)
+        root = self.project(team='version = "1.8.0-dev.9"\n')
+        proc = self.cortex(root, "upgrade", "--team", "1.8.0-dev.5", CORTEX_SOURCE_VERSION="1.8.0-dev.5",
+                           CORTEX_RELEASES_URL=release.url)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"every teammate reads {TEAM} — nothing was changed. Update this cortex to a release that reads "
+                      "the team's file — 1.8.0 or a candidate of it — then pin one: `cortex self-update VERSION`, "
+                      "`cortex upgrade --team VERSION`", proc.err)
+        self.assertNotIn("Pin a release there", proc.err)
+        # Followed: a release candidate — the self-update — pins one.
+        rc = {"CORTEX_SOURCE_VERSION": "1.8.0-rc.1", "CORTEX_RELEASES_URL": release.url}
+        self.assert_ok(self.cortex(root, "upgrade", "--team", "1.8.0-rc.1", **rc))
+        self.assertIn('version = "1.8.0-rc.1"', (root / TEAM).read_text(encoding="utf-8"))
 
     @SOURCE
     def test_a_try_of_a_build_of_no_release_is_said_as_no_download(self):
