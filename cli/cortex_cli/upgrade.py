@@ -818,20 +818,46 @@ def _no_release(the_store: store.Store, command: str) -> UpgradeError:
                         f"can download — name the version to move to: `{command} VERSION`. Nothing was changed")
 
 
+def _serves(the_store: store.Store, version: Version) -> bool:
+    """Whether this cortex serves ``version`` — its own, a release it downloads, or a build of no release's the
+    store holds below it — as a command that moves to it checks first (``store.check_served``)."""
+    try:
+        the_store.check_served(version)
+    except store.StoreError:
+        return False
+    return True
+
+
+def _tries(the_store: store.Store, target: Version, team: Optional[Version]) -> bool:
+    """Whether ``cortex upgrade --local target`` is a try that works: the version it is compared with, ``team`` —
+    the team's, or an uncommitted ``cortex.toml``'s beside a team's file that pins none — reads a try, the target
+    is above it, and this cortex serves it (``local_move``)."""
+    return team is not None and not grammar.before_team(str(team)) and target > team and _serves(the_store, target)
+
+
 def _shared(target: Version, name: str, team: Optional[Version], the_store: store.Store) -> UpgradeError:
     """A build of no release's version, named for a file every teammate reads — the team's file, or a
     committed ``cortex.toml`` — refused: no teammate can download it (ADR-009 §9). Tried on this
-    machine, it is ``--local``'s — named when that try works: the team's version, ``team``, reads a try,
-    the target is above it, and this cortex serves it, its own or one the store holds below it."""
-    works = team is not None and not grammar.before_team(str(team)) and target > team and \
-        (target == the_store.own or (target < the_store.own and the_store.has(target)))
-    tried = f"; tried on this machine: `cortex upgrade --local {target}`" if works else ""
+    machine, it is ``--local``'s — named when that try works (``_tries``), ``team`` the version it is
+    compared with."""
+    tried = f"; tried on this machine: `cortex upgrade --local {target}`" if _tries(the_store, target, team) else ""
     return UpgradeError(f"Cortex {target} is a build of no release, which no teammate can download, and every teammate "
                         f"reads {name} — nothing was changed. Pin a release there{tried}")
 
 
+def _unmoved(the_store: store.Store, target: Version) -> str:
+    """Why ``--team`` would not move the team's pin to ``target`` — said where its command is not named."""
+    if store.development(target):
+        return f"not to {target}: {_no_teammate(target)}"
+    if grammar.before_team(str(target)):
+        return f"not to {target}: the team's file is read from Cortex {grammar.FIRST_TEAM_VERSION} on"
+    if target > the_store.own:
+        return f"not to {target}, newer than this cortex, {the_store.own}: `{store.update_command(target)}` first"
+    return f"not to {target}, which this cortex does not serve"
+
+
 def team_target(pinned: Optional[Version], wanted: Optional[str], the_store: store.Store,
-                name: str = config.TEAM_NAME) -> Version:
+                name: str = config.TEAM_NAME, read: Optional[Version] = None) -> Version:
     """The version ``--team`` moves the team's file — ``name``, as the project root names it — to:
     ``wanted``, or this cortex's own — never down to it, nor, unnamed, to a build of no release's, which
     no teammate can download."""
@@ -848,7 +874,7 @@ def team_target(pinned: Optional[Version], wanted: Optional[str], the_store: sto
         raise UpgradeError(f"{name} reads Cortex {grammar.FIRST_TEAM_VERSION} or later, and {target} is "
                            "before it — nothing was changed")
     if store.development(target) and target != pinned:    # at the pin already, nothing new is written
-        raise _shared(target, name, pinned, the_store)
+        raise _shared(target, name, read if read is not None else pinned, the_store)
     _served(the_store, target, f"cortex upgrade --team {target}", name)
     return target
 
@@ -889,7 +915,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
                            f"{grammar.FIRST_TEAM_VERSION}. Nothing was changed")
     the_store = store.Store()
     pinned = team_pin(project)
-    target = team_target(pinned, wanted, the_store, name)
+    target = team_target(pinned, wanted, the_store, name, project.team_version)
     development = store.development(target)     # at the pin already: a move to one is refused (team_target)
     if development and (branch is not None or message is not None):
         # Nothing of a build of no release's version is to commit, where every teammate reads it (ADR-009 §9).
@@ -1080,15 +1106,17 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         folder = config.loose_team_folder(root)
         if name == config.cascade.team_name(folder) and not config.takes_folder(folder):
             # A folder only a later version may take, .team: no --team of this cortex moves its pin (§3.8, step 1).
+            pin = config.pin_a_release(root, name)
             raise UpgradeError(f"this project reads Cortex {newer}, which its {name} pins, newer than this cortex, "
                                f"{the_store.own} — nothing was changed. "
-                               + (config.pin_a_release(root, name) if store.development(newer) else
+                               + (pin[:1].upper() + pin[1:] if store.development(newer) else
                                   f"Update this cortex to serve it:\n    {store.update_command(newer)}"))
-        team = os.path.isfile(os.path.join(root, folder, config.TEAM_FILE))
+        # Each command named does what it says: the team's pin is moved by --team; a try, by --local, which drops it
+        # at the team's version or below — a try below a team's pin too new for this cortex is never read.
+        move = "`cortex upgrade --local VERSION` moves the try — to the team's version or below, it drops it" \
+            if name == config.LOCAL_FILE else "`cortex upgrade --team VERSION` moves the team's pin"
         raise UpgradeError(f"this project reads Cortex {newer}, which its {name} pins, newer than this cortex, "
-                           f"{the_store.own} — nothing was changed. Name the version to move to: "
-                           + ("`cortex upgrade --team VERSION` moves the team's pin, " if team else "")
-                           + "`cortex upgrade --local VERSION` the try")
+                           f"{the_store.own} — nothing was changed. Name the version to move to: {move}")
     if wanted is None and pinned is not None and pinned[1] > the_store.own:
         # The default moves a project to this cortex's version, never down: a teammate's older binary
         # would otherwise undo the team's pin. Said from the version read before any key is checked,
@@ -1112,16 +1140,19 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         # It follows the team's file — an uncommitted cortex.toml included, at a 2.B root: a move is the
         # team's, or a try; without VERSION, or with the team's or the version read, it resumes.
         if wanted is not None and Version(wanted) not in (current, project.version):
-            # Each command named does what it says: a try is read above the team's version only, never below
-            # it. A team's file that pins none: the version is the uncommitted cortex.toml's, which no command
-            # writes — set by hand; above it, the team's pin or a try is read instead, the higher one winning.
-            above = Version(wanted) > current
-            tried = f"; trying it here: `cortex upgrade --local {wanted}`" if above else ""
-            pins = f"which pins Cortex {current} — moving it is the team's: `cortex upgrade --team {wanted}`{tried}" \
+            # Each command named does what it says (ADR-013 §3.11): --team moves the team's pin to a release this
+            # cortex serves; a try, --local, is read above the version read only, of a version it serves. A team's
+            # file that pins none: the version is the uncommitted cortex.toml's, which no command writes — set by
+            # hand; above it, the team's pin or a try is read instead, the higher one winning. Neither: said why.
+            target = Version(wanted)
+            moves = not store.development(target) and not grammar.before_team(wanted) and _serves(the_store, target)
+            tried = f"; trying it here: `cortex upgrade --local {wanted}`" if _tries(the_store, target, current) else ""
+            pins = (f"which pins Cortex {current} — moving it is the team's"
+                    + (f": `cortex upgrade --team {wanted}`" if moves else f", {_unmoved(the_store, target)}") + tried) \
                 if project.team_origin == project.team_name else \
                 f"which pins no version: Cortex {current} is its uncommitted {config.PROJECT_FILE}'s, which no " \
                 "command writes — set it there by hand" + \
-                (f", or pin the team's: `cortex upgrade --team {wanted}`{tried}" if above else "")
+                (f", or pin the team's: `cortex upgrade --team {wanted}`" if target > current and moves else "") + tried
             raise UpgradeError(f"this project follows {project.team_name}, {pins}. Nothing was changed")
         wanted = None
         target = current
@@ -1936,7 +1967,7 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
     # Every follower of this folder, checked against the target team_move will use, before it moves.
     the_store = store.Store()
     try:
-        target = team_target(team_pin(project), options.wanted, the_store, project.team_name)
+        target = team_target(team_pin(project), options.wanted, the_store, project.team_name, project.team_version)
     except UpgradeError as error:
         moved[folder] = str(error)
         out.write(f"refused: {error}\n")

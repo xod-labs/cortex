@@ -820,7 +820,8 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
     if locked:
         why = (f"no {shown_name}" if lock is None else
                f"{shown_name} names Cortex {lock.version}, and {pins} pins {version}")
-        commit = "" if in_no_repository(root) else ", then commit it"     # committed nowhere (ADR-008 §9)
+        # Committed nowhere (ADR-008 §9); nor a build of no release's lock, which no teammate can use (ADR-009 §9).
+        commit = "" if in_no_repository(root) or store.development(version) else ", then commit it"
         raise SyncError(f"--locked: {why} — {writer} writes it{commit}. Nothing of the project was changed")
     return digest, ("written" if lock is None else f"Cortex {version}, where it named {lock.version}")
 

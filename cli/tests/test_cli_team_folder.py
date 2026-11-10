@@ -406,8 +406,10 @@ class CounterReviewTests(FolderTestCase):
             with self.subTest(args=args):
                 proc = self.cortex(root, *args)
                 self.assertEqual(proc.returncode != 0, args[0] != "config", proc.err)
-                self.assertIn(by_hand, proc.err)
+                self.assertIn(by_hand[1:], proc.err)
                 self.assertNotIn("--team", proc.err)
+                if args == ("upgrade",):       # a sentence of its own, after the refusal's
+                    self.assertIn("nothing was changed. Pin a release by hand", proc.err)
 
     @harness.outside_a_repository
     def test_the_gate_reads_no_folder_an_uncommitted_cortex_toml_names(self):

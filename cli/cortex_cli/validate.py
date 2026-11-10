@@ -78,7 +78,8 @@ def lock_warnings(project: config.Project, base: str, files: Optional[Dict[str, 
         lock = config.load_lock(directory, name, shown_name)
     except config.ConfigError as error:
         return [(shown_name, "LOCK_INVALID", str(error))]
-    commit = "" if sync.in_no_repository(directory) else ", then commit it"     # committed nowhere (ADR-008 §9)
+    # Committed nowhere (ADR-008 §9); nor a build of no release's lock, which no teammate can use (ADR-009 §9).
+    commit = "" if sync.in_no_repository(directory) or store.development(version) else ", then commit it"
     # The team's lock in a folder this user cannot write: the sync only warns of it here (ADR-013 §3.4). A
     # prediction: on Windows, os.access does not read a folder's ACL.
     fix = (f"{project.team_folder}/ cannot be written here — a `cortex sync` where it can be writes it, committed in "
