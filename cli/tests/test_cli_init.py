@@ -565,6 +565,26 @@ class OptionTests(InitTestCase):
         self.assertTrue(self.read("CLAUDE.md").endswith(team))
         self.assertEqual((self.project / "CLAUDE.md.bak").read_text(encoding="utf-8"), before)
 
+    def test_another_tool_s_file_of_no_layout_names_workspace_in_a_workspace_s_run(self):
+        # Cortex's title below a line of text: no layout --force could keep — a workspace's run names --workspace, which,
+        # followed, writes a workspace's; never a command that writes a single project's in silence (#329).
+        self.assertEqual(self.init("--tool", "claude", "--workspace").returncode, 0)
+        rule = self.project / ".cursor" / "rules" / "cortex.mdc"
+        rule.parent.mkdir(parents=True)
+        rule.write_text("This repository uses Cortex.\n\n# Cortex AI Team — Workspace Mode\n\nRead cortex.local.toml "
+                        "first.\n", encoding="utf-8")
+        proc = self.init("--workspace")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("note: .cursor/rules/cortex.mdc is there and was kept: Cortex's title below a line of text, so "
+                      "neither its bootstrap nor its layout can be told — cortex init --tool cursor --workspace --force "
+                      "replaces it, and keeps it as .bak", proc.err)
+        proc = self.init("--tool", "cursor", "--workspace", "--force")              # the command the note names
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read(".cursor/rules/cortex.mdc"))
+        # A single project's run names no option: --force writes a single project's, as the run would.
+        rule.write_text("This repository uses Cortex.\n\n# Cortex AI Team\n", encoding="utf-8")
+        self.assertIn("cortex init --tool cursor --force replaces it", self.init().err)
+
     def test_force_without_workspace_knows_a_workspace_written_before_the_marker(self):
         # The file of 1.3.0, which every workspace a team changed is sent to `cortex init --force` with.
         old = "# Cortex AI Team — Workspace Mode\n\nRead cortex.local.toml first.\n"
