@@ -58,6 +58,10 @@ class AgentsTextTests(unittest.TestCase):
         self.assertEqual(f("\u03f4"), f("\u03b8"))                      # ϴ is θ, likewise
         self.assertEqual(f("\u1f80"), f("\u1f88"))                      # ᾀ upper-cased is ᾈ: one on NTFS
         self.assertEqual(f("\u0131"), f("i"))                           # one folder rather than two: two on APFS
+        for small, capital in (("\u01f0", "J\u030c"), ("\u1e97", "T\u0308"), ("\u1e96", "H\u0331"),
+                               ("\u0390", "\u03aa\u0301"), ("\u1f50", "\u03a5\u0313")):
+            with self.subTest(name=small):                              # a letter whose upper case is longer, and
+                self.assertEqual(f(small), f(capital))                  # its marks: decomposed, one on NTFS too
         self.assertNotEqual(f("straße"), f("strase"))                   # ß is kept as written, not cut to S
         for full, compatible in (("\uff54\uff45\uff41\uff4d", "team"), ("x\u00b2", "x2")):
             with self.subTest(name=full):                               # a compatible form: two on NTFS and APFS

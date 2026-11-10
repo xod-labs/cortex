@@ -83,7 +83,7 @@ def _service_inside(service: Optional[str], team_folder: str = "agents",
     Its files reach the prompt: a service naming ``../elsewhere`` would read a neighbour's. Never
     ``agents/`` nor the team's folder that renames it (ADR-013 §3.6): the workspace's tier, no service.
     ``agents`` is refused as written, as 1.7.0 refused it, and as the disk under ``root`` opens it; the
-    team's folder that renames it in any case too (§9)."""
+    team's folder that renames it in any case too (§9) — nor a folder whose ``agents/`` the disk opens as either."""
     if not service:
         return service
     path = PurePosixPath(service.replace("\\", "/"))
@@ -93,6 +93,9 @@ def _service_inside(service: Optional[str], team_folder: str = "agents",
         return None                  # "." is the workspace itself: no service
     if path.parts[0] == "agents" or _opens(root, path, "agents"):     # Agents/ on Linux is a service of its own
         raise ValueError(f"service must be a folder of the workspace other than agents/, got {service!r}")
+    if team_folder == "agents" and _opens(root, path / "agents", "agents"):
+        # its agents/ the workspace's, a link to it or to the root: the same overlays, twice
+        raise ValueError(f"service must not be the folder whose agents/ is the team's folder, agents/, got {service!r}")
     if team_folder != "agents":         # a renamed team's folder, in any case (ADR-013 §3.6, §9)
         team = tuple(folded(part) for part in PurePosixPath(team_folder).parts)
         parts = tuple(folded(part) for part in path.parts)

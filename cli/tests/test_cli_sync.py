@@ -486,7 +486,9 @@ class GitIgnoreTests(SyncTestCase):
         # git would not ignore cortex.local.toml for any of these: a negation below the line, a leading space, a
         # tab, a byte order mark not at the start of the file — each a note, never "ignored".
         for n, ignore in enumerate(("cortex.local.toml\n!cortex.local.toml\n", "cortex.local.toml\n!*.toml\n",
-                                    " cortex.local.toml\n", "cortex.local.toml\t\n", "# ours\n\ufeffcortex.local.toml\n")):
+                                    " cortex.local.toml\n", "cortex.local.toml\t\n", "# ours\n\ufeffcortex.local.toml\n",
+                                    # git splits at a line feed only, dropping one carriage return before it
+                                    "a\rcortex.local.toml\n", "x\x0ccortex.local.toml\n", "cortex.local.toml\r\r\n")):
             with self.subTest(ignore=ignore):
                 project = self.repository(ignore, f"not-{n}")
                 proc = self.sync(project)
@@ -495,7 +497,8 @@ class GitIgnoreTests(SyncTestCase):
         # What git strips, Cortex strips too: the byte order mark at the start, trailing spaces; a negation above the
         # line is taken back by it.
         for n, ignore in enumerate(("\ufeffcortex.local.toml\n", "cortex.local.toml  \n",
-                                    "!cortex.local.toml\ncortex.local.toml\n")):
+                                    "!cortex.local.toml\ncortex.local.toml\n", "cortex.local.toml\r\n",
+                                    "cortex.local.toml \r\n")):
             with self.subTest(ignore=ignore):
                 project = self.repository(ignore, f"is-{n}")
                 proc = self.sync(project)
