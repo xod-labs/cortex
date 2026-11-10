@@ -266,8 +266,8 @@ def markers(content: bytes) -> List[Tuple[str, int]]:
 def written_for_workspace(content: bytes) -> bool:
     """Whether a bootstrap was written for a workspace: by its markers when they agree, or, written before the
     marker or with markers that disagree, by its title (ADR-010 §3.1) — the templates' heading, the first line once
-    a frontmatter is set aside, or the first line of Cortex's block that is one when a team wrote a line above it.
-    A file without that heading or the markers was written for none."""
+    a frontmatter is set aside, or one below blank lines and comments a team wrote above it, never one below a
+    line of text (``title_line``). A file without that heading or the markers was written for none."""
     content = normalised(content)
     layouts = {layout for layout, _ in markers(content)}
     if len(layouts) == 1:
@@ -360,7 +360,7 @@ def kept_bootstrap(kept: bytes, template: bytes) -> Optional[Kept]:
     kept = without_bom(kept)
     wanted, found = markers(template), markers(kept)
     if not bootstrap_of_cortex(kept) and not found:
-        return NO_BOOTSTRAP
+        return TITLE_BELOW_TEXT if title_below_text(kept) else NO_BOOTSTRAP
     if not wanted:
         if not reads_the_local_file(kept):
             return Kept(f"is an older Cortex bootstrap: it does not read {config.LOCAL_FILE}, which names the spec now",
@@ -388,6 +388,17 @@ def kept_bootstrap(kept: bytes, template: bytes) -> Optional[Kept]:
 
 
 NO_BOOTSTRAP = Kept("holds no Cortex bootstrap: the tool will not find Cortex", "it holds no Cortex bootstrap")
+# The templates' heading below a line of text: a team's notes quoting it, or a bootstrap of before the marker a team
+# wrote a line above — which, Cortex cannot tell, nor the layout: --force writes the run's own.
+TITLE_BELOW_TEXT = Kept("holds Cortex's title below a line of text, so Cortex cannot tell it for its bootstrap, nor "
+                        "its layout; a workspace's takes --workspace",
+                        "Cortex's title below a line of text, so neither its bootstrap nor its layout can be told")
+
+
+def title_below_text(content: bytes) -> bool:
+    """The templates' heading in Cortex's block of ``content``, below a line of text — no title (``title_line``)."""
+    return title_line(content) is None and any(
+        line.startswith(TITLE) for line in without_frontmatter(parts(normalised(content))[0]).split(b"\n"))
 
 
 def forced(path: Path, template: bytes, personality: bool, current: Optional[bytes]) -> bytes:
