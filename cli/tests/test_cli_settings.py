@@ -399,14 +399,14 @@ class TooNewTests(SettingsTestCase):
     @DEVELOPMENT
     def test_validate_of_a_checkout_s_copy_checks_no_version(self):
         # A copy of a checkout — its marker says no version — passes the gate: the key is said, not the version.
-        project = self.project("99.0.0", extra='agents = "team"\n')
+        project = self.project("99.0.0", extra='endpoints = "team"\n')        # a key no version takes yet
         for tree in ("agents", "templates", "docs"):
             shutil.copytree(harness.REPO / tree, project / "cortex" / tree)
         (project / "cortex" / ".synced").write_text('{"version": null, "files": {}}', encoding="utf-8")
         (project / "cortex.local.toml").write_text('spec = "cortex"\n', encoding="utf-8")
         proc = self.cortex(project, "validate")
         self.assertEqual(proc.returncode, 2, proc.err)
-        self.assertIn('unknown key "agents"', proc.err)
+        self.assertIn('unknown key "endpoints"', proc.err)
         self.assertNotIn(self.WHY, proc.err)
 
     def test_upgrade_says_the_version_not_the_key(self):
