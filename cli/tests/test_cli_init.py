@@ -486,8 +486,9 @@ class OptionTests(InitTestCase):
         self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", written)
         self.assertTrue(written.endswith(team))
         self.assertIn("CLAUDE.md was written for a workspace, and is written for one again — to write a single "
-                      "project's, remove it and run `cortex init --tool claude`, then copy the team's part back from its "
-                      ".bak", proc.err)
+                      "project's, remove it and run `cortex init --tool claude`, then copy the team's part back from ",
+                      proc.err)
+        self.assertIn("CLAUDE.md.bak, below the end marker", proc.err)
         self.assertTrue((self.project / "CLAUDE.md.bak").read_text(encoding="utf-8").endswith(team))
         # Followed: the project has no instructions file left, and `cortex init` alone would write Copilot's.
         (self.project / "CLAUDE.md").unlink()
@@ -587,6 +588,33 @@ class OptionTests(InitTestCase):
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
         self.assertIn("was written for a workspace, and is written for one again", proc.err)
+
+    def test_workspace_on_a_single_project_s_file_before_the_marker_names_the_option(self):
+        # --force alone keeps a single project's file of 1.3.0 single: the note of a --workspace run names the option,
+        # and the command it names writes a workspace's.
+        old = "# Cortex AI Team\n\nRead cortex.local.toml first.\n"
+        (self.project / "CLAUDE.md").write_text(old, encoding="utf-8")
+        proc = self.init("--tool", "claude", "--workspace")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("CLAUDE.md is an older Cortex bootstrap, written before the bootstrap marker — cortex init --tool "
+                      "claude --workspace --force writes it again", proc.err)
+        proc = self.init("--tool", "claude", "--workspace", "--force")          # the command the note names
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+
+    def test_the_note_names_the_backup_written(self):
+        # A .bak of other content there already: the team's part went to .bak.1, which the note names.
+        self.assertEqual(self.init("--tool", "claude", "--workspace").returncode, 0)
+        team = "\n## Ours\n"
+        before = self.read("CLAUDE.md").replace("<!-- cortex:bootstrap layout=workspace format=2",
+                                                "<!-- cortex:bootstrap layout=workspace format=1", 1) + team
+        (self.project / "CLAUDE.md").write_text(before, encoding="utf-8")
+        (self.project / "CLAUDE.md.bak").write_text("# something else\n", encoding="utf-8")
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertEqual(self.read("CLAUDE.md.bak.1"), before)
+        self.assertIn(f"then copy the team's part back from {self.project / 'CLAUDE.md.bak.1'}, below the end marker",
+                      proc.err.replace(str(self.project.resolve()), str(self.project)))
 
     def test_force_without_workspace_finds_the_title_below_a_line_a_team_wrote_above_it(self):
         # A file of before the marker, opened by the team's own line: the title is still the templates' — it was
@@ -1685,6 +1713,33 @@ class BootstrapMarkerTests(unittest.TestCase):
                     self.assertEqual(init_command.kept_bootstrap(kept, self.template(layout, 2)).sentence,
                                      "is an older Cortex bootstrap, written before the bootstrap marker")
         self.assertIsNone(init_command.title_line(b"<!-- our notes -->\nRead cortex.local.toml first.\n"))
+
+    def test_the_title_below_a_line_of_text_is_none(self):
+        # Below blank lines and comments, the heading is the title; below a line of text — a team's notes quoting
+        # an example, in a fence or not — it is none, and the file is no Cortex bootstrap.
+        workspace = self.unmarked().decode("utf-8")
+        for above in ("\n\n", "<!-- ours -->\n\n<!-- and\nours -->\n", "<!-- a --><!-- b -->\n"):
+            with self.subTest(above=above):
+                kept = (above + workspace).encode("utf-8")
+                self.assertEqual(init_command.title_line(kept), b"# Cortex AI Team \xe2\x80\x94 Workspace Mode")
+                self.assertTrue(init_command.written_for_workspace(kept))
+        for above in ("# Our notes\n\n```\n", "Our notes\n", "<!-- ours --> and text\n", "<!-- never closed\n"):
+            with self.subTest(above=above):
+                kept = (above + workspace).encode("utf-8")
+                self.assertIsNone(init_command.title_line(kept))
+                self.assertFalse(init_command.bootstrap_of_cortex(kept))
+                self.assertFalse(init_command.written_for_workspace(kept))
+                self.assertIs(init_command.kept_bootstrap(kept, self.template(format=2)), init_command.NO_BOOTSTRAP)
+
+    def test_one_marker_says_the_layout_against_the_title(self):
+        # A single marker is the layout, whatever the title says — a team that retitled the file, or a title of the
+        # other layout's: the title is read only where the markers say none, or disagree.
+        for layout, title in (("workspace", "# Cortex AI Team"), ("single", "# Cortex AI Team — Workspace Mode")):
+            with self.subTest(layout=layout):
+                kept = (f"{title}\n\n<!-- cortex:bootstrap layout={layout} format=2 -->\n\nRead cortex.local.toml "
+                        "first.\n").encode("utf-8")
+                self.assertEqual(init_command.written_for_workspace(kept), layout == "workspace")
+                self.assertIsNone(init_command.kept_bootstrap(kept, self.template(layout, 2)))
 
     def test_the_marker_says_the_layout_whatever_the_title(self):
         retitled = self.template().replace("Workspace Mode".encode(), "Workspace Mode (Acme)".encode())

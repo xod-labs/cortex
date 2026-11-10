@@ -192,11 +192,9 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     kept = path.read_bytes()
     content = init.normalised(kept)
     found = init.markers(content)
-    # A workspace's file — by its markers, or, written before the marker, by its title — is named with --workspace,
-    # which cortex init reads from it without the option too (#329).
-    workspace = init.written_for_workspace(content)
-    again = f"cortex init {init.tool_options(path)} --force{' --workspace' if workspace else ''} writes it again, " \
-        "and keeps yours as .bak"
+    # No --workspace for a workspace's file: --force keeps the layout it was written for — by its markers, or, written
+    # before the marker, by its title — and the option would also write the team's pair in agents/ (#329).
+    again = f"cortex init {init.tool_options(path)} --force writes it again, and keeps yours as .bak"
     if len(found) > 1:
         return None, f"{display(str(path))} holds several bootstrap markers, so none is read, and it is kept: {again}"
     if not (found or init.bootstrap_of_cortex(content)):
