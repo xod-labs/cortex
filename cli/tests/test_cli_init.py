@@ -598,8 +598,8 @@ class OptionTests(InitTestCase):
         proc = self.init("--tool", "claude", "--force")
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertEqual(self.read("CLAUDE.md.bak.1"), before)
-        self.assertIn(f"then copy the team's part back from {self.project / 'CLAUDE.md.bak.1'}, below the end marker",
-                      proc.err.replace(str(self.project.resolve()), str(self.project)))
+        self.assertIn(f"then copy the team's part back from {display(self.project / 'CLAUDE.md.bak.1')}, below the end "
+                      "marker", proc.err.replace(display(self.project.resolve()), display(self.project)))
 
     def test_force_without_workspace_finds_the_title_below_a_line_a_team_wrote_above_it(self):
         # A file of before the marker, opened by the team's own line: the title is still the templates' — it was
@@ -622,8 +622,8 @@ class OptionTests(InitTestCase):
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn("note: CLAUDE.md holds Cortex's title below a line of text, so Cortex cannot tell it for its "
                       "bootstrap, nor its layout; a workspace's takes --workspace — cortex init --tool claude --force "
-                      "writes it again", proc.err.replace(str(self.project.resolve()) + os.sep, "").replace(
-                          str(self.project) + os.sep, ""))
+                      "writes it again", proc.err.replace(display(self.project.resolve()) + "/", "").replace(
+                          display(self.project) + "/", ""))
         self.assertNotIn("the tool will not find Cortex", proc.err)
         proc = self.init("--tool", "claude", "--workspace", "--force")          # as the note says, for a workspace's
         self.assertEqual(proc.returncode, 0, proc.err)

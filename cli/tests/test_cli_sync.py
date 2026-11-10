@@ -428,7 +428,7 @@ class GitIgnoreTests(SyncTestCase):
     def repository(self, ignore, name="app"):
         project = self.project(name)
         subprocess.run(["git", "init", "-q", str(project)], check=True)
-        (project / ".gitignore").write_text(ignore, encoding="utf-8")
+        (project / ".gitignore").write_bytes(ignore.encode("utf-8"))     # as written: no newline turned into CRLF
         return project
 
     def check_ignore(self, project, name):
