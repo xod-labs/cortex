@@ -239,6 +239,8 @@ class CommittedTests(SettingsTestCase):
         self.assertIs(self.settings(project, PATH=path, GIT_DIR=str(other / ".git"))["committed"], False)
         self.assertIs(self.settings(other, PATH=path, GIT_DIR=str(empty / ".git"))["committed"], True)
         self.assertIs(self.settings(other, PATH=path, GIT_INDEX_FILE=str(empty / "index"))["committed"], True)
+        # GIT_LITERAL_PATHSPECS reads `:(literal)cortex.toml` as a file of that name, which git tracks not.
+        self.assertIs(self.settings(other, PATH=path, GIT_LITERAL_PATHSPECS="1")["committed"], True)
 
     @NEEDS_GIT
     @DEVELOPMENT
@@ -354,13 +356,22 @@ class TooNewTests(SettingsTestCase):
     @DEVELOPMENT
     def test_validate_of_a_synced_project_or_of_a_spec_not_there_says_the_version(self):
         # Only a spec that names no version — a checkout's — passes the gate: the store's version does
-        # not, nor a spec that is not there.
+        # not, nor a spec that is not there, nor one that is no checkout: an empty cortex/ — a copy whose
+        # marker is gone — or a link to a checkout moved since.
         project = self.project("99.0.0", extra='agents = "team"\n')
         stored = self.home / "versions" / "99.0.0"
         for tree in ("agents", "templates", "docs"):
             shutil.copytree(harness.REPO / tree, stored / tree)
-        for spec in (display(stored), "cortex"):
-            with self.subTest(spec=spec):
+        cases = [(display(stored), None), ("cortex", None), ("cortex", "empty")]
+        if os.name != "nt":
+            cases.append(("cortex", "dangling"))
+        for spec, cortex in cases:
+            with self.subTest(spec=spec, cortex=cortex):
+                if cortex == "empty":
+                    (project / "cortex").mkdir()
+                elif cortex == "dangling":
+                    os.rmdir(project / "cortex")
+                    os.symlink(self.tmp / "moved-checkout", project / "cortex")
                 (project / "cortex.local.toml").write_text(f'spec = "{spec}"\n', encoding="utf-8")
                 proc = self.cortex(project, "validate")
                 self.assertEqual(proc.returncode, 2, proc.err)
