@@ -688,9 +688,10 @@ class DigestTests(UpgradeTestCase):
                 self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
                 self.assertNotIn("CLAUDE.md", proc.out + proc.err)
 
-    def test_a_workspace_bootstrap_without_the_marker_is_said_to_need_workspace(self):
+    def test_a_workspace_bootstrap_without_the_marker_is_written_again_a_workspace_s(self):
         # Written before the marker, by a Cortex before 1.4.0, and a team listed its services in it: its title says
-        # it is a workspace's.
+        # it is a workspace's, which the command the note names keeps (#329) — no --workspace, which would also write
+        # the team's pair in agents/.
         self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions-workspace.md": OLD_WORKSPACE})
         changed = init.instructions(OLD_WORKSPACE, True) + b"\n| `@api` | api/ | Our API |\n"
         project = self.project("9.9.8")
@@ -700,10 +701,14 @@ class DigestTests(UpgradeTestCase):
         self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
         self.assertIn("CLAUDE.md is a bootstrap without the marker, not what Cortex 9.9.8 writes — a team changed it, or "
                       "an older Cortex wrote it — so it is kept, and the target's template is not written: cortex init --tool claude "
-                      "--force --workspace writes it again, and keeps yours as .bak", proc.err)
+                      "--force writes it again, and keeps yours as .bak", proc.err)
+        init_proc = harness.run("init", "--tool", "claude", "--force", cwd=project, env=self.env)      # the command named
+        self.assertEqual(init_proc.returncode, 0, init_proc.stderr.decode())
+        self.assertIn(b"<!-- cortex:bootstrap layout=workspace format=", (project / "CLAUDE.md").read_bytes())
+        self.assertFalse((project / "agents").exists())
 
-    def test_a_workspace_bootstrap_a_team_changed_is_said_to_need_workspace(self):
-        # The note names --workspace for a workspace's file, which cortex init also reads without it (#329).
+    def test_a_workspace_bootstrap_a_team_changed_is_written_again_a_workspace_s(self):
+        # The note names no --workspace for a workspace's file: cortex init reads the layout from it (#329).
         name = "bootstrap-instructions-workspace.md"
         older = (harness.REPO / "templates" / name).read_bytes().replace(b"## Where the spec is",
                                                                         b"## Where the spec is, in 9.9.8", 1)
@@ -714,8 +719,12 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
         self.assertIn("CLAUDE.md is not what Cortex wrote, by the digest in its marker — a team changed it — so it is kept, "
-                      "and the target's template is not written: cortex init --tool claude --force --workspace writes it again, and "
+                      "and the target's template is not written: cortex init --tool claude --force writes it again, and "
                       "keeps yours as .bak — your own rules go below its end marker, where Cortex keeps them\n", proc.err)
+        init_proc = harness.run("init", "--tool", "claude", "--force", cwd=project, env=self.env)      # the command named
+        self.assertEqual(init_proc.returncode, 0, init_proc.stderr.decode())
+        self.assertIn(b"<!-- cortex:bootstrap layout=workspace format=", (project / "CLAUDE.md").read_bytes())
+        self.assertEqual((project / "CLAUDE.md.bak").read_bytes(), changed)
 
     def test_already_on_it_writes_again_what_an_interrupted_upgrade_left(self):
         # Cut short after the switch, or a pin moved by hand: 9.9.8's file under the pin of this cortex.
@@ -799,14 +808,18 @@ class DigestTests(UpgradeTestCase):
         self.assertIn("CLAUDE.md holds several bootstrap markers, so none is read, and it is kept: cortex init --tool claude --force "
                       "writes it again", proc.err)
 
-    def test_several_markers_of_a_workspace_are_said_to_need_workspace(self):
+    def test_several_markers_of_a_workspace_name_force_which_keeps_the_layout(self):
+        # Markers that agree say the layout, which `cortex init --force` keeps (#329): no --workspace named.
         marked = MARKED.replace(b"layout=single", b"layout=workspace")
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(init.instructions(marked, True) + b"\n" + marked)
         proc = self.upgrade(project)
         self.assert_ok(proc)
         self.assertIn("CLAUDE.md holds several bootstrap markers, so none is read, and it is kept: cortex init --tool claude --force "
-                      "--workspace writes it again", proc.err)
+                      "writes it again", proc.err)
+        init_proc = harness.run("init", "--tool", "claude", "--force", cwd=project, env=self.env)      # the command named
+        self.assertEqual(init_proc.returncode, 0, init_proc.stderr.decode())
+        self.assertIn(b"<!-- cortex:bootstrap layout=workspace format=", (project / "CLAUDE.md").read_bytes())
 
     def test_no_personality_is_compared_and_written_without_its_block(self):
         self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": PERSONAL})
