@@ -2308,19 +2308,21 @@ class CodeReviewThirdFixTests(TeamTestCase):
 
     @SOURCE
     @harness.outside_a_repository
-    def test_a_try_at_or_below_the_developer_s_own_cortex_toml_is_refused(self):
-        # At a 2.B root, the developer's own cortex.toml is read over a try: one at or below it would never be read.
+    def test_a_try_below_the_developer_s_own_cortex_toml_is_refused(self):
+        # At a 2.B root, the developer's own cortex.toml is read over a lower try: one below it would never be read.
         root = self.project('version = "9.9.9"\ntheme = "h2g2"\n', team='version = "9.9.7"\n', committed=False)
-        for version in ("9.9.8", "9.9.9"):
-            with self.subTest(version=version):
-                proc = self.cortex(root, "upgrade", "--local", version)
-                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-                self.assertIn(f"cortex.toml, not committed, pins Cortex 9.9.9 — your own, read over a try: one of "
-                              f"{version} would never be read. Nothing was changed. To read {version}, set cortex.toml's "
-                              "version to it by hand: no command writes it", proc.err)
-                self.assertFalse((root / "cortex.local.toml").exists())
-        # What the refusal says, done by hand: cortex.toml's version is the one read.
-        (root / "cortex.toml").write_text('version = "9.9.8"\ntheme = "h2g2"\n', encoding="utf-8")
+        proc = self.cortex(root, "upgrade", "--local", "9.9.8")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("cortex.toml, not committed, pins Cortex 9.9.9 — your own, read above a try of 9.9.8, which would "
+                      "never be read. Nothing was changed. To read 9.9.8, remove cortex.toml's version — the team's "
+                      "9.9.7 is read then — and run `cortex upgrade --local 9.9.8` again", proc.err)
+        self.assertFalse((root / "cortex.local.toml").exists())
+        # At its version, a try is read — the higher one wins, a try on a tie: written.
+        self.assert_ok(self.cortex(root, "upgrade", "--local", "9.9.9"))
+        self.assertEqual(self.local(root)["version"], "9.9.9")
+        # The remedy, followed: cortex.toml's version removed, the try below it is written, and read.
+        (root / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")
+        self.assert_ok(self.cortex(root, "upgrade", "--local", "9.9.8"))
         self.assertEqual(self.value(root, "version"), "9.9.8")
 
     @SOURCE
