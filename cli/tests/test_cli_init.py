@@ -441,6 +441,20 @@ class OptionTests(InitTestCase):
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn("was written for a single project", proc.err)
 
+    def test_the_other_layout_s_note_names_the_option_force_needs(self):
+        # --force alone keeps the file's layout (#329): the note named a command that left the file as it was.
+        self.assertEqual(self.init("--tool", "claude").returncode, 0)
+        proc = self.init("--workspace")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("was written for a single project — cortex init --workspace --force writes it again, and keeps "
+                      "it as .bak\n", proc.err)
+        before = self.read("CLAUDE.md")
+        proc = self.init("--workspace", "--force")                              # the command the note names
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotEqual(before, self.read("CLAUDE.md"))
+        self.assertIn("layout=workspace", self.read("CLAUDE.md"))
+        self.assertEqual((self.project / "CLAUDE.md.bak").read_text(encoding="utf-8"), before)
+
     def test_a_bootstrap_a_team_retitled_keeps_its_layout(self):
         # #141: the first line was compared with the template's, and a retitled workspace bootstrap was
         # taken for a single project's. The marker says the layout, whatever the title.
@@ -471,8 +485,10 @@ class OptionTests(InitTestCase):
         self.assertTrue(written.startswith("# Cortex AI Team — Workspace Mode\n"), written[:80])
         self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", written)
         self.assertTrue(written.endswith(team))
-        self.assertIn("CLAUDE.md was written for a workspace, and is written for one again — remove it first to write "
-                      "a single project's", proc.err)
+        self.assertIn("CLAUDE.md was written for a workspace, and is written for one again — to write a single "
+                      "project's, remove it and run `cortex init` again, then copy the team's part back from its .bak",
+                      proc.err)
+        self.assertTrue((self.project / "CLAUDE.md.bak").read_text(encoding="utf-8").endswith(team))
 
     def test_a_workspace_s_file_writes_no_team_pair_without_the_option(self):
         # The layout read from the file chooses the template, and nothing else: the team's repository is the option's.
