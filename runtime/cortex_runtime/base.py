@@ -138,10 +138,11 @@ def read_pin(root: Path) -> Optional[Pin]:
     team_version = None if not found.team or team is None else team.get("version")
     try:
         version = _team_version(data.get("version"), team_version, local, name)
-    except ValueError:
+    except Unrecorded:
         if alone is None:
             raise
         # The record is another version's, and the sync it names refuses or replaces cortex.toml as 1.7.0 reads it.
+        # Only that refusal: a try, a version that is none, keep their own — the sync clears neither.
         raise ValueError(f"{alone} — {remedy}") from None
     return Pin(version=version, theme=str(found.value("theme")), theme_locked=found["theme"].locked, team_folder=folder)
 
@@ -179,6 +180,10 @@ def _local(root: Path) -> Mapping[str, Any]:
     return {key: data[key] for key in ("version", "synced") if key in data}
 
 
+class Unrecorded(ValueError):
+    """The versions the workspace's files pin are not those ``cortex sync`` recorded: a ``422`` naming the sync."""
+
+
 def _team_version(pin: Optional[str], team: Optional[str], local: Mapping[str, Any],
                   team_name: str = cascade.TEAM_NAME) -> str:
     """The team's version (ADR-013 §3.12), with no git to ask: ``synced``'s ``pinned``, once each file's
@@ -198,7 +203,7 @@ def _team_version(pin: Optional[str], team: Optional[str], local: Mapping[str, A
         now = {name: value for name, value in (("team", team), ("project", pin), ("local", tried)) if value is not None}
         recorded = {name: synced[name] for name in ("team", "project", "local") if name in synced}
         if now != recorded:
-            raise ValueError(f"the versions this workspace's files pin are not those `cortex sync` recorded in "
+            raise Unrecorded(f"the versions this workspace's files pin are not those `cortex sync` recorded in "
                              f"{project.LOCAL_FILE} — a teammate moved one: run `cortex sync` in the project")
         version, reads = synced["pinned"], synced["reads"]
         if reads and reads != version:

@@ -433,7 +433,7 @@ class GitIgnoreTests(SyncTestCase):
     def repository(self, ignore, name="app"):
         project = self.project(name)
         subprocess.run(["git", "init", "-q", str(project)], check=True)
-        (project / ".gitignore").write_text(ignore, encoding="utf-8")
+        (project / ".gitignore").write_bytes(ignore.encode("utf-8"))     # as written: no newline turned into CRLF
         return project
 
     def check_ignore(self, project, name):
@@ -488,7 +488,9 @@ class GitIgnoreTests(SyncTestCase):
         for n, ignore in enumerate(("cortex.local.toml\n!cortex.local.toml\n", "cortex.local.toml\n!*.toml\n",
                                     " cortex.local.toml\n", "cortex.local.toml\t\n", "# ours\n\ufeffcortex.local.toml\n",
                                     # git splits at a line feed only, dropping one carriage return before it
-                                    "a\rcortex.local.toml\n", "x\x0ccortex.local.toml\n", "cortex.local.toml\r\r\n")):
+                                    "a\rcortex.local.toml\n", "x\x0ccortex.local.toml\n", "cortex.local.toml\r\r\n",
+                                    # git skips one byte order mark at the start: a second is text of the line
+                                    "\ufeff\ufeffcortex.local.toml\n")):
             with self.subTest(ignore=ignore):
                 project = self.repository(ignore, f"not-{n}")
                 proc = self.sync(project)

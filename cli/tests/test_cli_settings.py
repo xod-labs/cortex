@@ -365,13 +365,14 @@ class TooNewTests(SettingsTestCase):
     def test_validate_of_a_synced_project_or_of_a_spec_not_there_says_the_version(self):
         # Only a spec that names no version — a checkout's — passes the gate: the store's version does
         # not, nor a spec that is not there, nor one that is no checkout: an empty cortex/, a copy whose
-        # marker is gone or does not read — its trees there all the same — or a link to a checkout moved since.
+        # marker is gone or does not read — its trees there all the same —, a release's copy, whose marker names its
+        # version, or a link to a checkout moved since.
         project = self.project("99.0.0", extra='agents = "team"\n')
         stored = self.home / "versions" / "99.0.0"
         for tree in ("agents", "templates", "docs"):
             shutil.copytree(harness.REPO / tree, stored / tree)
         cases = [(display(stored), None), ("cortex", None), ("cortex", "empty"), ("cortex", "no marker"),
-                 ("cortex", "a marker that does not read")]
+                 ("cortex", "a marker that does not read"), ("cortex", "a release's copy")]
         if os.name != "nt":
             cases.append(("cortex", "dangling"))
         for spec, cortex in cases:
@@ -383,6 +384,8 @@ class TooNewTests(SettingsTestCase):
                         shutil.copytree(harness.REPO / tree, project / "cortex" / tree)
                 elif cortex == "a marker that does not read":
                     (project / "cortex" / ".synced").write_text("{", encoding="utf-8")
+                elif cortex == "a release's copy":         # every `sync = "copy"` project's: its marker names the version
+                    (project / "cortex" / ".synced").write_text('{"version": "99.0.0", "files": {}}', encoding="utf-8")
                 elif cortex == "dangling":
                     shutil.rmtree(project / "cortex")
                     os.symlink(self.tmp / "moved-checkout", project / "cortex")
