@@ -542,7 +542,7 @@ class CodeReviewFolderTests(FolderTestCase):
                 proc = self.cortex(root, *args)
                 self.assertEqual(proc.returncode, 1, proc.out + proc.err)
                 self.assertIn(f"cortex upgrade: {FOLDER}/cortex.team.lock: Invalid", proc.err)
-                self.assertIn("delete it, and `cortex upgrade` writes it again", proc.err)
+                self.assertIn("delete it, and `cortex upgrade 9.9.8` writes it again", proc.err)
                 self.assertNotIn(" agents/cortex.team.lock", proc.err)
 
     @SOURCE
@@ -565,6 +565,30 @@ class CodeReviewFolderTests(FolderTestCase):
         self.assertIn(f"warning: {FOLDER}/cortex.team.lock cannot be written — ", proc.err)
         self.assertEqual(lock.read_bytes(), before)
         self.assertFalse((root / "agents").exists())
+
+    @TEAM_RELEASE
+    @AS_ROOT
+    def test_team_puts_back_what_it_could_not_write_in_the_folder(self):
+        # As in agents/: the folder cannot be written, --team fails, and names the team's files as they were.
+        root = self.named(team='version = "9.9.8"\n')
+        team = (root / FOLDER / "cortex.team.toml").read_bytes()
+        os.chmod(root / FOLDER, 0o555)
+        self.addCleanup(os.chmod, root / FOLDER, 0o755)
+        proc = self.cortex(root, "upgrade", "--team", OWN)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(f"note: {FOLDER}/cortex.team.toml and {FOLDER}/cortex.team.lock are as they were\n", proc.err)
+        self.assertNotIn("not put back", proc.err)
+        self.assertEqual((root / FOLDER / "cortex.team.toml").read_bytes(), team)
+        self.assertFalse((root / "agents").exists())
+
+    @SOURCE
+    @DOWNLOADS
+    def test_team_ending_names_the_folder_it_commits_in(self):
+        root = self.named(team='version = "9.9.8"\n')
+        proc = self.cortex(root, "upgrade", "--team", OWN)
+        self.assert_ok(proc)
+        self.assertIn(f"\nCommit {FOLDER}/cortex.team.toml and {FOLDER}/cortex.team.lock in {FOLDER}/", proc.out)
+        self.assertNotIn(" in agents/", proc.out)
 
     @NEEDS_GIT
     @TEAM_RELEASE

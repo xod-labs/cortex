@@ -1968,6 +1968,7 @@ class CodeReviewSecondFixTests(TeamTestCase):
         self.assertEqual(self.git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "main")
         self.assertEqual(self.git(root, "branch", "--list", "fix").stdout, "")
 
+    @SOURCE
     @AS_ROOT
     def test_a_move_cut_short_before_its_sync_says_no_sync(self):
         # The pin could not be written: the sync never ran, and this machine was not moved.
@@ -1992,6 +1993,7 @@ class CodeReviewSecondFixTests(TeamTestCase):
         self.assertIn("are as they were — `cortex sync` puts this machine back on them", proc.err)
         self.assertEqual(lock.read_bytes(), before)
 
+    @TEAM_RELEASE
     @AS_ROOT
     def test_team_puts_back_what_it_could_not_write(self):
         # The team's folder cannot be written: --team fails, and says the team's files are as they were.
