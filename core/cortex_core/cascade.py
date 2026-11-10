@@ -43,8 +43,8 @@ TEAM_NAME = f"{TEAM_FOLDER}/{TEAM_FILE}"
 
 @dataclass(frozen=True)
 class Unreadable:
-    """A team's file that does not parse: refused only once the team's version says it is read —
-    beside a committed pin before 1.8.0, it is not read, and said so."""
+    """A team's file that does not parse, or cannot be opened: refused, unless a committed pin before
+    1.8.0 makes the team's version its own — the file is not read then, and said so."""
     error: str
 
 
@@ -105,7 +105,9 @@ def _versions(project_data: Mapping, local_data: Optional[Mapping], team_data: O
     notes: List[str] = []
     pin = project_data.get("version")
     own = bool(committed) and pin is not None              # the project pins its own version, committed
-    pinless = isinstance(team_data, Unreadable) or (team_data is not None and "version" not in team_data)
+    # A file that does not read — a conflict a pull left in it, say — may pin the team's version: it is no pinless
+    # file, and is refused below, unless a committed pin makes the team's version cortex.toml's.
+    pinless = team_data is not None and not isinstance(team_data, Unreadable) and "version" not in team_data
     # The team's version, before the file is read: a committed pin's, else the team's file's, else an
     # uncommitted pin's. Before 1.8.0, the team's file is not read — said, never refused.
     unread = pin if own else pin if pinless and pin is not None else None
@@ -234,8 +236,8 @@ UNREADABLE_SYNCED = Unreadable("synced")
 def read_team(root: str, folder: str = TEAM_FOLDER):
     """The team's file in the team's folder of the project at ``root``, as parsed — ``None`` when it
     is not there, ``Unreadable`` when it does not parse, or cannot be opened. Its grammar is checked by
-    ``resolve``, and such a file refused, once the team's version says it is read: a project before
-    1.8.0 reads nothing of it."""
+    ``resolve``, which refuses such a file unless a committed pin before 1.8.0 makes the team's version
+    cortex.toml's: a project kept there reads nothing of it."""
     path = os.path.join(root, folder, TEAM_FILE)
     if not os.path.isfile(path):
         return None

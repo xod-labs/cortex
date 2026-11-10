@@ -198,11 +198,9 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     kept = path.read_bytes()
     content = init.normalised(kept)
     found = init.markers(content)
-    # A workspace's file — by its markers, or, written before the marker, by its title — is named with --workspace,
-    # which cortex init reads from it without the option too (#329).
-    workspace = init.written_for_workspace(content)
-    again = f"cortex init {init.tool_options(path)} --force{' --workspace' if workspace else ''} writes it again, " \
-        "and keeps yours as .bak"
+    # No --workspace for a workspace's file: --force keeps the layout it was written for — by its markers, or, written
+    # before the marker, by its title — and the option would also write the team's pair in agents/ (#329).
+    again = f"cortex init {init.tool_options(path)} --force writes it again, and keeps yours as .bak"
     if len(found) > 1:
         return None, f"{display(str(path))} holds several bootstrap markers, so none is read, and it is kept: {again}"
     if not (found or init.bootstrap_of_cortex(content)):
@@ -879,8 +877,10 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
         out.write(f"This project pins its own version, Cortex {project.team_version}, in its committed "
                   f"{config.PROJECT_FILE}: it does not follow {config.TEAM_NAME}, and its overlays are not checked\n")
     team_files = [team_file, team_file.with_name(config.TEAM_LOCK_FILE)]
-    # At the pin, its lock missing or stale, the lock alone is written: the file names the version already.
-    writes = team_files[1:] if target == pinned else team_files
+    # At the pin, its lock missing or stale, the lock is written: the file names the version already. Moved there
+    # by hand, git sees it changed: it goes with its lock — committed alone, the lock would name a version the
+    # committed file does not pin.
+    writes = _team_left(agents, team_files[:1]) + team_files[1:] if target == pinned else team_files
     if dry_run:
         out.write("--dry-run: nothing of the project was changed\n")
         return Outcome(root, pinned, target, files=[] if unchanged else writes, team=agents,
@@ -1509,7 +1509,11 @@ def _theirs(root: str, pin: Path, before: List[Path], error: Optional[str], writ
     if error is not None:
         return f"git could not tell whether {config.PROJECT_FILE} or a bootstrap file held changes of yours — {error}"
     wrote = {_real(path) for path in written}
-    theirs = [path for path in before if _real(path) == _real(pin) or _real(path) in wrote]
+    # The team's file is a pin too where the commit carries its lock — a follower's resume writes it: moved by
+    # hand, it would stay out of the commit, and a teammate's checkout read a lock of another version.
+    team_lock = Path(root) / config.TEAM_FOLDER / config.TEAM_LOCK_FILE
+    pins = {_real(pin)} | ({_real(team_lock.with_name(config.TEAM_FILE))} if _real(team_lock) in wrote else set())
+    theirs = [path for path in before if _real(path) in pins or _real(path) in wrote]
     if not theirs:
         return None
     return (f"{_and([_shown_path(path, root) for path in theirs])} held changes of yours before the upgrade — "
@@ -1611,8 +1615,10 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
     pin = Path(root) / config.PROJECT_FILE if root is not None else None
     before: Tuple[List[Path], Optional[str]] = ([], None)
     if options.message is not None and top is not None and not options.dry_run:
-        # Before anything is written: the pin and the bootstrap files, never the lock (``_theirs``).
-        before = _before(root, top, [pin, *_instructions_files(Path(root), options.named)])
+        # Before anything is written: the pins — cortex.toml, and the team's file — and the bootstrap files, never
+        # the lock (``_theirs``).
+        before = _before(root, top, [pin, Path(root) / config.TEAM_FOLDER / config.TEAM_FILE,
+                                     *_instructions_files(Path(root), options.named)])
     asked = []
 
     def branch(files: List[Path]) -> None:
