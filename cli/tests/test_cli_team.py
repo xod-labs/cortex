@@ -1994,16 +1994,83 @@ class CodeReviewSecondFixTests(TeamTestCase):
         self.assertNotIn("`cortex sync` puts this machine back", proc.err)
 
     @SOURCE
-    def test_a_resume_whose_sync_failed_says_the_sync_puts_it_back(self):
-        # The sync had started, and failed: what it moved of this machine, `cortex sync` puts back.
+    def test_a_resume_the_sync_would_refuse_stops_before_it_writes(self):
+        # What the sync refuses at cortex/ is refused before anything is written, as the upgrade does it: a lock
+        # written, said to commit, then put back — and a note naming a sync that refuses it again — no longer.
         root, lock = self.stale()
         before = lock.read_bytes()
         (root / "cortex").mkdir()
         (root / "cortex" / "mine.txt").write_text("not Cortex's\n", encoding="utf-8")
+        proc = self.cortex(root, "upgrade", "--dry-run")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("cortex upgrade: the sync would refuse it — cortex/ is a directory, which Cortex did not write",
+                      proc.err)
         proc = self.cortex(root, "upgrade")
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("are as they were — `cortex sync` puts this machine back on them", proc.err)
+        self.assertIn("cortex/ is a directory, which Cortex did not write", proc.err)
+        self.assertNotIn("agents/cortex.team.lock: Cortex", proc.out)
+        self.assertNotIn("as they were", proc.err)
+        self.assertNotIn("`cortex sync` puts this machine back", proc.err)
         self.assertEqual(lock.read_bytes(), before)
+
+    @SOURCE
+    def test_a_move_whose_sync_moved_this_machine_names_the_sync_that_puts_it_back(self):
+        # The sync moved this machine, then failed: the pin and the lock are put back, and the note names
+        # `cortex sync` — which, run, puts this machine back on the pin.
+        root = self.project('version = "9.9.8"\ntheme = "h2g2"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        out, err = io.StringIO(), io.StringIO()
+        real = store.Store
+
+        class Own(real):                # this process is the suite's cortex, OWN, as the commands it runs are
+            def __init__(self, *args, **kwargs):
+                kwargs.setdefault("own_version", OWN)
+                super().__init__(*args, **kwargs)
+
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home), "CORTEX_NO_REGISTER": "1",
+                                          "CORTEX_NO_UPDATE_CHECK": "1"}), mock.patch.object(store, "Store", Own), \
+                mock.patch.object(store, "VERSION", OWN), mock.patch.object(upgrade, "VERSION", OWN), \
+                mock.patch.object(sync, "_claude", side_effect=OSError(errno.EIO, "cut short")):
+            with self.assertRaises(OSError):
+                upgrade.upgrade(str(root), OWN, False, False, None, out, err)
+        self.assertIn("note: cortex.toml and cortex.lock are as they were — `cortex sync` puts this machine back on "
+                      "them", err.getvalue())
+        self.assertEqual(tomllib.loads((root / "cortex.toml").read_text(encoding="utf-8"))["version"], "9.9.8")
+        self.assertEqual(config.load(str(root)).synced["reads"], OWN)          # this machine was moved
+        self.assert_ok(self.cortex(root, "sync"))                               # the command the note names
+        self.assertEqual(config.load(str(root)).synced["reads"], "9.9.8")
+        # A resume — the pin moved by hand — whose sync moved this machine, then failed: the same.
+        (root / "cortex.toml").write_text(f'version = "{OWN}"\ntheme = "h2g2"\n', encoding="utf-8")
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home), "CORTEX_NO_REGISTER": "1",
+                                          "CORTEX_NO_UPDATE_CHECK": "1"}), mock.patch.object(store, "Store", Own), \
+                mock.patch.object(store, "VERSION", OWN), mock.patch.object(upgrade, "VERSION", OWN), \
+                mock.patch.object(sync, "_claude", side_effect=OSError(errno.EIO, "cut short")):
+            with self.assertRaises(OSError):
+                upgrade.upgrade(str(root), None, False, False, None, out, err)
+        self.assertIn("is as it was — `cortex sync` puts this machine back on them", err.getvalue())
+        self.assertEqual(config.load(str(root)).synced["reads"], OWN)           # this machine was moved
+        self.assert_ok(self.cortex(root, "sync"))                               # the command the note names
+        self.assertEqual(config.load(str(root)).synced["reads"], OWN)
+
+    @SOURCE
+    def test_validate_names_the_upgrade_that_writes_a_try_s_lock(self):
+        # Synced with --locked beside a try, the team's lock is the resume's to write: `cortex sync` reads the try
+        # and leaves it. Each remedy validate gives, run, makes it pass.
+        root, lock = self.stale()
+        self.assert_ok(self.cortex(root, "upgrade", "9.9.8"))
+        self.assert_ok(self.cortex(root, "sync", "--locked"))
+        lock.write_text("<<<<<<< HEAD\nversion = 1\n", encoding="utf-8")
+        proc = self.cortex(root, "validate")
+        self.assertIn("delete it, and `cortex upgrade 9.9.8` writes it again", proc.out + proc.err)
+        self.assertNotIn("`cortex sync` writes it again", proc.out + proc.err)
+        lock.unlink()
+        proc = self.cortex(root, "validate")
+        self.assertIn("no agents/cortex.team.lock — run `cortex upgrade 9.9.8`", proc.out + proc.err)
+        self.assert_ok(self.cortex(root, "upgrade", "9.9.8"))                     # the command it names
+        self.assertEqual(str(config.load_lock(str(root / "agents"), config.TEAM_LOCK_FILE).version), "9.9.8")
+        self.assert_ok(self.cortex(root, "sync", "--locked"))
+        self.assertNotIn("LOCK_", self.cortex(root, "validate").out)
 
     @TEAM_RELEASE
     @AS_ROOT
@@ -2043,13 +2110,16 @@ class CodeReviewSecondFixTests(TeamTestCase):
                 proc = self.cortex(root, "upgrade", "--team", OWN, *args, **env)
                 self.assert_ok(proc)
                 self.assertIn("CLAUDE.md: written again", proc.out)
+                # git sees CLAUDE.md changed in the team's repository, where it leads: named there.
+                self.assertIn(" M CLAUDE.md\n", self.git(team, "status", "--short").stdout)
                 if commit:
-                    self.assertEqual(self.git(team, "status", "--short").stdout, " M CLAUDE.md\n")
                     self.assertRegex(proc.out, r"\nCommitted in agents/ on \S+, [0-9a-f]+ — nothing was pushed; CLAUDE.md "
-                                               r"not committed: --team commits in the team's folder only; teammates")
+                                               r"not committed — it leads into agents/, where --team commits the team's "
+                                               r"files only: commit it there; teammates")
                 else:
-                    self.assertIn("\nCommit agents/cortex.team.toml and agents/cortex.team.lock in agents/; CLAUDE.md in "
-                                  "the project; teammates", proc.out)
+                    self.assertIn("\nCommit agents/cortex.team.toml and agents/cortex.team.lock in agents/, and CLAUDE.md "
+                                  "there too, where it leads; teammates", proc.out)
+                self.assertNotIn("CLAUDE.md in the project", proc.out)
 
     def test_a_file_still_as_it_was_is_not_written_back(self):
         # Writing it back would fail where it cannot be written — said lost, though it never changed.

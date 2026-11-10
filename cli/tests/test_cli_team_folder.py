@@ -595,6 +595,41 @@ class CodeReviewFolderTests(FolderTestCase):
         self.assertIn(f"\nCommit {FOLDER}/cortex.team.toml and {FOLDER}/cortex.team.lock in {FOLDER}/", proc.out)
         self.assertNotIn(" in agents/", proc.out)
 
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    @LINKS
+    @harness.outside_a_repository
+    def test_team_ending_names_a_bootstrap_linked_into_the_folder_where_it_leads(self):
+        # A bootstrap linked into the team's folder is named there, in the folder cortex.toml names.
+        marked = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes().replace(
+            b"# Cortex AI Team", b"# Cortex AI Team, as 9.9.8 wrote it", 1)
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        for commit in (False, True):
+            with self.subTest(commit=commit):
+                team = self.tmp / f"team-{commit}"
+                team.mkdir()
+                (team / "cortex.team.toml").write_text('version = "9.9.8"\n', encoding="utf-8")
+                (team / "CLAUDE.md").write_bytes(upgrade.init.stamped(upgrade.init.instructions(marked, True)))
+                self.git(team, "init", "-q")
+                self.git(team, "add", "-A")
+                self.git(team, "commit", "-q", "-m", "init")
+                root = self.project(NAMED, name=f"app-{commit}")
+                (root / FOLDER).symlink_to(team, target_is_directory=True)
+                (root / "CLAUDE.md").symlink_to(team / "CLAUDE.md")
+                args = ("--commit", "--message", "move") if commit else ()
+                proc = self.cortex(root, "upgrade", "--team", OWN, *args, **env)
+                self.assert_ok(proc)
+                self.assertIn(" M CLAUDE.md\n", self.git(team, "status", "--short").stdout)
+                if commit:
+                    self.assertRegex(proc.out, rf"\nCommitted in {FOLDER}/ on \S+, [0-9a-f]+ — nothing was pushed; "
+                                               rf"CLAUDE.md not committed — it leads into {FOLDER}/, where --team "
+                                               r"commits the team's files only: commit it there; teammates")
+                else:
+                    self.assertIn(f"\nCommit {FOLDER}/cortex.team.toml and {FOLDER}/cortex.team.lock in {FOLDER}/, "
+                                  "and CLAUDE.md there too, where it leads; teammates", proc.out)
+                self.assertNotIn("agents/", proc.out.replace(f"{FOLDER}/", ""))
+
     @NEEDS_GIT
     @TEAM_RELEASE
     def test_team_commit_names_the_folder_of_the_developer_s_own_change(self):
