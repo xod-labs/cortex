@@ -1528,7 +1528,7 @@ def _theirs(root: str, pin: Path, before: List[Path], error: Optional[str], writ
     wrote = {_real(path) for path in written}
     # The team's file is a pin too where the commit carries its lock — a follower's resume writes it: moved by
     # hand, it would stay out of the commit, and a teammate's checkout read a lock of another version.
-    team_lock = Path(root) / config.TEAM_FOLDER / config.TEAM_LOCK_FILE
+    team_lock = Path(root) / config.loose_team_folder(root) / config.TEAM_LOCK_FILE
     pins = {_real(pin)} | ({_real(team_lock.with_name(config.TEAM_FILE))} if _real(team_lock) in wrote else set())
     theirs = [path for path in before if _real(path) in pins or _real(path) in wrote]
     if not theirs:
@@ -1634,7 +1634,7 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
     if options.message is not None and top is not None and not options.dry_run:
         # Before anything is written: the pins — cortex.toml, and the team's file — and the bootstrap files, never
         # the lock (``_theirs``).
-        before = _before(root, top, [pin, Path(root) / config.TEAM_FOLDER / config.TEAM_FILE,
+        before = _before(root, top, [pin, Path(root) / config.loose_team_folder(root) / config.TEAM_FILE,
                                      *_instructions_files(Path(root), options.named)])
     asked = []
 

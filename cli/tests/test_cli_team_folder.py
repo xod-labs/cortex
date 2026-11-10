@@ -624,6 +624,34 @@ class CodeReviewFolderTests(FolderTestCase):
         self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "init")
         self.assertFalse((root / "agents").exists())
 
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_a_resume_commit_leaves_a_team_s_file_moved_by_hand_in_the_folder(self):
+        # The team's file in the folder cortex.toml names is a pin too: moved by hand, a follower's resume commits
+        # nothing — committed alone, the lock would name 9.9.8 beside a committed file at 9.9.7.
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        root = self.named(team='version = "9.9.7"\n', committed=False)
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "init")
+        self.assert_ok(self.cortex(root, "sync", **env))
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "locked")
+        team = root / FOLDER / "cortex.team.toml"
+        team.write_text('version = "9.9.8"\n', encoding="utf-8")
+        proc = self.cortex(root, "upgrade", "9.9.8", "--commit", "--message", "resume", **env)
+        self.assert_ok(proc)
+        self.assertIn(f"note: nothing is committed in {root} — {FOLDER}/cortex.team.toml held changes of yours before "
+                      "the upgrade — commit by hand what is the team's\n", proc.err)
+        self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "locked")
+        # What the note says, done by hand: the two committed together, a teammate's clean checkout reads them.
+        self.git(root, "commit", "-q", "-m", "move", "--", f"{FOLDER}/cortex.team.toml", f"{FOLDER}/cortex.team.lock")
+        self.assertEqual(self.git(root, "status", "--porcelain").stdout, "")
+        self.assert_ok(self.cortex(root, "sync", "--locked", **env))
+        self.assertFalse((root / "agents").exists())
+
     @LINKS
     @NEEDS_GIT
     @harness.outside_a_repository
