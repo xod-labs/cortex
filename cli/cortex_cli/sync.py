@@ -949,10 +949,12 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
 
 
 def gitignore_lines(text: str) -> List[str]:
-    """``.gitignore``'s lines as git reads them, in their order: the byte order mark an editor may put at the start
-    of the file left out, and each line's trailing spaces — not one a backslash escapes, nor a tab: what git leaves
-    out of a pattern, and nothing more. One reading, to tell what is ignored and what to add alike."""
-    lines = text.lstrip("\ufeff").splitlines()
+    """``.gitignore``'s lines as git reads them, in their order: split at a line feed only — a lone carriage return,
+    a form feed, a line separator are text to git — one carriage return before it left out, the byte order mark an
+    editor may put at the start of the file left out, and each line's trailing spaces — not one a backslash escapes,
+    nor a tab: what git leaves out of a pattern, and nothing more. One reading, to tell what is ignored and what to
+    add alike."""
+    lines = [line[:-1] if line.endswith("\r") else line for line in text.lstrip("\ufeff").split("\n")]
     return [re.sub(r"(?<!\\) +$", "", line) for line in lines]
 
 
@@ -1006,7 +1008,7 @@ def ignored(root: Path, name: str) -> Optional[bool]:
     directory = (root / name).is_dir() and not is_link(root / name)
     wanted = {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if directory else set())
     try:
-        lines = gitignore_lines((root / ".gitignore").read_text(encoding="utf-8", errors="replace"))
+        lines = gitignore_lines((root / ".gitignore").read_bytes().decode("utf-8", errors="replace"))   # as written
     except OSError:
         return False
     return _named(lines, wanted)
