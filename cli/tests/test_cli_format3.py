@@ -55,7 +55,10 @@ class TemplateTests(unittest.TestCase):
                 for rule in (b"**The team's folder** is the folder `synced`, in `cortex.local.toml`, records as `agents`, "
                              b"else `agents/`", b"**`cortex.toml` names another folder**",
                              # `./x/` names x (ADR-013 §9): no sync on every conversation for its spelling.
-                             b"compared without a leading `./` or a final `/`",
+                             b"compared with every leading `./` and every final `/` dropped",
+                             # A cortex before 1.8.0 refuses the key: its rule, a self-update, is reached.
+                             b"When the sync refuses a key, follow the rules below for what `cortex sync` says; when it "
+                             b"ran and the folders still differ, tell the user, and go no further.",
                              b"on a checkout, below, tell the user instead, and go no further",
                              b"`cortex.team.toml`", b"**A version moved**", b"never order versions",
                              b"**A checkout**", b"**No `synced`**",
@@ -74,6 +77,8 @@ class TemplateTests(unittest.TestCase):
                 # A checkout is said before a version moved, a missing team's folder before a missing version.
                 self.assertLess(text.index(b"**A checkout**"), text.index(b"**A version moved**"))
                 self.assertLess(text.index(b"**It names a missing team's folder**"), text.index(b"**It refuses"))
+                self.assertLess(text.index(b"When the sync refuses a key, follow the rules below"),
+                                text.index(b"**It refuses `cortex.toml` or `cortex.local.toml` for a key"))
                 self.assertIn(b"**No `synced`** in `cortex.local.toml`, and `cortex/` a link \xe2\x86\x92 nothing to "
                               b"compare", text)
 
@@ -441,6 +446,38 @@ class TryTests(TeamTestCase):
         (root / ".gitignore").write_text("CLAUDE.md\ncortex.local.toml\n", encoding="utf-8")
         self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
         self.assertEqual((root / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(FORMAT_2, False)))
+
+    def test_another_tool_s_file_is_judged_as_force_writes_the_developer_s_own(self):
+        # A plain `cortex init` among several tools' files judges each as `--tool X --force` writes it: the
+        # developer's own with their theme and the version this machine reads. Judged with the team's, its note
+        # named a command that writes nothing, and came back on every run.
+        workspace_98 = WORKSPACE.replace(b"format=3", b"format=2").replace(b"## Where the spec is",
+                                                                             b"## Where the spec is, in 2", 1)
+        self.assertNotEqual(workspace_98, WORKSPACE.replace(b"format=3", b"format=2"))
+        self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": FORMAT_2,
+                                            "templates/bootstrap-instructions-workspace.md": workspace_98,
+                                            "templates/project-overview.md.template": b"# Overview\n",
+                                            "templates/project-context.md.template": b"# Context\n"})
+        for case, local in (("a theme of none", 'theme = "none"\n'), ("a try", f'version = "{OWN}"\n')):
+            with self.subTest(case=case):
+                root = self.project(toml='version = "9.9.8"\ntheme = "h2g2"\n', local=local, name=case.replace(" ", "-"))
+                (root / ".gitignore").write_text("CLAUDE.md\nAGENTS.md\ncortex.local.toml\n", encoding="utf-8")
+                self.assert_ok(self.cortex(root, "sync"))
+                self.assert_ok(self.cortex(root, "init", "--tool", "claude", "--workspace", "--force"))
+                self.assert_ok(self.cortex(root, "init", "--tool", "agents"))
+                written_once = (root / "CLAUDE.md").read_bytes()
+                for _ in range(2):
+                    proc = self.cortex(root, "init")
+                    self.assert_ok(proc)
+                    self.assertIn("note: CLAUDE.md is there and was kept: a bootstrap written for a workspace, up to "
+                                  "date as one\n", proc.err)
+                    self.assertNotIn("--tool claude --force", proc.err)
+                    # What the note says, the command does: --force writes it as it is.
+                    followed = self.cortex(root, "init", "--tool", "claude", "--force")
+                    self.assert_ok(followed)
+                    self.assertIn("CLAUDE.md is what --force would write: left as it is", followed.out)
+                    self.assertEqual((root / "CLAUDE.md").read_bytes(), written_once)
+                    self.assertFalse((root / "CLAUDE.md.bak").exists())
 
 
 @DOWNLOADS

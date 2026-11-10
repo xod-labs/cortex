@@ -8,6 +8,7 @@ the project's own themes follow the folder; a missing one is warned, an error un
 
 import json
 import os
+import re
 import shutil
 import sys
 import unittest
@@ -57,6 +58,19 @@ class FollowsTests(FolderTestCase):
         self.assertEqual(self.local(root)["synced"]["agents"], FOLDER)       # what the runtime reads (§3.12)
         (root / "cortex.toml").write_text(f'agents = "./{FOLDER}/"\ntheme = "h2g2"\n', encoding="utf-8")
         self.assertEqual(self.value(root, "agents"), FOLDER)                    # as every message names it
+
+    def test_every_spelling_of_the_folder_is_recorded_as_the_bootstrap_compares_it(self):
+        # The bootstrap compares cortex.toml's agents with the folder synced records, every leading ./ and every
+        # final / dropped (§3.10): each spelling the command takes, a sync records as that comparison reads it —
+        # no sync in every conversation for a spelling.
+        for name in ("bootstrap-instructions.md", "bootstrap-instructions-workspace.md"):
+            self.assertIn("compared with every leading `./` and every final `/` dropped",
+                          (harness.REPO / "templates" / name).read_text(encoding="utf-8"))
+        for value in (FOLDER, f"./{FOLDER}/", f"././{FOLDER}", f"{FOLDER}//", f"./././{FOLDER}///"):
+            with self.subTest(value=value):
+                root = self.named(toml=f'agents = "{value}"\ntheme = "h2g2"\n', name=f"spelling-{len(value)}")
+                self.assert_ok(self.cortex(root, "sync"))
+                self.assertEqual(self.local(root)["synced"]["agents"], re.sub(r"^(\./)+", "", value).rstrip("/"))
 
     def test_the_overlays_validated_are_the_folder_s(self):
         root = self.named()

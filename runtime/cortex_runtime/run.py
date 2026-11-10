@@ -73,7 +73,7 @@ def _service_inside(service: Optional[str], team_folder: str = "agents") -> Opti
         raise ValueError(f"service must be a folder inside the workspace, got {service!r}")
     if not path.parts:
         return None                  # "." is the workspace itself: no service
-    if path.parts[0] == "agents":
+    if folded(path.parts[0]) == folded("agents"):     # in any case, as a disk that ignores it opens it
         raise ValueError(f"service must be a folder of the workspace other than agents/, got {service!r}")
     if team_folder != "agents":         # a renamed team's folder, in any case (ADR-013 §3.6, §9)
         team = tuple(folded(part) for part in PurePosixPath(team_folder).parts)
