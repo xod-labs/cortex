@@ -426,12 +426,13 @@ class TooNewTests(TeamTestCase):
         # Not a move: the pin names this build already — nothing new is written where every teammate reads it.
         dev = {"CORTEX_SOURCE_VERSION": "9.9.9-dev.1"}
         root = self.project('version = "9.9.9-dev.1"\ntheme = "h2g2"\n')
-        for args in (("upgrade",), ("upgrade", "9.9.9-dev.1")):
+        for args in (("upgrade",), ("upgrade", "9.9.9-dev.1"), ("upgrade",)):
             with self.subTest(args=args):
                 proc = self.cortex(root, *args, **dev)
                 self.assert_ok(proc)
                 self.assertIn("Cortex 9.9.9-dev.1: already on it — nothing to move", proc.out)
                 self.assertNotIn("commit it", proc.out + proc.err)
+        self.assertNotIn("Nothing to commit", proc.out)       # nothing written, the last time: nothing said of it
 
     @SOURCE
     @NEEDS_GIT
@@ -447,11 +448,11 @@ class TooNewTests(TeamTestCase):
             roots.append(root)
         proc = self.cortex(roots[0], "upgrade", "9.9.9-dev.1", "--branch", "try", "--commit", "--message", "m", **dev)
         self.assert_ok(proc)
-        self.assertIn("Nothing to commit: Cortex 9.9.9-dev.1 is a build of no release, which no teammate can download",
-                      proc.out)
+        self.assertIn("Cortex 9.9.9-dev.1 is ready on this machine. Nothing to commit: Cortex 9.9.9-dev.1 is a build "
+                      "of no release, which no teammate can download", proc.out)
         self.assertIn("Cortex 9.9.9-dev.1 is a build of no release, which no teammate can download — no branch is made",
                       proc.err)
-        for said in ("commit it", "Commit ", "Committed", "eammates run", "on a new branch"):
+        for said in ("commit it", "Commit ", "Committed", "eammates run", "on a new branch", "nothing was written"):
             self.assertNotIn(said, proc.out + proc.err)
         self.assertNotIn("try", self.git(roots[0], "branch", "--list").stdout)
         self.assertEqual(self.git(roots[0], "rev-list", "--count", "HEAD").stdout.strip(), "1")
@@ -735,10 +736,16 @@ class UpgradeTests(TeamTestCase):
         self.assertIn(f"Cortex {OWN}: already on it — nothing to move", proc.out)
         proc = self.cortex(root, "upgrade", "9.9.8")
         self.assertEqual(proc.returncode, 1)
-        # A try is read above the team's version only: below it, none is named (ADR-013 §3.11).
-        tried = "; trying it here: `cortex upgrade --local 9.9.8`" if Version("9.9.8") > Version(OWN) else ""
-        self.assertIn(f"this project follows {TEAM}, which pins Cortex {OWN} — moving it is the team's: "
-                      f"`cortex upgrade --team 9.9.8`{tried}. Nothing was changed", proc.err)
+        # A try is read above the team's version only: below it, none is named (ADR-013 §3.11). --team is named for a
+        # release this cortex serves: a build's own version, 1.8.0-rc.1 or -dev.N, is below 9.9.8.
+        if Version("9.9.8") <= Version(OWN):
+            self.assertIn(f"this project follows {TEAM}, which pins Cortex {OWN} — moving it is the team's: "
+                          "`cortex upgrade --team 9.9.8`. Nothing was changed", proc.err)
+        else:
+            self.assertIn(f"this project follows {TEAM}, which pins Cortex {OWN} — moving it is the team's, not to "
+                          f"9.9.8, newer than this cortex, {OWN}: `cortex self-update 9.9.8` first. Nothing was changed",
+                          proc.err)
+        self.assertNotIn("--local", proc.err)
 
     @harness.outside_a_repository
     def test_at_a_2b_root_a_move_is_refused_as_all_skips_the_project(self):
@@ -746,7 +753,8 @@ class UpgradeTests(TeamTestCase):
         before = (root / "cortex.toml").read_bytes()
         proc = self.cortex(root, "upgrade", OWN)
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("`cortex upgrade --team", proc.err)
+        if not DEV_OWN:                                  # --team writes no build of no release's version
+            self.assertIn("`cortex upgrade --team", proc.err)
         if Version(OWN) > Version("9.9.8"):              # a try is read above the team's version only
             self.assertIn("`cortex upgrade --local", proc.err)
         else:
@@ -1417,8 +1425,12 @@ class SecondReviewTests(TeamTestCase):
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', local='version = "99.0.0"\n')
         proc = self.cortex(root, "upgrade")
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("`cortex upgrade --local VERSION` the try", proc.err)
+        self.assertIn("`cortex upgrade --local VERSION` moves the try — to the team's version or below, it drops it",
+                      proc.err)
         self.assertNotIn("--team", proc.err)
+        proc = self.cortex(root, "upgrade", "--local", OWN)       # named, and followed: the try dropped
+        self.assert_ok(proc)
+        self.assertNotIn("version", self.local(root) if (root / "cortex.local.toml").exists() else {})
 
 
 class CodeReviewTests(TeamTestCase):
@@ -1982,16 +1994,83 @@ class CodeReviewSecondFixTests(TeamTestCase):
         self.assertNotIn("`cortex sync` puts this machine back", proc.err)
 
     @SOURCE
-    def test_a_resume_whose_sync_failed_says_the_sync_puts_it_back(self):
-        # The sync had started, and failed: what it moved of this machine, `cortex sync` puts back.
+    def test_a_resume_the_sync_would_refuse_stops_before_it_writes(self):
+        # What the sync refuses at cortex/ is refused before anything is written, as the upgrade does it: a lock
+        # written, said to commit, then put back — and a note naming a sync that refuses it again — no longer.
         root, lock = self.stale()
         before = lock.read_bytes()
         (root / "cortex").mkdir()
         (root / "cortex" / "mine.txt").write_text("not Cortex's\n", encoding="utf-8")
+        proc = self.cortex(root, "upgrade", "--dry-run")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("cortex upgrade: the sync would refuse it — cortex/ is a directory, which Cortex did not write",
+                      proc.err)
         proc = self.cortex(root, "upgrade")
         self.assertEqual(proc.returncode, 1)
-        self.assertIn("are as they were — `cortex sync` puts this machine back on them", proc.err)
+        self.assertIn("cortex/ is a directory, which Cortex did not write", proc.err)
+        self.assertNotIn("agents/cortex.team.lock: Cortex", proc.out)
+        self.assertNotIn("as they were", proc.err)
+        self.assertNotIn("`cortex sync` puts this machine back", proc.err)
         self.assertEqual(lock.read_bytes(), before)
+
+    @SOURCE
+    def test_a_move_whose_sync_moved_this_machine_names_the_sync_that_puts_it_back(self):
+        # The sync moved this machine, then failed: the pin and the lock are put back, and the note names
+        # `cortex sync` — which, run, puts this machine back on the pin.
+        root = self.project('version = "9.9.8"\ntheme = "h2g2"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        out, err = io.StringIO(), io.StringIO()
+        real = store.Store
+
+        class Own(real):                # this process is the suite's cortex, OWN, as the commands it runs are
+            def __init__(self, *args, **kwargs):
+                kwargs.setdefault("own_version", OWN)
+                super().__init__(*args, **kwargs)
+
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home), "CORTEX_NO_REGISTER": "1",
+                                          "CORTEX_NO_UPDATE_CHECK": "1"}), mock.patch.object(store, "Store", Own), \
+                mock.patch.object(store, "VERSION", OWN), mock.patch.object(upgrade, "VERSION", OWN), \
+                mock.patch.object(sync, "_claude", side_effect=OSError(errno.EIO, "cut short")):
+            with self.assertRaises(OSError):
+                upgrade.upgrade(str(root), OWN, False, False, None, out, err)
+        self.assertIn("note: cortex.toml and cortex.lock are as they were — `cortex sync` puts this machine back on "
+                      "them", err.getvalue())
+        self.assertEqual(tomllib.loads((root / "cortex.toml").read_text(encoding="utf-8"))["version"], "9.9.8")
+        self.assertEqual(config.load(str(root)).synced["reads"], OWN)          # this machine was moved
+        self.assert_ok(self.cortex(root, "sync"))                               # the command the note names
+        self.assertEqual(config.load(str(root)).synced["reads"], "9.9.8")
+        # A resume — the pin moved by hand — whose sync moved this machine, then failed: the same.
+        (root / "cortex.toml").write_text(f'version = "{OWN}"\ntheme = "h2g2"\n', encoding="utf-8")
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home), "CORTEX_NO_REGISTER": "1",
+                                          "CORTEX_NO_UPDATE_CHECK": "1"}), mock.patch.object(store, "Store", Own), \
+                mock.patch.object(store, "VERSION", OWN), mock.patch.object(upgrade, "VERSION", OWN), \
+                mock.patch.object(sync, "_claude", side_effect=OSError(errno.EIO, "cut short")):
+            with self.assertRaises(OSError):
+                upgrade.upgrade(str(root), None, False, False, None, out, err)
+        self.assertIn("is as it was — `cortex sync` puts this machine back on them", err.getvalue())
+        self.assertEqual(config.load(str(root)).synced["reads"], OWN)           # this machine was moved
+        self.assert_ok(self.cortex(root, "sync"))                               # the command the note names
+        self.assertEqual(config.load(str(root)).synced["reads"], OWN)
+
+    @SOURCE
+    def test_validate_names_the_upgrade_that_writes_a_try_s_lock(self):
+        # Synced with --locked beside a try, the team's lock is the resume's to write: `cortex sync` reads the try
+        # and leaves it. Each remedy validate gives, run, makes it pass.
+        root, lock = self.stale()
+        self.assert_ok(self.cortex(root, "upgrade", "9.9.8"))
+        self.assert_ok(self.cortex(root, "sync", "--locked"))
+        lock.write_text("<<<<<<< HEAD\nversion = 1\n", encoding="utf-8")
+        proc = self.cortex(root, "validate")
+        self.assertIn("delete it, and `cortex upgrade 9.9.8` writes it again", proc.out + proc.err)
+        self.assertNotIn("`cortex sync` writes it again", proc.out + proc.err)
+        lock.unlink()
+        proc = self.cortex(root, "validate")
+        self.assertIn("no agents/cortex.team.lock — run `cortex upgrade 9.9.8`", proc.out + proc.err)
+        self.assert_ok(self.cortex(root, "upgrade", "9.9.8"))                     # the command it names
+        self.assertEqual(str(config.load_lock(str(root / "agents"), config.TEAM_LOCK_FILE).version), "9.9.8")
+        self.assert_ok(self.cortex(root, "sync", "--locked"))
+        self.assertNotIn("LOCK_", self.cortex(root, "validate").out)
 
     @TEAM_RELEASE
     @AS_ROOT
@@ -2031,13 +2110,16 @@ class CodeReviewSecondFixTests(TeamTestCase):
                 proc = self.cortex(root, "upgrade", "--team", OWN, *args, **env)
                 self.assert_ok(proc)
                 self.assertIn("CLAUDE.md: written again", proc.out)
+                # git sees CLAUDE.md changed in the team's repository, where it leads: named there.
+                self.assertIn(" M CLAUDE.md\n", self.git(team, "status", "--short").stdout)
                 if commit:
-                    self.assertEqual(self.git(team, "status", "--short").stdout, " M CLAUDE.md\n")
                     self.assertRegex(proc.out, r"\nCommitted in agents/ on \S+, [0-9a-f]+ — nothing was pushed; CLAUDE.md "
-                                               r"not committed: --team commits in the team's folder only; teammates")
+                                               r"not committed — it leads into agents/, where --team commits the team's "
+                                               r"files only: commit it there; teammates")
                 else:
-                    self.assertIn("\nCommit agents/cortex.team.toml and agents/cortex.team.lock in agents/; CLAUDE.md in "
-                                  "the project; teammates", proc.out)
+                    self.assertIn("\nCommit agents/cortex.team.toml and agents/cortex.team.lock in agents/, and CLAUDE.md "
+                                  "there too, where it leads; teammates", proc.out)
+                self.assertNotIn("CLAUDE.md in the project", proc.out)
 
     def test_a_file_still_as_it_was_is_not_written_back(self):
         # Writing it back would fail where it cannot be written — said lost, though it never changed.
@@ -2074,6 +2156,154 @@ class CodeReviewSecondFixTests(TeamTestCase):
         self.assertIn("GIT_CONFIG_PARAMETERS", environment)
         self.assertNotIn("GIT_DIR", environment)
         self.assertEqual((name, abbrev), ("CI", "12"))
+
+
+class CodeReviewThirdFixTests(TeamTestCase):
+    """The counter-review's third round (2026-11-10): each remedy named is a command that does what it says, and
+    nothing of a build of no release is said to commit, by every command that says it."""
+
+    @SOURCE
+    def test_a_lock_of_no_release_is_never_said_to_commit_by_locked_nor_validate(self):
+        dev = {"CORTEX_SOURCE_VERSION": "9.9.9-dev.1"}
+        mine = self.project('version = "9.9.9-dev.1"\ntheme = "h2g2"\n', name="mine")      # a .git: in a repository
+        team = self.project('theme = "h2g2"\n', team='version = "9.9.9-dev.1"\n', name="team")
+        for root, lock in ((mine, "cortex.lock"), (team, "agents/cortex.team.lock")):
+            with self.subTest(lock=lock):
+                proc = self.cortex(root, "sync", "--locked", **dev)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"--locked: no {lock} — `cortex sync` writes it. Nothing of the project was changed",
+                              proc.err)
+                self.assertNotIn("commit it", proc.err)
+                proc = self.cortex(root, "sync", **dev)           # the command named
+                self.assert_ok(proc)
+                self.assertIn(f"{lock}: written", proc.out)
+                self.assertNotIn("commit it", proc.out)
+                self.assert_ok(self.cortex(root, "sync", "--locked", **dev))
+                (root / lock).unlink()
+                proc = self.cortex(root, "validate", **dev)
+                self.assertIn(f"no {lock} — run `cortex sync`", proc.out + proc.err)
+                self.assertNotIn("commit it", proc.out + proc.err)
+                self.assert_ok(self.cortex(root, "sync", **dev))
+                self.assert_ok(self.cortex(root, "validate", **dev))
+
+    @SOURCE
+    def test_a_follower_s_refusal_names_only_the_commands_that_work(self):
+        # --team V for a release this cortex serves; --local V for a try that is read and served; neither, said why.
+        cases = (
+            ("9.9.9-dev.1", "9.9.9-dev.1", None, "--local", "Cortex 9.9.9-dev.1 is a build of no release, which no "
+                                                           "teammate can download"),
+            ("9.9.9", "9.9.10-dev.2", None, None, "not to 9.9.10-dev.2: Cortex 9.9.10-dev.2 is a build of no release"),
+            ("9.9.9-dev.1", "9.9.9-dev.2", None, None, "not to 9.9.9-dev.2: Cortex 9.9.9-dev.2 is a build of no release"),
+            ("9.9.9", "9.9.8-dev.4", None, None, "not to 9.9.8-dev.4: Cortex 9.9.8-dev.4 is a build of no release"),
+            ("9.9.9", "99.0.0", None, None, "not to 99.0.0, newer than this cortex, 9.9.9: `cortex self-update 99.0.0` "
+                                            "first"),
+            ("9.9.9", "9.9.7", "--team", None, None),
+        )
+        for own, wanted, team, local, why in cases:
+            with self.subTest(own=own, wanted=wanted):
+                env = {"CORTEX_SOURCE_VERSION": own}
+                root = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n', name=f"f{len(os.listdir(self.tmp))}")
+                proc = self.cortex(root, "upgrade", wanted, **env)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"follows {TEAM}, which pins Cortex 9.9.8 — moving it is the team's", proc.err)
+                for option, named in (("--team", team), ("--local", local)):
+                    command = f"`cortex upgrade {option} {wanted}`"
+                    if named is None:
+                        self.assertNotIn(command, proc.err)
+                        continue
+                    self.assertIn(command, proc.err)
+                    followed = self.cortex(root, "upgrade", option, wanted, **env)      # named: it works
+                    self.assert_ok(followed)
+                if why is not None:
+                    self.assertIn(why, proc.err)
+
+    @SOURCE
+    @harness.outside_a_repository
+    def test_beside_a_team_s_file_that_pins_none_the_refusal_names_the_commands_that_work(self):
+        # A team's file that pins none, at a 2.B root: the uncommitted cortex.toml is set by hand; above it, the
+        # team's pin and a try are named where they work.
+        pinless = self.project('version = "9.9.7"\ntheme = "h2g2"\n', team='theme = "h2g2"\n', committed=False,
+                               name="pinless")
+        proc = self.cortex(pinless, "upgrade", "9.9.10-dev.2")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("which no command writes — set it there by hand. Nothing was changed", proc.err)
+        for option in ("--team", "--local"):
+            self.assertNotIn(f"`cortex upgrade {option}", proc.err)
+        proc = self.cortex(pinless, "upgrade", "9.9.8")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("set it there by hand, or pin the team's: `cortex upgrade --team 9.9.8`; trying it here: "
+                      "`cortex upgrade --local 9.9.8`", proc.err)
+        self.assert_ok(self.cortex(pinless, "upgrade", "--local", "9.9.8"))
+        self.assertEqual(self.local(pinless)["version"], "9.9.8")
+
+    @SOURCE
+    def test_a_pin_too_new_names_the_command_of_its_own_file(self):
+        # The team's pin is moved by --team; a try by --local, which drops it at the team's version or below.
+        team = self.project('theme = "h2g2"\n', team='version = "99.0.0"\n', name="team")
+        proc = self.cortex(team, "upgrade")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("Name the version to move to: `cortex upgrade --team VERSION` moves the team's pin", proc.err)
+        self.assertNotIn("--local", proc.err)
+        self.assert_ok(self.cortex(team, "upgrade", "--team", "9.9.8"))
+        tried = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n', local='version = "99.0.0"\n',
+                             name="tried")
+        proc = self.cortex(tried, "upgrade")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("`cortex upgrade --local VERSION` moves the try — to the team's version or below, it drops it",
+                      proc.err)
+        self.assertNotIn("--team", proc.err)
+        self.assert_ok(self.cortex(tried, "upgrade", "--local", "9.9.8"))
+        self.assertNotIn("version", self.local(tried) if (tried / "cortex.local.toml").exists() else {})
+
+    @SOURCE
+    @harness.outside_a_repository
+    def test_a_refused_build_of_no_release_names_a_try_beside_a_team_s_file_that_pins_none(self):
+        # Beside a team's file that pins no version, a try is compared with the uncommitted cortex.toml's version.
+        dev = {"CORTEX_SOURCE_VERSION": "9.9.9-dev.1"}
+        root = self.project('version = "9.9.7"\ntheme = "h2g2"\n', team='theme = "h2g2"\n', committed=False)
+        before = (root / TEAM).read_bytes()
+        proc = self.cortex(root, "upgrade", "--team", "9.9.9-dev.1", **dev)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("tried on this machine: `cortex upgrade --local 9.9.9-dev.1`", proc.err)
+        self.assertEqual((root / TEAM).read_bytes(), before)
+        self.assert_ok(self.cortex(root, "upgrade", "--local", "9.9.9-dev.1", **dev))       # named: a try that works
+        self.assertEqual(self.local(root)["version"], "9.9.9-dev.1")
+
+    @SOURCE
+    def test_a_build_of_no_release_the_store_holds_below_the_team_s_pin_names_no_try(self):
+        # Served, but below the team's version: a try there is never read, and none is named.
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        stored = self.home / "versions"
+        shutil.copytree(stored / "9.9.8", stored / "9.9.8-dev.4")
+        self.assertTrue(store.Store(self.home, OWN).has(Version("9.9.8-dev.4")))
+        proc = self.cortex(root, "upgrade", "--team", "9.9.8-dev.4")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("Pin a release there", proc.err)
+        self.assertNotIn("--local", proc.err)
+
+    @NEEDS_GIT
+    def test_team_at_a_kept_pin_makes_a_branch_for_a_release_only(self):
+        # --team at the pin, its lock to write: a branch for a release's; none for a build of no release's.
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        cases = [(OWN, {})] + ([] if harness.BINARY else [("9.9.9-dev.1", {"CORTEX_SOURCE_VERSION": "9.9.9-dev.1"})])
+        for own, extra in cases:
+            with self.subTest(own=own):
+                root = self.project('theme = "h2g2"\n', team=f'version = "{own}"\n', name=f"b{len(os.listdir(self.tmp))}")
+                self.assert_ok(self.cortex(root, "sync", **env, **extra))
+                (root / "agents" / "cortex.team.lock").unlink()          # what --team writes
+                for args in (("init", "-q"), ("add", "-A"), ("commit", "-q", "-m", "x")):
+                    self.git(root / "agents", *args)
+                proc = self.cortex(root, "upgrade", "--team", "--branch", "move", **env, **extra)
+                self.assert_ok(proc)
+                self.assertTrue((root / "agents" / "cortex.team.lock").is_file())
+                branches = self.git(root / "agents", "branch", "--list", "move").stdout.strip()
+                if store.development(Version(own)):
+                    self.assertEqual(branches, "")
+                    self.assertIn(f"note: Cortex {own} is a build of no release, which no teammate can download — no "
+                                  "branch is made in agents/", proc.err)
+                else:
+                    self.assertIn("move", branches)
 
 
 def newer_refused(pin):
