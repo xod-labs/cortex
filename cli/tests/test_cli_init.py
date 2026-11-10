@@ -493,7 +493,7 @@ class OptionTests(InitTestCase):
         (self.project / "CLAUDE.md").unlink()
         proc = self.init("--tool", "claude")                                       # the command the note names
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("<!-- cortex:bootstrap layout=single format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("<!-- cortex:bootstrap layout=single format=3 digest=", self.read("CLAUDE.md"))
         self.assertFalse((self.project / ".github" / "copilot-instructions.md").exists())
 
     def test_the_notes_name_the_tool_where_several_instructions_files_are(self):
@@ -523,14 +523,14 @@ class OptionTests(InitTestCase):
         # A custom instructions file, named again with --instructions-file: the note's command writes it.
         self.assertEqual(self.init("--tool", "custom", "--instructions-file", "docs/ai.md").returncode, 0)
         path = self.project / "docs" / "ai.md"
-        path.write_text(self.read("docs/ai.md").replace("format=2", "format=1", 1), encoding="utf-8")
+        path.write_text(self.read("docs/ai.md").replace("format=3", "format=1", 1), encoding="utf-8")
         proc = self.init("--tool", "custom", "--instructions-file", "docs/ai.md")
         self.assertEqual(proc.returncode, 0, proc.err)
         named = f"cortex init --tool custom --instructions-file {quote(display(path))} --force"
         self.assertIn(named, proc.err)
         proc = self.init("--tool", "custom", "--instructions-file", str(path), "--force")   # the command the note names
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("format=2", self.read("docs/ai.md"))
+        self.assertIn("format=3", self.read("docs/ai.md"))
 
     def test_a_workspace_s_file_writes_no_team_pair_without_the_option(self):
         # The layout read from the file chooses the template, and nothing else: the team's repository is the option's.
