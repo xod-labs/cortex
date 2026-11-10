@@ -200,6 +200,25 @@ class BumpTests(unittest.TestCase):
         # Backticks in the info string make no fence: a line of code spans, read as Markdown.
         self.assertEqual(prepared(changelog("### Fixed\n- a fix\n``` a `b` c\n### Added\n- a thing\n", "2.3.4")),
                          "2.4.0")
+        # Indented four spaces, it is code, and no fence; two backticks are none either: what follows is read.
+        for line in ("    ```", "``", "~~"):
+            with self.subTest(line=line):
+                text = changelog(f"### Fixed\n- a fix\n{line}\n### Added\n- a thing\n{line}\n", "2.3.4")
+                self.assertEqual(prepared(text), "2.4.0")
+
+    def test_a_fence_never_closed_hides_nothing(self):
+        # Opened in an entry and never closed — Markdown closes it with the list item: the sections below are read,
+        # and the branch prepares the release after the last one, not 0.0.1.
+        text = changelog("### Fixed\n- a fix:\n  ```toml\n  version = \"1\"\n", "2.3.4")
+        self.assertEqual(devversion.released(text), [Version("2.3.4")])
+        self.assertEqual(prepared(text), "2.3.5")
+        # A fence closed later still holds what it holds.
+        self.assertEqual(prepared(changelog("### Fixed\n- a fix\n```\n### Removed\n```\n", "2.3.4")), "2.3.5")
+
+    def test_a_section_heading_takes_a_tab(self):
+        text = "## [Unreleased]\n\n### Fixed\n- a fix\n\n##\t[2.3.4] - 2026-11-01\n"
+        self.assertEqual(devversion.released(text), [Version("2.3.4")])
+        self.assertEqual(prepared(text), "2.3.5")
 
     def test_a_byte_order_mark_is_no_part_of_the_text(self):
         text = "\ufeff## [Unreleased]\n\n### Added\n- a thing\n\n## [2.3.4] - 2026-11-01 — A Name _(Released)_\n"
