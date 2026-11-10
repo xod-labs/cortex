@@ -355,7 +355,9 @@ def try_lock(project: config.Project) -> Optional[Tuple[Tuple[str, str, str], st
     where = config.lock_of(project, project.team_origin)
     if where is None:
         return None
-    lock = config.load_lock(where[0], where[1], writer="`cortex upgrade`")     # the sync leaves it
+    # The sync leaves it: `cortex upgrade` writes it — named with the version, which resumes it, where a plain one
+    # would move a project that pins its own version.
+    lock = config.load_lock(where[0], where[1], writer=f"`cortex upgrade {project.team_version}`")
     if lock is not None and lock.version == project.team_version:
         return None
     return where, f"there is no {where[2]}" if lock is None else f"{where[2]} names Cortex {lock.version}"
@@ -456,15 +458,19 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
         return outcome.code
     if which == "team":
         outcome = team_move(cwd, wanted, dry_run, force, out, err, branch, message)
-        agents = os.path.join(outcome.root, config.TEAM_FOLDER)
-        team = [path for path in outcome.files if _inside(agents, path)]
+        # The team's files are those team_move commits — not whatever lies in the team's folder: a bootstrap
+        # linked into it is the project's, written again and left uncommitted.
+        team = [path for path in outcome.files if path in outcome.team_files]
         if not dry_run and outcome.why is None and team:
-            own = [path for path in outcome.files if path not in team]
-            mine = f"; {_and([_shown_path(path, outcome.root) for path in own])} in the project" if own else ""
-            out.write(f"\nCommit {_and([_shown_path(path, outcome.root) for path in team])} in {config.TEAM_FOLDER}/"
-                      f"{mine}; teammates run `cortex sync` after they pull.\n"
-                      if outcome.committed is None else f"\nCommitted in {config.TEAM_FOLDER}/ on {outcome.committed}"
-                      f" — nothing was pushed{mine}; teammates run `cortex sync` after they pull.\n")
+            own = [_shown_path(path, outcome.root) for path in outcome.files if path not in team]
+            if outcome.committed is None:
+                mine = f"; {_and(own)} in the project" if own else ""
+                out.write(f"\nCommit {_and([_shown_path(path, outcome.root) for path in team])} in "
+                          f"{config.TEAM_FOLDER}/{mine}; teammates run `cortex sync` after they pull.\n")
+            else:
+                mine = f"; {_and(own)} not committed: --team commits in the team's folder only" if own else ""
+                out.write(f"\nCommitted in {config.TEAM_FOLDER}/ on {outcome.committed} — nothing was pushed{mine}; "
+                          "teammates run `cortex sync` after they pull.\n")
         return outcome.code
     newer = _asking(wanted)
     try:
@@ -723,12 +729,10 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
         if project.follows:
             sync.sync(root, None, None, out, err, announce=False)
     except BaseException:
-        for path, content in before.items():
-            if content is None:
-                path.unlink(missing_ok=True)
-            else:
-                _put(path, content)
-        err.write(f"note: {config.TEAM_NAME} and its lock are as they were\n")
+        back = _put_back(before, root, err)
+        if back:
+            names = _and([_shown_path(path, root) for path in back])
+            err.write(f"note: {names} {'are as they were' if len(back) > 1 else 'is as it was'}\n")
         raise
     outcome = Outcome(root, pinned, target, files=list(files), team=agents, team_files=list(files))
     outcome.left = [] if files else left
@@ -944,6 +948,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     # `cortex sync` puts right.
     committed = {Path(root) / name: (Path(root) / name).read_bytes() if (Path(root) / name).is_file() else None
                  for name in (config.PROJECT_FILE, config.LOCK_FILE)}
+    synced: List[bool] = []
 
     def switch() -> None:
         config.write_text(os.path.join(root, config.PROJECT_FILE), config.render_project(root, {"version": str(target)}))
@@ -953,9 +958,10 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
             # writes it, and says so, as before.
             config.write_lock(root, target, the_store.digest(target))
             out.write(f"{config.LOCK_FILE}: Cortex {target}{'' if sync.in_no_repository(root) else ' — commit it'}\n")
+        synced.append(True)
         sync.sync(root, None, None, out, err, announce=False, said=said)
 
-    _write(rewrites, committed, root, err, switch)
+    _write(rewrites, committed, root, err, switch, lambda: bool(synced))
     for path, content in rewrites:
         out.write(f"{_shown_path(path, root)}: written again from Cortex {target}'s template — {_nobody(content)}\n")
     if developer is not None and Version(str(developer.value)) > target:
@@ -985,9 +991,12 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     if behind is not None:
         out.write(f"{behind}, and {project.version_origin} pins Cortex {project.version} — an upgrade cut short, or a "
                   f"pin moved by hand: {'the sync would put them on it' if dry_run else 'syncing'}\n")
+    # A team's folder this user cannot write: the lock is a warning, not written (``_write_try_lock``) — no branch
+    # is made for it, and the dry run says so. A prediction: on Windows, os.access does not read a folder's ACL.
+    unwritable = stale is not None and stale[0][2] == config.TEAM_LOCK_NAME and not os.access(stale[0][0], os.W_OK)
     if stale is not None:
         would = "it would be written" + ("" if the_store.has(current) else f", once Cortex {current} is downloaded")
-        if stale[0][2] == config.TEAM_LOCK_NAME and not os.access(stale[0][0], os.W_OK):
+        if unwritable:
             would = f"{config.TEAM_FOLDER}/ cannot be written here — it would be a warning, the lock not updated"
         out.write(f"{stale[1]}, and {project.team_origin} pins Cortex {current} — the sync reads the try and leaves "
                   f"it to `cortex upgrade`: {would if dry_run else 'writing it'}\n")
@@ -999,7 +1008,7 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     # The try's lock may be the project's own `cortex.lock` — a committed pin of its own, read beside a
     # try: it is left out only when the relock names it already.
     locks = ([lock] if relock else [])
-    locks += [team_lock] if team_lock is not None and team_lock not in locks else []
+    locks += [team_lock] if team_lock is not None and not unwritable and team_lock not in locks else []
     team = locks + [path for path, _ in rewrites]
     if prepare is not None and team:
         prepare(team)
@@ -1046,25 +1055,31 @@ def _write(rewrites: List[Tuple[Path, bytes]], committed: Dict[Path, Optional[by
             _put(path, content)
         then()
     except BaseException:
-        back, lost = [], []
-        for path, content in before.items():
-            try:
-                now = path.read_bytes() if path.is_file() else None
-                if now != content:
-                    if content is None:
-                        path.unlink(missing_ok=True)
-                    else:
-                        _put(path, content)
-                back.append(path)
-            except OSError as error:
-                lost.append(f"{_shown_path(path, root)} — {sync.os_error(error)}")
+        back = _put_back(before, root, err)
         if back:
             names = _and([_shown_path(path, root) for path in back])
             err.write(f"note: {names} {'are as they were' if len(back) > 1 else 'is as it was'}"
                       f"{' — `cortex sync` puts this machine back on them' if committed and synced() else ''}\n")
-        for what in lost:
-            err.write(f"warning: {what}: not put back as it was\n")
         raise
+
+
+def _put_back(before: Dict[Path, Optional[bytes]], root: str, err: TextIO) -> List[Path]:
+    """Put each file of ``before`` back as it was — removed, where it was none — and return those that are:
+    a file still as it was is not written again; one that cannot be put back is said, and the others are
+    all the same. Never raises: it runs as a failure is on its way out."""
+    back = []
+    for path, content in before.items():
+        try:
+            now = path.read_bytes() if path.is_file() else None
+            if now != content:
+                if content is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    _put(path, content)
+            back.append(path)
+        except OSError as error:
+            err.write(f"warning: {_shown_path(path, root)} — {sync.os_error(error)}: not put back as it was\n")
+    return back
 
 
 # --------------------------------------------------------------------------- #
