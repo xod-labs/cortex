@@ -430,6 +430,21 @@ class CounterReviewTests(FolderTestCase):
         kept = {path.name for path in (self.home / "versions").iterdir() if not path.name.startswith(".")}
         self.assertTrue({"9.9.7", "9.9.8"} <= kept, kept)
 
+    @DOWNLOADS
+    def test_prune_reads_the_team_s_file_in_a_folder_a_later_version_may_take(self):
+        # agents = ".team": this version refuses the name, a later one may take it (§3.8 step 1) — prune reads the
+        # team's file there, as the gate does, not in agents/.
+        for name, version in (("seven", "9.9.7"), ("eight", "9.9.8")):
+            self.assert_ok(self.cortex(self.project(f'version = "{version}"\ntheme = "h2g2"\n', name=name), "sync"))
+        root = self.project('agents = ".team"\ntheme = "h2g2"\n', local='version = "9.9.8"\n', name="refused")
+        (root / ".team").mkdir()
+        (root / ".team" / "cortex.team.toml").write_text('version = "9.9.7"\n', encoding="utf-8")
+        proc = self.cortex(self.tmp, "prune", str(root))
+        self.assert_ok(proc)
+        self.assertIn("only its versions are read: 9.9.8, 9.9.7", proc.err)
+        kept = {path.name for path in (self.home / "versions").iterdir() if not path.name.startswith(".")}
+        self.assertTrue({"9.9.7", "9.9.8"} <= kept, kept)
+
 
 @LINKS
 class SharedRenamedFolderTests(FolderTestCase):
