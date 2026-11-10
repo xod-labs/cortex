@@ -62,7 +62,7 @@ def _origin(setting: cascade.Setting, newer: Optional[str], found: Optional[casc
         said += " — locked"
     if setting.key == "version" and newer is not None and store.development(Version(str(setting.value))):
         said += f" — a build of no release, newer than this cortex, {newer}: " \
-                f"{store.pin_remedy(setting.origin, config.by_hand(found, setting.origin))}"
+                f"{config.release_remedy(found, setting.origin)}"
     elif setting.key == "version" and newer is not None:
         said += f" — newer than this cortex, {newer}: {store.update_command(Version(str(setting.value)))}"
     return said
@@ -152,7 +152,7 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
         if key == "version" and newer is not None and store.development(Version(str(value))):
             origin = found["version"].origin
             sys.stderr.write(f"note: Cortex {value} is a build of no release, newer than this cortex, {newer} — "
-                             f"{store.pin_remedy(origin, config.by_hand(found, origin), block=True)}\n")
+                             f"{config.release_remedy(found, origin, block=True)}\n")
         elif key == "version" and newer is not None:
             sys.stderr.write(f"note: Cortex {value} is newer than this cortex, {newer} — update it:\n"
                              f"    {store.update_command(Version(str(value)))}\n")

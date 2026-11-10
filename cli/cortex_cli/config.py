@@ -111,7 +111,7 @@ class Project:
     def developer_version(self) -> Optional[cascade.Setting]:
         return self._settings().developer_version
 
-    def by_hand(self, origin: Optional[str]) -> bool:
+    def by_hand(self, origin: Optional[str]) -> object:
         """Whether the version from ``origin`` is this developer's ``cortex.toml``'s, which no command
         writes (``by_hand``)."""
         return by_hand(self._settings(), origin)
@@ -213,12 +213,14 @@ def _read(path: str, name: Optional[str] = None) -> Dict:
         raise ConfigError(f"{name}: {error}")
 
 
-# The variables that point git at one repository — what `git rev-parse --local-env-vars` lists, which a hook
-# exports — and those that change how a pathspec matches. Git asked about a project runs without them, from the
-# project's folder: a hook's GIT_DIR would make it answer of another repository. The others stay — the author's
-# name, the transport, a CI's configuration.
+# The variables that point git at one repository — a copy of what `git rev-parse --local-env-vars` lists (git
+# 2.43), which a hook exports — and those that change how a pathspec matches. Git asked about a project runs without
+# them, from the project's folder: a hook's GIT_DIR would make it answer of another repository. The configuration
+# given by GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS stays, as git keeps it itself on its way to another repository
+# (prepare_other_repo_env): a CI's identity, its safe.directory. The others stay too — the author's name, the
+# transport.
 GIT_LOCAL = frozenset({
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG",
     "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE",
     "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
     "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS",
@@ -406,12 +408,17 @@ def loose_team(root: str) -> Optional[Tuple[str, Version]]:
     return None if chosen is None else (chosen[0], Version(chosen[1]))
 
 
-def by_hand(found: Optional[cascade.Resolution], origin: Optional[str]) -> bool:
+def by_hand(found: Optional[cascade.Resolution], origin: Optional[str]) -> object:
     """Whether the version from ``origin`` is this developer's ``cortex.toml``'s: not committed, beside a
     team's file that is read — pinning a version or none, at a 2.B root (ADR-013 §3.1). No command writes
     it: a plain ``cortex upgrade`` moves no project that follows the team's file, ``--local`` writes a try
-    and ``--team`` the team's file — a pin of no release there is moved by hand (``store.pin_remedy``)."""
-    return found is not None and origin == PROJECT_FILE and found.team and not found.committed
+    and ``--team`` the team's file — a pin of no release there is moved by hand (``store.pin_remedy``).
+    ``store.TEAM_PINS_NONE`` when the team's file pins no version — or, read loosely, when that is not
+    known: the remedy then names no removal, which would leave no version to read."""
+    if found is None or origin != PROJECT_FILE or not found.team or found.committed:
+        return False
+    pins = found.team_version is not None and found.team_version.origin != PROJECT_FILE
+    return True if pins else store.TEAM_PINS_NONE
 
 
 def loose_team_file(root: str) -> bool:
@@ -419,10 +426,12 @@ def loose_team_file(root: str) -> bool:
     return os.path.isfile(os.path.join(root, loose_team_folder(root), TEAM_FILE))
 
 
-def developers_toml(root: str, name: str = PROJECT_FILE) -> bool:
+def developers_toml(root: str, name: str = PROJECT_FILE) -> object:
     """``by_hand``, read loosely — the files before any key is checked: ``name`` is ``cortex.toml``, not
-    committed, beside a team's file, which pins a version or none."""
-    return name == PROJECT_FILE and loose_team_file(root) and not committed(root)
+    committed, beside a team's file, which pins a version — or none, ``store.TEAM_PINS_NONE``."""
+    if name != PROJECT_FILE or not loose_team_file(root) or committed(root):
+        return False
+    return True if "team" in cascade.loose_versions(root, loose_team_folder(root)) else store.TEAM_PINS_NONE
 
 
 def too_new(root: str, own: Version) -> Optional[str]:
@@ -437,18 +446,40 @@ def too_new(root: str, own: Version) -> Optional[str]:
     name, version = found
     if store.development(version):          # no self-update installs it: the pin moves (ADR-009 §9)
         return (f"this project uses Cortex {version}, which its {name} pins — a build of no release, newer than "
-                f"this cortex, {own}: {store.pin_remedy(name, developers_toml(root, name), block=True)}")
+                f"this cortex, {own}: {pin_a_release(root, name)}")
     teams = loose_team(root)
     # A build of no release names no version of its own to move to: no teammate can download it (ADR-009 §9).
     down = "VERSION" if store.development(own) else str(own)
     other = (f"\nor drop the try: cortex upgrade --local {teams[1] if teams else down}" if name == LOCAL_FILE else
              f"\nor move the team's pin: cortex upgrade --team {down}"
-             if name.endswith(f"/{TEAM_FILE}") and _takes_folder(name[:-len(TEAM_FILE) - 1]) else "")
+             if name.endswith(f"/{TEAM_FILE}") and takes_folder(name[:-len(TEAM_FILE) - 1]) else "")
     return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
             f"    {store.update_command(version)}{other}")
 
 
-def _takes_folder(folder: str) -> bool:
+def pin_a_release(root: str, name: str) -> str:
+    """How the pin of no release ``name`` holds is moved to a release, on a line of its own: by a command, or by
+    hand — a developer's ``cortex.toml`` (``developers_toml``), or a team's file in a folder this cortex does not
+    take (``release_remedy``)."""
+    return _in_a_refused_folder(name) or store.pin_remedy(name, developers_toml(root, name), block=True)
+
+
+def release_remedy(found: Optional[cascade.Resolution], origin: str, block: bool = False) -> str:
+    """``pin_a_release`` of the resolution ``found``: the pin of no release ``origin`` holds moved by a command
+    (``store.pin_remedy``), or by hand — a developer's ``cortex.toml`` (``by_hand``), or a team's file in a folder
+    this cortex does not take, ``.team``, read for its version alone: no ``--team`` of it moves the pin (§3.8)."""
+    return _in_a_refused_folder(origin) or store.pin_remedy(origin, by_hand(found, origin), block)
+
+
+def _in_a_refused_folder(name: str) -> Optional[str]:
+    folder = name[:-len(TEAM_FILE) - 1] if name.endswith(f"/{TEAM_FILE}") else None
+    if folder is None or takes_folder(folder):
+        return None
+    return (f"pin a release by hand: set {name}'s version to one — this cortex does not take the folder {folder}/, "
+            "so no command of it moves the team's pin")
+
+
+def takes_folder(folder: str) -> bool:
     """Whether this cortex takes the team's folder by its name — a folder only a later version may take,
     ``.team``, read for its version alone (§3.8, step 1), it cannot move the team's pin in."""
     try:

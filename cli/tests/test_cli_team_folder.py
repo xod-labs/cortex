@@ -8,6 +8,7 @@ the project's own themes follow the folder; a missing one is warned, an error un
 
 import json
 import os
+import re
 import shutil
 import sys
 import unittest
@@ -17,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_cli_format3 import FORMAT_2, OURS, TEMPLATE, written  # noqa: E402
-from test_cli_team import (AS_ROOT, DEV_OWN, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, SOURCE, TEAM_RELEASE,  # noqa: E402
+from test_cli_team import (AS_ROOT, COMMIT_IT, DEV_OWN, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, SOURCE, TEAM_RELEASE,  # noqa: E402
                            TeamTestCase, harness_path)
 
 import cli_harness as harness  # noqa: E402
@@ -48,7 +49,7 @@ class FollowsTests(FolderTestCase):
         self.assertTrue((root / FOLDER / "cortex.team.lock").is_file())
         self.assertFalse((root / "agents").exists())
         self.assertFalse((root / "cortex.lock").exists())
-        self.assertIn(f"{FOLDER}/cortex.team.lock: written — commit it in {FOLDER}/", proc.out)
+        self.assertIn(f"{FOLDER}/cortex.team.lock: written{COMMIT_IT}{f' in {FOLDER}/' if COMMIT_IT else ''}\n", proc.out)
         self.assertEqual(self.value(root, "agents"), FOLDER)
         lines = {line.split()[0]: line.split(None, 2)[1:] for line in self.cortex(root, "config").out.splitlines()}
         self.assertEqual(lines["version"], [OWN, f"{FOLDER}/cortex.team.toml"])
@@ -57,6 +58,19 @@ class FollowsTests(FolderTestCase):
         self.assertEqual(self.local(root)["synced"]["agents"], FOLDER)       # what the runtime reads (§3.12)
         (root / "cortex.toml").write_text(f'agents = "./{FOLDER}/"\ntheme = "h2g2"\n', encoding="utf-8")
         self.assertEqual(self.value(root, "agents"), FOLDER)                    # as every message names it
+
+    def test_every_spelling_of_the_folder_is_recorded_as_the_bootstrap_compares_it(self):
+        # The bootstrap compares cortex.toml's agents with the folder synced records, every leading ./ and every
+        # final / dropped (§3.10): each spelling the command takes, a sync records as that comparison reads it —
+        # no sync in every conversation for a spelling.
+        for name in ("bootstrap-instructions.md", "bootstrap-instructions-workspace.md"):
+            self.assertIn("compared with every leading `./` and every final `/` dropped",
+                          (harness.REPO / "templates" / name).read_text(encoding="utf-8"))
+        for value in (FOLDER, f"./{FOLDER}/", f"././{FOLDER}", f"{FOLDER}//", f"./././{FOLDER}///"):
+            with self.subTest(value=value):
+                root = self.named(toml=f'agents = "{value}"\ntheme = "h2g2"\n', name=f"spelling-{len(value)}")
+                self.assert_ok(self.cortex(root, "sync"))
+                self.assertEqual(self.local(root)["synced"]["agents"], re.sub(r"^(\./)+", "", value).rstrip("/"))
 
     def test_the_overlays_validated_are_the_folder_s(self):
         root = self.named()
@@ -370,6 +384,28 @@ class CounterReviewTests(FolderTestCase):
         proc = self.cortex(root, "sync")                                # the gate passed: the name is refused
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn('cortex.toml: agents ".team" names a folder that starts with "."', proc.err)
+
+    def test_a_pin_too_new_in_a_folder_this_cortex_refuses_names_no_command_of_it(self):
+        # .team: this cortex takes no --team of it — a release newer than it is installed, a build of no release
+        # pinned there is edited by hand (ADR-013 §3.8, step 1; ADR-009 §9).
+        root = self.project('agents = ".team"\ntheme = "h2g2"\n')
+        (root / ".team").mkdir()
+        (root / ".team" / "cortex.team.toml").write_text('version = "99.0.0"\n', encoding="utf-8")
+        proc = self.cortex(root, "upgrade")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn("which its .team/cortex.team.toml pins, newer than this cortex", proc.err)
+        self.assertIn("Update this cortex to serve it:\n    cortex self-update", proc.err.replace("\r\n", "\n"))
+        self.assertNotIn("--team", proc.err)
+        self.assertNotIn("--local", proc.err)
+        (root / ".team" / "cortex.team.toml").write_text('version = "99.0.0-dev.1"\n', encoding="utf-8")
+        by_hand = ("pin a release by hand: set .team/cortex.team.toml's version to one — this cortex does not take the "
+                   "folder .team/, so no command of it moves the team's pin")
+        for args in (("sync",), ("upgrade",), ("config", "version")):
+            with self.subTest(args=args):
+                proc = self.cortex(root, *args)
+                self.assertEqual(proc.returncode != 0, args[0] != "config", proc.err)
+                self.assertIn(by_hand, proc.err)
+                self.assertNotIn("--team", proc.err)
 
     def test_the_gate_reads_no_folder_an_uncommitted_cortex_toml_names(self):
         root = self.named(team='version = "99.0.0"\n', committed=False)

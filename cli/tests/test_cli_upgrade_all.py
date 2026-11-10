@@ -364,7 +364,8 @@ class AllInProcessTests(AllTestCase):
         def one(cwd, *args, **kwargs):
             if cwd.endswith("/beta"):
                 raise KeyboardInterrupt
-            return upgrade.Outcome(cwd, Version("9.9.8"), Version(OWN), files=[Path(cwd) / "cortex.toml"])
+            # The in-process cortex's release, 9.9.9: a build of no release's files are not to commit (ADR-009 §9).
+            return upgrade.Outcome(cwd, Version("9.9.8"), Version("9.9.9"), files=[Path(cwd) / "cortex.toml"])
 
         out, err = io.StringIO(), io.StringIO()
         with self.in_process(asks=False), mock.patch.object(upgrade, "_upgrade", side_effect=one):
@@ -372,7 +373,7 @@ class AllInProcessTests(AllTestCase):
         self.assertEqual(code, 130)
         self.assertTrue(out.getvalue().endswith(
             f" in each registered project:\n"
-            f"  alpha  moved 9.9.8 → {OWN}\n"
+            "  alpha  moved 9.9.8 → 9.9.9\n"
             "  beta   interrupted — it may be half written: `git status` there says what was written\n"
             "  gamma  not reached\n"
             f"\nWhat each project must commit:\n  alpha  {display(roots[0])}: cortex.toml\n" + NOT_COMMITTED),

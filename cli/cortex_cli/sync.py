@@ -781,6 +781,13 @@ def register(root: str, out: TextIO, err: TextIO) -> None:
         out.write(f"registered as {entry.name} — {registry.LISTS}\n")
 
 
+def commit_it(directory: str, version: store.Version, where: str = "") -> str:
+    """What follows a file written in ``directory`` for ``version``: `` — commit it``, then ``where`` — the
+    folder it is committed in. Nothing in no git repository, where it is committed nowhere (ADR-008 §9), nor
+    for a build of no release's version, which no teammate can download (ADR-009 §9)."""
+    return "" if in_no_repository(directory) or store.development(version) else " — commit it" + where
+
+
 def check_lock(root: str, version: store.Version, the_store: store.Store, out: TextIO,
                locked: bool = False, name: str = config.LOCK_FILE, writer: str = "`cortex sync`",
                folder: str = config.TEAM_FOLDER) -> Tuple[str, Optional[str]]:
@@ -793,7 +800,7 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
     team = name == config.TEAM_LOCK_FILE
     shown_name = f"{folder}/{config.TEAM_LOCK_FILE}" if team else name
     pins = config.cascade.team_name(folder) if team else config.PROJECT_FILE
-    lock = config.load_lock(root, name, shown_name)
+    lock = config.load_lock(root, name, shown_name, writer=writer)
     digest = the_store.digest(version)
     if lock is not None and lock.version == version:
         if lock.digest == digest:
@@ -1087,10 +1094,8 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if source is not None:
         out.write(f"{config.LOCK_FILE}: neither read nor written — a checkout has no version (--from)\n")
     elif lock is not None:
-        name = where[2]
-        commit = " — commit it" + (f" in {project.team_folder}/" if where[1] == config.TEAM_LOCK_FILE else "")
-        nowhere = in_no_repository(where[0])
-        out.write(f"{name}: {lock}{'' if nowhere else commit}\n")
+        team = f" in {project.team_folder}/" if where[1] == config.TEAM_LOCK_FILE else ""
+        out.write(f"{where[2]}: {lock}{commit_it(where[0], version, team)}\n")
     if notes:
         _notes(Path(root), mode, err)
     _claude(Path(root), project, None if mode == "copy" else spec_source, out, err)
