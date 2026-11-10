@@ -600,13 +600,13 @@ class OptionTests(InitTestCase):
                       "claude --workspace --force writes it again", proc.err)
         proc = self.init("--tool", "claude", "--workspace", "--force")          # the command the note names
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=3 digest=", self.read("CLAUDE.md"))
 
     def test_the_note_names_the_backup_written(self):
         # A .bak of other content there already: the team's part went to .bak.1, which the note names.
         self.assertEqual(self.init("--tool", "claude", "--workspace").returncode, 0)
         team = "\n## Ours\n"
-        before = self.read("CLAUDE.md").replace("<!-- cortex:bootstrap layout=workspace format=2",
+        before = self.read("CLAUDE.md").replace("<!-- cortex:bootstrap layout=workspace format=3",
                                                 "<!-- cortex:bootstrap layout=workspace format=1", 1) + team
         (self.project / "CLAUDE.md").write_text(before, encoding="utf-8")
         (self.project / "CLAUDE.md.bak").write_text("# something else\n", encoding="utf-8")
