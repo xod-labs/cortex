@@ -51,6 +51,19 @@ def _synced_version(root: str, spec: Optional[str], base: str) -> str:
     return resolved.name if resolved.parent.name == "versions" and store.Version.valid(resolved.name) else ""
 
 
+def _a_checkout(root: str, spec: str) -> bool:
+    """Whether the spec ``spec`` names is a checkout's, which names no version: the checkout, a link to one, or a
+    copy of one — a copy is a checkout's by its marker, which says no version; one without a marker that reads is
+    none's."""
+    path = Path(_spec_path(root, spec))
+    if not sync.is_checkout(path):
+        return False
+    if spec == sync.LINK and not sync.is_link(path):
+        marker = sync.read_marker(path)
+        return marker is not None and not marker.get("version")
+    return _synced_version(root, spec, str(path)) == ""
+
+
 def _spec_path(root: str, spec: str) -> str:
     """The directory ``spec`` names, as ``config.Project.spec_directory`` reads it."""
     return spec if os.path.isabs(spec) else f"{root}/{spec}"
@@ -86,12 +99,11 @@ def roots(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]]]:
     if root is not None:
         # A version newer than this cortex, said before any key is checked (ADR-013 §3.8) — but of a
         # spec that names no version, a checkout's, there is nothing to compare. A spec that is not
-        # there, or not a checkout — an empty cortex/, a copy whose marker is gone, a link that leads
-        # nowhere — is no checkout: the version is said first.
+        # there, or not a checkout — an empty cortex/, a copy whose marker is gone or does not read, a
+        # link that leads nowhere — is no checkout: the version is said first.
         old = config.too_new(root, store.own_version())
         spec = config.local_spec(root)
-        if old is not None and (spec is None or not sync.is_checkout(Path(_spec_path(root, spec)))
-                                or _synced_version(root, spec, _spec_path(root, spec)) != ""):
+        if old is not None and (spec is None or not _a_checkout(root, spec)):
             raise RootsError(old)
         try:
             project = config.load(root)
