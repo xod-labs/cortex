@@ -183,16 +183,26 @@ AGENTS_UNCOMMITTED = (f'{PROJECT_FILE}: "agents" is read from a committed {PROJE
                       f"`agents` — the team's folder is then {TEAM_FOLDER}/")
 
 
+def _one_case(char: str) -> str:
+    """A character in one case: lower-cased, then upper-cased, each kept as written where it is longer."""
+    lower = char.lower()
+    char = lower if len(lower) == 1 else char        # ẞ is ß, ϴ is θ, as the simple case folding folds them
+    upper = char.upper()
+    return upper if len(upper) == 1 else char
+
+
 def folded(name: str) -> str:
-    """A name of the workspace, folded to compare it in any case — the common names as file systems that
-    ignore case fold them: composed first (NFC), as APFS takes a name decomposed for the same one, then
-    each character upper-cased on its own, as NTFS's table does, a character whose upper case is longer
-    kept as written. ``ς`` and ``σ`` are one, ``ß`` is not ``ss``; the Kelvin sign, composed, is ``K``.
-    ``str.casefold`` folds further, ``ß`` as ``ss``, and would take two folders of the disk for one. It
-    is no file system's own table: a name that differs from another only past these may be one folder on
-    one disk and two on another. Compare what it gives with what it gives, never with a literal."""
-    return "".join(upper if len(upper := char.upper()) == 1 else char
-                   for char in unicodedata.normalize("NFC", name))
+    """A name of the workspace, folded to compare it in any case — as the file systems that ignore case
+    fold the common names, and past them to one folder rather than two: composed (NFC), as APFS takes a
+    name decomposed for the same one, then each character in one case on its own, as NTFS's table
+    upper-cases it — a character whose case is longer kept as written —, then composed again: ``i`` and a
+    dot above, upper-cased, is ``İ``. ``ς`` and ``σ`` are one, ``ß`` is not ``ss``. It takes for one folder
+    every two that Unicode's simple upper case — NTFS's table — or simple case folding takes for one, ``ﬅ``
+    and ``ﬆ`` aside, and some a disk keeps apart: the Kelvin sign and ``k`` — composed, it is ``K`` —, a
+    name composed and decomposed, two on NTFS; ``ı`` and ``i``, two on APFS. ``str.casefold`` folds
+    further, ``ß`` as ``ss``, and would take two folders of every disk for one. Compare what it gives with
+    what it gives, never with a literal."""
+    return unicodedata.normalize("NFC", "".join(_one_case(char) for char in unicodedata.normalize("NFC", name)))
 
 
 def check_agents(value: object, name: str = PROJECT_FILE, loose: bool = False) -> str:

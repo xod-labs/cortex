@@ -26,7 +26,8 @@ class AgentsTextTests(unittest.TestCase):
     def test_what_names_no_folder_inside_the_workspace_is_refused(self):
         for value in ("../x", "a/../b", "/x", "C:\\x", "C:/x", "C:x", "C:", "\\\\server\\x", "a\\b", ".", "./", "././",
                       "a//b", ".team", "a/.b", "a/./b", "cortex", "Cortex", "cortex/x", "", 3, "a\nb", "a\tb", "a\x7fb",
-                      "cortex.", "cortex ", "team.", "a/b ", " ", "cortex::$INDEX_ALLOCATION", "team:x", "a/b:c"):
+                      "cortex.", "cortex ", "team.", "a/b ", " ", "cortex::$INDEX_ALLOCATION", "team:x", "a/b:c",
+                      "team./agents", "team /agents", "a/b./c"):           # Windows drops it in any component
             with self.subTest(value=value), self.assertRaises(project.ProjectFileError) as caught:
                 project.check_agents(value)
             self.assertIn("agents", str(caught.exception))
@@ -37,7 +38,7 @@ class AgentsTextTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(project.check_agents(value, loose=True), folder)
         for value in ("../x", "/x", "C:x", "a\\b", "a\nb", ".", "a/./b", "cortex", "cortex.", "team ", "", 3,
-                      "cortex::$INDEX_ALLOCATION", ".team:x"):
+                      "cortex::$INDEX_ALLOCATION", ".team:x", ".team./agents", ".team /agents"):
             with self.subTest(value=value), self.assertRaises(project.ProjectFileError):
                 project.check_agents(value, loose=True)
 
@@ -51,6 +52,16 @@ class AgentsTextTests(unittest.TestCase):
         self.assertEqual(f("\u212aeys"), f("keys"))                     # the Kelvin sign is K composed: one on APFS
         self.assertEqual(f("\u00e9quipe"), f("e\u0301quipe"))          # composed or not, one name on APFS
         self.assertEqual(f("\u00c9QUIPE"), f("e\u0301quipe"))
+        self.assertEqual(f("i\u0307"), f("\u0130"))                     # İ is i and a dot above, upper-cased
+        self.assertEqual(f("I\u0307"), f("\u0130"))
+        self.assertEqual(f("\u1e9e"), f("\u00df"))                      # ẞ is ß, as the simple case folding folds it
+        self.assertEqual(f("\u03f4"), f("\u03b8"))                      # ϴ is θ, likewise
+        self.assertEqual(f("\u1f80"), f("\u1f88"))                      # ᾀ upper-cased is ᾈ: one on NTFS
+        self.assertEqual(f("\u0131"), f("i"))                           # one folder rather than two: two on APFS
+        self.assertNotEqual(f("straße"), f("strase"))                   # ß is kept as written, not cut to S
+        for full, compatible in (("\uff54\uff45\uff41\uff4d", "team"), ("x\u00b2", "x2")):
+            with self.subTest(name=full):                               # a compatible form: two on NTFS and APFS
+                self.assertNotEqual(f(full), f(compatible))
         for value in ("cortex", "Cortex", "CORTEX", "Cortex/x"):
             with self.subTest(value=value), self.assertRaises(project.ProjectFileError):
                 project.check_agents(value)
