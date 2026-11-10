@@ -1765,6 +1765,24 @@ class SecondCodeReviewTests(TeamTestCase):
     LOCKING = 'claude_access = false\nlocked = ["claude_access"]\n'
     PULLED = '<<<<<<< HEAD\nversion = "9.9.7"\n=======\nversion = "9.9.8"\n>>>>>>> origin/main\n' + LOCKING
 
+    @SOURCE
+    @harness.outside_a_repository
+    def test_init_s_remedy_for_a_team_s_file_that_does_not_read_names_that_file(self):
+        # The team's file's own error: never remove cortex.toml — the developer's own at a 2.B root, and lost — but
+        # fix the file, after which init runs.
+        root = self.project('version = "1.7.0"\ntheme = "h2g2"\nclaude_access = true\n', team=self.PULLED,
+                            committed=False)
+        proc = self.cortex(root, "init", "--tool", "claude")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"{TEAM}: Invalid statement", proc.err)
+        self.assertIn(f"cortex init reads {TEAM}: fix it — a conflict a pull left in it, say — then run cortex init "
+                      "again", proc.err)
+        self.assertNotIn("remove it", proc.err)
+        (root / TEAM).write_text(f'version = "{OWN}"\n' + self.LOCKING, encoding="utf-8")       # the conflict solved
+        proc = self.cortex(root, "init", "--tool", "claude")
+        self.assert_ok(proc)
+        self.assertIn("claude_access = true", (root / "cortex.toml").read_text(encoding="utf-8"))
+
     @harness.outside_a_repository
     def test_a_team_s_file_that_does_not_read_beside_an_uncommitted_pin_is_refused(self):
         # A 2.B root at 1.7.0 whose agents/ a pull left in a conflict: the team's version is the file's, which it
@@ -1850,6 +1868,101 @@ class SecondCodeReviewTests(TeamTestCase):
         self.git(where, "commit", "-q", "-m", "move", "--", TEAM, "agents/cortex.team.lock")
         self.assertEqual(self.git(where, "status", "--porcelain", "--", "agents").stdout, "")
         self.assert_ok(self.cortex(root, "sync", "--locked", **env))
+
+    def edited_at_its_version(self, name, own_repository):
+        """A follower whose team's file at 9.9.8 is committed beside a stale lock at 9.9.7 — a commit that left the
+        lock behind — and holds an edit of the developer's own, its version as committed: in a folder of the
+        project's repository, or in the team's own. The repository, and git's environment."""
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.7"\n', committed=False, name=name)
+        where = root / "agents" if own_repository else root
+        (where / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        self.assert_ok(self.cortex(root, "sync", **env))                  # the lock, at 9.9.7
+        (root / TEAM).write_text('version = "9.9.8"\n', encoding="utf-8")
+        self.git(where, "init", "-q")
+        self.git(where, "add", "-A")
+        self.git(where, "commit", "-q", "-m", "init")
+        (root / TEAM).write_text('version = "9.9.8"\ntheme = "none"\n', encoding="utf-8")    # the developer's own
+        return root, where, env
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_team_at_its_pin_commits_the_lock_alone_beside_an_edit_of_the_developer_s(self):
+        # Its version as committed, the team's file is not moved by hand: the lock goes alone — committed, or named
+        # alone to commit — and the developer's own edit stays out of the team's commit.
+        for own in (False, True):
+            for commit in (False, True):
+                with self.subTest(own_repository=own, commit=commit):
+                    root, where, env = self.edited_at_its_version(f"edit{int(own)}{int(commit)}", own)
+                    args = ("--commit", "--message", "lock") if commit else ()
+                    proc = self.cortex(root, "upgrade", "--team", "9.9.8", *args, **env)
+                    self.assert_ok(proc)
+                    lock = "cortex.team.lock" if own else "agents/cortex.team.lock"
+                    if commit:
+                        self.assertEqual(self.git(where, "log", "-1", "--format=%s").stdout.strip(), "lock")
+                        self.assertEqual(self.git(where, "show", "--name-only", "--format=", "HEAD").stdout.split(),
+                                         [lock])
+                        self.assertNotIn("holds changes of yours", proc.err)
+                    else:
+                        self.assertIn("\nCommit agents/cortex.team.lock in agents/", proc.out)
+                    self.assertNotIn("Commit agents/cortex.team.toml", proc.out)
+                    shown = "cortex.team.toml" if own else TEAM
+                    self.assertEqual(self.git(where, "status", "--porcelain", "--", shown).stdout.strip(), f"M {shown}")
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_a_resume_commits_the_lock_beside_an_edit_of_the_developer_s(self):
+        # A follower's resume writes the lock of the version the committed file pins: the developer's own edit of
+        # another key does not hold the commit back — the lock is committed, the edit left.
+        root, where, env = self.edited_at_its_version("resume-edit", False)
+        proc = self.cortex(root, "upgrade", "--commit", "--message", "resume", **env)
+        self.assert_ok(proc)
+        self.assertNotIn("held changes of yours", proc.err)
+        self.assertEqual(self.git(where, "log", "-1", "--format=%s").stdout.strip(), "resume")
+        self.assertIn("agents/cortex.team.lock", self.git(where, "show", "--name-only", "--format=", "HEAD").stdout)
+        self.assertEqual(self.git(where, "status", "--porcelain", "--", TEAM).stdout.strip(), f"M {TEAM}")
+        self.assertEqual(str(config.load_lock(str(root / "agents"), config.TEAM_LOCK_FILE).version), "9.9.8")
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_a_project_s_own_pin_commits_beside_an_edit_of_the_team_s_file(self):
+        # A committed cortex.toml pinning its own version: the team's file, edited by hand, is no pin of this project
+        # — the upgrade commits cortex.toml and cortex.lock.
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        root = self.project('version = "9.9.7"\ntheme = "h2g2"\n', team='version = "9.9.7"\n', committed=False,
+                            name="own-pin")
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        self.assert_ok(self.cortex(root, "sync", **env))
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "init")
+        (root / TEAM).write_text('version = "9.9.7"\ntheme = "none"\n', encoding="utf-8")
+        proc = self.cortex(root, "upgrade", "9.9.8", "--commit", "--message", "up", **env)
+        self.assert_ok(proc)
+        self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "up")
+        self.assertEqual(sorted(self.git(root, "show", "--name-only", "--format=", "HEAD").stdout.split()),
+                         ["cortex.lock", "cortex.toml"])
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_a_lock_written_beside_a_team_s_file_moved_by_hand_names_the_file_too(self):
+        # agents/ its own repository: the sync's note, and the resume's, name the team's file moved by hand beside
+        # the lock — committed alone, the lock would name 9.9.8 beside a committed file at 9.9.7.
+        root, where, env = self.moved_by_hand("named", True)
+        proc = self.cortex(root, "sync", **env)
+        self.assert_ok(proc)
+        self.assertIn("agents/cortex.team.lock: written — commit it in agents/, with cortex.team.toml, moved to its "
+                      "version by hand\n", proc.out)
+        root, where, env = self.moved_by_hand("named-resume", True, synced=True)
+        proc = self.cortex(root, "upgrade", "9.9.8", "--commit", "--message", "resume", **env)
+        self.assert_ok(proc)
+        self.assertIn("— commit it in agents/, with cortex.team.toml, moved to its version by hand\n", proc.out)
+        self.assertIn(f"{root / 'agents' / 'cortex.team.lock'} and {root / TEAM} — outside its git work tree: commit "
+                      "them where they are", proc.out)
 
     @SOURCE
     @DOWNLOADS

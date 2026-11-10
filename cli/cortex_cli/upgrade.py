@@ -557,7 +557,7 @@ def _write_try_lock(where: Tuple[str, str, str], version: Version, the_store: st
             return
     else:
         config.write_lock(directory, version, digest, name)
-    team = f" in {config.TEAM_FOLDER}/" if shown_name == config.TEAM_LOCK_NAME else ""
+    team = sync.team_lock_commit(Path(directory)) if shown_name == config.TEAM_LOCK_NAME else ""
     out.write(f"{shown_name}: {said}{'' if sync.in_no_repository(directory) else ' — commit it' + team}\n")
 
 
@@ -878,9 +878,10 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
                   f"{config.PROJECT_FILE}: it does not follow {config.TEAM_NAME}, and its overlays are not checked\n")
     team_files = [team_file, team_file.with_name(config.TEAM_LOCK_FILE)]
     # At the pin, its lock missing or stale, the lock is written: the file names the version already. Moved there
-    # by hand, git sees it changed: it goes with its lock — committed alone, the lock would name a version the
-    # committed file does not pin.
-    writes = _team_left(agents, team_files[:1]) + team_files[1:] if target == pinned else team_files
+    # by hand — its version is not the one committed — it goes with its lock: committed alone, the lock would name a
+    # version the committed file does not pin. Another key changed, the version as committed, the lock goes alone.
+    writes = ([team_file] if sync.team_file_moved(team_file) else []) + team_files[1:] if target == pinned \
+        else team_files
     if dry_run:
         out.write("--dry-run: nothing of the project was changed\n")
         return Outcome(root, pinned, target, files=[] if unchanged else writes, team=agents,
@@ -1267,7 +1268,13 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     for path, content in mine:
         out.write(_again(path, root, project.version, content, differs))
     relocked = [path for path, before in kept.items() if path.is_file() and path.read_bytes() != before]
-    return Outcome(root, current, current, files=relocked + [path for path, _ in rewrites] + _committed(mine))
+    # The team's lock written, beside a team's file moved to its version by hand: the two go together, named — where
+    # they are, outside the project's work tree — or held from --commit as the developer's change (``_theirs``).
+    team_file = Path(root) / config.TEAM_FOLDER / config.TEAM_FILE
+    team_lock = _real(team_file.with_name(config.TEAM_LOCK_FILE))
+    moved = [team_file] if any(_real(path) == team_lock for path in relocked) and sync.team_file_moved(team_file) \
+        else []
+    return Outcome(root, current, current, files=relocked + moved + [path for path, _ in rewrites] + _committed(mine))
 
 
 def _machine(root: str) -> Tuple[Optional[bytes], Optional[str]]:
@@ -1509,10 +1516,13 @@ def _theirs(root: str, pin: Path, before: List[Path], error: Optional[str], writ
     if error is not None:
         return f"git could not tell whether {config.PROJECT_FILE} or a bootstrap file held changes of yours — {error}"
     wrote = {_real(path) for path in written}
-    # The team's file is a pin too where the commit carries its lock — a follower's resume writes it: moved by
-    # hand, it would stay out of the commit, and a teammate's checkout read a lock of another version.
+    # The team's file is a pin too where the commit carries its lock — a follower's resume writes it — and it was
+    # moved to its version by hand: it would stay out of the commit, and a teammate's checkout read a lock of
+    # another version. Another key changed, the version as committed, the lock goes alone.
     team_lock = Path(root) / config.TEAM_FOLDER / config.TEAM_LOCK_FILE
-    pins = {_real(pin)} | ({_real(team_lock.with_name(config.TEAM_FILE))} if _real(team_lock) in wrote else set())
+    team_file = team_lock.with_name(config.TEAM_FILE)
+    pins = {_real(pin)} | ({_real(team_file)} if _real(team_lock) in wrote and sync.team_file_moved(team_file)
+                           else set())
     theirs = [path for path in before if _real(path) in pins or _real(path) in wrote]
     if not theirs:
         return None

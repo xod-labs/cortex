@@ -241,6 +241,17 @@ class CommittedTests(SettingsTestCase):
         self.assertIs(self.settings(other, PATH=path, GIT_INDEX_FILE=str(empty / "index"))["committed"], True)
         # GIT_LITERAL_PATHSPECS reads `:(literal)cortex.toml` as a file of that name, which git tracks not.
         self.assertIs(self.settings(other, PATH=path, GIT_LITERAL_PATHSPECS="1")["committed"], True)
+        # GIT_ICASE_PATHSPECS matches a tracked CORTEX.TOML: the developer's own cortex.toml, untracked, would read
+        # as committed.
+        icase = self.tmp / "icase"
+        icase.mkdir()
+        subprocess.run([GIT, "init", "-q", str(icase)], check=True)
+        (icase / "CORTEX.TOML").write_text("", encoding="utf-8")
+        subprocess.run([GIT, "-C", str(icase), "add", "CORTEX.TOML"], check=True)
+        if not (icase / "cortex.toml").exists():                         # two files, where names keep case
+            (icase / "cortex.toml").write_text(f'version = "{OWN}"\ntheme = "h2g2"\n', encoding="utf-8")
+            self.assertIs(self.settings(icase, PATH=path)["committed"], False)
+            self.assertIs(self.settings(icase, PATH=path, GIT_ICASE_PATHSPECS="1")["committed"], False)
 
     @NEEDS_GIT
     @DEVELOPMENT
@@ -356,27 +367,46 @@ class TooNewTests(SettingsTestCase):
     @DEVELOPMENT
     def test_validate_of_a_synced_project_or_of_a_spec_not_there_says_the_version(self):
         # Only a spec that names no version — a checkout's — passes the gate: the store's version does
-        # not, nor a spec that is not there, nor one that is no checkout: an empty cortex/ — a copy whose
-        # marker is gone — or a link to a checkout moved since.
+        # not, nor a spec that is not there, nor one that is no checkout: an empty cortex/, a copy whose
+        # marker is gone or does not read — its trees there all the same — or a link to a checkout moved since.
         project = self.project("99.0.0", extra='agents = "team"\n')
         stored = self.home / "versions" / "99.0.0"
         for tree in ("agents", "templates", "docs"):
             shutil.copytree(harness.REPO / tree, stored / tree)
-        cases = [(display(stored), None), ("cortex", None), ("cortex", "empty")]
+        cases = [(display(stored), None), ("cortex", None), ("cortex", "empty"), ("cortex", "no marker"),
+                 ("cortex", "a marker that does not read")]
         if os.name != "nt":
             cases.append(("cortex", "dangling"))
         for spec, cortex in cases:
             with self.subTest(spec=spec, cortex=cortex):
                 if cortex == "empty":
                     (project / "cortex").mkdir()
+                elif cortex == "no marker":
+                    for tree in ("agents", "templates", "docs"):
+                        shutil.copytree(harness.REPO / tree, project / "cortex" / tree)
+                elif cortex == "a marker that does not read":
+                    (project / "cortex" / ".synced").write_text("{", encoding="utf-8")
                 elif cortex == "dangling":
-                    os.rmdir(project / "cortex")
+                    shutil.rmtree(project / "cortex")
                     os.symlink(self.tmp / "moved-checkout", project / "cortex")
                 (project / "cortex.local.toml").write_text(f'spec = "{spec}"\n', encoding="utf-8")
                 proc = self.cortex(project, "validate")
                 self.assertEqual(proc.returncode, 2, proc.err)
                 self.assertIn(self.WHY, proc.err)
                 self.assertNotIn("unknown key", proc.err)
+
+    @DEVELOPMENT
+    def test_validate_of_a_checkout_s_copy_checks_no_version(self):
+        # A copy of a checkout — its marker says no version — passes the gate: the key is said, not the version.
+        project = self.project("99.0.0", extra='agents = "team"\n')
+        for tree in ("agents", "templates", "docs"):
+            shutil.copytree(harness.REPO / tree, project / "cortex" / tree)
+        (project / "cortex" / ".synced").write_text('{"version": null, "files": {}}', encoding="utf-8")
+        (project / "cortex.local.toml").write_text('spec = "cortex"\n', encoding="utf-8")
+        proc = self.cortex(project, "validate")
+        self.assertEqual(proc.returncode, 2, proc.err)
+        self.assertIn('unknown key "agents"', proc.err)
+        self.assertNotIn(self.WHY, proc.err)
 
     def test_upgrade_says_the_version_not_the_key(self):
         # Never down to this cortex's version without naming it — a development build's too, as in 1.7.0.
