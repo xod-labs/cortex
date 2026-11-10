@@ -258,6 +258,23 @@ def written_for_workspace(content: bytes) -> bool:
     return b"Workspace Mode" in (title_line(content) or b"")
 
 
+def tool_options(path: Path, tool: Optional[str] = None) -> str:
+    """The options that name the instructions file at ``path`` to ``cortex init``, run from its project's root:
+    ``--tool X``, or ``--tool custom --instructions-file PATH`` for a file of no known tool's. A note names them, so
+    that the command it names writes that file — without them, ``--force`` is refused where several instructions
+    files are, and a project left with none writes Copilot's. ``tool`` is the run's own, when it knows it."""
+    if tool is None:
+        for name, rel in TOOLS.items():
+            depth = len(PurePosixPath(rel).parts)
+            if len(path.parts) > depth and path.parents[depth - 1] / rel == path and \
+                    (path.parents[depth - 1] / config.PROJECT_FILE).is_file():
+                tool = name
+                break
+    if tool is None or tool == "custom":
+        return f"--tool custom --instructions-file {sync.quote(display(str(path)))}"
+    return f"--tool {tool}"
+
+
 def normalised(content: bytes) -> bytes:
     """A bootstrap as its digest reads it: without a leading byte order mark, with LF line endings —
     any run of CRs before an LF read as one (``LINE_BREAK``) — and one newline at the end, as
@@ -620,7 +637,8 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         # Of the other layout, the option chose this run's: --force alone keeps the file's (#329), and would leave
         # it as it is — so the command names the option.
         option = " --workspace" if options.workspace and found is not None and found.layout else ""
-        again = f"cortex init{option} --force writes it again, and keeps it as .bak"
+        again = f"cortex init {tool_options(instructions_file, tool)}{option} --force writes it again, and keeps " \
+            "it as .bak"
         if found is not None:
             err.write(f"note: {display(str(instructions_file))} {found.sentence} — "
                       f"{again if found.force else 'it is kept as it is'}\n")
@@ -650,8 +668,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             out.write(f"✓ {display(str(instructions_file))} {'replaced' if replaced else 'written'}\n")
             if kept_workspace:
                 err.write(f"note: {display(str(instructions_file))} was written for a workspace, and is written for one "
-                          "again — to write a single project's, remove it and run `cortex init` again, then copy the team's "
-                          "part back from its .bak, below the end marker\n")
+                          "again — to write a single project's, remove it and run "
+                          f"`cortex init {tool_options(instructions_file, tool)}`, then copy the team's part back from "
+                          "its .bak, below the end marker\n")
     if not tool_named:
         # Found, not written: a file of another tool's, which a new project's default leaves alone.
         for name, rel in TOOLS.items():
