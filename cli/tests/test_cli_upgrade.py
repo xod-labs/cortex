@@ -265,7 +265,7 @@ class UpgradeTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), ours)
         self.assertIn("CLAUDE.md is a bootstrap without the marker, not what Cortex 9.9.8 writes — you changed it, or "
-                      "an older Cortex wrote it — so it is kept, and the target's template is not written: cortex init "
+                      "an older Cortex wrote it — so it is kept, and the target's template is not written: cortex init --tool claude "
                       "--force writes it again, and keeps yours as .bak", proc.err)
 
     def test_a_layer_readme_changed_is_said_under_its_layer(self):
@@ -375,7 +375,7 @@ class DigestTests(UpgradeTestCase):
         self.assertEqual(rule.read_bytes(), ours)
         self.assertIn(".cursor/rules/cortex.mdc is not what Cortex wrote — you changed it — and it has no `alwaysApply: "
                       "true` line in a frontmatter, as Cursor's documentation writes it: Cursor may not apply it in every "
-                      "conversation. It is kept: cortex init --force writes it again, and keeps yours as .bak — your own rules go "
+                      "conversation. It is kept: cortex init --tool cursor --force writes it again, and keeps yours as .bak — your own rules go "
                       "below its end marker, where Cortex keeps them\n", proc.err)
 
     @harness.outside_a_repository
@@ -389,7 +389,7 @@ class DigestTests(UpgradeTestCase):
         self.assertIn(".cursor/rules/cortex.mdc is not what Cortex wrote, by the digest in its marker — you changed it "
                       "— so it is kept, and the target's template is not written; and with no `alwaysApply: true` line in a "
                       "frontmatter, as Cursor's documentation writes it, Cursor may not apply it in every conversation: "
-                      "cortex init --force writes it again, and keeps yours as .bak — your own rules go below its end marker, where "
+                      "cortex init --tool cursor --force writes it again, and keeps yours as .bak — your own rules go below its end marker, where "
                       "Cortex keeps them\n", proc.err)
 
     def test_a_cursor_rule_a_team_changed_that_applies_always_is_kept_unsaid(self):
@@ -521,7 +521,8 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
         self.assertIn("CLAUDE.md is not what Cortex wrote, by the digest in its marker — you changed it — so it is "
-                      "kept, and the target's template is not written: cortex init --force writes it again", proc.err)
+                      "kept, and the target's template is not written: cortex init --tool claude --force writes it again",
+                      proc.err)
 
     def test_one_a_team_changed_is_not_said_when_the_target_writes_the_same(self):
         changed = self.marked(template=TEMPLATE).replace(END, b"## Our own rules\n\n" + END)   # above it: Cortex's block
@@ -618,8 +619,28 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
         self.assertIn("CLAUDE.md is not what Cortex wrote, by the digest in its marker — you changed it — so it is kept, "
-                      "and the target's template is not written: cortex init --force writes it again, and keeps yours as "
+                      "and the target's template is not written: cortex init --tool claude --force writes it again, and keeps "
+                      "yours as "
                       ".bak — your own rules go below its end marker, where Cortex keeps them\n", proc.err)
+
+    @harness.outside_a_repository
+    def test_the_note_names_the_tool_where_several_instructions_files_are(self):
+        # `cortex init --force` without --tool is refused where several instructions files are: the note names the
+        # tool, and the command it names writes that file again, the team's kept as .bak.
+        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        changed = self.marked(template=older).replace(END, b"## Our own rules\n\n" + END)
+        project = self.project("9.9.8")
+        (project / "CLAUDE.md").write_bytes(changed)
+        (project / "AGENTS.md").write_bytes(self.marked(template=older))
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertIn("CLAUDE.md is not what Cortex wrote, by the digest in its marker — you changed it — so it is kept, "
+                      "and the target's template is not written: cortex init --tool claude --force writes it again",
+                      proc.err)
+        proc = self.run_cortex(project, "init", "--tool", "claude", "--force")    # the command the note names
+        self.assert_ok(proc)
+        self.assertEqual((project / "CLAUDE.md.bak").read_bytes(), changed)
+        self.assertNotEqual((project / "CLAUDE.md").read_bytes(), changed)
 
     @harness.outside_a_repository
     def test_already_on_it_a_bootstrap_without_the_marker_of_another_version_is_said(self):
@@ -631,25 +652,25 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), older)
         self.assertIn(f"CLAUDE.md is a bootstrap without the marker, not what Cortex {OWN} writes — you changed it, "
-                      "or an older Cortex wrote it — so it is kept: cortex init --force writes it again, and keeps yours "
-                      "as .bak — your own rules go below its end marker, where Cortex keeps them\n", proc.err)
+                      "or an older Cortex wrote it — so it is kept: cortex init --tool claude --force writes it again, and keeps "
+                      "yours as .bak — your own rules go below its end marker, where Cortex keeps them\n", proc.err)
 
     @harness.outside_a_repository
     def test_a_target_without_an_end_marker_is_not_said_to_keep_rules_below_it(self):
-        # ADR-012 §3.4: below the end marker of the file `cortex init --force` writes — the target's, and a
+        # ADR-012 §3.4: below the end marker of the file `cortex init --tool claude --force` writes — the target's, and a
         # target before format 2 has none: up, on the pinned version (#313), and down.
         older = MARKED.replace(b"Written by 9.9.8", b"Written by 9.9.7")
         self.marked(version="9.9.7", template=older)
         self.marked()
         newer = init.stamped(init.instructions(TEMPLATE, True)).replace(END, b"## Our own rules\n\n" + END)
-        kept = " — so it is kept, and the target's template is not written: cortex init --force writes it again, and " \
+        kept = " — so it is kept, and the target's template is not written: cortex init --tool claude --force writes it again, and " \
                "keeps yours as .bak\n"
         cases = (
             ("9.9.7", init.stamped(init.instructions(older, True)) + b"\n## Our own rules\n",
              "CLAUDE.md is not what Cortex wrote, by the digest in its marker — you changed it" + kept),
             ("9.9.8", b"# Cortex AI Team\n\nWritten by an older Cortex: read cortex.local.toml first.\n",
              "CLAUDE.md is a bootstrap without the marker, not what Cortex 9.9.8 writes — you changed it, or an older "
-             "Cortex wrote it — so it is kept: cortex init --force writes it again, and keeps yours as .bak\n"),
+             "Cortex wrote it — so it is kept: cortex init --tool claude --force writes it again, and keeps yours as .bak\n"),
             (OWN, newer, "CLAUDE.md is of format 3, which Cortex 1.8.0 or later reads, and not what Cortex wrote" + kept),
         )
         for pinned, content, note in cases:
@@ -689,7 +710,7 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
         self.assertIn("CLAUDE.md is a bootstrap without the marker, not what Cortex 9.9.8 writes — you changed it, or "
-                      "an older Cortex wrote it — so it is kept, and the target's template is not written: cortex init "
+                      "an older Cortex wrote it — so it is kept, and the target's template is not written: cortex init --tool claude "
                       "--force --workspace writes it again, and keeps yours as .bak", proc.err)
 
     @harness.outside_a_repository
@@ -705,7 +726,8 @@ class DigestTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
         self.assertIn("CLAUDE.md is not what Cortex wrote, by the digest in its marker — you changed it — so it is kept, "
-                      "and the target's template is not written: cortex init --force --workspace writes it again, and "
+                      "and the target's template is not written: cortex init --tool claude --force --workspace writes it "
+                      "again, and "
                       "keeps yours as .bak — your own rules go below its end marker, where Cortex keeps them\n", proc.err)
 
     def test_already_on_it_writes_again_what_an_interrupted_upgrade_left(self):
@@ -734,7 +756,7 @@ class DigestTests(UpgradeTestCase):
         proc = self.upgrade(project)
         self.assert_ok(proc)
         self.assertIn("CLAUDE.md was not checked: its marker carries no digest, and Cortex 9.9.8, whose templates would "
-                      "tell whether you changed it, is not in the store. It is kept: cortex init --force", proc.err)
+                      "tell whether you changed it, is not in the store. It is kept: cortex init --tool claude --force", proc.err)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), init.instructions(OLD_BOOTSTRAP, True))
 
     @unittest.skipIf(os.name == "nt", "a link to a file needs a privilege on Windows")
@@ -789,7 +811,7 @@ class DigestTests(UpgradeTestCase):
         (project / "CLAUDE.md").write_bytes(init.instructions(MARKED, True) + b"\n" + MARKED)
         proc = self.upgrade(project)
         self.assert_ok(proc)
-        self.assertIn("CLAUDE.md holds several bootstrap markers, so none is read, and it is kept: cortex init --force "
+        self.assertIn("CLAUDE.md holds several bootstrap markers, so none is read, and it is kept: cortex init --tool claude --force "
                       "writes it again", proc.err)
 
     def test_several_markers_of_a_workspace_are_said_to_need_workspace(self):
@@ -798,7 +820,7 @@ class DigestTests(UpgradeTestCase):
         (project / "CLAUDE.md").write_bytes(init.instructions(marked, True) + b"\n" + marked)
         proc = self.upgrade(project)
         self.assert_ok(proc)
-        self.assertIn("CLAUDE.md holds several bootstrap markers, so none is read, and it is kept: cortex init --force "
+        self.assertIn("CLAUDE.md holds several bootstrap markers, so none is read, and it is kept: cortex init --tool claude --force "
                       "--workspace writes it again", proc.err)
 
     def test_no_personality_is_compared_and_written_without_its_block(self):
