@@ -327,8 +327,9 @@ def own_bootstraps(root: str, project: config.Project, the_store: store.Store, o
         if not sync.developers_own(path):
             continue
         intact = init.untouched(content)
-        again = f"cortex init --force{' --workspace' if init.written_for_workspace(content) else ''} writes it " \
-            "again, and keeps yours as .bak"
+        # The tool named: several instructions files refuse --force without it. No --workspace: --force keeps a
+        # workspace's layout (#329), and the option writes the team's pair into agents/, its own repository at 2.B.
+        again = f"cortex init {init.tool_options(path)} --force writes it again, and keeps yours as .bak"
         if intact is False and below:
             err.write(f"note: {_shown_path(path, root)} is of format {_format(content)}, which Cortex "
                       f"{grammar.FIRST_TEAM_VERSION} or later reads, and not what Cortex wrote — so it is kept: "

@@ -221,13 +221,43 @@ class OwnBootstrapTests(TeamTestCase):
         self.assert_ok(proc)
         self.assertEqual((root / "CLAUDE.md").read_bytes(), stale)
         self.assertIn(f"note: CLAUDE.md is not what Cortex wrote, by the digest in its marker — you changed it — so it is "
-                      f"kept, and Cortex {OWN}'s template is not written: cortex init --force writes it again, and keeps "
-                      "yours as .bak — your own rules go below its end marker", proc.err)
+                      f"kept, and Cortex {OWN}'s template is not written: cortex init --tool claude --force writes it "
+                      "again, and keeps yours as .bak — your own rules go below its end marker", proc.err)
         # Changed after Cortex wrote this version's: nothing new to say.
         (root / "CLAUDE.md").write_bytes(written(TEMPLATE).replace(b"Cortex AI Team\n", b"Cortex AI Team, ours\n", 1))
         proc = self.cortex(root, "sync")
         self.assert_ok(proc)
         self.assertNotIn("CLAUDE.md", proc.out + proc.err)
+
+    @harness.outside_a_repository
+    def test_the_note_on_a_changed_own_bootstrap_names_a_command_that_writes_it(self):
+        # `cortex init --force` without --tool is refused where several instructions files are: the note names the
+        # tool. And no --workspace, which --force does not need to keep a workspace's layout (#329), and which writes
+        # the team's pair into agents/ — at a 2.B root, the team's own repository.
+        older = WORKSPACE.replace(b"## Where the spec is", b"## Where the spec is, in 2", 1)
+        for case, name, template, other in (("several", "several", FORMAT_2, "AGENTS.md"),
+                                            ("2.B workspace", "workspace", older, None)):
+            with self.subTest(case=case):
+                root = self.project(team=f'version = "{OWN}"\n', committed=False, name=name)
+                if other is None:
+                    self.git(root / "agents", "init", "-q")                     # the team's repository
+                self.assert_ok(self.cortex(root, "sync"))
+                stale = written(template).replace(b"Cortex AI Team", b"Cortex AI Team, ours", 1)
+                (root / "CLAUDE.md").write_bytes(stale)
+                if other is not None:
+                    (root / other).write_bytes(written(TEMPLATE))
+                proc = self.cortex(root, "sync")
+                self.assert_ok(proc)
+                self.assertIn(f"kept, and Cortex {OWN}'s template is not written: cortex init --tool claude --force "
+                              "writes it again, and keeps yours as .bak", proc.err)
+                self.assertNotIn("--workspace", proc.err)
+                proc = self.cortex(root, "init", "--tool", "claude", "--force")       # the command the note names
+                self.assert_ok(proc)
+                self.assertEqual((root / "CLAUDE.md.bak").read_bytes(), stale)
+                self.assertEqual(init.markers((root / "CLAUDE.md").read_bytes()),
+                                 [("single" if other else "workspace", 3)])
+                self.assertFalse((root / "agents" / "project-context.md").exists())
+                self.assertNotIn("CLAUDE.md", self.cortex(root, "sync").err)          # nothing more to say
 
     def test_sync_from_a_checkout_writes_no_bootstrap(self):
         root = self.project(team=f'version = "{OWN}"\n', committed=False)
