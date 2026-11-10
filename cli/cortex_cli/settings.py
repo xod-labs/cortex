@@ -53,7 +53,8 @@ def _shown(value: object) -> str:
     return str(value)
 
 
-def _origin(setting: cascade.Setting, newer: Optional[str], found: Optional[cascade.Resolution] = None) -> str:
+def _origin(setting: cascade.Setting, newer: Optional[str], found: Optional[cascade.Resolution] = None,
+            root: Optional[str] = None) -> str:
     said = setting.origin
     if setting.key == "version" and found is not None and found.team_version is not None \
             and found.team_version.origin != setting.origin:
@@ -62,7 +63,7 @@ def _origin(setting: cascade.Setting, newer: Optional[str], found: Optional[casc
         said += " — locked"
     if setting.key == "version" and newer is not None and store.development(Version(str(setting.value))):
         said += f" — a build of no release, newer than this cortex, {newer}: " \
-                f"{config.release_remedy(found, setting.origin)}"
+                f"{config.release_remedy(found, setting.origin, root=root)}"
     elif setting.key == "version" and newer is not None:
         said += f" — newer than this cortex, {newer}: {store.update_command(Version(str(setting.value)))}"
     return said
@@ -152,7 +153,7 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
         if key == "version" and newer is not None and store.development(Version(str(value))):
             origin = found["version"].origin
             sys.stderr.write(f"note: Cortex {value} is a build of no release, newer than this cortex, {newer} — "
-                             f"{config.release_remedy(found, origin, block=True)}\n")
+                             f"{config.release_remedy(found, origin, block=True, root=root)}\n")
         elif key == "version" and newer is not None:
             sys.stderr.write(f"note: Cortex {value} is newer than this cortex, {newer} — update it:\n"
                              f"    {store.update_command(Version(str(value)))}\n")
@@ -161,7 +162,7 @@ def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO)
     values = {name: _shown(setting.value) for name, setting in found.settings.items()}
     column = max(len(text) for text in values.values()) + 4
     for name, setting in found.settings.items():
-        out.write(f"{name:<{width}}{values[name]:<{column}}{_origin(setting, newer, found)}\n")
+        out.write(f"{name:<{width}}{values[name]:<{column}}{_origin(setting, newer, found, root)}\n")
     return 0
 
 

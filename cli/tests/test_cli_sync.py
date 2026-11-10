@@ -430,8 +430,8 @@ class LinkAndCopyTests(SyncTestCase):
 class GitIgnoreTests(SyncTestCase):
     """What git ignores, asked of git: a link is a file to git, which `cortex/` does not match."""
 
-    def repository(self, ignore):
-        project = self.project()
+    def repository(self, ignore, name="app"):
+        project = self.project(name)
         subprocess.run(["git", "init", "-q", str(project)], check=True)
         (project / ".gitignore").write_text(ignore, encoding="utf-8")
         return project
@@ -439,13 +439,27 @@ class GitIgnoreTests(SyncTestCase):
     def check_ignore(self, project, name):
         return subprocess.run(["git", "-C", str(project), "check-ignore", "-q", name]).returncode == 0
 
+    def with_git(self):
+        """The command's environment with git on its PATH, to answer what it ignores."""
+        if shutil.which("git") is None:
+            self.skipTest("needs git")
+        self.env = dict(self.env, PATH=os.pathsep.join([os.path.dirname(shutil.which("git")), self.env["PATH"]]))
+
     @unittest.skipIf(os.name == "nt", "a junction is a directory to git on Windows")
     def test_a_link_is_not_ignored_by_a_trailing_slash(self):
-        project = self.repository("cortex.local.toml\n/cortex/\n")
-        proc = self.sync(project, "--link")
-        self.assert_ok(proc)
-        self.assertFalse(self.check_ignore(project, "cortex"))
-        self.assertIn("add a `/cortex` line to .gitignore, without the final slash", proc.err)
+        # Without git to ask, the note says no more than .gitignore tells; with git, git's answer.
+        for git, said in ((False, "git could not be asked whether it ignores cortex/, and Cortex cannot tell from "
+                                  ".gitignore that it does"), (True, "git does not ignore cortex/")):
+            with self.subTest(git=git):
+                if git:
+                    self.with_git()
+                project = self.repository("cortex.local.toml\n/cortex/\n")
+                shutil.move(str(project), str(self.tmp / f"repo-{git}"))
+                project = self.tmp / f"repo-{git}"
+                proc = self.sync(project, "--link")
+                self.assert_ok(proc)
+                self.assertFalse(self.check_ignore(project, "cortex"))
+                self.assertIn(f"note: {said} — add a `/cortex` line to .gitignore, without the final slash", proc.err)
 
     def test_without_the_slash_a_link_and_a_copy_are_ignored(self):
         for mode in ("--link", "--copy"):
@@ -461,7 +475,53 @@ class GitIgnoreTests(SyncTestCase):
     def test_cortex_local_toml_not_ignored_is_said(self):
         project = self.repository("")
         proc = self.sync(project)
-        self.assertIn("git does not ignore cortex.local.toml", proc.err)
+        self.assertIn("note: git could not be asked whether it ignores cortex.local.toml, which holds this machine's "
+                      "paths, and Cortex cannot tell from .gitignore that it does — add it to .gitignore\n", proc.err)
+        self.with_git()
+        proc = self.sync(project)
+        self.assertIn("note: git does not ignore cortex.local.toml, which holds this machine's paths — add it to "
+                      ".gitignore\n", proc.err)
+
+    def test_without_git_only_a_line_git_reads_as_it_is_says_ignored(self):
+        # git would not ignore cortex.local.toml for any of these: a negation below the line, a leading space, a
+        # tab, a byte order mark not at the start of the file — each a note, never "ignored".
+        for n, ignore in enumerate(("cortex.local.toml\n!cortex.local.toml\n", "cortex.local.toml\n!*.toml\n",
+                                    " cortex.local.toml\n", "cortex.local.toml\t\n", "# ours\n\ufeffcortex.local.toml\n")):
+            with self.subTest(ignore=ignore):
+                project = self.repository(ignore, f"not-{n}")
+                proc = self.sync(project)
+                self.assertFalse(self.check_ignore(project, "cortex.local.toml"))
+                self.assertIn("note: git could not be asked whether it ignores cortex.local.toml", proc.err)
+        # What git strips, Cortex strips too: the byte order mark at the start, trailing spaces; a negation above the
+        # line is taken back by it.
+        for n, ignore in enumerate(("\ufeffcortex.local.toml\n", "cortex.local.toml  \n",
+                                    "!cortex.local.toml\ncortex.local.toml\n")):
+            with self.subTest(ignore=ignore):
+                project = self.repository(ignore, f"is-{n}")
+                proc = self.sync(project)
+                self.assertTrue(self.check_ignore(project, "cortex.local.toml"))
+                self.assertNotIn("cortex.local.toml", proc.err)
+
+    def test_without_git_a_pattern_is_not_said_not_ignored(self):
+        # A glob, `**`: git ignores the file, which Cortex cannot tell without git — it does not say git does not.
+        for n, ignore in enumerate(("*.local.toml\n", "**/cortex.local.toml\n")):
+            with self.subTest(ignore=ignore):
+                project = self.repository(ignore, f"glob-{n}")
+                proc = self.sync(project)
+                self.assertTrue(self.check_ignore(project, "cortex.local.toml"))
+                self.assertNotIn("git does not ignore", proc.err)
+                self.assertIn("Cortex cannot tell from .gitignore that it does", proc.err)
+
+    def test_a_refusing_git_is_not_taken_for_a_no(self):
+        # git refusing the repository — a worktree whose repository is gone — answers nothing: .gitignore's line says
+        # it is ignored, and no note says otherwise.
+        self.with_git()
+        project = self.project()
+        (project / ".git").write_text("gitdir: ../nowhere\n", encoding="utf-8")
+        (project / ".gitignore").write_text("cortex.local.toml\n", encoding="utf-8")
+        proc = self.sync(project)
+        self.assert_ok(proc)
+        self.assertNotIn("ignore", proc.err)
 
 
 class HousekeepingTests(SyncTestCase):

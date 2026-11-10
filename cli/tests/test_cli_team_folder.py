@@ -18,8 +18,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_cli_format3 import FORMAT_2, OURS, TEMPLATE, written  # noqa: E402
-from test_cli_team import (AS_ROOT, COMMIT_IT, DEV_OWN, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, SOURCE, TEAM_RELEASE,  # noqa: E402
-                           TeamTestCase, harness_path)
+from test_cli_team import (AS_ROOT, COMMIT_IT, DEV_OWN, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, SOURCE, TEAM_MOVES,  # noqa: E402
+                           TEAM_RELEASE, TeamTestCase, harness_path)
 
 import cli_harness as harness  # noqa: E402
 from cortex_cli import config, store, upgrade, validate  # noqa: E402
@@ -108,7 +108,10 @@ class FollowsTests(FolderTestCase):
         proc = self.cortex(root, "sync")
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn(f"Cortex 99.0.0, which its {FOLDER}/cortex.team.toml pins, newer than this cortex", proc.err)
-        self.assertIn(f"or move the team's pin: cortex upgrade --team {'VERSION' if DEV_OWN else OWN}", proc.err)
+        if TEAM_MOVES:
+            self.assertIn(f"or move the team's pin: cortex upgrade --team {'VERSION' if DEV_OWN else OWN}", proc.err)
+        else:                       # no release this cortex serves reads the team's file (ADR-009 §9)
+            self.assertNotIn("--team", proc.err)
 
     def test_the_team_s_pair_init_scaffolds_is_in_the_folder(self):
         root = self.named()
@@ -400,8 +403,9 @@ class CounterReviewTests(FolderTestCase):
         self.assertNotIn("--team", proc.err)
         self.assertNotIn("--local", proc.err)
         (root / ".team" / "cortex.team.toml").write_text('version = "99.0.0-dev.1"\n', encoding="utf-8")
-        by_hand = ("pin a release by hand: set .team/cortex.team.toml's version to one — this cortex does not take the "
-                   "folder .team/, so no command of it moves the team's pin")
+        # A release this cortex serves would be refused there too: one newer than it, that takes the folder.
+        by_hand = ("pin a release by hand: set .team/cortex.team.toml's version to a release newer than this cortex, one "
+                   "that takes the folder .team/ — this cortex does not take it, so no command of it moves the team's pin")
         for args in (("sync",), ("upgrade",), ("config", "version")):
             with self.subTest(args=args):
                 proc = self.cortex(root, *args)
@@ -445,6 +449,21 @@ class CounterReviewTests(FolderTestCase):
             self.assert_ok(self.cortex(self.project(f'version = "{version}"\ntheme = "h2g2"\n', name=name), "sync"))
         root = self.named(toml=NAMED + "later = 1\n", team='version = "9.9.7"\n', local='version = "9.9.8"\n',
                           name="refused")
+        proc = self.cortex(self.tmp, "prune", str(root))
+        self.assert_ok(proc)
+        self.assertIn("only its versions are read: 9.9.8, 9.9.7", proc.err)
+        kept = {path.name for path in (self.home / "versions").iterdir() if not path.name.startswith(".")}
+        self.assertTrue({"9.9.7", "9.9.8"} <= kept, kept)
+
+    @DOWNLOADS
+    def test_prune_reads_the_team_s_file_in_a_folder_a_later_version_may_take(self):
+        # agents = ".team": this version refuses the name, a later one may take it (§3.8 step 1) — prune reads the
+        # team's file there, as the gate does, not in agents/.
+        for name, version in (("seven", "9.9.7"), ("eight", "9.9.8")):
+            self.assert_ok(self.cortex(self.project(f'version = "{version}"\ntheme = "h2g2"\n', name=name), "sync"))
+        root = self.project('agents = ".team"\ntheme = "h2g2"\n', local='version = "9.9.8"\n', name="refused")
+        (root / ".team").mkdir()
+        (root / ".team" / "cortex.team.toml").write_text('version = "9.9.7"\n', encoding="utf-8")
         proc = self.cortex(self.tmp, "prune", str(root))
         self.assert_ok(proc)
         self.assertIn("only its versions are read: 9.9.8, 9.9.7", proc.err)
@@ -648,6 +667,34 @@ class CodeReviewFolderTests(FolderTestCase):
         self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "init")
         self.assertFalse((root / "agents").exists())
 
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_a_resume_commit_leaves_a_team_s_file_moved_by_hand_in_the_folder(self):
+        # The team's file in the folder cortex.toml names is a pin too: moved by hand, a follower's resume commits
+        # nothing — committed alone, the lock would name 9.9.8 beside a committed file at 9.9.7.
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        root = self.named(team='version = "9.9.7"\n', committed=False)
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "init")
+        self.assert_ok(self.cortex(root, "sync", **env))
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "locked")
+        team = root / FOLDER / "cortex.team.toml"
+        team.write_text('version = "9.9.8"\n', encoding="utf-8")
+        proc = self.cortex(root, "upgrade", "9.9.8", "--commit", "--message", "resume", **env)
+        self.assert_ok(proc)
+        self.assertIn(f"note: nothing is committed in {root} — {FOLDER}/cortex.team.toml held changes of yours before "
+                      "the upgrade — commit by hand what is the team's\n", proc.err)
+        self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "locked")
+        # What the note says, done by hand: the two committed together, a teammate's clean checkout reads them.
+        self.git(root, "commit", "-q", "-m", "move", "--", f"{FOLDER}/cortex.team.toml", f"{FOLDER}/cortex.team.lock")
+        self.assertEqual(self.git(root, "status", "--porcelain").stdout, "")
+        self.assert_ok(self.cortex(root, "sync", "--locked", **env))
+        self.assertFalse((root / "agents").exists())
+
     @LINKS
     @NEEDS_GIT
     @TEAM_RELEASE
@@ -701,6 +748,66 @@ class CodeReviewFolderTests(FolderTestCase):
                 found = validate.lock_warnings(project, str(self.home / "versions" / OWN))
         self.assertEqual([code for _, code, _ in found], ["LOCK_MISSING"])
         self.assertIn(f"{FOLDER}/ cannot be written here", found[0][2])
+
+
+class CounterReviewRoundTwoFolderTests(FolderTestCase):
+    """Bluspark's second pass over the code (2026-11-10): --team is named where it moves the pin only."""
+
+    def refused_folders(self):
+        """Projects whose committed agents --team refuses for no fault of its text: inside a service — the gate reads
+        its team's file there — and naming no folder inside the workspace, where the gate reads agents/."""
+        service = self.project('agents = "svc/team"\ntheme = "h2g2"\n', name="service")
+        (service / "svc" / "agents").mkdir(parents=True)
+        (service / "svc" / "project-overview.md").write_text("# A service\n", encoding="utf-8")
+        (service / "svc" / "team").mkdir()
+        outside = self.project('agents = "../shared"\ntheme = "h2g2"\n', name="outside")
+        (outside / "agents").mkdir()
+        return ((service, "svc/team/cortex.team.toml", 'agents "svc/team" is inside the service "svc"'),
+                (outside, "agents/cortex.team.toml", 'agents "../shared" climbs out of the folder it is in'))
+
+    def test_a_too_new_pin_names_no_team_move_where_agents_makes_team_refuse(self):
+        for root, team, why in self.refused_folders():
+            (root / team).write_text('version = "99.0.0"\n', encoding="utf-8")
+            for args in (("sync",), ("validate",), ("init", "--tool", "claude"), ("upgrade",)):
+                with self.subTest(team=team, args=args):
+                    proc = self.cortex(root, *args)
+                    self.assertNotEqual(proc.returncode, 0, proc.out + proc.err)
+                    self.assertIn(f"Cortex 99.0.0, which its {team} pins, newer than this cortex", proc.err)
+                    self.assertIn("cortex self-update 99.0.0", proc.err)
+                    self.assertNotIn("--team", proc.err)
+            # The move, were it named, is refused — for agents, which the gate says nothing of.
+            proc = self.cortex(root, "upgrade", "--team", "9.9.8")
+            self.assertEqual(proc.returncode, 1, proc.err)
+            self.assertIn(why, proc.err)
+
+    @SOURCE
+    def test_a_pin_of_no_release_there_is_moved_by_hand_and_the_edit_works(self):
+        for root, team, why in self.refused_folders():
+            (root / team).write_text('version = "9.9.10-dev.3"\n', encoding="utf-8")
+            for args in (("sync",), ("upgrade",), ("init", "--tool", "claude"), ("config", "version")):
+                with self.subTest(team=team, args=args):
+                    proc = self.cortex(root, *args)
+                    self.assertEqual(proc.returncode != 0, args[0] != "config", proc.out + proc.err)
+                    self.assertIn(f"pin a release by hand: set {team}'s version to one — no command of this cortex "
+                                  f"moves the team's pin: cortex.toml: {why}", proc.err.replace("Pin a", "pin a"))
+                    self.assertNotIn("--team", proc.err)
+            # The edit named, made: the gate passes, and what is left is agents, said as such.
+            (root / team).write_text('version = "9.9.8"\n', encoding="utf-8")
+            proc = self.cortex(root, "sync")
+            self.assertEqual(proc.returncode, 1, proc.err)
+            self.assertIn(why, proc.err)
+            self.assertNotIn("9.9.10-dev.3", proc.err)
+
+    def test_a_too_new_pin_in_the_folder_team_moves_still_names_it(self):
+        root = self.named(team='version = "99.0.0"\n')
+        proc = self.cortex(root, "upgrade")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        if TEAM_MOVES:
+            self.assertIn("`cortex upgrade --team VERSION` moves the team's pin", proc.err)
+            if not DEV_OWN:                     # named: it works — to this cortex's release, or the suite's 9.9.8
+                self.assert_ok(self.cortex(root, "upgrade", "--team", OWN if harness.BINARY else "9.9.8"))
+        else:
+            self.assertNotIn("--team", proc.err)
 
 
 if __name__ == "__main__":

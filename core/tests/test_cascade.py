@@ -2,6 +2,7 @@
 for the command and the runtime — and the machine's file, ADR-013 §3.7."""
 
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -291,6 +292,19 @@ class TeamTests(unittest.TestCase):
             (Path(tmp) / "agents").mkdir()
             (Path(tmp) / "agents" / "cortex.team.toml").write_text("oops =\n", encoding="utf-8")
             self.assertIsInstance(cascade.read_team(tmp), cascade.Unreadable)
+
+    def test_a_team_s_file_that_does_not_read_beside_an_uncommitted_pin_is_refused(self):
+        # A 2.B root at 1.7.0: the team's version is the file's, or cortex.toml's when it pins none — which a file
+        # that does not read cannot tell. Refused, never read as one that pins none (second review, 2026-11-10).
+        for found in (cascade.Unreadable(f"{NAME}: Invalid statement (at line 1, column 1)"),
+                      cascade.Unreadable(f"{NAME}: cannot be read — Permission denied")):
+            for committed in (False, None):
+                with self.subTest(found=found, committed=committed), \
+                        self.assertRaisesRegex(project.ProjectFileError, f"^{re.escape(found.error)}$"):
+                    cascade.resolve(PROJECT, {"claude_access": True}, {}, {}, team_data=found, committed=committed)
+            # Committed, cortex.toml's 1.7.0 is the team's version: the file is not read, as before 1.8.0.
+            self.assertEqual(cascade.resolve(PROJECT, None, {}, {}, team_data=found, committed=True).notes,
+                             (f"{NAME} is not read: the team's version is 1.7.0, before 1.8.0",))
 
     def test_a_team_s_file_that_cannot_be_opened_is_refused_only_where_it_is_read(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -199,11 +199,9 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     kept = path.read_bytes()
     content = init.normalised(kept)
     found = init.markers(content)
-    # A workspace's file — by its markers, or, written before the marker, by its title — is named with --workspace,
-    # which cortex init reads from it without the option too (#329).
-    workspace = init.written_for_workspace(content)
-    again = f"cortex init {init.tool_options(path)} --force{' --workspace' if workspace else ''} writes it again, " \
-        "and keeps yours as .bak"
+    # No --workspace for a workspace's file: --force keeps the layout it was written for — by its markers, or, written
+    # before the marker, by its title — and the option would also write the team's pair in agents/ (#329).
+    again = f"cortex init {init.tool_options(path)} --force writes it again, and keeps yours as .bak"
     if len(found) > 1:
         return None, f"{display(str(path))} holds several bootstrap markers, so none is read, and it is kept: {again}"
     if not (found or init.bootstrap_of_cortex(content)):
@@ -328,8 +326,9 @@ def own_bootstraps(root: str, project: config.Project, the_store: store.Store, o
         if not sync.developers_own(path):
             continue
         intact = init.untouched(content)
-        again = f"cortex init --force{' --workspace' if init.written_for_workspace(content) else ''} writes it " \
-            "again, and keeps yours as .bak"
+        # The tool named: several instructions files refuse --force without it. No --workspace: --force keeps a
+        # workspace's layout (#329), and the option writes the team's pair into agents/, its own repository at 2.B.
+        again = f"cortex init {init.tool_options(path)} --force writes it again, and keeps yours as .bak"
         if intact is False and below:
             err.write(f"note: {_shown_path(path, root)} is of format {_format(content)}, which Cortex "
                       f"{grammar.FIRST_TEAM_VERSION} or later reads, and not what Cortex wrote — so it is kept: "
@@ -757,6 +756,12 @@ def local_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out:
         if not dry_run:
             _local_then_sync(root, {"version": None}, out, err)
         return Outcome(root, Version(str(tried.value)), team)
+    own_toml = (project.inputs[0] if project.inputs is not None else {}).get("version")
+    if config.developers_toml(root) and _at_or_above(own_toml, target):
+        # The developer's own cortex.toml is read over a try (§3.1): one at or below it would never be read.
+        raise UpgradeError(f"{config.PROJECT_FILE}, not committed, pins Cortex {own_toml} — your own, read over a try: "
+                           f"one of {target} would never be read. Nothing was changed. To read {target}, set "
+                           f"{config.PROJECT_FILE}'s version to it by hand: no command writes it")
     the_store = store.Store()
     _served(the_store, target, f"cortex upgrade --local {target}", config.LOCAL_FILE)
     the_store.ensure(target)
@@ -771,6 +776,11 @@ def local_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out:
         return Outcome(root, project.version, target)
     _local_then_sync(root, {"version": str(target)}, out, err)
     return Outcome(root, project.version, target)
+
+
+def _at_or_above(value: object, target: Version) -> bool:
+    """Whether ``value``, a ``version`` as a file holds it, is a version at ``target`` or above it."""
+    return grammar.is_version(value) and Version(str(value)) >= target
 
 
 def _local_then_sync(root: str, values: Dict[str, object], out: TextIO, err: TextIO) -> None:
@@ -824,6 +834,14 @@ def _no_release(the_store: store.Store, command: str) -> UpgradeError:
     """No VERSION from a build of no release: its own version is the one its branch prepares, which no
     teammate can download (ADR-009 §9, 2026-11-09) — a project is moved to it only by naming it."""
     kind = "a development build" if store.embedded_archive() is not None else "a source checkout"
+    prepares = Version("{}.{}.{}".format(*the_store.own.core))
+    if "--team" in command and prepares <= Version(grammar.FIRST_TEAM_VERSION):
+        # Every release that reads the team's file is newer than a build that prepares 1.8.0: no VERSION named moves
+        # the pin from this cortex — a release of one does (``config.moves_team_pin``).
+        return UpgradeError(f"this cortex is {kind}, {the_store.own}, the version its branch prepares, which no "
+                            "teammate can download, and every release that reads the team's file is newer than it — "
+                            f"update this cortex to one first: `cortex self-update VERSION`, then `{command} VERSION`. "
+                            "Nothing was changed")
     return UpgradeError(f"this cortex is {kind}, {the_store.own}, the version its branch prepares, which no teammate "
                         f"can download — name the version to move to: `{command} VERSION`. Nothing was changed")
 
@@ -908,6 +926,17 @@ def _team_left(agents: str, files: List[Path]) -> List[Path]:
         return []
 
 
+def _first_team_release() -> str:
+    """The version to move a project to before 1.8.0 for it to read the team's file: 1.8.0 — or this
+    cortex's own, a release candidate of it, which reads the team's file and is served, where 1.8.0
+    is not out yet. A build of no release names 1.8.0: no teammate can download it (ADR-009 §9)."""
+    own = store.own_version()
+    first = Version(grammar.FIRST_TEAM_VERSION)
+    if own < first and not grammar.before_team(str(own)) and not store.development(own):
+        return str(own)
+    return grammar.FIRST_TEAM_VERSION
+
+
 def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: TextIO, err: TextIO,
               branch: Optional[str] = None, message: Optional[str] = None, checked: Optional[str] = None) -> Outcome:
     """``cortex upgrade --team [VERSION]`` (ADR-013 §3.11): the team's file's version and its lock, in the
@@ -922,7 +951,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
         # Moved to 1.8.0 first, the project reads the team's file, whose version --team then moves.
         raise UpgradeError(f"{name} is not read: this project pins Cortex {project.team_version}, before "
                            f"{grammar.FIRST_TEAM_VERSION} — move it there first: cortex upgrade "
-                           f"{grammar.FIRST_TEAM_VERSION}. Nothing was changed")
+                           f"{_first_team_release()}. Nothing was changed")
     the_store = store.Store()
     pinned = team_pin(project)
     target = team_target(pinned, wanted, the_store, name, project.team_version)
@@ -967,8 +996,10 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
         out.write(f"This project pins its own version, Cortex {project.team_version}, in its committed "
                   f"{config.PROJECT_FILE}: it does not follow {name}, and its overlays are not checked\n")
     team_files = [team_file, team_file.with_name(config.TEAM_LOCK_FILE)]
-    # At the pin, its lock missing or stale, the lock alone is written: the file names the version already.
-    writes = team_files[1:] if target == pinned else team_files
+    # At the pin, its lock missing or stale, the lock is written: the file names the version already. Moved there
+    # by hand, git sees it changed: it goes with its lock — committed alone, the lock would name a version the
+    # committed file does not pin.
+    writes = _team_left(agents, team_files[:1]) + team_files[1:] if target == pinned else team_files
     if dry_run:
         out.write("--dry-run: nothing of the project was changed\n")
         return Outcome(root, pinned, target, files=[] if unchanged else writes, team=agents,
@@ -1114,8 +1145,9 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         # A try, or the team's pin, newer than this cortex: said with its own remedy (ADR-013 §3.8).
         name, newer = pinned
         folder = config.loose_team_folder(root)
-        if name == config.cascade.team_name(folder) and not config.takes_folder(folder):
-            # A folder only a later version may take, .team: no --team of this cortex moves its pin (§3.8, step 1).
+        if name == config.cascade.team_name(folder) and not config.moves_team_pin(root, folder, the_store.own):
+            # No --team of this cortex moves the pin: a folder only a later version may take, .team, or one cortex.toml's
+            # agents makes --team refuse (§3.8, step 1) — or no release it serves reads the team's file (ADR-009 §9).
             pin = config.pin_a_release(root, name)
             raise UpgradeError(f"this project reads Cortex {newer}, which its {name} pins, newer than this cortex, "
                                f"{the_store.own} — nothing was changed. "
@@ -1156,7 +1188,11 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
             # hand; above it, the team's pin or a try is read instead, the higher one winning. Neither: said why.
             target = Version(wanted)
             moves = not store.development(target) and not grammar.before_team(wanted) and _serves(the_store, target)
-            tried = f"; trying it here: `cortex upgrade --local {wanted}`" if _tries(the_store, target, current) else ""
+            # A try is read above the team's version and this developer's cortex.toml's, at a 2.B root: the higher wins.
+            mine = project.inputs[0].get("version") if project.inputs is not None and project.inputs[0] is not None \
+                and project.by_hand(config.PROJECT_FILE) else None
+            read = max(current, Version(str(mine))) if mine is not None else current
+            tried = f"; trying it here: `cortex upgrade --local {wanted}`" if _tries(the_store, target, read) else ""
             pins = (f"which pins Cortex {current} — moving it is the team's"
                     + (f": `cortex upgrade --team {wanted}`" if moves else f", {_unmoved(the_store, target)}") + tried) \
                 if project.team_origin == project.team_name else \
@@ -1647,7 +1683,11 @@ def _theirs(root: str, pin: Path, before: List[Path], error: Optional[str], writ
     if error is not None:
         return f"git could not tell whether {config.PROJECT_FILE} or a bootstrap file held changes of yours — {error}"
     wrote = {_real(path) for path in written}
-    theirs = [path for path in before if _real(path) == _real(pin) or _real(path) in wrote]
+    # The team's file is a pin too where the commit carries its lock — a follower's resume writes it: moved by
+    # hand, it would stay out of the commit, and a teammate's checkout read a lock of another version.
+    team_lock = Path(root) / config.loose_team_folder(root) / config.TEAM_LOCK_FILE
+    pins = {_real(pin)} | ({_real(team_lock.with_name(config.TEAM_FILE))} if _real(team_lock) in wrote else set())
+    theirs = [path for path in before if _real(path) in pins or _real(path) in wrote]
     if not theirs:
         return None
     return (f"{_and([_shown_path(path, root) for path in theirs])} held changes of yours before the upgrade — "
@@ -1749,8 +1789,10 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
     pin = Path(root) / config.PROJECT_FILE if root is not None else None
     before: Tuple[List[Path], Optional[str]] = ([], None)
     if options.message is not None and top is not None and not options.dry_run:
-        # Before anything is written: the pin and the bootstrap files, never the lock (``_theirs``).
-        before = _before(root, top, [pin, *_instructions_files(Path(root), options.named)])
+        # Before anything is written: the pins — cortex.toml, and the team's file — and the bootstrap files, never
+        # the lock (``_theirs``).
+        before = _before(root, top, [pin, Path(root) / config.loose_team_folder(root) / config.TEAM_FILE,
+                                     *_instructions_files(Path(root), options.named)])
     asked = []
 
     def branch(files: List[Path]) -> None:

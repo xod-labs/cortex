@@ -166,6 +166,41 @@ class BumpTests(unittest.TestCase):
                 self.assertEqual(prepared(text), "2.3.5")
         self.assertEqual(prepared(changelog("### Added\r- a thing\r", "2.3.4")), "2.4.0")
 
+    def test_an_indented_entry_a_tab_after_the_hashes_and_a_kind_named_first(self):
+        # Bluspark's second pass: an entry indented up to three spaces is one, four make it its entry's text; a tab
+        # after ### makes a heading; the kind is the heading's first word — a note that names one after it is none.
+        for indent, expected in (("", "2.4.0"), (" ", "2.4.0"), ("   ", "2.4.0"), ("    ", "2.3.5")):
+            with self.subTest(indent=repr(indent)):
+                self.assertEqual(prepared(changelog(f"### Fixed\n- a fix\n\n### Added\n{indent}- a thing\n", "2.3.4")),
+                                 expected)
+        self.assertEqual(prepared(changelog("###\tAdded\n- a thing\n", "2.3.4")), "2.4.0")
+        self.assertEqual(prepared(changelog("### \tRemoved\n- a thing\n", "2.3.4")), "3.0.0")
+        for heading in ("### Notes: nothing removed", "### What changed", "### Docs, added later"):
+            with self.subTest(heading=heading):
+                self.assertEqual(prepared(changelog(f"{heading}\n- a thing\n", "2.3.4")), "2.3.5")
+        self.assertEqual(devversion.unreleased(changelog("### Notes: nothing removed\n- a thing\n")),
+                         {"Notes: nothing removed": ["a thing"]})
+
+    def test_a_fenced_code_block_holds_no_section_heading_nor_entry(self):
+        # An example of a changelog, fenced, is none of this one's: its sections are no release, its headings and
+        # entries ask nothing — backticks or tildes, indented up to three spaces, closed by as many or more.
+        example = "```markdown\n## [99.0.0] - 2026-11-01\n### Removed\n- a thing\n```\n"
+        self.assertEqual(prepared(changelog("### Fixed\n- a fix, shown:\n\n" + example, "2.3.4")), "2.3.5")
+        self.assertNotIn(Version("99.0.0"), devversion.released(changelog(example, "2.3.4")))
+        for fence, close in (("~~~", "~~~"), ("  ````", "`````"), ("```", "   ```")):
+            with self.subTest(fence=fence):
+                text = changelog(f"### Fixed\n- a fix\n{fence}\n### Removed\n- a thing\n{close}\n### Added\n- one\n",
+                                 "2.3.4")
+                self.assertEqual(devversion.unreleased(text), {"Fixed": ["a fix"], "Added": ["one"]})
+        # A fence closes on its own character, as many or more, and nothing after it: until then, all is code.
+        text = changelog("### Fixed\n- a fix\n````\n```\n~~~~\n```` x\n### Removed\n- a thing\n````\n", "2.3.4")
+        self.assertEqual(prepared(text), "2.3.5")
+        text = changelog("### Fixed\n- a fix\n~~~\n```\n### Removed\n- a thing\n~~~\n", "2.3.4")
+        self.assertEqual(prepared(text), "2.3.5")
+        # Backticks in the info string make no fence: a line of code spans, read as Markdown.
+        self.assertEqual(prepared(changelog("### Fixed\n- a fix\n``` a `b` c\n### Added\n- a thing\n", "2.3.4")),
+                         "2.4.0")
+
     def test_a_byte_order_mark_is_no_part_of_the_text(self):
         text = "\ufeff## [Unreleased]\n\n### Added\n- a thing\n\n## [2.3.4] - 2026-11-01 — A Name _(Released)_\n"
         self.assertEqual(prepared(text), "2.4.0")

@@ -4,6 +4,7 @@
 team's file; an ``agents/`` left behind is not read, and a service is never the team's folder.
 """
 
+import os
 import shutil
 import sys
 import unittest
@@ -174,6 +175,66 @@ class ResolveTests(TeamFolderTestCase):
         resolve_run(self.request(service="straße"), self.project, theme="h2g2")
         with self.assertRaisesRegex(ValueError, "the team's folder"):
             resolve_run(self.request(service="STRASSE"), self.project, theme="h2g2")
+
+
+def _link(test, target, link):
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except (OSError, NotImplementedError) as error:
+        test.skipTest(f"no symbolic link here: {error}")
+
+
+class AgentsOnTheDiskTests(SyncedProjectTestCase):
+    """``agents/`` is refused as written, as 1.7.0 refused it, and as the disk opens it — never by its name
+    folded: on Linux, ``Agents/`` is a folder of its own, a service 1.7.0 served (ADR-013 §9)."""
+
+    request = ResolveTests.request
+
+    def ignores_case(self):
+        return (self.project / "AGENTS").exists()
+
+    def test_a_service_agents_names_in_another_case_is_served_where_it_is_another_folder(self):
+        if self.ignores_case():
+            self.skipTest("this disk ignores case: Agents is agents/")
+        shutil.copytree(self.project / "svc-a", self.project / "Agents")
+        shutil.copytree(self.project / "svc-a", self.project / "agents-api")
+        for service in ("Agents", "agents-api"):
+            with self.subTest(service=service):
+                run = resolve_run(self.request(service=service), self.project, theme="h2g2")
+                self.assertIn("SERVICE-RULE", run.system_prompt)        # its own overlays, as in 1.7.0
+
+    def test_a_service_the_disk_opens_as_agents_is_refused(self):
+        if self.ignores_case():
+            services = ("Agents", "AGENTS/roles")
+        else:
+            _link(self, self.project / "agents", self.project / "alias")
+            services = ("alias", "alias/roles", "./alias/")
+        for service in ("agents", "agents/roles", *services):
+            with self.subTest(service=service), self.assertRaisesRegex(ValueError, "other than agents/"):
+                resolve_run(self.request(service=service), self.project, theme="h2g2")
+
+    def test_agents_as_written_is_refused_where_the_disk_has_none(self):
+        shutil.rmtree(self.project / "agents")
+        with self.assertRaisesRegex(ValueError, "other than agents/"):
+            resolve_run(self.request(service="agents/roles"), self.project, theme="h2g2")
+        if not self.ignores_case():
+            resolve_run(self.request(service="Agents"), self.project, theme="h2g2")
+
+
+class TeamFolderOnTheDiskTests(TeamFolderTestCase):
+    request = ResolveTests.request
+
+    def test_a_service_the_disk_opens_as_the_team_s_folder_is_refused(self):
+        _link(self, self.project / FOLDER, self.project / "alias")
+        for service in ("alias", "alias/roles"):
+            with self.subTest(service=service), self.assertRaisesRegex(ValueError, "the team's folder, got"):
+                resolve_run(self.request(service=service), self.project, theme="h2g2")
+
+    def test_a_service_whose_agents_the_disk_opens_as_the_team_s_folder_is_refused(self):
+        (self.project / "svc-b").mkdir()
+        _link(self, self.project / FOLDER, self.project / "svc-b" / "agents")
+        with self.assertRaisesRegex(ValueError, "whose agents/ is the team's folder"):
+            resolve_run(self.request(service="svc-b"), self.project, theme="h2g2")
 
 
 @unittest.skipUnless(HAVE_FASTAPI, "fastapi not installed")
