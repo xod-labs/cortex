@@ -445,14 +445,18 @@ class TeamVersionTests(SyncedProjectTestCase):
                 host = self.cli("sync")                     # the command named
                 self.assertEqual(host.returncode, 0, host.stdout + host.stderr)
                 self.assertEqual((pin().version, pin().theme), ("1.7.0", "h2g2"))
-        # Not committed, the sync reads the team's file in its place (§3.3), and refuses it too.
+        # Not committed, the sync reads the team's file in its place (§3.3), and refuses it too — one that does not
+        # parse included: beside a pin no commit holds, it is refused, not read as pinning nothing (§3.5).
         (self.project / ".git").rmdir()
-        pin = self.files('version = "1.7.0"\ntheme = "h2g2"\n', team='version = "1.8.0"\nunknown = 1\n', local=stale)
-        with self.assertRaisesRegex(ValueError, r"not committed, it refuses this file too$"):
-            pin()
-        host = self.cli("sync")
-        self.assertEqual(host.returncode, 1, host.stdout + host.stderr)
-        self.assertIn(b'agents/cortex.team.toml: unknown key "unknown"', host.stderr)
+        for team, said in (('version = "1.8.0"\nunknown = 1\n', b'agents/cortex.team.toml: unknown key "unknown"'),
+                           ("version = [\n", b"agents/cortex.team.toml: ")):
+            with self.subTest(team=team):
+                pin = self.files('version = "1.7.0"\ntheme = "h2g2"\n', team=team, local=stale)
+                with self.assertRaisesRegex(ValueError, r"not committed, it refuses this file too$"):
+                    pin()
+                host = self.cli("sync")
+                self.assertEqual(host.returncode, 1, host.stdout + host.stderr)
+                self.assertIn(said, host.stderr)
 
     def test_a_synced_that_is_none_names_its_remedy_once(self):
         pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local='synced = { pinned = "9.9.9" }\n')
