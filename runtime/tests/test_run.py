@@ -100,8 +100,9 @@ class ServiceBoundaryTests(unittest.TestCase):
                 self.assertEqual(run.system_prompt, resolve_run(RunRequest(workspace="host", role="lead-backend"), ROOT).system_prompt)
 
     def test_agents_is_no_service(self):
-        # The workspace's agents/ holds the cascade and ADR-006's team tier: never a service.
-        for service in ("agents", "agents/roles"):
+        # The workspace's agents/ holds the cascade and ADR-006's team tier: never a service — in any case, which
+        # a disk of macOS or Windows opens as agents/.
+        for service in ("agents", "agents/roles", "Agents", "AGENTS/roles"):
             with self.subTest(service=service):
                 with self.assertRaisesRegex(ValueError, "agents/"):
                     resolve_run(RunRequest(workspace="host", role="lead-backend", service=service), ROOT)
