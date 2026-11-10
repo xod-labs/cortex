@@ -193,16 +193,17 @@ def _one_case(char: str) -> str:
 
 def folded(name: str) -> str:
     """A name of the workspace, folded to compare it in any case — as the file systems that ignore case
-    fold the common names, and past them to one folder rather than two: composed (NFC), as APFS takes a
-    name decomposed for the same one, then each character in one case on its own, as NTFS's table
-    upper-cases it — a character whose case is longer kept as written —, then composed again: ``i`` and a
-    dot above, upper-cased, is ``İ``. ``ς`` and ``σ`` are one, ``ß`` is not ``ss``. It takes for one folder
+    fold the common names, and past them to one folder rather than two: decomposed (NFD), as APFS takes a
+    name decomposed for the same one — a letter apart from its marks, so that ``ǰ``, whose upper case is
+    longer, is ``j`` and a caron, as ``J̌`` is —, then each character in one case on its own, as NTFS's
+    table upper-cases it — a character whose case is longer kept as written —, then composed (NFC): ``i``
+    and a dot above, upper-cased, is ``İ``. ``ς`` and ``σ`` are one, ``ß`` is not ``ss``. It takes for one folder
     every two that Unicode's simple upper case — NTFS's table — or simple case folding takes for one, ``ﬅ``
-    and ``ﬆ`` aside, and some a disk keeps apart: the Kelvin sign and ``k`` — composed, it is ``K`` —, a
+    and ``ﬆ`` aside, and some a disk keeps apart: the Kelvin sign and ``k`` — decomposed, it is ``K`` —, a
     name composed and decomposed, two on NTFS; ``ı`` and ``i``, two on APFS. ``str.casefold`` folds
     further, ``ß`` as ``ss``, and would take two folders of every disk for one. Compare what it gives with
     what it gives, never with a literal."""
-    return unicodedata.normalize("NFC", "".join(_one_case(char) for char in unicodedata.normalize("NFC", name)))
+    return unicodedata.normalize("NFC", "".join(_one_case(char) for char in unicodedata.normalize("NFD", name)))
 
 
 def check_agents(value: object, name: str = PROJECT_FILE, loose: bool = False) -> str:
