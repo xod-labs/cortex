@@ -125,7 +125,10 @@ def read_pin(root: Path) -> Optional[Pin]:
 
 def _gives_what_it_lacks(data: Mapping[str, Any]) -> bool:
     """Whether ``cortex.toml`` fails 1.7.0's grammar only for a key the team's file may give instead — the one
-    case a sync that reads the team's file clears (ADR-013 §3.12)."""
+    case a sync that reads the team's file clears (ADR-013 §3.12). Never one that names a team's folder: a sync
+    reads ``agents`` from a committed ``cortex.toml`` of 1.8.0 or later only, and refuses this one (§3.6)."""
+    if "agents" in data:
+        return False
     try:
         project.check_project(data, project.PROJECT_REQUIRED)
     except project.ProjectFileError:
