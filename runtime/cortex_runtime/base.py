@@ -63,18 +63,23 @@ def read_pin(root: Path) -> Optional[Pin]:
     remedy = "cortex sync refuses this file too"
     try:
         data = tomllib.loads(path.read_bytes().decode("utf-8-sig"))
-        if local.get("synced") is None and project.is_version(data.get("version")) \
-                and project.before_team(data["version"]):
+        before = project.is_version(data.get("version")) and project.before_team(data["version"])
+        if local.get("synced") is None and before:
             # Below 1.8.0 nothing of ADR-013 is read (§3.8), and `cortex sync` records no `synced` (§3.1): the
-            # version is cortex.toml's alone, as 1.7.0 read it — a 422 there no sync could ever clear (§9).
-            if _gives_what_it_lacks(Path(root), data):
-                # Mid-adoption: of a cortex.toml no commit holds, `cortex sync` reads the team's file instead (§3.3),
-                # which may give what this one lacks — or refuses it too, committed. A file it would refuse
-                # whatever the team's gives — a theme out of the store, a key it does not know — keeps the remedy,
-                # as a team's file that gives nothing in its place does.
-                remedy = (f"run `cortex sync` in the project, which may read {cascade.TEAM_NAME} instead of a "
-                          f"{project.PROJECT_FILE} not committed")
-            project.check_project(data)
+            # version is cortex.toml's alone, as 1.7.0 read it — a 422 there no sync could ever clear (§9). Nor is
+            # the team's file read, but to say what a cortex.toml 1.7.0 refuses lacks.
+            try:
+                project.check_project(data)
+            except project.ProjectFileError:
+                lacking = tuple(key for key in project.PROJECT_REQUIRED if key not in data)
+                if _gives_what_it_lacks(Path(root), data):
+                    # Mid-adoption: of a cortex.toml no commit holds, `cortex sync` reads the team's file instead
+                    # (§3.3), which may give what this one lacks — committed, it is read alone, and refused. A file
+                    # it would refuse whatever the team's gives — a theme out of the store, a key it does not know —
+                    # keeps the remedy, as a team's file that gives nothing in its place does.
+                    remedy = (f"run `cortex sync` in the project, which may read {cascade.TEAM_NAME} instead of a "
+                              f"{project.PROJECT_FILE} not committed — committed, it needs its {project.listed(lacking)}")
+                raise
             found = cascade.resolve(data, None, {}, {}, locked=True)
             return Pin(version=_team_version(data["version"], None, local), theme=str(found.value("theme")))
         try:
@@ -82,6 +87,11 @@ def read_pin(root: Path) -> Optional[Pin]:
         except OSError as error:        # the team's file's, not cortex.toml's
             raise ValueError(f"{cascade.TEAM_NAME} of this workspace cannot be read: {error.strerror or error}")
         project.check_project(data, project.PROJECT_REQUIRED if team is not None else ())
+        if before:
+            # A synced left from another version: `cortex sync` reads a committed cortex.toml before 1.8.0 alone, and
+            # records none (§3.8) — what the team's file holds, it clears; not committed, it reads that file too.
+            remedy = (f"run `cortex sync` in the project, which reads a committed {project.PROJECT_FILE} before "
+                      f"{project.FIRST_TEAM_VERSION} alone — not committed, it refuses this file too")
         if isinstance(team, cascade.Unreadable):
             raise project.ProjectFileError(team.error)
         synced = local.get("synced")
