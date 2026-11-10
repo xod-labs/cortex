@@ -213,6 +213,18 @@ class AgentsOnTheDiskTests(SyncedProjectTestCase):
             with self.subTest(service=service), self.assertRaisesRegex(ValueError, "other than agents/"):
                 resolve_run(self.request(service=service), self.project, theme="h2g2")
 
+    def test_a_service_whose_agents_the_disk_opens_as_agents_is_refused(self):
+        # A link to agents/, or to the root: the workspace's overlays read twice, the second time as a service's.
+        (self.project / "svc-b").mkdir()
+        _link(self, self.project / "agents", self.project / "svc-b" / "agents")
+        _link(self, self.project, self.project / "root-alias")
+        for service in ("svc-b", "root-alias", "./svc-b/"):
+            with self.subTest(service=service), self.assertRaisesRegex(ValueError, "whose agents/ is the team's "
+                                                                                   "folder, agents/"):
+                resolve_run(self.request(service=service), self.project, theme="h2g2")
+        run = resolve_run(self.request(service="svc-a"), self.project, theme="h2g2")      # an agents/ of its own
+        self.assertIn("SERVICE-RULE", run.system_prompt)
+
     def test_agents_as_written_is_refused_where_the_disk_has_none(self):
         shutil.rmtree(self.project / "agents")
         with self.assertRaisesRegex(ValueError, "other than agents/"):

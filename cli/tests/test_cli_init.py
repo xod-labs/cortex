@@ -627,6 +627,51 @@ class OptionTests(InitTestCase):
         self.assertIn("was written for a workspace, and is written for one again", proc.err)
         self.assertEqual(self.read("CLAUDE.md.bak"), old)
 
+    def test_the_title_below_a_line_of_text_is_said_untold_and_workspace_writes_a_workspace_s(self):
+        # A workspace's file of before the marker, a line of text above its title: Cortex cannot tell it for its
+        # bootstrap — the note says so, never that the tool will not find Cortex — and the --workspace it names writes
+        # a workspace's.
+        old = "This repository uses Cortex.\n\n# Cortex AI Team — Workspace Mode\n\nRead cortex.local.toml first.\n"
+        (self.project / "CLAUDE.md").write_text(old, encoding="utf-8")
+        proc = self.init("--tool", "claude")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("note: CLAUDE.md holds Cortex's title below a line of text, so Cortex cannot tell it for its "
+                      "bootstrap, nor its layout; a workspace's takes --workspace — cortex init --tool claude --force "
+                      "writes it again", proc.err.replace(str(self.project.resolve()) + os.sep, "").replace(
+                          str(self.project) + os.sep, ""))
+        self.assertNotIn("the tool will not find Cortex", proc.err)
+        proc = self.init("--tool", "claude", "--workspace", "--force")          # as the note says, for a workspace's
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=3 digest=", self.read("CLAUDE.md"))
+        self.assertEqual(self.read("CLAUDE.md.bak"), old)
+
+    def test_in_a_repository_without_git_the_backup_is_not_said_left_to_git(self):
+        # Without git to ask, a team's *.bak line is git's to read: the backup line says nothing of git.
+        (self.project / ".git").mkdir(parents=True, exist_ok=True)
+        (self.project / ".gitignore").write_text("*.bak\n", encoding="utf-8")
+        (self.project / "CLAUDE.md").write_text("# mine\n", encoding="utf-8")
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("CLAUDE.md.bak: the file --force replaces, as it was — carry over what you wrote in it", proc.out)
+        self.assertNotIn("git does not ignore it", proc.out)
+
+    def test_without_git_a_line_a_negation_takes_back_is_written_again(self):
+        # cortex.local.toml, then !cortex.local.toml: git does not ignore it — init, with no git on its PATH, writes the
+        # line again below, which git then reads as ignoring it.
+        self.project.mkdir(parents=True, exist_ok=True)
+        if HAS_GIT:
+            subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        else:
+            (self.project / ".git").mkdir()
+        (self.project / ".gitignore").write_text("cortex.local.toml\n!cortex.local.toml\n", encoding="utf-8")
+        proc = self.init("--tool", "claude")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertEqual(self.read(".gitignore"), "cortex.local.toml\n!cortex.local.toml\ncortex.local.toml\n")
+        if HAS_GIT:
+            check = subprocess.run(["git", "-C", str(self.project), "check-ignore", "-q", "cortex.local.toml"],
+                                   capture_output=True)
+            self.assertEqual(check.returncode, 0, check.stderr)
+
     def test_force_with_workspace_says_nothing_of_a_layout_read_from_the_file(self):
         # The note is of the layout read from the file, without the option: with --workspace, the option chose it.
         self.assertEqual(self.init("--tool", "claude", "--workspace").returncode, 0)
@@ -1756,7 +1801,9 @@ class BootstrapMarkerTests(unittest.TestCase):
                 self.assertIsNone(init_command.title_line(kept))
                 self.assertFalse(init_command.bootstrap_of_cortex(kept))
                 self.assertFalse(init_command.written_for_workspace(kept))
-                self.assertIs(init_command.kept_bootstrap(kept, self.template(format=2)), init_command.NO_BOOTSTRAP)
+                self.assertIs(init_command.kept_bootstrap(kept, self.template(format=2)), init_command.TITLE_BELOW_TEXT)
+        # No title at all: no Cortex bootstrap.
+        self.assertIs(init_command.kept_bootstrap(b"# Our notes\n", self.template(format=2)), init_command.NO_BOOTSTRAP)
 
     def test_one_marker_says_the_layout_against_the_title(self):
         # A single marker is the layout, whatever the title says — a team that retitled the file, or a title of the
