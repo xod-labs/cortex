@@ -566,6 +566,7 @@ class CodeReviewFolderTests(FolderTestCase):
         self.assertEqual(lock.read_bytes(), before)
         self.assertFalse((root / "agents").exists())
 
+    @TEAM_RELEASE
     @AS_ROOT
     def test_team_puts_back_what_it_could_not_write_in_the_folder(self):
         # As in agents/: the folder cannot be written, --team fails, and names the team's files as they were.
