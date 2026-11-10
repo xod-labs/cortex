@@ -649,10 +649,37 @@ class OptionTests(InitTestCase):
         self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
         self.assertNotIn("written for a workspace", proc.err)
 
+    @unittest.skipUnless(HAS_GIT, "needs git")
     def test_the_backup_is_said_to_be_left_to_git(self):
+        self.project.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        (self.project / "CLAUDE.md").write_text("# mine\n", encoding="utf-8")
+        self.env = dict(self.env, PATH=os.pathsep.join([os.path.dirname(shutil.which("git")), self.env["PATH"]]))
+        proc = self.init("--tool", "claude", "--force")
+        self.assertIn("CLAUDE.md.bak: the file --force replaces, as it was — git does not ignore it: carry over",
+                      proc.out)
+
+    @unittest.skipUnless(HAS_GIT, "needs git")
+    def test_a_backup_git_ignores_is_not_said_to_be_left_to_it(self):
+        # A team's .gitignore that holds *.bak: git ignores the backup, and the line asks git rather than saying so.
+        self.project.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        (self.project / ".gitignore").write_text("*.bak\n", encoding="utf-8")
+        (self.project / "CLAUDE.md").write_text("# mine\n", encoding="utf-8")
+        self.env = dict(self.env, PATH=os.pathsep.join([os.path.dirname(shutil.which("git")), self.env["PATH"]]))
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("CLAUDE.md.bak: the file --force replaces, as it was — carry over what you wrote in it", proc.out)
+        self.assertNotIn("git does not ignore it", proc.out)
+
+    @harness.outside_a_repository
+    def test_outside_a_repository_the_backup_is_not_said_to_be_left_to_git(self):
+        self.project.mkdir(parents=True, exist_ok=True)
         (self.project / "CLAUDE.md").write_text("# mine\n", encoding="utf-8")
         proc = self.init("--tool", "claude", "--force")
-        self.assertIn("CLAUDE.md.bak: the file --force replaces, as it was — git does not ignore it", proc.out)
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("CLAUDE.md.bak: the file --force replaces, as it was — carry over what you wrote in it", proc.out)
+        self.assertNotIn("git does not ignore it", proc.out)
 
     @harness.outside_a_repository
     def test_outside_a_repository_an_existing_gitignore_is_said_to_do_nothing(self):

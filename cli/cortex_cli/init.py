@@ -623,8 +623,11 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                     out.write(f"✓ {display(str(instructions_file))}: a backup of it is there already\n")
                 else:
                     os.replace(instructions_file, backup)
-                    out.write(f"✓ {display(str(backup))}: the file --force replaces, as it was — git does not ignore "
-                              "it: carry over what you wrote in it, then delete it\n")
+                    # Said when git says so: a team's .gitignore may hold *.bak, and a root in no repository has no git.
+                    left = sync.git_ignores(root, os.path.relpath(backup, root)) is False
+                    out.write(f"✓ {display(str(backup))}: the file --force replaces, as it was — "
+                              f"{'git does not ignore it: ' if left else ''}carry over what you wrote in it, "
+                              "then delete it\n")
             instructions_file.write_bytes(wanted)
             out.write(f"✓ {display(str(instructions_file))} {'replaced' if replaced else 'written'}\n")
             if kept_workspace:
