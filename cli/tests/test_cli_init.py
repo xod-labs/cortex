@@ -196,7 +196,7 @@ class OptionTests(InitTestCase):
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertEqual(self.read("CLAUDE.md"), old)
         self.assertIn(f"note: {display(self.project / 'CLAUDE.md')} is an older Cortex bootstrap: format 1, where this "
-                      "version writes format 2 — cortex init --force writes it again, and keeps it as .bak\n", proc.err)
+                      "version writes format 2 — cortex init --tool claude --force writes it again, and keeps it as .bak\n", proc.err)
 
     def test_force_replaces_whole_a_file_without_the_end_marker(self):
         # No end marker, no team's part: a file of format 1, or one a team wrote, is replaced whole.
@@ -446,10 +446,10 @@ class OptionTests(InitTestCase):
         self.assertEqual(self.init("--tool", "claude").returncode, 0)
         proc = self.init("--workspace")
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("was written for a single project — cortex init --workspace --force writes it again, and keeps "
-                      "it as .bak\n", proc.err)
+        self.assertIn("was written for a single project — cortex init --tool claude --workspace --force writes it "
+                      "again, and keeps it as .bak\n", proc.err)
         before = self.read("CLAUDE.md")
-        proc = self.init("--workspace", "--force")                              # the command the note names
+        proc = self.init("--tool", "claude", "--workspace", "--force")          # the command the note names
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertNotEqual(before, self.read("CLAUDE.md"))
         self.assertIn("layout=workspace", self.read("CLAUDE.md"))
@@ -486,9 +486,51 @@ class OptionTests(InitTestCase):
         self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", written)
         self.assertTrue(written.endswith(team))
         self.assertIn("CLAUDE.md was written for a workspace, and is written for one again — to write a single "
-                      "project's, remove it and run `cortex init` again, then copy the team's part back from its .bak",
-                      proc.err)
+                      "project's, remove it and run `cortex init --tool claude`, then copy the team's part back from its "
+                      ".bak", proc.err)
         self.assertTrue((self.project / "CLAUDE.md.bak").read_text(encoding="utf-8").endswith(team))
+        # Followed: the project has no instructions file left, and `cortex init` alone would write Copilot's.
+        (self.project / "CLAUDE.md").unlink()
+        proc = self.init("--tool", "claude")                                       # the command the note names
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=single format=2 digest=", self.read("CLAUDE.md"))
+        self.assertFalse((self.project / ".github" / "copilot-instructions.md").exists())
+
+    def test_the_notes_name_the_tool_where_several_instructions_files_are(self):
+        # --force without --tool is refused where several instructions files are: each note names the tool, and
+        # the command it names writes that tool's file.
+        self.assertEqual(self.init("--tool", "claude").returncode, 0)
+        self.assertEqual(self.init("--tool", "agents").returncode, 0)
+        before = self.read("CLAUDE.md")
+        proc = self.init("--tool", "claude", "--workspace")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("CLAUDE.md was written for a single project — cortex init --tool claude --workspace --force "
+                      "writes it again", proc.err)
+        proc = self.init("--tool", "claude", "--workspace", "--force")          # the command the note names
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("layout=workspace", self.read("CLAUDE.md"))
+        self.assertEqual(self.read("CLAUDE.md.bak"), before)
+        # A file no longer fitting the theme: the note names --tool too, and the command it names writes it.
+        proc = self.init("--tool", "agents", "--no-personality")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("AGENTS.md was written with the personality block this theme needs removed or added — cortex "
+                      "init --tool agents --force writes it again", proc.err)
+        proc = self.init("--tool", "agents", "--force")                         # the command the note names
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("PERSONALITY:BEGIN", self.read("AGENTS.md"))
+
+    def test_a_custom_file_s_note_names_its_tool_and_file(self):
+        # A custom instructions file, named again with --instructions-file: the note's command writes it.
+        self.assertEqual(self.init("--tool", "custom", "--instructions-file", "docs/ai.md").returncode, 0)
+        path = self.project / "docs" / "ai.md"
+        path.write_text(self.read("docs/ai.md").replace("format=2", "format=1", 1), encoding="utf-8")
+        proc = self.init("--tool", "custom", "--instructions-file", "docs/ai.md")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        named = f"cortex init --tool custom --instructions-file {quote(display(path))} --force"
+        self.assertIn(named, proc.err)
+        proc = self.init("--tool", "custom", "--instructions-file", str(path), "--force")   # the command the note names
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("format=2", self.read("docs/ai.md"))
 
     def test_a_workspace_s_file_writes_no_team_pair_without_the_option(self):
         # The layout read from the file chooses the template, and nothing else: the team's repository is the option's.
@@ -645,7 +687,7 @@ class OptionTests(InitTestCase):
         proc = self.init("--tool", "claude", "--no-personality")
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn("was written with the personality block", proc.err)
-        self.assertIn("cortex init --force writes it again", proc.err)
+        self.assertIn("cortex init --tool claude --force writes it again", proc.err)
 
     def test_cortex_toml_keeps_its_comments_and_its_byte_order_mark(self):
         self.assertEqual(self.init("--theme", "acme").returncode, 0)
@@ -1525,7 +1567,7 @@ class OptionTests(InitTestCase):
         proc = self.init("--tool", "cursor")
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn(f"note: {display(rule)} has no `alwaysApply: true` line in a frontmatter, as Cursor's "
-                      "documentation writes it: Cursor may not apply it in every conversation — cortex init --force writes "
+                      "documentation writes it: Cursor may not apply it in every conversation — cortex init --tool cursor --force writes "
                       "it again, and keeps it as .bak\n", proc.err)
         self.assertEqual(rule.read_bytes(), init_command.without_frontmatter(written))
         rule.write_bytes(written + b"\n## Our own rules\n")                     # a team's, Cursor applies it always
