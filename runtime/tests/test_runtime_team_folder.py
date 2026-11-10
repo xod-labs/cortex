@@ -248,6 +248,14 @@ class TeamFolderOnTheDiskTests(TeamFolderTestCase):
         with self.assertRaisesRegex(ValueError, "whose agents/ is the team's folder"):
             resolve_run(self.request(service="svc-b"), self.project, theme="h2g2")
 
+    def test_a_service_whose_agents_leads_to_the_root_s_agents_left_behind_is_served(self):
+        # The folder renamed, the root's agents/ is no tier: a service whose agents/ leads there reads it once, as
+        # its own — only the team's folder is refused.
+        (self.project / "agents").mkdir()
+        (self.project / "svc-b").mkdir()
+        _link(self, self.project / "agents", self.project / "svc-b" / "agents")
+        resolve_run(self.request(service="svc-b"), self.project, theme="h2g2")
+
 
 @unittest.skipUnless(HAVE_FASTAPI, "fastapi not installed")
 class ApiTests(TeamFolderTestCase):

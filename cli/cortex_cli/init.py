@@ -504,10 +504,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         project = config.load(str(root)) if existing_project else None
     except config.ConfigError as error:
         folder = config.loose_team_folder(str(root))
-        team = cascade.read_team(str(root), folder)
-        if isinstance(team, cascade.Unreadable) and team.error in str(error):
-            # The team's file's own error: removing cortex.toml — the developer's own, at a 2.B root — loses it, and
-            # changes nothing of this.
+        if str(error).startswith(f"{cascade.team_name(folder)}:"):
+            # The team's file's own error — it does not parse, or its grammar refuses it: removing cortex.toml — the
+            # developer's own, at a 2.B root — loses it, and changes nothing of this.
             raise InitError(f"{error}\ncortex init reads {cascade.team_name(folder)}: fix it — a conflict a pull left "
                             "in it, say — then run cortex init again")
         raise InitError(f"{error}\ncortex init keeps an existing {config.PROJECT_FILE}: fix it, or remove it to "
@@ -743,7 +742,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                     f"cortex init --tool {name} --force writes it again, a workspace's as it was written"
                 again += ", and keeps it as .bak"
             else:
-                again = f"cortex init --tool {name} --force replaces it, and keeps it as .bak"
+                # No layout --force could keep: a workspace's run names its option, or --force writes a single project's.
+                option = " --workspace" if workspace and found in (NO_BOOTSTRAP, TITLE_BELOW_TEXT) else ""
+                again = f"cortex init --tool {name}{option} --force replaces it, and keeps it as .bak"
             err.write(f"note: {rel} is there and was kept: {found.phrase} — {again}\n")
         if project is not None and not known_before and instructions_file is not None:
             err.write(f"note: no instructions file of a known tool was here, and {TOOLS['copilot']} is written: "
