@@ -113,8 +113,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     broken = False
     with tempfile.TemporaryDirectory(prefix="cortex-parallel-") as logs:
         with ProcessPoolExecutor(args.workers, initializer=_start_worker, initargs=(args.start_dir, logs)) as pool:
-            # Submitted in order, taken in order: a worker that is free takes the next one.
-            futures: Dict[Future, str] = {pool.submit(_run, test_id): test_id for test_id in order(ids, heavy)}
+            # Submitted in order, taken in order: a worker that is free takes the next one. A worker that dies
+            # while they are submitted breaks the pool: what was not submitted is not run, and said.
+            futures: Dict[Future, str] = {}
+            for test_id in order(ids, heavy):
+                try:
+                    futures[pool.submit(_run, test_id)] = test_id
+                except BrokenProcessPool:
+                    broken = True
+                    break
             for future in as_completed(futures):
                 test_id = futures[future]
                 try:
