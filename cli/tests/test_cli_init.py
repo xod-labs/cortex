@@ -595,7 +595,7 @@ class OptionTests(InitTestCase):
                       "replaces it, and keeps it as .bak", proc.err)
         proc = self.init("--tool", "cursor", "--workspace", "--force")              # the command the note names
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read(".cursor/rules/cortex.mdc"))
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=3 digest=", self.read(".cursor/rules/cortex.mdc"))
         # A single project's run names no option: --force writes a single project's, as the run would.
         rule.write_text("This repository uses Cortex.\n\n# Cortex AI Team\n", encoding="utf-8")
         self.assertIn("cortex init --tool cursor --force replaces it", self.init().err)
