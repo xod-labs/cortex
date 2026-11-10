@@ -487,6 +487,31 @@ class TeamVersionTests(SyncedProjectTestCase):
         self.assertEqual(host.returncode, 0, host.stdout + host.stderr)
         self.assertEqual((pin().version, pin().theme), ("1.8.0", "h2g2"))
 
+    @unittest.skipIf(os.name == "nt", "the source's cortex run with an empty environment")
+    @outside_a_repository
+    def test_below_1_8_0_a_try_or_a_version_that_is_none_keeps_its_own_422(self):
+        # Mid-adoption — cortex.toml without its theme, the team's file giving it, synced: a try above the team's,
+        # or a local version that is none, is said as such, never as cortex.toml's lack, which no sync clears there.
+        self.store_1_7_0()
+        for version in ("1.8.0", "1.9.0"):
+            shutil.copytree(self.home / "versions" / "1.7.0", self.home / "versions" / version)
+        pin = self.files('version = "1.7.0"\n', team='version = "1.8.0"\ntheme = "h2g2"\n')
+        (self.project / "cortex.local.toml").unlink(missing_ok=True)
+        host = self.cli("sync")
+        self.assertEqual(host.returncode, 0, host.stdout + host.stderr)
+        self.assertEqual(pin().version, "1.8.0")
+        host = self.cli("upgrade", "--local", "1.9.0", "--force")
+        self.assertEqual(host.returncode, 0, host.stdout + host.stderr)
+        with self.assertRaisesRegex(ValueError, r"a try — and the runtime the team's 1\.8\.0: remove the try"):
+            pin()
+        host = self.cli("upgrade", "--local", "1.8.0")          # the try removed: at the team's, the key goes
+        self.assertEqual(host.returncode, 0, host.stdout + host.stderr)
+        self.assertEqual(pin().version, "1.8.0")
+        synced = 'synced = { team = "1.8.0", project = "1.7.0", pinned = "1.8.0", reads = "1.8.0" }\n'
+        (self.project / "cortex.local.toml").write_text('version = "x"\n' + synced, encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, r'^cortex\.local\.toml: "version" is no version'):
+            pin()
+
     def test_a_synced_that_is_none_names_its_remedy_once(self):
         pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local='synced = { pinned = "9.9.9" }\n')
         with self.assertRaisesRegex(ValueError, r'"synced": "reads" is required') as caught:
