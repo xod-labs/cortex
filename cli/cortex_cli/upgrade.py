@@ -823,6 +823,14 @@ def _no_release(the_store: store.Store, command: str) -> UpgradeError:
     """No VERSION from a build of no release: its own version is the one its branch prepares, which no
     teammate can download (ADR-009 §9, 2026-11-09) — a project is moved to it only by naming it."""
     kind = "a development build" if store.embedded_archive() is not None else "a source checkout"
+    prepares = Version("{}.{}.{}".format(*the_store.own.core))
+    if "--team" in command and prepares <= Version(grammar.FIRST_TEAM_VERSION):
+        # Every release that reads the team's file is newer than a build that prepares 1.8.0: no VERSION named moves
+        # the pin from this cortex — a release of one does (``config.moves_team_pin``).
+        return UpgradeError(f"this cortex is {kind}, {the_store.own}, the version its branch prepares, which no "
+                            "teammate can download, and every release that reads the team's file is newer than it — "
+                            f"update this cortex to one first: `cortex self-update VERSION`, then `{command} VERSION`. "
+                            "Nothing was changed")
     return UpgradeError(f"this cortex is {kind}, {the_store.own}, the version its branch prepares, which no teammate "
                         f"can download — name the version to move to: `{command} VERSION`. Nothing was changed")
 

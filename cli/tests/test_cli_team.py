@@ -1065,6 +1065,29 @@ class SecondReviewTests(TeamTestCase):
                 self.assertEqual((root / TEAM).read_bytes(), before)
 
     @SOURCE
+    @DOWNLOADS
+    def test_a_development_build_that_prepares_1_8_0_names_no_team_version_it_cannot_move_to(self):
+        # A build that prepares 1.8.0 serves no release that reads the team's file — each is newer: `--team VERSION`
+        # alone is refused for every one; a cortex of that release moves the pin.
+        dev = {"CORTEX_SOURCE_VERSION": "1.8.0-dev.5"}
+        root = self.project('theme = "h2g2"\n', team='version = "1.8.0-dev.4"\n')       # another build's pin
+        self.registered(root)
+        before = (root / TEAM).read_bytes()
+        for args in (("upgrade", "--team"), ("upgrade", "--all", "--team")):
+            with self.subTest(args=args):
+                proc = self.cortex(self.tmp if "--all" in args else root, *args, **dev)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn("every release that reads the team's file is newer than it — update this cortex to one "
+                              f"first: `cortex self-update VERSION`, then `cortex {' '.join(args)} VERSION`. Nothing "
+                              "was changed", proc.err)
+                self.assertNotIn("name the version to move to", proc.err)
+        for version in ("1.7.0", "1.8.0", "1.8.0-rc.1"):          # no VERSION this cortex moves the pin to
+            with self.subTest(version=version):
+                followed = self.cortex(root, "upgrade", "--team", version, **dev)
+                self.assertEqual(followed.returncode, 1, followed.out + followed.err)
+        self.assertEqual((root / TEAM).read_bytes(), before)
+
+    @SOURCE
     def test_all_from_a_development_build_is_refused_for_a_move_up_only(self):
         # Refused once when a project would move up to the build's version unnamed: one pinned below it,
         # that follows no team's file. A pin newer than the build, or a follower, moves none.
