@@ -148,6 +148,7 @@ class ConfigCommandTests(SettingsTestCase):
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn('cortex.local.toml: unknown key "verison"', proc.err)
 
+    @harness.outside_a_repository
     def test_a_root_that_is_no_repository_reads_cortex_toml_s_version_locked_too(self):
         # A 2.B root, with no team's file: the version is cortex.toml's, whoever reads it (§3.1).
         project = self.project()
@@ -169,6 +170,7 @@ class CommittedTests(SettingsTestCase):
         return str(bin_dir)
 
     @POSIX
+    @harness.outside_a_repository
     def test_a_git_that_refuses_counts_as_no_git(self):
         project = self.project()
         path = self.refusing_git()
