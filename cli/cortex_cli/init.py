@@ -659,7 +659,8 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             if other == instructions_file or not other.is_file():
                 continue
             content = other.read_bytes()
-            found = kept_bootstrap(content, (templates / layout).read_bytes())
+            # Told against the template --force writes it with: the developer's own follows their version.
+            found = kept_bootstrap(content, as_forced(other, layout)[0])
             if found is None:
                 continue
             if not found.force:
