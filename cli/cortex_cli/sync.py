@@ -793,7 +793,7 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
     team = name == config.TEAM_LOCK_FILE
     shown_name = f"{folder}/{config.TEAM_LOCK_FILE}" if team else name
     pins = config.cascade.team_name(folder) if team else config.PROJECT_FILE
-    lock = config.load_lock(root, name, shown_name)
+    lock = config.load_lock(root, name, shown_name, writer=writer)
     digest = the_store.digest(version)
     if lock is not None and lock.version == version:
         if lock.digest == digest:

@@ -447,6 +447,38 @@ class TryTests(TeamTestCase):
         self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
         self.assertEqual((root / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(FORMAT_2, False)))
 
+    def test_another_tool_s_file_is_judged_as_force_writes_the_developer_s_own(self):
+        # A plain `cortex init` among several tools' files judges each as `--tool X --force` writes it: the
+        # developer's own with their theme and the version this machine reads. Judged with the team's, its note
+        # named a command that writes nothing, and came back on every run.
+        workspace_98 = WORKSPACE.replace(b"format=3", b"format=2").replace(b"## Where the spec is",
+                                                                             b"## Where the spec is, in 2", 1)
+        self.assertNotEqual(workspace_98, WORKSPACE.replace(b"format=3", b"format=2"))
+        self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": FORMAT_2,
+                                            "templates/bootstrap-instructions-workspace.md": workspace_98,
+                                            "templates/project-overview.md.template": b"# Overview\n",
+                                            "templates/project-context.md.template": b"# Context\n"})
+        for case, local in (("a theme of none", 'theme = "none"\n'), ("a try", f'version = "{OWN}"\n')):
+            with self.subTest(case=case):
+                root = self.project(toml='version = "9.9.8"\ntheme = "h2g2"\n', local=local, name=case.replace(" ", "-"))
+                (root / ".gitignore").write_text("CLAUDE.md\nAGENTS.md\ncortex.local.toml\n", encoding="utf-8")
+                self.assert_ok(self.cortex(root, "sync"))
+                self.assert_ok(self.cortex(root, "init", "--tool", "claude", "--workspace", "--force"))
+                self.assert_ok(self.cortex(root, "init", "--tool", "agents"))
+                written_once = (root / "CLAUDE.md").read_bytes()
+                for _ in range(2):
+                    proc = self.cortex(root, "init")
+                    self.assert_ok(proc)
+                    self.assertIn("note: CLAUDE.md is there and was kept: a bootstrap written for a workspace, up to "
+                                  "date as one\n", proc.err)
+                    self.assertNotIn("--tool claude --force", proc.err)
+                    # What the note says, the command does: --force writes it as it is.
+                    followed = self.cortex(root, "init", "--tool", "claude", "--force")
+                    self.assert_ok(followed)
+                    self.assertIn("CLAUDE.md is what --force would write: left as it is", followed.out)
+                    self.assertEqual((root / "CLAUDE.md").read_bytes(), written_once)
+                    self.assertFalse((root / "CLAUDE.md.bak").exists())
+
 
 @DOWNLOADS
 class BeforeTheTeamTests(TeamTestCase):

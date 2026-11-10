@@ -149,6 +149,7 @@ class ConfigCommandTests(SettingsTestCase):
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn('cortex.local.toml: unknown key "verison"', proc.err)
 
+    @harness.outside_a_repository
     def test_a_root_that_is_no_repository_reads_cortex_toml_s_version_locked_too(self):
         # A 2.B root, with no team's file: the version is cortex.toml's, whoever reads it (§3.1).
         project = self.project()
@@ -170,6 +171,7 @@ class CommittedTests(SettingsTestCase):
         return str(bin_dir)
 
     @POSIX
+    @harness.outside_a_repository
     def test_a_git_that_refuses_counts_as_no_git(self):
         project = self.project()
         path = self.refusing_git()
@@ -208,6 +210,20 @@ class CommittedTests(SettingsTestCase):
             environment = sync.git_environment()
             self.assertEqual(environment.get("GIT_AUTHOR_NAME"), "Kept")
             self.assertNotIn("GIT_DIR", environment)
+
+    @NEEDS_GIT
+    def test_git_s_configuration_of_the_caller_is_kept(self):
+        # A CI gives git its identity, or a safe.directory, through GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS: git
+        # keeps them itself on its way to another repository (prepare_other_repo_env), and so does Cortex.
+        mine = self.tmp / "mine"
+        subprocess.run([GIT, "init", "-q", str(mine)], check=True)
+        given = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "cortex.counted", "GIT_CONFIG_VALUE_0": "kept",
+                 "GIT_CONFIG_PARAMETERS": "'cortex.given=kept'"}
+        with mock.patch.dict(os.environ, given):
+            for call in (sync._git, upgrade._git):
+                for key in ("cortex.counted", "cortex.given"):
+                    with self.subTest(call=call.__module__, key=key):
+                        self.assertEqual(call(str(mine), "config", "--get", key).stdout.strip(), "kept")
 
     @NEEDS_GIT
     def test_git_s_variables_of_the_caller_do_not_name_another_repository(self):

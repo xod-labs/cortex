@@ -71,10 +71,11 @@ def read_pin(root: Path) -> Optional[Pin]:
                 and project.before_team(data["version"]):
             # Below 1.8.0 nothing of ADR-013 is read (§3.8), and `cortex sync` records no `synced` (§3.1): the
             # version is cortex.toml's alone, as 1.7.0 read it — a 422 there no sync could ever clear (§9).
-            if os.path.lexists(Path(root) / cascade.TEAM_NAME) and _gives_what_it_lacks(data):
+            if _gives_what_it_lacks(Path(root), data):
                 # Mid-adoption: of a cortex.toml no commit holds, `cortex sync` reads the team's file instead (§3.3),
                 # which may give what this one lacks — or refuses it too, committed. A file it would refuse
-                # whatever the team's gives — a theme out of the store, a key it does not know — keeps the remedy.
+                # whatever the team's gives — a theme out of the store, a key it does not know — keeps the remedy,
+                # as a team's file that gives nothing in its place does.
                 remedy = (f"run `cortex sync` in the project, which may read {cascade.TEAM_NAME} instead of a "
                           f"{project.PROJECT_FILE} not committed")
             project.check_project(data)
@@ -123,17 +124,27 @@ def read_pin(root: Path) -> Optional[Pin]:
     return Pin(version=version, theme=str(found.value("theme")), theme_locked=found["theme"].locked, team_folder=folder)
 
 
-def _gives_what_it_lacks(data: Mapping[str, Any]) -> bool:
-    """Whether ``cortex.toml`` fails 1.7.0's grammar only for a key the team's file may give instead — the one
-    case a sync that reads the team's file clears (ADR-013 §3.12). Never one that names a team's folder: a sync
-    reads ``agents`` from a committed ``cortex.toml`` of 1.8.0 or later only, and refuses this one (§3.6)."""
+def _gives_what_it_lacks(root: Path, data: Mapping[str, Any]) -> bool:
+    """Whether ``cortex.toml`` fails 1.7.0's grammar only for a key the team's file gives instead — the one
+    case a sync that reads the team's file clears (ADR-013 §3.12): a team's file of its own grammar, which
+    pins a version — 1.8.0 or later, above this one — and sets each required key ``cortex.toml`` lacks. Never
+    one that names a team's folder: a sync reads ``agents`` from a committed ``cortex.toml`` of 1.8.0 or later
+    only, and refuses this one (§3.6)."""
     if "agents" in data:
         return False
     try:
         project.check_project(data, project.PROJECT_REQUIRED)
     except project.ProjectFileError:
         return False
-    return True
+    team = cascade.read_team(str(root))
+    if team is None or isinstance(team, cascade.Unreadable):
+        return False
+    try:
+        project.check_team(team)
+    except project.ProjectFileError:
+        return False
+    return project.is_version(team.get("version")) and all(key in data or key in team
+                                                           for key in project.PROJECT_REQUIRED)
 
 
 def _local(root: Path) -> Mapping[str, Any]:

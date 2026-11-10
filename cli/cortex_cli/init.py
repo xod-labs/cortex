@@ -597,22 +597,33 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         and written_for_workspace(instructions_file.read_bytes())
     workspace = options.workspace or kept_workspace
     layout = "bootstrap-instructions-workspace.md" if workspace else "bootstrap-instructions.md"
+    team_personality = personality
+
+    def as_forced(path: Path, name: str) -> Tuple[bytes, bool]:
+        """The template ``name`` and the personality `cortex init --tool X --force` writes ``path`` with. The
+        developer's own instructions file follows the version this machine reads, and its theme, from a team's
+        version of 1.8.0 (ADR-013 §3.10): before it, as 1.7.0 writes it — git asked only where they are not the
+        team's. Any other file, the team's."""
+        if project is not None and not grammar.before_team(str(project.team_version)):
+            # The theme as read once cortex.toml is written: a local theme, or a lock, wins over --theme still.
+            mine = config.load(str(root)).active_theme != "none"
+            if (templates_spec != spec or mine != team_personality) and sync.developers_own(path):
+                return (spec / "templates" / name).read_bytes(), mine
+        return (templates / name).read_bytes(), team_personality
+
     template = (templates / layout).read_bytes()
-    # The developer's own instructions file follows the version this machine reads, and its theme, from a team's
-    # version of 1.8.0 (ADR-013 §3.10): before it, as 1.7.0 writes it — git asked only where they are not the team's.
-    if project is not None and instructions_file is not None and not grammar.before_team(str(project.team_version)):
-        # The theme as read once cortex.toml is written: a local theme, or a lock, wins over --theme still.
-        mine = config.load(str(root)).active_theme != "none"
-        if (templates_spec != spec or mine != personality) and sync.developers_own(instructions_file):
-            template = (spec / "templates" / layout).read_bytes()
-            personality = mine
+    if instructions_file is not None:
+        template, personality = as_forced(instructions_file, layout)
     if instructions_file is None:
         out.write("✓ the instructions files are kept — several are there; --tool names the one to write\n")
     elif instructions_file.exists() and not options.force:
         out.write(f"✓ {display(str(instructions_file))} kept — --force replaces it\n")
         kept = instructions_file.read_bytes()
-        again = "cortex init --force writes it again, and keeps it as .bak"
         found = kept_bootstrap(kept, template)
+        # Of the other layout, the option chose this run's: --force alone keeps the file's (#329), and would leave
+        # it as it is — so the command names the option.
+        option = " --workspace" if options.workspace and found is not None and found.layout else ""
+        again = f"cortex init{option} --force writes it again, and keeps it as .bak"
         if found is not None:
             err.write(f"note: {display(str(instructions_file))} {found.sentence} — "
                       f"{again if found.force else 'it is kept as it is'}\n")
@@ -642,7 +653,8 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             out.write(f"✓ {display(str(instructions_file))} {'replaced' if replaced else 'written'}\n")
             if kept_workspace:
                 err.write(f"note: {display(str(instructions_file))} was written for a workspace, and is written for one "
-                          "again — remove it first to write a single project's\n")
+                          "again — to write a single project's, remove it and run `cortex init` again, then copy the team's "
+                          "part back from its .bak, below the end marker\n")
     if not tool_named:
         # Found, not written: a file of another tool's, which a new project's default leaves alone.
         for name, rel in TOOLS.items():
@@ -656,8 +668,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             if not found.force:
                 again = "kept as it is"
             elif found.layout and not workspace and content == forced(
-                    other, (templates / "bootstrap-instructions-workspace.md").read_bytes(), personality, content):
-                # A workspace's file as --force, which keeps its layout (#329), would write it: no command to name.
+                    other, *as_forced(other, "bootstrap-instructions-workspace.md"), content):
+                # A workspace's file as --force, which keeps its layout (#329), would write it: no command to name —
+                # judged as that run writes this file, the developer's own with their theme and version.
                 err.write(f"note: {rel} is there and was kept: {found.phrase}, up to date as one\n")
                 continue
             elif found.layout:

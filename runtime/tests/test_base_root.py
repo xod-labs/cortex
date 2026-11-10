@@ -376,6 +376,25 @@ class TeamVersionTests(SyncedProjectTestCase):
                 self.assertNotEqual(host.returncode, 0, host.stdout.decode())
                 self.assertIn('"agents"', host.stderr.decode())
 
+    @unittest.skipIf(os.name == "nt", "the source's cortex run with an empty environment")
+    def test_below_1_8_0_the_sync_is_named_only_where_it_reads_the_team_s_file(self):
+        # `cortex sync` is named only where the host's cortex resolves these files — where the team's file pins
+        # 1.8.0 or later and gives the theme cortex.toml lacks. A team's file that gives nothing in its place —
+        # no version, one before 1.8.0, no theme, none that parses — and the sync refuses this file too.
+        for team, named in (('version = "1.8.0"\ntheme = "h2g2"\n', True), ('theme = "h2g2"\n', False),
+                            ('version = "1.7.5"\ntheme = "h2g2"\n', False), ('version = "1.8.0"\n', False),
+                            ("version = [\n", False)):
+            with self.subTest(team=team):
+                pin = self.files('version = "1.7.0"\n', team=team)
+                with self.assertRaises(ValueError) as caught:
+                    pin()
+                self.assertEqual("run `cortex sync`" in str(caught.exception), named, caught.exception)
+                if not named:
+                    self.assertTrue(str(caught.exception).endswith("— cortex sync refuses this file too"),
+                                    caught.exception)
+                host = self.cli("config", "--locked")         # what the sync named would read, or refuse
+                self.assertEqual(host.returncode == 0, named, host.stderr.decode())
+
     def test_a_synced_that_is_none_names_its_remedy_once(self):
         pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local='synced = { pinned = "9.9.9" }\n')
         with self.assertRaisesRegex(ValueError, r'"synced": "reads" is required') as caught:
