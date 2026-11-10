@@ -136,6 +136,7 @@ class VersionTests(TeamTestCase):
         self.assertEqual(proc.out, "1.7.0\n")
         self.assertIn(f"note: {TEAM} is not read: the team's version is 1.7.0, before 1.8.0", proc.err)
 
+    @harness.outside_a_repository
     def test_at_a_2b_root_the_team_s_file_wins_over_an_uncommitted_cortex_toml(self):
         root = self.project('version = "1.7.0"\ntheme = "h2g2"\n', team='version = "1.8.0"\n', committed=False)
         self.assertEqual(self.value(root, "version"), "1.8.0")
@@ -254,6 +255,7 @@ class LockTests(TeamTestCase):
 
 class SyncedTests(TeamTestCase):
     @SOURCE
+    @harness.outside_a_repository
     def test_synced_records_the_versions_read(self):
         root = self.project('version = "9.9.7"\ntheme = "h2g2"\n', team=f'version = "{OWN}"\n', committed=False)
         self.assert_ok(self.cortex(root, "sync"))
@@ -352,6 +354,7 @@ class TeamFileTests(TeamTestCase):
 
 
 class UpgradeTests(TeamTestCase):
+    @harness.outside_a_repository
     def test_team_without_a_team_s_file_is_refused_and_adds_a_version_to_one_without(self):
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n')
         proc = self.cortex(root, "upgrade", "--team")
@@ -417,6 +420,7 @@ class UpgradeTests(TeamTestCase):
         self.assertIn(f"this project follows {TEAM}, which pins Cortex {OWN} — moving it is the team's: "
                       "`cortex upgrade --team 9.9.8`; trying it here: `cortex upgrade --local 9.9.8`", proc.err)
 
+    @harness.outside_a_repository
     def test_at_a_2b_root_a_move_is_refused_as_all_skips_the_project(self):
         root = self.project('version = "9.9.7"\ntheme = "h2g2"\n', team='version = "9.9.8"\n', committed=False)
         before = (root / "cortex.toml").read_bytes()
@@ -974,6 +978,7 @@ class SecondReviewTests(TeamTestCase):
         with mock.patch.dict(os.environ, GIT_ENV):
             self.assertTrue(upgrade._other_tree(str(root), str(root), root / "agents" / "cortex.team.lock"))
 
+    @harness.outside_a_repository
     def test_an_unreadable_project_s_pinned_is_its_team_s_version(self):
         root = self.project('version = "9.9.7"\ntheme = "h2g2"\nlater = "x"\n', team='version = "9.9.8"\n',
                             committed=False)
@@ -1000,12 +1005,14 @@ class SecondReviewTests(TeamTestCase):
 
     @SOURCE
     @DOWNLOADS
+    @harness.outside_a_repository
     def test_upgrade_during_a_try_says_commit_only_where_a_repository_is(self):
         root = self.project('version = "9.9.7"\ntheme = "h2g2"\n', local=f'version = "{OWN}"\n', committed=False)
         proc = self.cortex(root, "upgrade", "9.9.8")
         self.assert_ok(proc)
         self.assertIn("cortex.lock: Cortex 9.9.8\n", proc.out)
 
+    @harness.outside_a_repository
     def test_a_try_at_or_below_the_team_s_in_cortex_toml_says_its_remedy_once(self):
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', team=f'version = "{OWN}"\n', committed=False)
         proc = self.cortex(root, "sync")
@@ -1207,6 +1214,7 @@ class CodeReviewTests(TeamTestCase):
         self.assertNotIn(f"The overlays of {harness_path(alpha)}", proc.out)
 
     @DEVELOPMENT
+    @harness.outside_a_repository
     def test_at_a_2b_root_a_team_s_pin_too_new_is_said_as_the_team_s(self):
         # ADR-013 §3.1: at a 2.B root, cortex.toml's version is the developer's, and the team's file's is the team's.
         root = self.project('version = "1.8.0"\ntheme = "h2g2"\n', team='version = "99.0.0"\n', committed=False)
@@ -1215,6 +1223,7 @@ class CodeReviewTests(TeamTestCase):
         self.assertIn(f"this project uses Cortex 99.0.0, which its {TEAM} pins, newer than this cortex", proc.err)
 
     @SOURCE
+    @harness.outside_a_repository
     def test_local_at_a_2b_root_removes_no_try_cortex_toml_holds(self):
         # cortex.toml's version is the developer's at a 2.B root, but no try of cortex.local.toml's: nothing to remove.
         root = self.project('version = "9.9.7"\ntheme = "h2g2"\n', team='version = "9.9.8"\n', committed=False)
