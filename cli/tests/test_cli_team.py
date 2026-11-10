@@ -1992,6 +1992,7 @@ class CodeReviewSecondFixTests(TeamTestCase):
         self.assertIn("are as they were — `cortex sync` puts this machine back on them", proc.err)
         self.assertEqual(lock.read_bytes(), before)
 
+    @TEAM_RELEASE
     @AS_ROOT
     def test_team_puts_back_what_it_could_not_write(self):
         # The team's folder cannot be written: --team fails, and says the team's files are as they were.
