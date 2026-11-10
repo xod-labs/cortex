@@ -35,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 from pathlib import Path
 from typing import Collection, Dict, List, Optional, Set, TextIO, Tuple
 
@@ -177,6 +178,37 @@ def _git(root: str, *args: str) -> Optional[subprocess.CompletedProcess]:
                               timeout=30, env=git_environment())
     except (OSError, subprocess.SubprocessError):
         return None
+
+
+def team_file_moved(team_file: Path) -> bool:
+    """Whether the team's file pins another version than the one its repository has committed — moved there by
+    hand — or is committed nowhere yet: its lock goes with it then, or a teammate's checkout reads a lock of another
+    version than its file. A change of another key, the version as committed, does not count: the lock goes alone.
+    ``False`` where git cannot tell, and for a file that does not read."""
+    folder = str(team_file.parent)
+    status = _git(folder, "status", "--porcelain", "--", f":(literal){team_file.name}")
+    if status is None or status.returncode != 0 or not status.stdout.strip():
+        return False                                    # no git, no work tree, or as committed
+    try:
+        now = tomllib.loads(team_file.read_bytes().decode("utf-8-sig")).get("version")
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return False
+    shown = _git(folder, "show", f"HEAD:./{team_file.name}")
+    if shown is None:
+        return False
+    if shown.returncode != 0:                           # committed nowhere yet: it goes with its lock
+        return True
+    try:
+        return tomllib.loads(shown.stdout.lstrip("\ufeff")).get("version") != now
+    except tomllib.TOMLDecodeError:
+        return True
+
+
+def team_lock_commit(folder: Path) -> str:
+    """Where the team's lock in ``folder`` is to be committed, as a note says it: in the team's folder — with the
+    team's file, when it was moved there by hand (``team_file_moved``)."""
+    moved = team_file_moved(folder / config.TEAM_FILE)
+    return f" in {config.TEAM_FOLDER}/" + (f", with {config.TEAM_FILE}, moved to its version by hand" if moved else "")
 
 
 def in_index(path: Path) -> Optional[bool]:
@@ -1014,7 +1046,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         out.write(f"{config.LOCK_FILE}: neither read nor written — a checkout has no version (--from)\n")
     elif lock is not None:
         name = where[2]
-        commit = " — commit it" + (f" in {config.TEAM_FOLDER}/" if name == config.TEAM_LOCK_NAME else "")
+        commit = " — commit it" + (team_lock_commit(Path(where[0])) if name == config.TEAM_LOCK_NAME else "")
         nowhere = in_no_repository(where[0])
         out.write(f"{name}: {lock}{'' if nowhere else commit}\n")
     if notes:
