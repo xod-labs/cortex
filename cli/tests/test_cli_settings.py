@@ -559,6 +559,16 @@ class DevelopmentBuildTests(SettingsTestCase):
             self.assertFalse(store.too_old_for(Version(version), Version(own)), (version, own))
 
 
+def team_remedy(block: bool) -> str:
+    """What a team's pin of no release is told: pin a release by --team — after a self-update, from a build that prepares
+    1.8.0 or below, whose every --team VERSION is refused (ADR-009 §9)."""
+    if store.prepares_before_team(Version(OWN)):
+        return ("update this cortex to a release, then pin one:\n    cortex self-update VERSION\n    cortex upgrade --team "
+                "VERSION" if block else "update this cortex to a release, then pin one: `cortex self-update VERSION`, "
+                "`cortex upgrade --team VERSION`")
+    return "pin a release:\n    cortex upgrade --team VERSION" if block else "pin a release: `cortex upgrade --team VERSION`"
+
+
 class DevelopmentPinTests(SettingsTestCase):
     """A project pinned to a build of no release's version — a CI artifact's, which `cortex init` pins —
     is told to pin a release: no self-update installs that version, no release serves it (ADR-009 §9)."""
@@ -602,8 +612,8 @@ class DevelopmentPinTests(SettingsTestCase):
             with self.subTest(args=args):
                 proc = self.cortex(root, *args)
                 self.assertEqual(proc.returncode, 1, proc.err)
-                self.assertIn("Cortex 1.8.0-dev.3 is a build of no release, which no release serves — pin a release: "
-                              "`cortex upgrade --team VERSION`", proc.err)
+                self.assertIn(f"Cortex 1.8.0-dev.3 is a build of no release, which no release serves — {team_remedy(False)}",
+                              proc.err)
 
     def test_config_names_the_command_of_the_file_that_pins_it(self):
         project = self.project(extra="")
@@ -612,14 +622,15 @@ class DevelopmentPinTests(SettingsTestCase):
         (team / "agents").mkdir(parents=True)
         (team / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")
         (team / "agents" / "cortex.team.toml").write_text(f'version = "{self.NEWER}"\n', encoding="utf-8")
-        for root, command in ((project, "cortex upgrade --local VERSION"), (team, "cortex upgrade --team VERSION")):
-            with self.subTest(command=command):
+        local = ("pin a release:\n    cortex upgrade --local VERSION", "pin a release: `cortex upgrade --local VERSION`")
+        for root, (block, inline) in ((project, local), (team, (team_remedy(True), team_remedy(False)))):
+            with self.subTest(command=inline):
                 proc = self.cortex(root, "config", "version")
                 self.assert_ok(proc)
-                self.assertIn(f"pin a release:\n    {command}\n", proc.err)
+                self.assertIn(f"{block}\n", proc.err.replace("\r\n", "\n"))
                 proc = self.cortex(root, "config")
                 self.assert_ok(proc)
-                self.assertIn(f"newer than this cortex, {OWN}: pin a release: `{command}`", proc.out)
+                self.assertIn(f"newer than this cortex, {OWN}: {inline}", proc.out)
 
     @harness.outside_a_repository
     def test_named_to_upgrade(self):
