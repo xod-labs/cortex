@@ -642,7 +642,7 @@ class OptionTests(InitTestCase):
         self.assertNotIn("the tool will not find Cortex", proc.err)
         proc = self.init("--tool", "claude", "--workspace", "--force")          # as the note says, for a workspace's
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=3 digest=", self.read("CLAUDE.md"))
         self.assertEqual(self.read("CLAUDE.md.bak"), old)
 
     def test_in_a_repository_without_git_the_backup_is_not_said_left_to_git(self):
