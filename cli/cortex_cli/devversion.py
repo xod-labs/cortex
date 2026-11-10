@@ -9,10 +9,12 @@ run's number. ``X.Y.Z`` is the version the branch prepares, which ``CHANGELOG.md
 - ``[Unreleased]`` gives the bump: an entry under ``Removed``, or one marked breaking (``💥``) — or
   under a heading so marked, ``### 💥 Breaking`` — a major; one under ``Added``, ``Changed`` or
   ``Deprecated``, a minor; anything else — ``Fixed`` and ``Security`` only, or no entry yet — a
-  patch. A kind is read in any case, an emoji or a note around it: ``### ✨ Added``, ``### Fixed
-  (CLI)``. Markdown's rules hold: a heading may be indented up to three spaces, an entry starts with
-  ``-``, ``*`` or ``+``, and a line ends at a line feed or a carriage return alone — not at the
-  other breaks Python splits text at, which an entry may hold;
+  patch. A kind is read in any case, the heading's first word, an emoji before it or a note after it:
+  ``### ✨ Added``, ``### Fixed (CLI)`` — ``### Notes: nothing removed`` names none. Markdown's rules
+  hold: a heading or an entry may be indented up to three spaces, a space or a tab after its ``###``,
+  an entry starts with ``-``, ``*`` or ``+``, a fenced code block holds no section, heading nor entry,
+  and a line ends at a line feed or a carriage return alone — not at the other breaks Python splits
+  text at, which an entry may hold;
 - a changelog that writes a pre-release's section — Cortex's does not (ADR-009 §3.7) — has it as
   a floor: above the base, ``3.1.0-rc.1`` makes the version the higher of its release and the
   bump's — ``3.1.0`` after a fix or an addition, ``4.0.0`` after a removal.
@@ -32,11 +34,16 @@ UNRELEASED = "unreleased"
 # A second-level section: `## [1.7.0] - 2026-11-06 — …`, `## [Unreleased]` — indented up to three spaces, as
 # Markdown has a heading.
 SECTION = re.compile(r" {0,3}## \[(?P<label>[^\]]+)\].*")
-KIND = re.compile(r" {0,3}### (?P<kind>.+?)\s*")
-# The kinds of Keep a Changelog, as a heading names one: `### Added`, `### ✨ Added`, `### fixed (CLI)`.
-KINDS = re.compile(r"\b(added|changed|deprecated|removed|fixed|security)\b", re.IGNORECASE)
-# An entry is a line of its own starting a list item; what follows it, indented, is its text.
-ENTRY = re.compile(r"[-*+][ \t]+(?P<text>.*)")
+KIND = re.compile(r" {0,3}###[ \t]+(?P<kind>.+?)\s*")
+# The kinds of Keep a Changelog, as a heading names one — its first word, after an emoji or a mark: `### Added`,
+# `### ✨ Added`, `### fixed (CLI)`; `### Notes: nothing removed` names none.
+KINDS = re.compile(r"^[\W_]*(added|changed|deprecated|removed|fixed|security)\b", re.IGNORECASE)
+# An entry is a line of its own starting a list item, indented up to three spaces; what follows it, indented
+# further, is its text.
+ENTRY = re.compile(r" {0,3}[-*+][ \t]+(?P<text>.*)")
+# A code fence opens and closes a block that holds no Markdown: three backticks or tildes, or more, indented up to
+# three spaces — closed by a line of the same character, at least as many.
+FENCE = re.compile(r" {0,3}(?P<fence>`{3,}|~{3,})(?P<info>.*)")
 BREAKING = re.compile(r"(?:\*\*)?💥")
 # A heading marked breaking, `### 💥 Breaking`, `### Breaking changes`: its entries are, whatever kind it names.
 # The word first, or the mark: `### Fixed (no breaking change)` and `### Non-breaking` are not.
@@ -107,8 +114,22 @@ def prepared(text: str) -> Version:
 
 
 def _lines(text: str) -> List[str]:
-    # Markdown's line endings alone: `splitlines` would also break at U+2028, U+0085 or a form feed in an entry.
-    return re.split(r"\r\n|\r|\n", text.removeprefix("\ufeff"))
+    """The lines Markdown reads as such, those of a fenced code block left out — an example of a changelog in one
+    is none of its sections. Markdown's line endings alone: ``splitlines`` would also break at U+2028, U+0085 or a
+    form feed in an entry."""
+    kept: List[str] = []
+    fence: Optional[str] = None
+    for line in re.split(r"\r\n|\r|\n", text.removeprefix("\ufeff")):
+        found = FENCE.fullmatch(line.rstrip())
+        if fence is None and found and not (found.group("fence")[0] == "`" and "`" in found.group("info")):
+            fence = found.group("fence")
+        elif fence is not None:
+            if found and found.group("fence")[0] == fence[0] and len(found.group("fence")) >= len(fence) \
+                    and not found.group("info").strip():
+                fence = None
+        else:
+            kept.append(line)
+    return kept
 
 
 def development(text: str, build: Optional[int] = None) -> str:
