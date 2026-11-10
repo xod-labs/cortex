@@ -1759,6 +1759,46 @@ class CodeReviewSecondFixTests(TeamTestCase):
         self.assertEqual((name, abbrev), ("CI", "12"))
 
 
+class SecondCodeReviewTests(TeamTestCase):
+    """What the second counter-review of the 1.8.0 stack's code found (2026-11-10)."""
+
+    LOCKING = 'claude_access = false\nlocked = ["claude_access"]\n'
+    PULLED = '<<<<<<< HEAD\nversion = "9.9.7"\n=======\nversion = "9.9.8"\n>>>>>>> origin/main\n' + LOCKING
+
+    @harness.outside_a_repository
+    def test_a_team_s_file_that_does_not_read_beside_an_uncommitted_pin_is_refused(self):
+        # A 2.B root at 1.7.0 whose agents/ a pull left in a conflict: the team's version is the file's, which it
+        # cannot tell — refused, never read as a file that pins none, and its lock dropped (ADR-013 §3.1, §3.5).
+        root = self.project('version = "1.7.0"\ntheme = "h2g2"\nclaude_access = true\n', team=self.PULLED,
+                            committed=False)
+        for args in (("sync",), ("sync", "--locked"), ("config", "claude_access"), ("validate",)):
+            with self.subTest(args=args):
+                proc = self.cortex(root, *args)
+                self.assertNotEqual(proc.returncode, 0, proc.out + proc.err)
+                self.assertIn(f"{TEAM}: Invalid statement", proc.out + proc.err)
+                self.assertNotIn("is not read", proc.out + proc.err)
+        self.assertFalse((root / "cortex.local.toml").exists())
+        # Committed, cortex.toml's pin is the team's version: the file is not read, as before 1.8.0.
+        (root / ".git").mkdir()
+        proc = self.cortex(root, "config", "claude_access")
+        self.assert_ok(proc)
+        self.assertEqual(proc.out, "true\n")
+        self.assertIn(f"{TEAM} is not read: the team's version is 1.7.0", proc.err)
+
+    @AS_ROOT
+    @harness.outside_a_repository
+    def test_a_team_s_file_that_cannot_be_opened_beside_an_uncommitted_pin_is_refused(self):
+        root = self.project('version = "1.7.0"\ntheme = "h2g2"\nclaude_access = true\n',
+                            team='version = "9.9.8"\n' + self.LOCKING, committed=False)
+        (root / TEAM).chmod(0)
+        self.addCleanup((root / TEAM).chmod, 0o644)
+        for args in (("sync",), ("sync", "--locked")):
+            with self.subTest(args=args):
+                proc = self.cortex(root, *args)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"{TEAM}: cannot be read — Permission denied", proc.err)
+        self.assertFalse((root / "cortex.local.toml").exists())
+
 def newer_refused(pin):
     """What --team with no VERSION says of a team's pin newer than this cortex."""
     return (f"this cortex is a development build, {OWN}, which serves no release" if DEV_OWN else
