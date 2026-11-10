@@ -10,6 +10,7 @@ over it, so the contract stays testable with zero install.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
@@ -62,10 +63,27 @@ class ResolvedRun:
     cortex_version: Optional[str] = None  # the version cortex.toml pins; None: the base is {root}/cortex
 
 
-def _service_inside(service: Optional[str], team_folder: str = "agents") -> Optional[str]:
+def _opens(root: Optional[Path], path: PurePosixPath, folder: str) -> bool:
+    """Whether ``path``, or a folder of the workspace above it, is ``folder`` on the disk — both there, one
+    folder: ``Agents`` where names ignore case, ``agents.`` and ``AGENTS~1`` on Windows, a link to it."""
+    if root is None:
+        return False
+    for depth in range(1, len(path.parts) + 1):
+        try:
+            if os.path.samefile(root / PurePosixPath(*path.parts[:depth]), root / folder):
+                return True
+        except (OSError, ValueError):       # not there, or no name the disk takes: nothing to ask it
+            pass
+    return False
+
+
+def _service_inside(service: Optional[str], team_folder: str = "agents",
+                    root: Optional[Path] = None) -> Optional[str]:
     """The service as a folder of the workspace — relative, normalised, never climbing out of it.
     Its files reach the prompt: a service naming ``../elsewhere`` would read a neighbour's. Never
-    ``agents/`` nor the team's folder that renames it (ADR-013 §3.6): the workspace's tier, no service."""
+    ``agents/`` nor the team's folder that renames it (ADR-013 §3.6): the workspace's tier, no service.
+    ``agents`` is refused as written, as 1.7.0 refused it, and as the disk under ``root`` opens it; the
+    team's folder that renames it in any case too (§9)."""
     if not service:
         return service
     path = PurePosixPath(service.replace("\\", "/"))
@@ -73,15 +91,16 @@ def _service_inside(service: Optional[str], team_folder: str = "agents") -> Opti
         raise ValueError(f"service must be a folder inside the workspace, got {service!r}")
     if not path.parts:
         return None                  # "." is the workspace itself: no service
-    if folded(path.parts[0]) == folded("agents"):     # in any case, as a disk that ignores it opens it
+    if path.parts[0] == "agents" or _opens(root, path, "agents"):     # Agents/ on Linux is a service of its own
         raise ValueError(f"service must be a folder of the workspace other than agents/, got {service!r}")
     if team_folder != "agents":         # a renamed team's folder, in any case (ADR-013 §3.6, §9)
         team = tuple(folded(part) for part in PurePosixPath(team_folder).parts)
         parts = tuple(folded(part) for part in path.parts)
-        if parts[:len(team)] == team:
+        if parts[:len(team)] == team or _opens(root, path, team_folder):
             raise ValueError(f"service must be a folder of the workspace other than {team_folder}/, the team's "
                              f"folder, got {service!r}")
-        if parts + (folded("agents"),) == team:    # its agents/ the team's folder: the same overlays, twice
+        if parts + (folded("agents"),) == team or _opens(root, path / "agents", team_folder):
+            # its agents/ the team's folder: the same overlays, twice
             raise ValueError(f"service must not be the folder whose agents/ is the team's folder, {team_folder}/, "
                              f"got {service!r}")
     return str(path)
@@ -107,12 +126,12 @@ def resolve_run(req: RunRequest, root: Path, theme: Optional[str] = None, *,
     ``pin`` is what ``cortex.toml`` said when the run was accepted — a queued run resolves as it
     was checked, whatever the file says by the time a worker takes it (``None``: it had none)."""
     root = Path(root)
-    req = replace(req, service=_service_inside(req.service))
+    req = replace(req, service=_service_inside(req.service, root=root))
     if pin is READ_NOW:
         pin = read_pin(root)
     folder = pin.team_folder if pin is not None else "agents"
     if folder != "agents":
-        _service_inside(req.service, folder)
+        _service_inside(req.service, folder, root)
     team = root / folder if folder != "agents" else None        # None: the core's default, {root}/agents
     base_root = base_for(pin)
     if pin is not None and (theme is None or pin.theme_locked):
