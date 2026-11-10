@@ -156,6 +156,7 @@ class RefusalTests(FolderTestCase):
                 self.assertEqual(proc.returncode, 1, proc.out + proc.err)
                 self.assertIn(f"cortex.toml: agents {json.dumps(value)} ", proc.err)
 
+    @harness.outside_a_repository
     def test_the_default_agents_is_never_refused(self):
         root = self.project(f'agents = "agents"\nversion = "{OWN}"\ntheme = "h2g2"\n')
         self.assert_ok(self.cortex(root, "sync"))
@@ -173,6 +174,7 @@ class RefusalTests(FolderTestCase):
                 self.assert_ok(self.cortex(root, "sync"))           # named, uncommitted: the default all the same
                 self.assertNotIn("agents", self.local(root)["synced"])
 
+    @harness.outside_a_repository
     def test_agents_in_an_uncommitted_cortex_toml_is_refused(self):
         root = self.named(committed=False)
         proc = self.cortex(root, "sync")
@@ -388,6 +390,7 @@ class CounterReviewTests(FolderTestCase):
         self.assertIn('cortex.toml: agents ".team" names a folder that starts with "."', proc.err)
 
     @DEVELOPMENT
+    @harness.outside_a_repository
     def test_the_gate_reads_no_folder_an_uncommitted_cortex_toml_names(self):
         root = self.named(team='version = "99.0.0"\n', committed=False)
         proc = self.cortex(root, "sync")
@@ -573,6 +576,7 @@ class CodeReviewFolderTests(FolderTestCase):
 
     @LINKS
     @NEEDS_GIT
+    @harness.outside_a_repository
     def test_team_commit_names_the_folder_in_no_work_tree(self):
         # A renamed folder is read from a committed cortex.toml: it is in no work tree as a link out of it.
         root, shared = self.tmp / "ws", self.tmp / "shared"
@@ -610,6 +614,7 @@ class CodeReviewFolderTests(FolderTestCase):
         self.assertIn(f"note: {FOLDER}/ is a submodule of {harness_path(root)}, which now shows it changed — commit "
                       "it there too", proc.err)
 
+    @harness.outside_a_repository
     def test_validate_names_the_folder_whose_lock_this_user_cannot_write(self):
         root = self.named()
         self.assert_ok(self.cortex(root, "sync"))

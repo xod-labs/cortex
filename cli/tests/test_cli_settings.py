@@ -390,6 +390,7 @@ class TooNewTests(SettingsTestCase):
                 self.assertIn("register", proc.out)
 
     @DEVELOPMENT
+    @harness.outside_a_repository
     def test_a_known_key_of_a_project_too_new_says_the_version_and_an_unknown_one_is_unknown(self):
         project = self.project("99.0.0", extra='agents = "team"\n')
         proc = self.cortex(project, "config", "theme")
