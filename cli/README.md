@@ -35,5 +35,6 @@ version its branch prepares, as a pre-release (ADR-009 §9): `X.Y.Z-dev.N` from 
 number, which `build.py --development-version N` gives; `X.Y.Z-dev` from a source checkout, read
 from its `CHANGELOG.md` — the highest release there, bumped by the `[Unreleased]` entries. No
 teammate can download it: `cortex upgrade` writes it only where no teammate reads it — an
-uncommitted `cortex.toml`, a try — with a warning. The tests name another with
+uncommitted `cortex.toml`, a try — with a warning, and says none of what it writes for it is to
+commit; a team's file that pins one already keeps it, and its lock. The tests name another with
 `CORTEX_SOURCE_VERSION`.
