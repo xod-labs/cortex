@@ -785,7 +785,7 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
     project's CI — a lock to write is refused instead: the one committed must already be the pin's."""
     shown_name = config.TEAM_LOCK_NAME if name == config.TEAM_LOCK_FILE else name
     pins = config.TEAM_NAME if name == config.TEAM_LOCK_FILE else config.PROJECT_FILE
-    lock = config.load_lock(root, name)
+    lock = config.load_lock(root, name, writer=writer)
     digest = the_store.digest(version)
     if lock is not None and lock.version == version:
         if lock.digest == digest:
