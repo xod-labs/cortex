@@ -61,6 +61,12 @@ class TemplateTests(unittest.TestCase):
                              b"read the numbers before any `-`: `1.7.3` is below it, `1.8.0-rc.1` and `1.8.0-dev.2` "
                              b"are not", b"run `cortex self-update`, then `cortex sync`, once each. No `synced` still",
                              b"then `cortex sync` again, once; when it still says so, tell the user, and go no further",
+                             # A sync of a version moved that says too old falls through to that rule; a self-update
+                             # that installed nothing is said, not read as a project before 1.8.0.
+                             b"Run `cortex sync`, once \xe2\x80\x94 when it says this cortex is too old, follow that rule "
+                             b"below instead",
+                             b"No `synced` still \xe2\x86\x92 run `cortex --version` again: still below 1.8.0 \xe2\x86\x92 "
+                             b"the self-update installed nothing \xe2\x80\x94 tell the user, and go no further; otherwise",
                              b"`cortex sync`, once each; otherwise, or when it still refuses, tell the user",
                              b"**It names a missing team's folder**",
                              b"the team's file's own when its `locked` lists `theme`",
@@ -69,6 +75,7 @@ class TemplateTests(unittest.TestCase):
                 self.assertNotIn(b"**The spec is of a version other than", text)
                 # A checkout is said before a version moved, a missing team's folder before a missing version.
                 self.assertLess(text.index(b"**A checkout**"), text.index(b"**A version moved**"))
+                self.assertLess(text.index(b"**A version moved**"), text.index(b"says this cortex is too old for the"))
                 self.assertLess(text.index(b"**It names a missing team's folder**"), text.index(b"**It refuses"))
                 self.assertIn(b"**No `synced`** in `cortex.local.toml`, and `cortex/` a link \xe2\x86\x92 nothing to "
                               b"compare", text)
