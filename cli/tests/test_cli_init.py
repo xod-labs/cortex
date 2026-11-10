@@ -470,8 +470,10 @@ class OptionTests(InitTestCase):
         self.assertTrue(written.startswith("# Cortex AI Team — Workspace Mode\n"), written[:80])
         self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", written)
         self.assertTrue(written.endswith(team))
-        self.assertIn("CLAUDE.md was written for a workspace, and is written for one again — remove it first to write "
-                      "a single project's", proc.err)
+        self.assertIn("CLAUDE.md was written for a workspace, and is written for one again — to write a single "
+                      "project's, remove it and run `cortex init` again, then copy the team's part back from its .bak",
+                      proc.err)
+        self.assertTrue((self.project / "CLAUDE.md.bak").read_text(encoding="utf-8").endswith(team))
 
     def test_a_workspace_s_file_writes_no_team_pair_without_the_option(self):
         # The layout read from the file chooses the template, and nothing else: the team's repository is the option's.

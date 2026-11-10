@@ -591,7 +591,8 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             out.write(f"✓ {display(str(instructions_file))} {'replaced' if replaced else 'written'}\n")
             if kept_workspace:
                 err.write(f"note: {display(str(instructions_file))} was written for a workspace, and is written for one "
-                          "again — remove it first to write a single project's\n")
+                          "again — to write a single project's, remove it and run `cortex init` again, then copy the team's "
+                          "part back from its .bak, below the end marker\n")
     if not tool_named:
         # Found, not written: a file of another tool's, which a new project's default leaves alone.
         for name, rel in TOOLS.items():
