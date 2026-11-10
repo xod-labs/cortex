@@ -553,8 +553,12 @@ class DevelopmentBuildTests(SettingsTestCase):
         before = (team / "agents" / "cortex.team.toml").read_bytes()
         proc = self.cortex(team, "upgrade", "--team", OWN_DEV)
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        # From a build that prepares 1.8.0, no release it serves is pinned there: this cortex is updated first.
+        pin = "Pin a release there" if not store.prepares_before_team(Version(OWN_DEV)) else \
+            ("Update this cortex to a release that reads the team's file — 1.8.0 or a candidate of it — then pin one: "
+             "`cortex self-update VERSION`, `cortex upgrade --team VERSION`")
         self.assertIn(f"Cortex {OWN_DEV} is a build of no release, which no teammate can download, and every teammate "
-                      f"reads agents/cortex.team.toml — nothing was changed. Pin a release there; tried on this machine: "
+                      f"reads agents/cortex.team.toml — nothing was changed. {pin}; tried on this machine: "
                       f"`cortex upgrade --local {OWN_DEV}`", proc.err)
         self.assertEqual((team / "agents" / "cortex.team.toml").read_bytes(), before)
         self.assertFalse((team / "agents" / "cortex.team.lock").exists())
@@ -592,9 +596,9 @@ def team_remedy(block: bool) -> str:
     """What a team's pin of no release is told: pin a release by --team — after a self-update, from a build that prepares
     1.8.0 or below, whose every --team VERSION is refused (ADR-009 §9)."""
     if store.prepares_before_team(Version(OWN)):
-        return ("update this cortex to a release, then pin one:\n    cortex self-update VERSION\n    cortex upgrade --team "
-                "VERSION" if block else "update this cortex to a release, then pin one: `cortex self-update VERSION`, "
-                "`cortex upgrade --team VERSION`")
+        first = "update this cortex to a release that reads the team's file — 1.8.0 or a candidate of it — then pin one"
+        return (f"{first}:\n    cortex self-update VERSION\n    cortex upgrade --team VERSION" if block else
+                f"{first}: `cortex self-update VERSION`, `cortex upgrade --team VERSION`")
     return "pin a release:\n    cortex upgrade --team VERSION" if block else "pin a release: `cortex upgrade --team VERSION`"
 
 
