@@ -2146,6 +2146,10 @@ class CodeReviewThirdFixTests(TeamTestCase):
                     self.assert_ok(followed)
                 if why is not None:
                     self.assertIn(why, proc.err)
+
+    @SOURCE
+    @harness.outside_a_repository
+    def test_beside_a_team_s_file_that_pins_none_the_refusal_names_the_commands_that_work(self):
         # A team's file that pins none, at a 2.B root: the uncommitted cortex.toml is set by hand; above it, the
         # team's pin and a try are named where they work.
         pinless = self.project('version = "9.9.7"\ntheme = "h2g2"\n', team='theme = "h2g2"\n', committed=False,
