@@ -455,6 +455,21 @@ class CounterReviewTests(FolderTestCase):
         kept = {path.name for path in (self.home / "versions").iterdir() if not path.name.startswith(".")}
         self.assertTrue({"9.9.7", "9.9.8"} <= kept, kept)
 
+    @DOWNLOADS
+    def test_prune_reads_the_team_s_file_in_a_folder_a_later_version_may_take(self):
+        # agents = ".team": this version refuses the name, a later one may take it (§3.8 step 1) — prune reads the
+        # team's file there, as the gate does, not in agents/.
+        for name, version in (("seven", "9.9.7"), ("eight", "9.9.8")):
+            self.assert_ok(self.cortex(self.project(f'version = "{version}"\ntheme = "h2g2"\n', name=name), "sync"))
+        root = self.project('agents = ".team"\ntheme = "h2g2"\n', local='version = "9.9.8"\n', name="refused")
+        (root / ".team").mkdir()
+        (root / ".team" / "cortex.team.toml").write_text('version = "9.9.7"\n', encoding="utf-8")
+        proc = self.cortex(self.tmp, "prune", str(root))
+        self.assert_ok(proc)
+        self.assertIn("only its versions are read: 9.9.8, 9.9.7", proc.err)
+        kept = {path.name for path in (self.home / "versions").iterdir() if not path.name.startswith(".")}
+        self.assertTrue({"9.9.7", "9.9.8"} <= kept, kept)
+
 
 @LINKS
 class SharedRenamedFolderTests(FolderTestCase):
@@ -650,6 +665,34 @@ class CodeReviewFolderTests(FolderTestCase):
         self.assertIn(f"note: nothing is committed in {FOLDER}/ — {FOLDER}/cortex.team.toml holds changes of yours "
                       "besides its version", proc.err)
         self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "init")
+        self.assertFalse((root / "agents").exists())
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_a_resume_commit_leaves_a_team_s_file_moved_by_hand_in_the_folder(self):
+        # The team's file in the folder cortex.toml names is a pin too: moved by hand, a follower's resume commits
+        # nothing — committed alone, the lock would name 9.9.8 beside a committed file at 9.9.7.
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        root = self.named(team='version = "9.9.7"\n', committed=False)
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "init")
+        self.assert_ok(self.cortex(root, "sync", **env))
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "locked")
+        team = root / FOLDER / "cortex.team.toml"
+        team.write_text('version = "9.9.8"\n', encoding="utf-8")
+        proc = self.cortex(root, "upgrade", "9.9.8", "--commit", "--message", "resume", **env)
+        self.assert_ok(proc)
+        self.assertIn(f"note: nothing is committed in {root} — {FOLDER}/cortex.team.toml held changes of yours before "
+                      "the upgrade — commit by hand what is the team's\n", proc.err)
+        self.assertEqual(self.git(root, "log", "-1", "--format=%s").stdout.strip(), "locked")
+        # What the note says, done by hand: the two committed together, a teammate's clean checkout reads them.
+        self.git(root, "commit", "-q", "-m", "move", "--", f"{FOLDER}/cortex.team.toml", f"{FOLDER}/cortex.team.lock")
+        self.assertEqual(self.git(root, "status", "--porcelain").stdout, "")
+        self.assert_ok(self.cortex(root, "sync", "--locked", **env))
         self.assertFalse((root / "agents").exists())
 
     @LINKS

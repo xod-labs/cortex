@@ -31,11 +31,13 @@ jobs:
         with:
           base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           head: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
-          # the runtime, the core it embeds, and its deployment
+          # the runtime, the core it embeds, and its deployment — and the CLI, whose answers its tests
+          # check the runtime's 422s against (runtime/tests/test_base_root.py, cli())
           paths: |
             runtime/**
             core/**
             deploy/**
+            cli/**
             .github/workflows/runtime-tests.yml
 
   test:
