@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterator, Optional
 
 from cortex_core.project import DEFAULT_RELEASES_URL  # noqa: F401 — part of this module's API
-from cortex_core.project import LOCAL_FILE, PROJECT_FILE, TEAM_FILE
+from cortex_core.project import FIRST_TEAM_VERSION, LOCAL_FILE, PROJECT_FILE, TEAM_FILE
 
 from . import machine, net
 from .semver import FIRST_SPEC_ARCHIVE, Version
@@ -120,6 +120,14 @@ def development(version: Version) -> bool:
     return version.pre[:1] == ("dev",) and len(version.pre) <= 2 and all(part.isdigit() for part in version.pre[1:])
 
 
+def prepares_before_team(own: Optional[Version] = None) -> bool:
+    """Whether ``own`` — this cortex, by default — is a build of no release that prepares 1.8.0 or below: every
+    release that reads the team's file is newer than it, so no ``cortex upgrade --team VERSION`` it runs moves the
+    team's pin — this cortex is updated to such a release first (ADR-009 §9, ADR-013 §3.8 step 2)."""
+    own = own_version() if own is None else own
+    return development(own) and Version("{}.{}.{}".format(*own.core)) <= Version(FIRST_TEAM_VERSION)
+
+
 def too_old_for(version: Version, own: Version) -> bool:
     """Whether a binary of version ``own`` is too old for a project of ``version``, as the commands say
     it before any key is checked (ADR-013 §3.8): ``version`` newer than ``own``. A build of no release
@@ -158,6 +166,12 @@ def pin_remedy(origin: Optional[str] = None, by_hand: object = False, block: boo
         return (f"pin a release by hand: set {PROJECT_FILE}'s version to one{remove} — "
                 "uncommitted beside the team's file, it is this developer's, which no command writes")
     command = pin_command(origin)
+    if command == "cortex upgrade --team VERSION" and prepares_before_team():
+        # From a build that prepares 1.8.0 or below, every VERSION --team names is refused: newer than this cortex,
+        # before the team's file, or this build's own, which no teammate can download.
+        update = "cortex self-update VERSION"
+        return (f"update this cortex to a release, then pin one:\n    {update}\n    {command}" if block else
+                f"update this cortex to a release, then pin one: `{update}`, `{command}`")
     return f"pin a release:\n    {command}" if block else f"pin a release: `{command}`"
 
 
