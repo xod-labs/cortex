@@ -458,6 +458,35 @@ class TeamVersionTests(SyncedProjectTestCase):
                 self.assertEqual(host.returncode, 1, host.stdout + host.stderr)
                 self.assertIn(said, host.stderr)
 
+    @unittest.skipIf(os.name == "nt", "the source's cortex run with an empty environment")
+    @outside_a_repository
+    def test_below_1_8_0_a_synced_left_over_beside_a_file_1_7_0_refuses_names_what_the_sync_does(self):
+        # A synced left from another version beside a cortex.toml 1.7.0's grammar refuses: committed, the sync reads
+        # it alone and refuses it too — never "reads it alone", which reads as a sync that clears it.
+        self.store_1_7_0()
+        (self.project / ".git").mkdir()
+        stale = 'synced = { team = "1.8.0", project = "1.8.0", pinned = "1.8.0", reads = "1.8.0" }\n'
+        for team, said in (('version = "1.8.0"\n', r"— cortex sync refuses this file too$"),
+                           ('version = "1.8.0"\ntheme = "h2g2"\n', r"^cortex\.toml: \"theme\" is required — run `cortex "
+                                                                  r"sync` .* — committed, it needs its theme$")):
+            with self.subTest(team=team):
+                pin = self.files('version = "1.7.0"\n', team=team, local=stale)
+                with self.assertRaisesRegex(ValueError, said):
+                    pin()
+                host = self.cli("sync")                     # the sync, committed: it refuses the file, as said
+                self.assertEqual(host.returncode, 1, host.stdout + host.stderr)
+                self.assertIn(b'cortex.toml: "theme" is required', host.stderr)
+        # Not committed, the sync named reads the team's file in its place, and records what the runtime then serves.
+        (self.project / ".git").rmdir()
+        shutil.copytree(self.home / "versions" / "1.7.0", self.home / "versions" / "1.8.0")
+        pin = self.files('version = "1.7.0"\n', team='version = "1.8.0"\ntheme = "h2g2"\n', local=stale)
+        with self.assertRaisesRegex(ValueError, r"— run `cortex sync` in the project, which may read "
+                                                r"agents/cortex\.team\.toml instead of a cortex\.toml not committed"):
+            pin()
+        host = self.cli("sync")
+        self.assertEqual(host.returncode, 0, host.stdout + host.stderr)
+        self.assertEqual((pin().version, pin().theme), ("1.8.0", "h2g2"))
+
     def test_a_synced_that_is_none_names_its_remedy_once(self):
         pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local='synced = { pinned = "9.9.9" }\n')
         with self.assertRaisesRegex(ValueError, r'"synced": "reads" is required') as caught:
