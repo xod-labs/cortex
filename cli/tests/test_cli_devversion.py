@@ -187,7 +187,7 @@ class BumpTests(unittest.TestCase):
         example = "```markdown\n## [99.0.0] - 2026-11-01\n### Removed\n- a thing\n```\n"
         self.assertEqual(prepared(changelog("### Fixed\n- a fix, shown:\n\n" + example, "2.3.4")), "2.3.5")
         self.assertNotIn(Version("99.0.0"), devversion.released(changelog(example, "2.3.4")))
-        for fence, close in (("~~~", "~~~"), ("  ````", "`````"), ("```", "   ```")):
+        for fence, close in (("~~~", "~~~"), ("\nNotes:\n\n  ````", "`````"), ("```", "   ```")):
             with self.subTest(fence=fence):
                 text = changelog(f"### Fixed\n- a fix\n{fence}\n### Removed\n- a thing\n{close}\n### Added\n- one\n",
                                  "2.3.4")
@@ -197,8 +197,9 @@ class BumpTests(unittest.TestCase):
         self.assertEqual(prepared(text), "2.3.5")
         text = changelog("### Fixed\n- a fix\n~~~\n```\n### Removed\n- a thing\n~~~\n", "2.3.4")
         self.assertEqual(prepared(text), "2.3.5")
-        # Backticks in the info string make no fence: a line of code spans, read as Markdown.
-        self.assertEqual(prepared(changelog("### Fixed\n- a fix\n``` a `b` c\n### Added\n- a thing\n", "2.3.4")),
+        # Backticks in the info string make no fence: a line of code spans, read as Markdown — the fence below it opens
+        # a block of its own, which hides nothing.
+        self.assertEqual(prepared(changelog("### Fixed\n- a fix\n``` a `b` c\n### Added\n- a thing\n```\n", "2.3.4")),
                          "2.4.0")
         # Indented four spaces, it is code, and no fence; two backticks are none either: what follows is read.
         for line in ("    ```", "``", "~~"):
@@ -215,10 +216,31 @@ class BumpTests(unittest.TestCase):
         # A fence closed later still holds what it holds.
         self.assertEqual(prepared(changelog("### Fixed\n- a fix\n```\n### Removed\n```\n", "2.3.4")), "2.3.5")
 
+    def test_a_fence_in_a_list_item_ends_with_the_item(self):
+        # As CommonMark reads it: a fence opened in an entry ends at the first line indented less — the item's end —
+        # never at a later fence of its character, the next example's.
+        text = ("## [Unreleased]\n### Fixed\n- a fix:\n  ```toml\n  version = \"1\"\n## [2.3.4] - 2026-01-01\n### Fixed\n"
+                "- b, its example:\n  ```\n  ## [9.9.9] - example\n  ```\n## [2.3.3] - 2025-01-01\n")
+        self.assertEqual(devversion.released(text), [Version("2.3.4"), Version("2.3.3")])
+        self.assertEqual(prepared(text), "2.3.5")
+        text = "## [Unreleased]\n### Fixed\n- a:\n  ~~~\n  x\n### Added\n- b\n  ~~~\n## [2.3.4] - 2026-01-01\n"
+        self.assertEqual(devversion.unreleased(text), {"Fixed": ["a:"], "Added": ["b"]})
+        self.assertEqual(prepared(text), "2.4.0")
+        # Open to the end of the file, it holds what the item holds there: an indented heading is code.
+        text = "## [2.3.4] - x\n\n## [Unreleased]\n### Fixed\n- a:\n  ```\n  ### Added\n  - b\n"
+        self.assertEqual(prepared(text), "2.3.5")
+        # A blank line keeps the item open, and its fence closed in it holds what it holds.
+        text = "## [Unreleased]\n### Fixed\n- a:\n\n  ```\n  ## [9.9.9]\n\n  ```\n### Added\n- b\n## [2.3.4] - x\n"
+        self.assertEqual(devversion.released(text), [Version("2.3.4")])
+        self.assertEqual(prepared(text), "2.4.0")
+
     def test_a_section_heading_takes_a_tab(self):
         text = "## [Unreleased]\n\n### Fixed\n- a fix\n\n##\t[2.3.4] - 2026-11-01\n"
         self.assertEqual(devversion.released(text), [Version("2.3.4")])
         self.assertEqual(prepared(text), "2.3.5")
+        # With nothing after its ##, it is no heading — as ###Added is none.
+        text = "## [Unreleased]\n### Fixed\n- a\n##[2.3.4] - 2026-01-01\n## [2.3.3]\n"
+        self.assertEqual(devversion.released(text), [Version("2.3.3")])
 
     def test_a_byte_order_mark_is_no_part_of_the_text(self):
         text = "\ufeff## [Unreleased]\n\n### Added\n- a thing\n\n## [2.3.4] - 2026-11-01 — A Name _(Released)_\n"

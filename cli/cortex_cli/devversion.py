@@ -12,8 +12,8 @@ run's number. ``X.Y.Z`` is the version the branch prepares, which ``CHANGELOG.md
   patch. A kind is read in any case, the heading's first word, an emoji before it or a note after it:
   ``### ✨ Added``, ``### Fixed (CLI)`` — ``### Notes: nothing removed`` names none. Markdown's rules
   hold: a heading or an entry may be indented up to three spaces, a space or a tab after its ``###``,
-  an entry starts with ``-``, ``*`` or ``+``, a fenced code block holds no section, heading nor entry,
-  and a line ends at a line feed or a carriage return alone — not at the other breaks Python splits
+  an entry starts with ``-``, ``*`` or ``+``, a fenced code block holds no section, heading nor entry —
+  one opened in a list item ends with it — and a line ends at a line feed or a carriage return alone — not at the other breaks Python splits
   text at, which an entry may hold;
 - a changelog that writes a pre-release's section — Cortex's does not (ADR-009 §3.7) — has it as
   a floor: above the base, ``3.1.0-rc.1`` makes the version the higher of its release and the
@@ -115,23 +115,52 @@ def prepared(text: str) -> Version:
 
 def _lines(text: str) -> List[str]:
     """The lines Markdown reads as such, those of a fenced code block left out — an example of a changelog in one
-    is none of its sections. A fence never closed hides nothing: opened in a list item, Markdown closes it with
-    the item, and its lines are read. Markdown's line endings alone: ``splitlines`` would also break at U+2028,
-    U+0085 or a form feed in an entry."""
+    is none of its sections. A fence opened in a list item ends with the item, as Markdown has it: at its closing
+    fence, or at the first line not blank indented less than it — what follows is read. One at the top level never
+    closed hides nothing, where Markdown would hide the rest of the file. Markdown's line endings alone:
+    ``splitlines`` would also break at U+2028, U+0085 or a form feed in an entry."""
     lines = re.split(r"\r\n|\r|\n", text.removeprefix("\ufeff"))
     kept: List[str] = []
     index = 0
     while index < len(lines):
         found = FENCE.fullmatch(lines[index].rstrip())
         if found and not (found.group("fence")[0] == "`" and "`" in found.group("info")):
-            fence = found.group("fence")
-            close = next((later for later in range(index + 1, len(lines)) if _closes(lines[later], fence)), None)
-            if close is not None:
-                index = close + 1
+            indent = _indent(lines[index])
+            end = _block_end(lines, index, found.group("fence"), indent if _in_an_item(lines, index, indent) else 0)
+            if end is not None:
+                index = end
                 continue
         kept.append(lines[index])
         index += 1
     return kept
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _in_an_item(lines: List[str], index: int, indent: int) -> bool:
+    """Whether the fence at ``lines[index]``, indented ``indent`` spaces, is in a list item: the nearest line above
+    it, not blank, indented less, starts an entry."""
+    if indent == 0:
+        return False
+    for line in reversed(lines[:index]):
+        if line.strip() and _indent(line) < indent:
+            return ENTRY.fullmatch(line.rstrip()) is not None
+    return False
+
+
+def _block_end(lines: List[str], index: int, fence: str, item: int) -> Optional[int]:
+    """The index of the first line past the block the fence at ``lines[index]`` opens — in a list item whose
+    content is indented ``item`` spaces, the item's end bounds it; ``None`` for a block at the top level never
+    closed, which holds nothing."""
+    for later in range(index + 1, len(lines)):
+        line = lines[later]
+        if item and line.strip() and _indent(line) < item:
+            return later                        # the item ends, and its block: this line is read
+        if _closes(line[item:], fence):
+            return later + 1
+    return len(lines) if item else None
 
 
 def _closes(line: str, fence: str) -> bool:
