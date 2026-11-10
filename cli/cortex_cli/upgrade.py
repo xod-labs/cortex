@@ -1287,7 +1287,7 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
     relocked = [path for path, before in kept.items() if path.is_file() and path.read_bytes() != before]
     # The team's lock written, beside a team's file moved to its version by hand: the two go together, named — where
     # they are, outside the project's work tree — or held from --commit as the developer's change (``_theirs``).
-    team_file = Path(root) / config.TEAM_FOLDER / config.TEAM_FILE
+    team_file = Path(root) / config.loose_team_folder(root) / config.TEAM_FILE
     team_lock = _real(team_file.with_name(config.TEAM_LOCK_FILE))
     moved = [team_file] if any(_real(path) == team_lock for path in relocked) and sync.team_file_moved(team_file) \
         else []

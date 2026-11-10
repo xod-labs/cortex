@@ -705,5 +705,53 @@ class CodeReviewFolderTests(FolderTestCase):
         self.assertIn(f"{FOLDER}/ cannot be written here", found[0][2])
 
 
+class MovedByHandFolderTests(FolderTestCase):
+    """The B6 round's fixes of a team's file moved by hand, and of its unreadable form, in a folder cortex.toml names
+    (2026-11-10)."""
+
+    @SOURCE
+    def test_init_s_remedy_for_a_team_s_file_that_does_not_read_names_it_in_its_folder(self):
+        root = self.named(team='<<<<<<< HEAD\nversion = "9.9.7"\n=======\nversion = "9.9.8"\n>>>>>>> origin/main\n')
+        proc = self.cortex(root, "init", "--tool", "claude")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"cortex init reads {FOLDER}/cortex.team.toml: fix it — a conflict a pull left in it, say — then "
+                      "run cortex init again", proc.err)
+        self.assertNotIn("remove it", proc.err)
+        (root / FOLDER / "cortex.team.toml").write_text(f'version = "{OWN}"\n', encoding="utf-8")     # as it says
+        self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+
+    def own_repository(self, name):
+        """A project whose committed cortex.toml names the team's folder, that folder its own repository, synced at
+        9.9.7 and committed there; its team's file then moved to 9.9.8 by hand. The root, and git's environment."""
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        root = self.named(team='version = "9.9.7"\n', committed=False, name=name)
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        self.git(root, "init", "-q")
+        self.git(root, "add", "cortex.toml", ".gitignore")
+        self.git(root, "commit", "-q", "-m", "init")
+        self.assert_ok(self.cortex(root, "sync", **env))
+        self.git(root / FOLDER, "init", "-q")
+        self.git(root / FOLDER, "add", "-A")
+        self.git(root / FOLDER, "commit", "-q", "-m", "team")
+        (root / FOLDER / "cortex.team.toml").write_text('version = "9.9.8"\n', encoding="utf-8")
+        return root, env
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_a_lock_written_beside_a_team_s_file_moved_by_hand_names_both_in_the_folder(self):
+        root, env = self.own_repository("named")
+        proc = self.cortex(root, "sync", **env)
+        self.assert_ok(proc)
+        self.assertIn(f"{FOLDER}/cortex.team.lock: Cortex 9.9.8, where it named 9.9.7 — commit it in {FOLDER}/, with "
+                      "cortex.team.toml, moved to its version by hand\n", proc.out)
+        root, env = self.own_repository("named-resume")
+        proc = self.cortex(root, "upgrade", "9.9.8", "--commit", "--message", "resume", **env)
+        self.assert_ok(proc)
+        self.assertIn(f"{root / FOLDER / 'cortex.team.lock'} and {root / FOLDER / 'cortex.team.toml'} — outside its "
+                      "git work tree: commit them where they are", proc.out)
+        self.assertFalse((root / "agents").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
