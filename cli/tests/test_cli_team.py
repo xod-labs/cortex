@@ -2307,6 +2307,23 @@ class CodeReviewThirdFixTests(TeamTestCase):
         self.assertEqual(self.local(pinless)["version"], "9.9.8")
 
     @SOURCE
+    @harness.outside_a_repository
+    def test_a_try_at_or_below_the_developer_s_own_cortex_toml_is_refused(self):
+        # At a 2.B root, the developer's own cortex.toml is read over a try: one at or below it would never be read.
+        root = self.project('version = "9.9.9"\ntheme = "h2g2"\n', team='version = "9.9.7"\n', committed=False)
+        for version in ("9.9.8", "9.9.9"):
+            with self.subTest(version=version):
+                proc = self.cortex(root, "upgrade", "--local", version)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"cortex.toml, not committed, pins Cortex 9.9.9 — your own, read over a try: one of "
+                              f"{version} would never be read. Nothing was changed. To read {version}, set cortex.toml's "
+                              "version to it by hand: no command writes it", proc.err)
+                self.assertFalse((root / "cortex.local.toml").exists())
+        # What the refusal says, done by hand: cortex.toml's version is the one read.
+        (root / "cortex.toml").write_text('version = "9.9.8"\ntheme = "h2g2"\n', encoding="utf-8")
+        self.assertEqual(self.value(root, "version"), "9.9.8")
+
+    @SOURCE
     def test_a_pin_too_new_names_the_command_of_its_own_file(self):
         # The team's pin is moved by --team; a try by --local, which drops it at the team's version or below.
         team = self.project('theme = "h2g2"\n', team='version = "99.0.0"\n', name="team")

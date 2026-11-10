@@ -756,6 +756,12 @@ def local_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out:
         if not dry_run:
             _local_then_sync(root, {"version": None}, out, err)
         return Outcome(root, Version(str(tried.value)), team)
+    own_toml = (project.inputs[0] if project.inputs is not None else {}).get("version")
+    if config.developers_toml(root) and _at_or_above(own_toml, target):
+        # The developer's own cortex.toml is read over a try (§3.1): one at or below it would never be read.
+        raise UpgradeError(f"{config.PROJECT_FILE}, not committed, pins Cortex {own_toml} — your own, read over a try: "
+                           f"one of {target} would never be read. Nothing was changed. To read {target}, set "
+                           f"{config.PROJECT_FILE}'s version to it by hand: no command writes it")
     the_store = store.Store()
     _served(the_store, target, f"cortex upgrade --local {target}", config.LOCAL_FILE)
     the_store.ensure(target)
@@ -770,6 +776,11 @@ def local_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out:
         return Outcome(root, project.version, target)
     _local_then_sync(root, {"version": str(target)}, out, err)
     return Outcome(root, project.version, target)
+
+
+def _at_or_above(value: object, target: Version) -> bool:
+    """Whether ``value``, a ``version`` as a file holds it, is a version at ``target`` or above it."""
+    return grammar.is_version(value) and Version(str(value)) >= target
 
 
 def _local_then_sync(root: str, values: Dict[str, object], out: TextIO, err: TextIO) -> None:
