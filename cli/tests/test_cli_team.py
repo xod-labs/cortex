@@ -3289,15 +3289,15 @@ class ThirdCodeReviewTests(TeamTestCase):
     @SOURCE
     @harness.outside_a_repository
     def test_a_try_too_new_beside_a_team_s_file_that_is_no_file_names_team_which_names_the_file(self):
-        # The team's file there, unread: the refusal of a try newer than this cortex names --team among the moves —
-        # the file is the team's pin — and --team, followed, says why the file does not read.
+        # The team's file there, unread: the refusal of a try newer than this cortex names the move of the try, and
+        # --team, followed, says why the file does not read — never that there is none.
         root = self.project('version = "9.9.8"\ntheme = "h2g2"\n', local='version = "9.9.10"\n', committed=False)
         (root / "agents").mkdir()
         (root / TEAM).mkdir()
         proc = self.cortex(root, "upgrade")
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertIn("this project reads Cortex 9.9.10, which its cortex.local.toml pins", proc.err)
-        self.assertIn("`cortex upgrade --team VERSION` moves the team's pin", proc.err)
+        self.assertIn("`cortex upgrade --local VERSION` moves the try", proc.err)
         proc = self.cortex(root, "upgrade", "--team", "9.9.8")
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertIn(f"{TEAM}: cannot be read — not a file", proc.err)
