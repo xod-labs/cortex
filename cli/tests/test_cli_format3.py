@@ -425,7 +425,10 @@ class TryTests(TeamTestCase):
         proc = self.cortex(root, "upgrade", "--team", "9.9.8")
         self.assert_ok(proc)
         self.assertEqual((root / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(FORMAT_2, False)))
-        self.assertIn("\nCommit agents/cortex.team.toml and agents/cortex.team.lock in agents/; teammates run", proc.out)
+        # agents/ in no git work tree: the team's files are committed nowhere, and nothing is named to commit.
+        self.assertIn("\nWritten: agents/cortex.team.toml and agents/cortex.team.lock — in no git work tree, so committed "
+                      "nowhere.\n", proc.out)
+        self.assertNotIn("Commit ", proc.out)
 
     @harness.outside_a_repository
     def test_init_writes_the_developer_s_own_bootstrap_in_the_theme_that_still_wins(self):
