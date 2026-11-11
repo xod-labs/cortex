@@ -87,6 +87,16 @@ class MarkdownTests(unittest.TestCase):
                 self.assertIsNone(re.fullmatch(DEFAULT_SECTION, heading))
                 self.assertEqual(section_text(text, "1.8.1"), "### Fixed\n- a")
 
+    def test_unreleased_is_read_in_any_case_as_the_cli_reads_it(self):
+        # The counter-review of the third pass: the CLI read [unreleased] as [Unreleased], the gate did not.
+        for label in ("Unreleased", "unreleased", "UNRELEASED"):
+            with self.subTest(label=label):
+                text = TEXT.replace("[Unreleased]", f"[{label}]")
+                self.assertEqual(first_after_unreleased(text), "## [1.4.0] - 2026-11-03 — A Name _(Released)_")
+                self.assertEqual(section_text(text, "Unreleased"), "### Added\n- a thing")
+        # Another label is matched as written.
+        self.assertIsNone(section_text(TEXT.replace("[1.4.0]", "[V1.4.0]"), "v1.4.0"))
+
     @unittest.skipUnless((HERE.parents[3] / "cli" / "cortex_cli").is_dir(), "not in the repository of the CLI")
     def test_the_cli_reads_through_the_same_file(self):
         # One rule: cli/cortex_cli/markdown_lines.py and this lib's are the same, byte for byte.
