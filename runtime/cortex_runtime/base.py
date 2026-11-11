@@ -116,10 +116,7 @@ def read_pin(root: Path) -> Optional[Pin]:
             raise ValueError(f"{project.LOCAL_FILE}: the team's folder `cortex sync` recorded, {project.shown(recorded)}, "
                              f"is not the one {project.PROJECT_FILE} names, {folder}/ — run `cortex sync` in the project")
         name = cascade.team_name(folder)
-        try:
-            team = cascade.read_team(str(root), folder)
-        except OSError as error:        # the team's file's, not cortex.toml's
-            raise ValueError(f"{name} of this workspace cannot be read: {error.strerror or error}")
+        team = cascade.read_team(str(root), folder)    # never raises: what is there and unread is an Unreadable
         project.check_project(data, project.PROJECT_REQUIRED if team is not None else ())
         if before and alone is None:
             # A synced left from another version: `cortex sync` reads a committed cortex.toml before 1.8.0 alone, and
