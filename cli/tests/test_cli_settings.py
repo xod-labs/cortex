@@ -566,6 +566,26 @@ class DevelopmentBuildTests(SettingsTestCase):
         self.assertEqual((team / "agents" / "cortex.team.toml").read_bytes(), before)
         self.assertFalse((team / "agents" / "cortex.team.lock").exists())
 
+    @unittest.skipIf(harness.BINARY, "a binary's version is its own")
+    @harness.outside_a_repository
+    def test_a_build_that_prepares_1_8_0_names_no_team_pin_for_a_committed_cortex_toml(self):
+        # Bluspark's third pass: a committed cortex.toml is no team's file — from a build that prepares 1.8.0 or
+        # below, its pin is moved plainly, never with `cortex upgrade --team VERSION`, whatever the changelog says.
+        self.env["CORTEX_SOURCE_VERSION"] = "1.8.0-dev.5"
+        self.assertTrue(store.prepares_before_team(Version("1.8.0-dev.5")))
+        project = self.project("1.7.0")
+        stored = self.home / "versions" / "1.7.0"
+        for tree in ("agents", "templates", "docs"):
+            shutil.copytree(harness.REPO / tree, stored / tree)
+        (project / ".git").mkdir()
+        before = (project / "cortex.toml").read_bytes()
+        proc = self.cortex(project, "upgrade", "1.8.0-dev.5")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("Cortex 1.8.0-dev.5 is a build of no release, which no teammate can download, and every teammate "
+                      "reads its committed cortex.toml — nothing was changed. Pin a release there\n", proc.err)
+        self.assertNotIn("--team", proc.err)
+        self.assertEqual((project / "cortex.toml").read_bytes(), before)
+
     def test_upgrade_all_names_the_version_once(self):
         project = self.project("1.7.0")
         (self.home / "projects.toml").write_text(f'format = 1\n\n[[project]]\nname = "app"\npath = "{display(project)}"\n',
