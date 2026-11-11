@@ -388,6 +388,22 @@ class TeamVersionTests(SyncedProjectTestCase):
         return subprocess.run([sys.executable, "-I", "-S", "-c", call, str(repo / "core"), str(repo / "cli"), *args],
                               cwd=self.project, env=env, capture_output=True)
 
+    def test_the_workflow_runs_these_tests_on_a_change_of_what_they_run(self):
+        # cli() runs the CLI's source, and the runtime embeds the core: a change of either runs this suite, which a
+        # path filter that leaves one out would skip — GitHub counts a skipped job as passing.
+        workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "runtime-tests.yml")
+        lines = workflow.read_text(encoding="utf-8").splitlines()
+        start = next(i for i, line in enumerate(lines) if line.strip() == "paths: |") + 1
+        paths = []
+        for line in lines[start:]:
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if ":" in line:
+                break
+            paths.append(line.strip())
+        for folder in ("runtime/**", "core/**", "cli/**", ".github/workflows/runtime-tests.yml"):
+            self.assertIn(folder, paths)
+
     @unittest.skipIf(os.name == "nt", "the source's cortex run with an empty environment")
     @outside_a_repository
     def test_below_1_8_0_the_sync_is_named_only_where_it_reads_the_team_s_file(self):
