@@ -13,9 +13,10 @@ run's number. ``X.Y.Z`` is the version the branch prepares, which ``CHANGELOG.md
   ``### ✨ Added``, ``### Fixed (CLI)`` — ``### Notes: nothing removed`` names none. Markdown's rules
   hold, as ``markdown_lines`` reads them — the release actions read the changelog through the same
   file: a heading or an entry may be indented up to three spaces, a space or a tab after its ``###``;
-  an entry is an item of the section's own list, started with ``-``, ``*`` or ``+`` — an item in an
-  entry is its text; a fenced code block or an HTML comment holds no section, heading nor entry —
-  one opened in a list item ends with it; a line ends at a line feed or a carriage return alone;
+  an entry is an item of the section's own list, started with ``-``, ``*`` or ``+``, its text on
+  its line or below it — an item in an entry is its text; a fenced code block, an HTML comment or a
+  block quote holds no section, heading nor entry — one opened in a list item ends with it; a line
+  ends at a line feed or a carriage return alone; ``[Unreleased]`` is read in any case;
 - a changelog that writes a pre-release's section — Cortex's does not (ADR-009 §3.7) — has it as
   a floor: above the base, ``3.1.0-rc.1`` makes the version the higher of its release and the
   bump's — ``3.1.0`` after a fix or an addition, ``4.0.0`` after a removal.
@@ -29,17 +30,17 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional
 
-from .markdown_lines import SECTION, lines, sections
+from .markdown_lines import SECTION, is_unreleased, lines, sections
 from .semver import Version
 
-UNRELEASED = "unreleased"
-KIND = re.compile(r" {0,3}###[ \t]+(?P<kind>.+?)\s*")
+# Matched against a line without its trailing white space.
+KIND = re.compile(r" {0,3}###[ \t]+(?P<kind>\S.*)")
 # The kinds of Keep a Changelog, as a heading names one — its first word, after an emoji or a mark: `### Added`,
 # `### ✨ Added`, `### fixed (CLI)`; `### Notes: nothing removed` names none.
 KINDS = re.compile(r"^[\W_]*(added|changed|deprecated|removed|fixed|security)\b", re.IGNORECASE)
 # An entry is a list item of the section's own list — none in another item, which is its text — marked `-`, `*` or
-# `+`, indented up to three spaces.
-ENTRY = re.compile(r" {0,3}[-*+][ \t]+(?P<text>.*)")
+# `+`, indented up to three spaces — its text on its own line, or below it.
+ENTRY = re.compile(r" {0,3}[-*+](?:[ \t]+(?P<text>.*))?")
 BREAKING = re.compile(r"(?:\*\*)?💥")
 # A heading marked breaking, `### 💥 Breaking`, `### Breaking changes`: its entries are, whatever kind it names.
 # The word first, or the mark: `### Fixed (no breaking change)` and `### Non-breaking` are not.
@@ -67,7 +68,7 @@ def unreleased(text: str) -> Dict[str, List[str]]:
         line = read.text.rstrip()
         section = SECTION.fullmatch(line)
         if section:
-            inside = section.group("label").strip().lower() == UNRELEASED
+            inside = is_unreleased(section.group("label"))
             continue
         if not inside:
             continue
@@ -79,7 +80,7 @@ def unreleased(text: str) -> Dict[str, List[str]]:
             continue
         entry = ENTRY.fullmatch(line) if read.item and not read.nested else None
         if entry and kind is not None:
-            entries.setdefault(kind, []).append(entry.group("text"))
+            entries.setdefault(kind, []).append(entry.group("text") or "")
     return entries
 
 

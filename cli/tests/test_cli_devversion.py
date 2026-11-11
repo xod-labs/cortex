@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -339,6 +340,85 @@ class BumpTests(unittest.TestCase):
     def test_a_byte_order_mark_is_no_part_of_the_text(self):
         text = "\ufeff## [Unreleased]\n\n### Added\n- a thing\n\n## [2.3.4] - 2026-11-01 — A Name _(Released)_\n"
         self.assertEqual(prepared(text), "2.4.0")
+
+    def test_a_block_quote_ends_the_list_and_holds_no_entry(self):
+        # The counter-review of the third pass: a block quote's line is no lazy line of the entry above — the list
+        # ends there, and an item below starts one. In the entry, as indented as its content, it is the entry's.
+        for quote in ("> **Note**\n\n", "> **Note**\n", "> [!NOTE]\n> It moved.\n", "> [!NOTE]\n> It moved.\n\n"):
+            with self.subTest(quote=quote):
+                self.assertEqual(prepared(changelog(f"### Fixed\n- a\n{quote}  - 💥 b\n", "2.3.4")), "3.0.0")
+        self.assertEqual(prepared(changelog("### Fixed\n- a\n  > a note\n  - 💥 b\n", "2.3.4")), "2.3.5")
+        # Its own items are none of the section's. Its paragraph, continued lazily or not, is no container of an
+        # item's line, which any item then starts — an empty one too; an empty quote holds no paragraph to continue.
+        self.assertEqual(prepared(changelog("### Fixed\n- a\n\n> - 💥 b\n> ### Removed\n", "2.3.4")), "2.3.5")
+        for quote in ("> a note\n", "> a note\ncontinued lazily\n"):
+            with self.subTest(quote=quote):
+                self.assertEqual(prepared(changelog(f"### Removed\n{quote}-\n", "2.3.4")), "3.0.0")
+        self.assertEqual(prepared(changelog("### Fixed\n- a\n  >\nfoo\n  - 💥 b\n", "2.3.4")), "3.0.0")
+
+    def test_what_a_paragraph_continues_and_what_interrupts_it(self):
+        # Indented code is no paragraph: the line below it is no lazy line of the entry, and the list ends there.
+        for code in ("- a\n\n      code\n", "-     code\n"):
+            with self.subTest(code=code):
+                self.assertEqual(prepared(changelog(f"### Fixed\n{code}text\n  - 💥 b\n", "2.3.4")), "3.0.0")
+        # Neither an ordered item that does not start at 1, nor an empty one, interrupts a paragraph: below it, an
+        # indented item starts the section's list. An item of the list goes on as its sibling.
+        for line in ("2. June:", "*", "-"):
+            with self.subTest(line=line):
+                text = changelog(f"### Fixed\nNotes, as of\n{line}\n   - 💥 b\n", "2.3.4")
+                self.assertEqual(prepared(text), "3.0.0")
+        self.assertEqual(prepared(changelog("### Fixed\nNotes\n1. x\n   - 💥 b\n", "2.3.4")), "2.3.5")
+        self.assertEqual(prepared(changelog("### Fixed\n1. a\n2. b\n   - 💥 c\n", "2.3.4")), "2.3.5")
+        # Less indented than the entry's content, an empty item is no line of its paragraph: an entry of its own.
+        self.assertEqual(devversion.unreleased(changelog("### Fixed\n- a\n*\n")), {"Fixed": ["a", ""]})
+        # A line of - under a paragraph makes it a heading: the empty item below it is the section's.
+        self.assertEqual(prepared(changelog("### Removed\nNotes\n-\n-\n  the old flag\n", "2.3.4")), "3.0.0")
+        # A top-level fence never closed is a paragraph's line: an empty item does not interrupt it.
+        self.assertEqual(prepared(changelog("### Fixed\n- a\n### Removed\n```\n-\n", "2.3.4")), "2.3.5")
+        # An empty item ends at a blank line below it: what follows, indented as its content, is no item of it.
+        self.assertEqual(prepared(changelog("### Fixed\n-\n\n  - 💥 b\n", "2.3.4")), "3.0.0")
+
+    def test_unreleased_is_read_in_any_case(self):
+        text = changelog("### Removed\n- a thing\n", "2.3.4").replace("[Unreleased]", "[unreleased]")
+        self.assertEqual(prepared(text), "3.0.0")
+        self.assertTrue(markdown_lines.is_unreleased(" UnReleased "))
+        self.assertFalse(markdown_lines.is_unreleased("Unreleased 2"))
+
+    def test_an_entry_whose_marker_line_is_empty_counts_for_its_kind(self):
+        text = changelog("### Removed\n-\n  the old flag\n", "2.3.4")
+        self.assertEqual(devversion.unreleased(text), {"Removed": [""]})
+        self.assertEqual(prepared(text), "3.0.0")
+
+    def test_what_ends_a_list_and_what_does_not(self):
+        # A thematic break of stars or underscores ends the entry's list.
+        for rule in ("***", "___", "* * *"):
+            with self.subTest(rule=rule):
+                self.assertEqual(prepared(changelog(f"### Fixed\n- a\n{rule}\n  - 💥 b\n", "2.3.4")), "3.0.0")
+        # A tab reaches the next multiple of four columns: after a marker, it puts the entry's content at column 4 —
+        # an item indented two is the list's own, one indented four the entry's.
+        self.assertEqual(prepared(changelog("### Fixed\n-\ta\n  - 💥 b\n", "2.3.4")), "3.0.0")
+        self.assertEqual(prepared(changelog("### Fixed\n-\ta\n    - 💥 b\n", "2.3.4")), "2.3.5")
+        self.assertEqual(prepared(changelog("### Fixed\n- a\n\t- 💥 b\n", "2.3.4")), "2.3.5")
+        # A comment opened after text on its line is none: what follows is read.
+        self.assertEqual(prepared(changelog("### Fixed\n- a\n\ntext <!--\n### Removed\n- b\n-->\n", "2.3.4")), "3.0.0")
+        # Indented four spaces, a heading is none: in the entry, it keeps the list open.
+        self.assertEqual(prepared(changelog("### Fixed\n- a\n\n    ### x\n  - 💥 b\n", "2.3.4")), "2.3.5")
+        # A line of other white space than spaces and tabs is no blank line: it is a paragraph's.
+        for space in (" ", "\x0c", "\x85"):
+            with self.subTest(space=repr(space)):
+                self.assertEqual(prepared(changelog(f"### Fixed\n- a\n {space}\nfoo\n  - 💥 b\n", "2.3.4")), "2.3.5")
+
+    def test_a_long_line_or_many_blocks_never_closed_are_read_at_once(self):
+        # The counter-review of the third pass: each never-closed block scanned the rest of the file, and a heading's
+        # spaces were matched twice — seconds, then minutes, on a few thousand lines.
+        # A block never closed leaves a shorter one below to be read: a fence as long or longer closes it.
+        text = changelog("### Fixed\n- a\n\n````\n```\n### Removed\n- b\n```\n", "2.3.4")
+        self.assertEqual(prepared(text), "2.3.5")
+        many = "".join(f"{opening}\n" for opening in ("<!--", "```", "~~~~") * 7000)
+        start = time.monotonic()
+        self.assertEqual(prepared(changelog("### Fixed\n- a\n\n" + many, "2.3.4")), "2.3.5")
+        self.assertEqual(prepared(changelog("### Added" + " " * 100000 + "x\n- a\n", "2.3.4")), "2.4.0")
+        self.assertLess(time.monotonic() - start, 5)
 
     def test_entries_and_their_kinds(self):
         text = changelog("### Added\n- **One.** First line\n  and its second.\n* Two\n\n### Fixed\n- Three\n", "1.0.0")
