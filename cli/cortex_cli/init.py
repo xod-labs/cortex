@@ -643,6 +643,13 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                           "again — to write a single project's, remove it and run "
                           f"`cortex init {tool_options(instructions_file, tool)}`, then copy the team's part back from "
                           f"{display(str(backup))}, below the end marker\n")
+            elif replaced and not options.workspace and kept_bootstrap(current, template) is TITLE_BELOW_TEXT:
+                # No marker, and a title below a line of text: the layout cannot be told, and --force alone writes a
+                # single project's — said, as the run without --force says it (#329).
+                err.write(f"note: {display(str(instructions_file))} held Cortex's title below a line of text, so neither "
+                          "its bootstrap nor its layout could be told, and a single project's is written — "
+                          f"`cortex init {tool_options(instructions_file, tool)} --workspace --force` writes a "
+                          f"workspace's; what you wrote is in {display(str(backup))}\n")
     if not tool_named:
         # Found, not written: a file of another tool's, which a new project's default leaves alone.
         for name, rel in TOOLS.items():

@@ -682,6 +682,38 @@ class OptionTests(InitTestCase):
         self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
         self.assertEqual(self.read("CLAUDE.md.bak"), old)
 
+    def test_force_over_a_title_below_a_line_of_text_says_a_single_project_s_is_written(self):
+        # --force alone over a workspace's file of before the marker, a line of text above its title: the layout cannot
+        # be told, and a single project's is written — said, with the --workspace that writes a workspace's (#329),
+        # which, followed, does; the file as it was stays in the backup the note names.
+        old = "Uses Cortex.\n\n# Cortex AI Team \u2014 Workspace Mode\n\nRead cortex.local.toml first.\n\n| @api | api/ |\n"
+        (self.project / "CLAUDE.md").write_bytes(old.encode("utf-8"))
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=single format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("note: CLAUDE.md held Cortex's title below a line of text, so neither its bootstrap nor its layout "
+                      "could be told, and a single project's is written — `cortex init --tool claude --workspace --force` "
+                      "writes a workspace's; what you wrote is in CLAUDE.md.bak",
+                      proc.err.replace(display(self.project.resolve()) + "/", "").replace(display(self.project) + "/", ""))
+        proc = self.init("--tool", "claude", "--workspace", "--force")                      # the command the note names
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertNotIn("below a line of text", proc.err)
+        self.assertEqual(self.read("CLAUDE.md.bak"), old)
+        # With --workspace, the option chose the layout: nothing to say.
+        (self.project / "CLAUDE.md").write_bytes(old.encode("utf-8"))
+        proc = self.init("--tool", "claude", "--workspace", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("below a line of text", proc.err)
+        # A marker tells the layout, whatever is above the title: nothing to say either.
+        (self.project / "CLAUDE.md").unlink()
+        self.assertEqual(self.init("--tool", "claude").returncode, 0)                       # a single project's
+        (self.project / "CLAUDE.md").write_bytes(("Ours.\n\n" + self.read("CLAUDE.md").replace("format=2", "format=1", 1))
+                                                 .encode("utf-8"))
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("below a line of text", proc.err)
+
     def test_in_a_repository_without_git_the_backup_is_not_said_left_to_git(self):
         # Without git to ask, a team's *.bak line is git's to read: the backup line says nothing of git.
         (self.project / ".git").mkdir(parents=True, exist_ok=True)
