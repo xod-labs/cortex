@@ -88,10 +88,7 @@ def read_pin(root: Path) -> Optional[Pin]:
             # — a 422 there no sync could ever clear (§9).
             found = cascade.resolve(data, None, {}, {}, locked=True)
             return Pin(version=_team_version(data["version"], None, local), theme=str(found.value("theme")))
-        try:
-            team = cascade.read_team(str(root))
-        except OSError as error:        # the team's file's, not cortex.toml's
-            raise ValueError(f"{cascade.TEAM_NAME} of this workspace cannot be read: {error.strerror or error}")
+        team = cascade.read_team(str(root))    # never raises: what is there and unread is an Unreadable
         project.check_project(data, project.PROJECT_REQUIRED if team is not None else ())
         if before and alone is None:
             # A synced left from another version: `cortex sync` reads a committed cortex.toml before 1.8.0 alone, and

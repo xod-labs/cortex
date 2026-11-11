@@ -278,13 +278,31 @@ class TeamVersionTests(SyncedProjectTestCase):
             pin()                                                                # from 1.8.0, it is read
 
     def test_a_team_s_file_that_cannot_be_opened_is_a_422(self):
-        from cortex_runtime import base
-
-        self.files('version = "9.9.9"\ntheme = "h2g2"\n', team='version = "9.9.9"\n')
-        with mock.patch.object(base.cascade, "read_team", side_effect=PermissionError(13, "Permission denied")):
-            with self.assertRaisesRegex(ValueError, "^agents/cortex.team.toml of this workspace cannot be read: "
-                                                    "Permission denied$"):
-                base.read_pin(self.project)
+        # There and unread — a directory, a link that leads nowhere, a folder this user cannot search — is
+        # refused as the CLI refuses it, never read as no file: the team's version would be lost (§3.5).
+        team = self.project / "agents" / "cortex.team.toml"
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n')
+        team.mkdir()
+        with self.assertRaisesRegex(ValueError, "^agents/cortex.team.toml: cannot be read — not a file — "):
+            pin()
+        team.rmdir()
+        try:
+            os.symlink(self.project / "gone", team)
+        except (OSError, NotImplementedError):
+            pass                                                        # Windows without the right to make links
+        else:
+            with self.assertRaisesRegex(ValueError, "^agents/cortex.team.toml: cannot be read — a link that leads "
+                                                    "nowhere — "):
+                pin()
+            team.unlink()
+        if os.name == "posix" and os.geteuid() != 0:                    # root searches any folder
+            team.write_text('version = "9.9.9"\n', encoding="utf-8")
+            (self.project / "agents").chmod(0)
+            try:
+                with self.assertRaisesRegex(ValueError, "^agents/cortex.team.toml: cannot be read — "):
+                    pin()
+            finally:
+                (self.project / "agents").chmod(0o755)
 
     def test_at_a_2b_root_the_team_s_theme_as_cortex_config_locked_gives_it(self):
         # An uncommitted cortex.toml's theme is left out where the team's file sets one (ADR-013 §3.1).
