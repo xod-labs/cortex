@@ -7,6 +7,10 @@ release's section is written final, its date and its name included:
 
 and its note is a file of its own, ``changelog/1.2.2.md``. Both paths and the section's heading
 are inputs of the actions: another project names them its own way.
+
+Its sections are read as Markdown has them, and as the version a build of no release prepares reads
+them (``markdown_lines``, the same file as the CLI's): a heading indented up to three spaces, a tab
+after its ``##``, none in a fenced code block or an HTML comment.
 """
 
 from __future__ import annotations
@@ -14,22 +18,16 @@ from __future__ import annotations
 import re
 from typing import List, Optional, Tuple
 
+from markdown_lines import SECTION, lines, sections
+
 # The heading of a released section. Its named groups `version` and `date` are what the actions read.
 DEFAULT_SECTION = r"## \[(?P<version>[^\]]+)\] - (?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2}) — (?P<name>.+) _\(Released\)_"
-UNRELEASED = re.compile(r"## \[Unreleased\]\s*")
-# Any second-level section of a version, released or not: `## [X.Y.Z]…`.
-ANY_SECTION = re.compile(r"## \[(?P<version>[^\]]+)\].*")
 NOTE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.md", re.ASCII)
 
 
 def headings(text: str) -> List[Tuple[str, str]]:
     """``(label, line)`` of every ``## [label]`` heading, in order."""
-    found = []
-    for line in text.splitlines():
-        match = ANY_SECTION.fullmatch(line.rstrip())
-        if match:
-            found.append((match.group("version"), line.rstrip()))
-    return found
+    return [(label, line.text.rstrip()) for label, line in sections(text)]
 
 
 def first_after_unreleased(text: str) -> Optional[str]:
@@ -56,14 +54,14 @@ def note_version(path: str, notes_dir: str) -> Optional[str]:
 
 def section_text(text: str, label: str) -> Optional[str]:
     """The body of the section ``## [label]``, without its heading, up to the next one."""
-    lines, inside, body = text.splitlines(), False, []
-    for line in lines:
-        match = ANY_SECTION.fullmatch(line.rstrip())
+    inside, body = False, []
+    for line in lines(text):
+        match = None if line.code else SECTION.fullmatch(line.text.rstrip())
         if match:
             if inside:
                 break
-            inside = match.group("version") == label
+            inside = match.group("label") == label
             continue
         if inside:
-            body.append(line)
+            body.append(line.text)
     return "\n".join(body).strip("\n") if inside or body else None

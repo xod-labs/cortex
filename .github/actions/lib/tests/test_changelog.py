@@ -59,6 +59,41 @@ class ChangelogTests(unittest.TestCase):
                 self.assertIsNone(note_version(path, "changelog"))
 
 
+class MarkdownTests(unittest.TestCase):
+    """Bluspark's third pass: the gate reads the sections the CLI's development version reads, as Markdown has
+    them."""
+
+    def test_a_fenced_section_is_none(self):
+        text = ("## [Unreleased]\n\n### Fixed\n- a fix, its example:\n\n  ```\n"
+                "  ## [9.9.9] - 2026-11-01 — X _(Released)_\n  ```\n\n"
+                "<!--\n## [9.9.8] - 2026-11-01 — X _(Released)_\n-->\n\n"
+                "## [1.4.0] - 2026-11-03 — A Name _(Released)_\n")
+        self.assertEqual([label for label, _ in headings(text)], ["Unreleased", "1.4.0"])
+        self.assertEqual(first_after_unreleased(text), "## [1.4.0] - 2026-11-03 — A Name _(Released)_")
+        self.assertFalse(has_section(text, "9.9.9"))
+        self.assertFalse(has_section(text, "9.9.8"))
+        # The section's body holds its example, as written.
+        self.assertIn("  ## [9.9.9] - 2026-11-01", section_text(text, "Unreleased"))
+
+    def test_an_indented_section_and_a_tab_after_its_hashes(self):
+        for heading in (" ## [1.8.1] - 2026-11-03 — A Name _(Released)_",
+                        "##\t[1.8.1] - 2026-11-03 — A Name _(Released)_"):
+            with self.subTest(heading=heading):
+                text = (f"## [Unreleased]\n\n{heading}\n### Fixed\n- a\n\n"
+                        "## [1.8.0] - 2026-11-01 — Older _(Released)_\n")
+                self.assertTrue(has_section(text, "1.8.1"))
+                # It is the first section, which the default shape refuses: the gate says so, and names it.
+                self.assertEqual(first_after_unreleased(text), heading)
+                self.assertIsNone(re.fullmatch(DEFAULT_SECTION, heading))
+                self.assertEqual(section_text(text, "1.8.1"), "### Fixed\n- a")
+
+    @unittest.skipUnless((HERE.parents[3] / "cli" / "cortex_cli").is_dir(), "not in the repository of the CLI")
+    def test_the_cli_reads_through_the_same_file(self):
+        # One rule: cli/cortex_cli/markdown_lines.py and this lib's are the same, byte for byte.
+        self.assertEqual((HERE.parent / "markdown_lines.py").read_bytes(),
+                         (HERE.parents[3] / "cli" / "cortex_cli" / "markdown_lines.py").read_bytes())
+
+
 @unittest.skipUnless((HERE.parents[3] / "CHANGELOG.md").is_file(), "not in the repository that calls the actions")
 class ThisRepositoryTests(unittest.TestCase):
     def test_every_released_section_of_this_changelog_has_the_default_shape(self):
