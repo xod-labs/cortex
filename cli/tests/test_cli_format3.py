@@ -76,6 +76,13 @@ class TemplateTests(unittest.TestCase):
                              b"No `synced` still \xe2\x86\x92 run `cortex --version` again: still below 1.8.0 \xe2\x86\x92 "
                              b"the self-update installed nothing \xe2\x80\x94 tell the user, and go no further; otherwise",
                              b"`cortex sync`, once each; otherwise, or when it still refuses, tell the user",
+                             # A sync that fails without `synced` reaches the rule that names what it says, or is
+                             # told: a binary below the team's pin does not go on silently on the old spec.
+                             b"run `cortex sync`, once \xe2\x80\x94 when it fails, follow the rules below for what it "
+                             b"says, or, when none names it, tell the user what it says, and go no further",
+                             # A project before 1.8.0, alone, in step: no sync and no self-update to stop on.
+                             b"and neither `cortex.local.toml` nor the team's file sets a `version`",
+                             b"before 1.8.0: when the spec is of that version, run nothing.",
                              b"**It names a missing team's folder**",
                              b"the team's file's own when its `locked` lists `theme`",
                              b"in `cortex.local.toml` or in the team's file, of your own accord"):
@@ -88,6 +95,10 @@ class TemplateTests(unittest.TestCase):
                 for later in (b"**`cortex sync` says this cortex is too old", b"**It refuses `cortex.toml` or "
                               b"`cortex.local.toml` for a key"):
                     self.assertLess(text.index(b"When the sync fails, follow the rules below"), text.index(later))
+                # Compared before any sync; the first that names "below 1.8.0" says how to read it.
+                self.assertLess(text.index(b"when the spec is of that version, run nothing"),
+                                text.index(b"when it fails, follow the rules below"))
+                self.assertLess(text.index(b"`1.8.0-rc.1` and `1.8.0-dev.2` are not"), text.index(b"below 1.8.0, read as above,"))
                 self.assertIn(b"**No `synced`** in `cortex.local.toml`, and `cortex/` a link \xe2\x86\x92 nothing to "
                               b"compare", text)
 
@@ -239,13 +250,30 @@ class OwnBootstrapTests(TeamTestCase):
         self.assert_ok(proc)
         self.assertEqual((root / "CLAUDE.md").read_bytes(), stale)
         self.assertIn(f"note: CLAUDE.md is not what Cortex wrote, by the digest in its marker — you changed it — so it is "
-                      f"kept, and Cortex {OWN}'s template is not written: cortex init --tool claude --force writes it "
-                      "again, and keeps yours as .bak — your own rules go below its end marker", proc.err)
+                      f"kept, and Cortex {OWN}'s template is not written: cortex init --tool claude --force, at the "
+                      "project root, writes it again, and keeps yours as .bak — your own rules go below its end "
+                      "marker", proc.err)
         # Changed after Cortex wrote this version's: nothing new to say.
         (root / "CLAUDE.md").write_bytes(written(TEMPLATE).replace(b"Cortex AI Team\n", b"Cortex AI Team, ours\n", 1))
         proc = self.cortex(root, "sync")
         self.assert_ok(proc)
         self.assertNotIn("CLAUDE.md", proc.out + proc.err)
+
+    @harness.outside_a_repository
+    def test_the_note_from_a_subdirectory_names_the_project_root(self):
+        # `cortex sync` finds the root above; `cortex init` makes a project where it runs: the note says where.
+        root = self.project(team=f'version = "{OWN}"\n', committed=False)
+        self.assert_ok(self.cortex(root, "sync"))
+        stale = written(FORMAT_2).replace(b"Cortex AI Team\n", b"Cortex AI Team, ours\n", 1)
+        (root / "CLAUDE.md").write_bytes(stale)
+        (root / "src").mkdir()
+        proc = self.cortex(root / "src", "sync")
+        self.assert_ok(proc)
+        self.assertIn("cortex init --tool claude --force, at the project root, writes it again", proc.err)
+        proc = self.cortex(root, "init", "--tool", "claude", "--force")        # the command the note names, there
+        self.assert_ok(proc)
+        self.assertEqual((root / "CLAUDE.md.bak").read_bytes(), stale)
+        self.assertFalse((root / "src" / "cortex.toml").exists())
 
     @harness.outside_a_repository
     def test_the_note_on_a_changed_own_bootstrap_names_a_command_that_writes_it(self):
@@ -266,8 +294,8 @@ class OwnBootstrapTests(TeamTestCase):
                     (root / other).write_bytes(written(TEMPLATE))
                 proc = self.cortex(root, "sync")
                 self.assert_ok(proc)
-                self.assertIn(f"kept, and Cortex {OWN}'s template is not written: cortex init --tool claude --force "
-                              "writes it again, and keeps yours as .bak", proc.err)
+                self.assertIn(f"kept, and Cortex {OWN}'s template is not written: cortex init --tool claude --force, "
+                              "at the project root, writes it again, and keeps yours as .bak", proc.err)
                 self.assertNotIn("--workspace", proc.err)
                 proc = self.cortex(root, "init", "--tool", "claude", "--force")       # the command the note names
                 self.assert_ok(proc)
