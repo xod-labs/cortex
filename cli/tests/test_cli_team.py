@@ -700,7 +700,9 @@ class UpgradeTests(TeamTestCase):
         self.assertEqual(tomllib.loads((root / TEAM).read_text(encoding="utf-8"))["version"], OWN)
         self.assertIn(f'version = "{OWN}"', (root / "agents" / "cortex.team.lock").read_text(encoding="utf-8"))
         self.assertIn(f"{TEAM}: Cortex {OWN}, a version added", proc.out)
-        self.assertIn("Commit agents/cortex.team.toml and agents/cortex.team.lock in agents/", proc.out)
+        # In no git work tree, the team's folder too: nothing commits them (round 3 of the 1.8.0 stack's review).
+        self.assertIn("Written: agents/cortex.team.toml and agents/cortex.team.lock — in no git work tree, so committed "
+                      "nowhere.", proc.out)
         # An uncommitted cortex.toml follows the team's file (ADR-013 §3.1): checked, and synced.
         self.assertNotIn("pins its own version", proc.out)
         self.assertIn(f"The project's overlays pass against Cortex {OWN}", proc.out)
@@ -2512,6 +2514,14 @@ class CounterReviewRoundTwoTests(TeamTestCase):
                       "would never be read. Nothing was changed. To read 9.9.6, remove cortex.toml's version — the "
                       "team's 9.9.5 is read then, or a try above it — and run `cortex upgrade --local 9.9.6` again", proc.err)
         self.assertEqual(self.local(root)["version"], OWN)
+        # Bluspark's third pass: at or below the team's version, the try is removed — and cortex.toml's version, above
+        # the team's, is what is read then, as said.
+        for dry in (("--dry-run",), ()):
+            proc = self.cortex(root, "upgrade", "--local", "9.9.5", *dry, **env)
+            self.assert_ok(proc)
+            self.assertIn(f"cortex.local.toml: version {OWN} {'would be' if dry else 'is'} removed — cortex.toml's "
+                          f"9.9.7, not committed, is read, above the team's 9.9.5 ({TEAM})\n", proc.out)
+        self.assertEqual(self.value(root, "version"), "9.9.7")
         (root / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")                # followed
         self.assert_ok(self.cortex(root, "upgrade", "--local", "9.9.6", **env))
         self.assertEqual(self.value(root, "version"), "9.9.6")
@@ -3050,6 +3060,211 @@ class SecondCodeReviewTests(TeamTestCase):
                 proc = self.cortex(root, "validate")
                 self.assertIn(f"no agents/cortex.team.lock — run `cortex sync`{', then commit it' if own else ''}\n",
                               proc.out + proc.err)
+
+class ThirdCodeReviewTests(TeamTestCase):
+    """What the third counter-review of the 1.8.0 stack's code found (2026-11-11)."""
+
+    LOCKING = 'version = "9.9.8"\nclaude_access = false\nlocked = ["claude_access"]\n'
+    PULLED = '<<<<<<< HEAD\nversion = "9.9.7"\n=======\nversion = "9.9.8"\n>>>>>>> origin/main\n'
+    REFUSED = (("sync",), ("sync", "--locked"), ("config", "claude_access"), ("validate",),
+               ("init", "--tool", "claude", "--claude-access"))
+
+    def assert_refused(self, root, said):
+        """Each command refuses the project, saying ``said`` — the team's file is never read as none — and this
+        machine's file is left as it was."""
+        local = (root / "cortex.local.toml").read_bytes() if (root / "cortex.local.toml").exists() else None
+        for args in self.REFUSED:
+            with self.subTest(args=args):
+                proc = self.cortex(root, *args)
+                self.assertNotEqual(proc.returncode, 0, proc.out + proc.err)
+                self.assertIn(said, proc.err)
+                self.assertNotIn("is not read", proc.out + proc.err)
+        self.assertEqual((root / "cortex.local.toml").read_bytes() if local is not None
+                         else (root / "cortex.local.toml").exists(), local if local is not None else False)
+
+    @SOURCE
+    @DOWNLOADS
+    @AS_ROOT
+    @harness.outside_a_repository
+    def test_a_team_s_folder_that_cannot_be_searched_is_refused_never_read_as_no_file(self):
+        # agents/ unsearchable — another user's, mode 700: the team's file is there, unread — refused, never a
+        # project without one, whose machine the sync would move to cortex.toml's version, the team's lock dropped.
+        for name, toml in (("own", 'version = "1.7.0"\ntheme = "h2g2"\nclaude_access = true\n'),
+                           ("pinned", 'version = "9.9.8"\ntheme = "h2g2"\nclaude_access = true\n')):
+            with self.subTest(name=name):
+                root = self.project(toml, team=self.LOCKING, committed=name == "pinned", name=name)
+                self.assert_ok(self.cortex(root, "sync"))
+                self.assertEqual(self.value(root, "claude_access"), "false")
+                os.chmod(root / "agents", 0)
+                self.addCleanup(os.chmod, root / "agents", 0o755)
+                self.assert_refused(root, f"{TEAM}: cannot be read — Permission denied")
+                os.chmod(root / "agents", 0o755)
+                self.assert_ok(self.cortex(root, "sync"))           # the folder readable again: the sync runs
+                self.assertEqual(self.value(root, "claude_access"), "false")
+
+    @SOURCE
+    @AS_ROOT
+    @harness.outside_a_repository
+    def test_a_fresh_init_beside_a_team_s_folder_that_cannot_be_searched_says_how_to_go_on(self):
+        root = self.tmp / "fresh"
+        (root / "agents").mkdir(parents=True)
+        (root / TEAM).write_text(f'version = "{OWN}"\n', encoding="utf-8")
+        os.chmod(root / "agents", 0)
+        self.addCleanup(os.chmod, root / "agents", 0o755)
+        proc = self.cortex(root, "init", "--tool", "claude")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"{TEAM}: cannot be read — Permission denied", proc.err)
+        self.assertIn(f"cortex init reads {TEAM}: fix it", proc.err)
+        self.assertFalse((root / "cortex.toml").exists())
+        os.chmod(root / "agents", 0o755)
+        self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+
+    @SOURCE
+    @unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")
+    @harness.outside_a_repository
+    def test_a_team_s_file_that_is_no_file_is_refused_never_read_as_none(self):
+        # A directory, a link that leads nowhere, a loop of links: there, and unread — refused, as git does not
+        # take them for no file either (ADR-013 §3.1, §3.5).
+        # A cortex.toml without version, which a team's file lets it leave out: the team's file's error, not its own.
+        for kind, said in (("directory", "not a file"), ("nowhere", "a link that leads nowhere"),
+                           ("loop", "cannot be read — "), ("versionless", "not a file")):
+            with self.subTest(kind=kind):
+                toml = 'theme = "h2g2"\n' if kind == "versionless" else 'version = "1.7.0"\ntheme = "h2g2"\n'
+                root = self.project(toml + "claude_access = true\n", committed=False, name=kind)
+                (root / "agents").mkdir()
+                if kind in ("directory", "versionless"):
+                    (root / TEAM).mkdir()
+                elif kind == "nowhere":
+                    (root / TEAM).symlink_to(self.tmp / "gone.toml")
+                else:
+                    (root / "agents" / "other.toml").symlink_to(root / TEAM)
+                    (root / TEAM).symlink_to(root / "agents" / "other.toml")
+                self.assert_refused(root, f"{TEAM}: cannot be read — " if kind == "loop" else
+                                    f"{TEAM}: cannot be read — {said}")
+
+    @SOURCE
+    @harness.outside_a_repository
+    def test_a_fresh_init_beside_a_team_s_file_that_does_not_read_says_how_to_go_on(self):
+        # No cortex.toml yet: the team's file's error, and its remedy — followed, init runs.
+        root = self.tmp / "fresh"
+        (root / "agents").mkdir(parents=True)
+        (root / TEAM).write_text(self.PULLED, encoding="utf-8")
+        proc = self.cortex(root, "init", "--tool", "claude")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"{TEAM}: Invalid statement", proc.err)
+        self.assertIn(f"cortex init reads {TEAM}: fix it — a conflict a pull left in it, say — then run cortex init "
+                      "again", proc.err)
+        (root / TEAM).write_text(f'version = "{OWN}"\n', encoding="utf-8")
+        self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+
+    @SOURCE
+    @harness.outside_a_repository
+    def test_init_s_remedy_for_cortex_toml_s_own_error_naming_the_team_s_file_is_cortex_toml_s(self):
+        # cortex.toml's own error names the team's file — "version" is required, or in it —: the remedy is
+        # cortex.toml's, which, followed, leads on.
+        root = self.project('theme = "h2g2"\n', team='theme = "h2g2"\n', committed=False)
+        proc = self.cortex(root, "init", "--tool", "claude")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f'cortex.toml: "version" is required — or in {TEAM}', proc.err)
+        self.assertIn("cortex init keeps an existing cortex.toml: fix it", proc.err)
+        self.assertNotIn(f"cortex init reads {TEAM}", proc.err)
+        (root / "cortex.toml").write_text(f'version = "{OWN}"\ntheme = "h2g2"\n', encoding="utf-8")
+        self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+
+    def team_committed(self, name, committed, now, own_repository=False):
+        """A follower whose team's file, ``committed`` as bytes, is committed — with no lock — and now holds ``now``.
+        The project, the repository, and git's environment."""
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        root = self.project('theme = "h2g2"\n', team="", committed=False, name=name)
+        (root / TEAM).write_bytes(committed)
+        where = root / "agents" if own_repository else root
+        (where / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        self.git(where, "init", "-q")
+        self.git(where, "add", "-A")
+        self.git(where, "commit", "-q", "-m", "init")
+        (root / TEAM).write_bytes(now)
+        return root, where, env
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_the_lock_s_note_reads_the_team_s_file_with_a_byte_order_mark_or_not_parsed(self):
+        # What the team's file pinned when committed against what it pins now, a byte order mark aside: moved by
+        # hand, it goes with its lock; another key changed, the lock goes alone; committed with a conflict, what it
+        # pinned cannot be read — it goes with its lock.
+        bom = b"\xef\xbb\xbf"
+        alone = "agents/cortex.team.lock: written — commit it in agents/\n"
+        moved = "agents/cortex.team.lock: written — commit it in agents/, with cortex.team.toml, moved to its " \
+                "version by hand\n"
+        for name, committed, now, said in (
+                ("bom-moved", bom + b'version = "9.9.7"\n', bom + b'version = "9.9.8"\n', moved),
+                ("bom-key", bom + b'version = "9.9.8"\n', bom + b'version = "9.9.8"\ntheme = "none"\n', alone),
+                ("conflict", self.PULLED.encode(), b'version = "9.9.8"\n', moved)):
+            with self.subTest(name=name):
+                root, where, env = self.team_committed(name, committed, now)
+                proc = self.cortex(root, "sync", **env)
+                self.assert_ok(proc)
+                self.assertIn(said, proc.out)
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_team_commit_commits_a_team_s_file_with_a_byte_order_mark_moved_by_hand_with_its_lock(self):
+        bom = b"\xef\xbb\xbf"
+        root, where, env = self.team_committed("bom", bom + b'version = "9.9.7"\n', bom + b'version = "9.9.8"\n')
+        proc = self.cortex(root, "upgrade", "--team", "9.9.8", "--commit", "--message", "move", **env)
+        self.assert_ok(proc)
+        self.assertEqual(self.git(where, "log", "-1", "--format=%s").stdout.strip(), "move")
+        self.assertEqual(sorted(self.git(where, "show", "--name-only", "--format=", "HEAD").stdout.split()),
+                         ["agents/cortex.team.lock", TEAM])
+        self.assert_ok(self.cortex(root, "sync", "--locked", **env))
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    def test_the_sync_leaves_the_team_s_index_as_it_was(self):
+        # Asking git whether the team's file goes with its lock rewrites nothing in the team's repository: a status
+        # that refreshes the index would write it, under its lock, where another git may be at work.
+        root, where, env = self.team_committed("index", b'version = "9.9.8"\n', b'version = "9.9.8"\n',
+                                               own_repository=True)
+        os.utime(root / TEAM, (1_000_000_000, 1_000_000_000))       # the same content, another time: stale stat
+        index = (where / ".git" / "index").read_bytes()
+        proc = self.cortex(root, "sync", **env)
+        self.assert_ok(proc)
+        self.assertIn("agents/cortex.team.lock: written — commit it in agents/\n", proc.out)
+        self.assertEqual((where / ".git" / "index").read_bytes(), index)
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    @harness.outside_a_repository
+    def test_the_lock_s_note_names_the_team_s_file_where_git_cannot_tell(self):
+        # agents/ in a repository git refuses — its .git leads nowhere, or another user owns it: whether the team's
+        # file was moved by hand cannot be told, and the note names it, if so.
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n', committed=False)
+        (root / "agents" / ".git").write_text(f"gitdir: {self.tmp / 'gone'}\n", encoding="utf-8")
+        proc = self.cortex(root, "sync", **env)
+        self.assert_ok(proc)
+        self.assertIn("agents/cortex.team.lock: written — commit it in agents/, with cortex.team.toml if you moved "
+                      "it\n", proc.out)
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    @harness.outside_a_repository
+    def test_team_in_no_work_tree_says_its_files_are_committed_nowhere(self):
+        # agents/ in no git work tree: --team writes its files, which nothing commits — never told to commit them.
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        for args in ((), ("--commit", "--message", "m")):
+            with self.subTest(args=args):
+                root = self.project('theme = "h2g2"\n', team='version = "9.9.7"\n', committed=False,
+                                    name=f"nowhere{len(args)}")
+                proc = self.cortex(root, "upgrade", "--team", "9.9.8", *args, **env)
+                self.assert_ok(proc)
+                self.assertNotIn("Commit ", proc.out)
+                self.assertIn("agents/cortex.team.toml and agents/cortex.team.lock — in no git work tree, so committed "
+                              "nowhere", proc.out)
 
 
 def newer_refused(pin):

@@ -248,15 +248,34 @@ def read_team(root: str, folder: str = TEAM_FOLDER):
     is not there, ``Unreadable`` when it does not parse, or cannot be opened. Its grammar is checked by
     ``resolve``, which refuses such a file unless a committed pin before 1.8.0 makes the team's version
     cortex.toml's: a project kept there reads nothing of it."""
-    path = os.path.join(root, folder, TEAM_FILE)
-    if not os.path.isfile(path):
+    path, name = os.path.join(root, folder, TEAM_FILE), f"{folder}/{TEAM_FILE}"
+    if not team_file_there(root, folder):
         return None
     try:
-        return _checked_toml(path, f"{folder}/{TEAM_FILE}")
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return Unreadable(f"{name}: cannot be read — not a file")
+        return _checked_toml(path, name)
     except project.ProjectFileError as error:
         return Unreadable(str(error))
+    except FileNotFoundError:
+        return Unreadable(f"{name}: cannot be read — a link that leads nowhere")
     except OSError as error:
-        return Unreadable(f"{folder}/{TEAM_FILE}: cannot be read — {error.strerror or error}")
+        return Unreadable(f"{name}: cannot be read — {error.strerror or error}")
+
+
+def team_file_there(root: str, folder: str = TEAM_FOLDER) -> bool:
+    """Whether the team's file is there, to read or to refuse: anything at its path — a file, a
+    directory, a link that leads nowhere, or what cannot be told, its folder unsearchable — but
+    nothing, or a folder that is no directory (ADR-013 §3.1, §3.5). Never read as no file: the
+    project would lose the team's version and its locks."""
+    path = os.path.join(root, folder, TEAM_FILE)
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return os.path.islink(path)
+    except OSError:
+        return True
+    return True
 
 
 def read_project(root: str, local: bool = True, lenient: bool = False,
@@ -267,7 +286,7 @@ def read_project(root: str, local: bool = True, lenient: bool = False,
     command's and ``cortex config``'s. Beside a team's file — in the team's folder ``folder`` — the
     ``version`` and ``theme`` of ``cortex.toml`` may be the file's: ``resolve`` says whether they are."""
     data = _checked_toml(os.path.join(root, PROJECT_FILE), PROJECT_FILE)
-    team = os.path.isfile(os.path.join(root, folder, TEAM_FILE))
+    team = team_file_there(root, folder)
     project.check_project(data, project.PROJECT_REQUIRED if team else ())
     local_data = None
     path = os.path.join(root, LOCAL_FILE)

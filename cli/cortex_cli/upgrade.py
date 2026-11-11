@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, TextIO, Tuple, Union
 
+from cortex_core import cascade
 from cortex_core import validate as overlay_validator
 from cortex_core import project as grammar
 from cortex_core.project import shown
@@ -200,8 +201,9 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     content = init.normalised(kept)
     found = init.markers(content)
     # No --workspace for a workspace's file: --force keeps the layout it was written for — by its markers, or, written
-    # before the marker, by its title — and the option would also write the team's pair in agents/ (#329).
-    again = f"cortex init {init.tool_options(path)} --force writes it again, and keeps yours as .bak"
+    # before the marker, by its title — and the option would also write the team's pair in agents/ (#329). At the
+    # project root: `cortex upgrade` finds it above a subdirectory, where `cortex init` would make another.
+    again = f"cortex init {init.tool_options(path)} --force, at the project root, writes it again, and keeps yours as .bak"
     if len(found) > 1:
         return None, f"{display(str(path))} holds several bootstrap markers, so none is read, and it is kept: {again}"
     if not (found or init.bootstrap_of_cortex(content)):
@@ -328,7 +330,9 @@ def own_bootstraps(root: str, project: config.Project, the_store: store.Store, o
         intact = init.untouched(content)
         # The tool named: several instructions files refuse --force without it. No --workspace: --force keeps a
         # workspace's layout (#329), and the option writes the team's pair into agents/, its own repository at 2.B.
-        again = f"cortex init {init.tool_options(path)} --force writes it again, and keeps yours as .bak"
+        # At the project root: `cortex sync` finds it above a subdirectory, where `cortex init` would make another.
+        again = f"cortex init {init.tool_options(path)} --force, at the project root, writes it again, and keeps " \
+                "yours as .bak"
         if intact is False and below:
             err.write(f"note: {_shown_path(path, root)} is of format {_format(content)}, which Cortex "
                       f"{grammar.FIRST_TEAM_VERSION} or later reads, and not what Cortex wrote — so it is kept: "
@@ -653,7 +657,11 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
             mine = [_shown_path(path, outcome.root) for path in own if path not in there]
             leads = _and([_shown_path(path, outcome.root) for path in there]) if there else ""
             lead = "they lead" if len(there) > 1 else "it leads"
-            if outcome.committed is None:
+            if outcome.committed is None and sync.in_no_repository(outcome.team):
+                # The team's folder in no work tree — nor the project, which holds it: nothing commits them.
+                out.write(f"\nWritten: {_and([_shown_path(path, outcome.root) for path in outcome.files])} — in no git "
+                          "work tree, so committed nowhere.\n")
+            elif outcome.committed is None:
                 also = f", and {leads} there too, where {lead}" if there else ""
                 ours = f"; {_and(mine)} in the project" if mine else ""
                 out.write(f"\nCommit {_and([_shown_path(path, outcome.root) for path in team])} in "
@@ -751,11 +759,15 @@ def local_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out:
             out.write(f"Cortex {target} is at or below the team's {team} ({project.team_origin}): there is no try "
                       "to remove — nothing to move\n")
             return Outcome(root, project.version, project.version)
-        out.write(f"{config.LOCAL_FILE}: version {tried.value} {'would be' if dry_run else 'is'} removed — the team's "
-                  f"{team} ({project.team_origin}) is read\n")
+        # The try removed, the higher of the team's version and this developer's own cortex.toml is read (§3.1).
+        mine = _developers_version(project)
+        read = mine if mine is not None and mine > team else team
+        what = f"{config.PROJECT_FILE}'s {mine}, not committed, is read, above the team's {team} " \
+               f"({project.team_origin})" if read is mine else f"the team's {team} ({project.team_origin}) is read"
+        out.write(f"{config.LOCAL_FILE}: version {tried.value} {'would be' if dry_run else 'is'} removed — {what}\n")
         if not dry_run:
             _local_then_sync(root, {"version": None}, out, err)
-        return Outcome(root, Version(str(tried.value)), team)
+        return Outcome(root, Version(str(tried.value)), read)
     mine = _developers_version(project)
     if mine is not None and mine > target:
         # The higher version is read (§3.1), a try on a tie: below the developer's own cortex.toml, it never would be.
@@ -1724,15 +1736,10 @@ def _theirs(root: str, pin: Path, before: List[Path], error: Optional[str], writ
     is the same whatever it held. A git that cannot tell stops the commit, never the upgrade."""
     if error is not None:
         return f"git could not tell whether {config.PROJECT_FILE} or a bootstrap file held changes of yours — {error}"
+    # The team's file counts where the commit carries it with its lock, moved to its version by hand — a follower's
+    # resume writes the two (``_resume``): it is then among ``written``.
     wrote = {_real(path) for path in written}
-    # The team's file is a pin too where the commit carries its lock — a follower's resume writes it — and it was
-    # moved to its version by hand: it would stay out of the commit, and a teammate's checkout read a lock of
-    # another version. Another key changed, the version as committed, the lock goes alone.
-    team_lock = Path(root) / config.loose_team_folder(root) / config.TEAM_LOCK_FILE
-    team_file = team_lock.with_name(config.TEAM_FILE)
-    pins = {_real(pin)} | ({_real(team_file)} if _real(team_lock) in wrote and sync.team_file_moved(team_file)
-                           else set())
-    theirs = [path for path in before if _real(path) in pins or _real(path) in wrote]
+    theirs = [path for path in before if _real(path) == _real(pin) or _real(path) in wrote]
     if not theirs:
         return None
     return (f"{_and([_shown_path(path, root) for path in theirs])} held changes of yours before the upgrade — "

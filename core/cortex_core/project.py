@@ -180,11 +180,11 @@ AGENTS_UNCOMMITTED = (f'{PROJECT_FILE}: "agents" is read from a committed {PROJE
 
 
 def _one_case(char: str) -> str:
-    """A character in one case: lower-cased, then upper-cased, each kept as written where it is longer."""
+    """A character of a name decomposed in one case: lower-cased — ẞ is ß, ϴ is θ, as the simple case folding folds
+    them; no decomposed character is longer lower-cased — then upper-cased, kept lower-cased where that is longer."""
     lower = char.lower()
-    char = lower if len(lower) == 1 else char        # ẞ is ß, ϴ is θ, as the simple case folding folds them
-    upper = char.upper()
-    return upper if len(upper) == 1 else char
+    upper = lower.upper()
+    return upper if len(upper) == 1 else lower
 
 
 def folded(name: str) -> str:
