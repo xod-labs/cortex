@@ -169,13 +169,16 @@ GIT_LOCAL = config.GIT_LOCAL                   # ADR-013 §3.1: git asked of the
 git_environment = config.git_environment
 
 
-def _git(root: str, *args: str) -> Optional[subprocess.CompletedProcess]:
+def _git(root: str, *args: str, optional_locks: bool = True) -> Optional[subprocess.CompletedProcess]:
     git = shutil.which("git")
     if git is None:
         return None
+    # Without optional locks through the environment, not --no-optional-locks: a git before 2.15 refuses the
+    # option, and ignores the variable.
+    env = git_environment() if optional_locks else {**git_environment(), "GIT_OPTIONAL_LOCKS": "0"}
     try:
         return subprocess.run([git, "-C", root, *args], capture_output=True, encoding="utf-8", errors="replace",
-                              timeout=30, env=git_environment())
+                              timeout=30, env=env)
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -197,8 +200,8 @@ def team_file_change(team_file: Path) -> Optional[str]:
     # Every untracked file listed, whatever status.showUntrackedFiles says: a new team's file is one. Without the
     # optional locks: a status refreshes the index, and would write it — in the team's repository, which a sync, or a
     # dry run, leaves as it was.
-    status = _git(folder, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all", "--",
-                  f":(literal){team_file.name}")
+    status = _git(folder, "status", "--porcelain", "--untracked-files=all", "--", f":(literal){team_file.name}",
+                  optional_locks=False)
     if status is not None and status.returncode != 0 and not in_no_repository(folder):
         return "unknown"
     if status is None or status.returncode != 0 or not status.stdout.strip():
@@ -1127,8 +1130,12 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
     """Add to ``.gitignore`` each line of ``entries`` whose path — its value — git does not ignore
     yet, and return them. The file keeps its bytes: its encoding, its byte order mark, its line
     endings. Without a repository to ask, a line is added unless it, or one that means the same,
-    is there with no negation below it — and no .gitignore is created: it would keep nothing out of any commit."""
+    is there with no negation below it — and no .gitignore is created: it would keep nothing out of any commit. A
+    .gitignore that is a symbolic link is never written through — git does not read it, and its target may be outside
+    the project, or none yet: the note names the link (``_notes``)."""
     path = root / ".gitignore"
+    if is_link(path):
+        return []
     if not path.is_file() and ignored(root, config.LOCAL_FILE) is None:
         return []
     data = path.read_bytes() if path.is_file() else b""
@@ -1245,13 +1252,16 @@ def developers_own(path: Path) -> bool:
 
 
 def _notes(root: Path, mode: str, err: TextIO) -> None:
+    # A .gitignore that is a symbolic link, which git does not read: no line added to it would count (#329).
+    linked = ".gitignore is a symbolic link, which git does not read: make it a file, with " \
+        if is_link(root / ".gitignore") else None
     said = _not_ignored(root, LINK, f"{LINK}/") if mode != "store" else None
     if said is not None:
-        err.write(f"note: {said} — add a `/{LINK}` line to .gitignore, without the final slash: a link is a file to "
-                  "git\n")
+        line = f"a `/{LINK}` line" + ("" if linked else " to .gitignore")
+        err.write(f"note: {said} — {linked or 'add '}{line}, without the final slash: a link is a file to git\n")
     said = _not_ignored(root, config.LOCAL_FILE, f"{config.LOCAL_FILE}, which holds this machine's paths")
     if said is not None:
-        err.write(f"note: {said} — add it to .gitignore\n")
+        err.write(f"note: {said} — {linked + 'a line for it' if linked else 'add it to .gitignore'}\n")
 
 
 def run(args: List[str]) -> int:
