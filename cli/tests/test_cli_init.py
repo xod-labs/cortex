@@ -771,6 +771,46 @@ class OptionTests(InitTestCase):
                                    capture_output=True)
             self.assertEqual(check.returncode, 0, check.stderr)
 
+    @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
+    def test_a_gitignore_that_is_a_link_is_never_written_through(self):
+        # git reads no .gitignore that is a symbolic link: init writes nothing through it — to its target, outside the
+        # project maybe, or one it would create — says no line was added, and the note names the link, with git or
+        # without, never "add it to .gitignore".
+        cases = [(git, dangling) for git in ((False, True) if HAS_GIT else (False,)) for dangling in (False, True)]
+        for n, (git, dangling) in enumerate(cases):
+            with self.subTest(git=git, dangling=dangling):
+                project = self.tmp / f"linked-{n}"
+                project.mkdir()
+                if git:
+                    subprocess.run(["git", "init", "-q", str(project)], check=True)
+                else:
+                    (project / ".git").mkdir()
+                target = self.tmp / f"shared-ignore-{n}"
+                if not dangling:
+                    target.write_bytes(b"other\n")
+                try:
+                    (project / ".gitignore").symlink_to(target)
+                except OSError:
+                    self.skipTest("no symbolic link here")
+                env = self.env
+                if git:
+                    self.env = dict(env, PATH=os.pathsep.join([os.path.dirname(shutil.which("git")), env["PATH"]]))
+                try:
+                    proc = self.init("--tool", "claude", cwd=project)
+                finally:
+                    self.env = env
+                self.assertEqual(proc.returncode, 0, proc.err)
+                if dangling:
+                    self.assertFalse(os.path.lexists(target))
+                else:
+                    self.assertEqual(target.read_bytes(), b"other\n")
+                self.assertNotIn(".gitignore:", proc.out)
+                said = "git does not ignore" if git else "git could not be asked whether it ignores"
+                self.assertIn(f"note: {said} cortex.local.toml, which holds this machine's paths", proc.err)
+                self.assertIn(".gitignore is a symbolic link, which git does not read: make it a file, with a line for "
+                              "it\n", proc.err)
+                self.assertNotIn("add it to .gitignore", proc.err)
+
     def test_without_git_a_negation_of_another_path_adds_no_line(self):
         # !.gitkeep takes back .gitkeep, never cortex.local.toml: init, with no git on its PATH, adds no second line,
         # and says nothing of git.
