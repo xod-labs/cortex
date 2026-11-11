@@ -196,11 +196,17 @@ def _read_above(project) -> str:
 def team_file_change(team_file: Path) -> Optional[str]:
     """``"moved"`` when the team's file pins another version than the one its repository has committed — moved there
     by hand —, ``"new"`` when it is committed nowhere yet: its lock goes with it then, or a teammate's checkout reads a
-    lock of another version than its file. ``None`` for a change of another key, the version as committed — the lock
-    goes alone —, where git cannot tell, and for a file that does not read."""
+    lock of another version than its file. ``"unknown"`` where git refuses the repository the file is in — another
+    user's, say: it may go with its lock. ``None`` for a change of another key, the version as committed — the lock
+    goes alone —, in no work tree, without git, and for a file that does not read."""
     folder = str(team_file.parent)
-    # Every untracked file listed, whatever status.showUntrackedFiles says: a new team's file is one.
-    status = _git(folder, "status", "--porcelain", "--untracked-files=all", "--", f":(literal){team_file.name}")
+    # Every untracked file listed, whatever status.showUntrackedFiles says: a new team's file is one. Without the
+    # optional locks: a status refreshes the index, and would write it — in the team's repository, which a sync, or a
+    # dry run, leaves as it was.
+    status = _git(folder, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all", "--",
+                  f":(literal){team_file.name}")
+    if status is not None and status.returncode != 0 and not in_no_repository(folder):
+        return "unknown"
     if status is None or status.returncode != 0 or not status.stdout.strip():
         return None                                     # no git, no work tree, or as committed
     try:
@@ -220,14 +226,16 @@ def team_file_change(team_file: Path) -> Optional[str]:
 
 def team_file_moved(team_file: Path) -> bool:
     """Whether the team's file goes with its lock (``team_file_change``): moved by hand, or committed nowhere yet."""
-    return team_file_change(team_file) is not None
+    return team_file_change(team_file) in ("moved", "new")
 
 
 def team_lock_commit(folder: Path, shown: str = config.TEAM_FOLDER) -> str:
     """Where the team's lock in ``folder`` is to be committed, as a note says it: in the team's folder — ``shown``, as
-    the root names it — with the team's file, when it was moved there by hand, or is committed nowhere yet
-    (``team_file_change``)."""
+    the root names it — with the team's file, when it was moved there by hand, or is committed nowhere yet — or may
+    have been, where git refuses the repository (``team_file_change``)."""
     change = team_file_change(folder / config.TEAM_FILE)
+    if change == "unknown":
+        return f" in {shown}/, with {config.TEAM_FILE} if you moved it"
     why = {"moved": "moved to its version by hand", "new": "committed nowhere yet"}.get(change)
     return f" in {shown}/" + (f", with {config.TEAM_FILE}, {why}" if why else "")
 
@@ -1193,8 +1201,9 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
         state = ignored(root, probe)
         if state is None:                       # no repository to ask
             name = probe.rstrip("/")
-            state = _named(lines, {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if probe.endswith("/") else set()))
-        if not state and not _named(lines, {line}):       # there already, with no negation below it: kept
+            state = _named(lines, {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if probe.endswith("/") else set()),
+                           name)
+        if not state and not _named(lines, {line}, probe):       # there already, with no negation below it: kept
             missing.append(line)
     if missing:
         newline = b"\r\n" if b"\r\n" in data else b"\n"
@@ -1219,16 +1228,22 @@ def gitignore_lines(text: str) -> List[str]:
     return [re.sub(r"(?<!\\) +$", "", line) for line in lines]
 
 
-def _negations(lines: List[str]) -> bool:
-    return any(line.startswith("!") for line in lines)
+def _negations(lines: List[str], name: str) -> bool:
+    """Whether a line of ``lines`` is a negation that can match ``name``: a glob — ``*``, ``?``, ``[`` — or an escape,
+    which only git reads, or one whose last component is the path's own, compared as a repository that ignores case
+    compares it. Any other negation — ``!.gitkeep`` — takes back another path, never this one."""
+    last = name.rstrip("/").rsplit("/", 1)[-1].casefold()
+    return any(line.startswith("!") and (any(char in line for char in "*?[\\")
+                                         or line[1:].rstrip("/").rsplit("/", 1)[-1].casefold() == last)
+               for line in lines)
 
 
-def _named(lines: List[str], wanted: Set[str]) -> bool:
-    """Whether a line of ``lines`` names the path as one of ``wanted`` writes it, with no negation below the last
-    such line — one could take it back: what Cortex can tell without git. A pattern, a negation, another
-    .gitignore, info/exclude or core.excludesFile is git's to read: not that Cortex can tell."""
+def _named(lines: List[str], wanted: Set[str], name: str) -> bool:
+    """Whether a line of ``lines`` names the path ``name`` as one of ``wanted`` writes it, with no negation below the
+    last such line that could take it back: what Cortex can tell without git. A pattern, another .gitignore,
+    info/exclude or core.excludesFile is git's to read: not that Cortex can tell."""
     found = [index for index, line in enumerate(lines) if line in wanted]
-    return bool(found) and not _negations(lines[found[-1] + 1:])
+    return bool(found) and not _negations(lines[found[-1] + 1:], name)
 
 
 def git_ignores(root: Path, name: str) -> Optional[bool]:
@@ -1257,14 +1272,16 @@ def ignored(root: Path, name: str) -> Optional[bool]:
     # No git to ask, or git refusing the repository: the project's own .gitignore, at the root of the repository or
     # in a subdirectory of it, read for a line that names the path as Cortex writes it — no pattern, no negation
     # below it, no .gitignore of a folder above, which git would read too. A link is a file to git — `cortex/` does
-    # not match it.
+    # not match it. A .gitignore that is a link git does not read, nor does Cortex.
+    if is_link(root / ".gitignore"):
+        return False
     directory = (root / name).is_dir() and not is_link(root / name)
     wanted = {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if directory else set())
     try:
         lines = gitignore_lines((root / ".gitignore").read_bytes().decode("utf-8", errors="replace"))   # as written
     except OSError:
         return False
-    return _named(lines, wanted)
+    return _named(lines, wanted, name)
 
 
 def _not_ignored(root: Path, name: str, shown: str) -> Optional[str]:

@@ -277,7 +277,7 @@ def _missing_team_folder(root: str, folder: str = TEAM_FOLDER) -> None:
         written = _read(os.path.join(root, PROJECT_FILE))
     except (OSError, ConfigError):
         return
-    if "version" in written or os.path.isfile(os.path.join(root, folder, TEAM_FILE)):
+    if "version" in written or cascade.team_file_there(root, folder):
         return
     try:
         project.check_project(written, ("version", "theme"))
@@ -574,7 +574,7 @@ def render_project(root: str, values: Dict[str, object]) -> str:
     against the grammar before anything is written: beside a team's file, its ``version`` and
     ``theme`` may be the file's."""
     text = set_keys(_read_text(os.path.join(root, PROJECT_FILE)), values, PROJECT_FILE, PROJECT_HEADER)
-    team = os.path.isfile(os.path.join(root, loose_team_folder(root), TEAM_FILE))
+    team = cascade.team_file_there(root, loose_team_folder(root))
     try:
         project.check_project(tomllib.loads(text.lstrip("\ufeff")), project.PROJECT_REQUIRED if team else ())
     except project.ProjectFileError as error:
