@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, TextIO, Tuple
 
+from cortex_core import cascade
 from cortex_core import validate as overlay_validator
 from cortex_core import project as grammar
 from cortex_core.project import shown
@@ -468,7 +469,11 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
             mine = [_shown_path(path, outcome.root) for path in own if path not in there]
             leads = _and([_shown_path(path, outcome.root) for path in there]) if there else ""
             lead = "they lead" if len(there) > 1 else "it leads"
-            if outcome.committed is None:
+            if outcome.committed is None and sync.in_no_repository(outcome.team):
+                # The team's folder in no work tree — nor the project, which holds it: nothing commits them.
+                out.write(f"\nWritten: {_and([_shown_path(path, outcome.root) for path in outcome.files])} — in no git "
+                          "work tree, so committed nowhere.\n")
+            elif outcome.committed is None:
                 also = f", and {leads} there too, where {lead}" if there else ""
                 ours = f"; {_and(mine)} in the project" if mine else ""
                 out.write(f"\nCommit {_and([_shown_path(path, outcome.root) for path in team])} in "
@@ -842,7 +847,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         # A try, or the team's pin, newer than this cortex: said with its own remedy (ADR-013 §3.8) — a
         # source or development build, which the gate lets by, never moves the project down to itself.
         name, newer = pinned
-        team = os.path.isfile(os.path.join(root, config.TEAM_FOLDER, config.TEAM_FILE))
+        team = cascade.team_file_there(root)
         raise UpgradeError(f"this project reads Cortex {newer}, which its {name} pins, newer than this cortex, "
                            f"{the_store.own} — nothing was changed. Name the version to move to: "
                            + ("`cortex upgrade --team VERSION` moves the team's pin, " if team else "")

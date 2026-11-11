@@ -466,6 +466,13 @@ def _services(options: argparse.Namespace, root: Path, out: TextIO, err: TextIO)
     return [service_path(name) for name in names]
 
 
+def _team_s_error(error: Exception) -> str:
+    """The team's file's own error — it does not parse, cannot be read, or its grammar refuses it — and its remedy:
+    removing cortex.toml, the developer's own at a 2.B root, loses it and changes nothing of this."""
+    return (f"{error}\ncortex init reads {config.TEAM_NAME}: fix it — a conflict a pull left in it, say — then run "
+            "cortex init again")
+
+
 def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> None:
     root = Path(display(os.path.normpath(os.path.join(cwd, options.dir) if options.dir else cwd)))
     personality = not options.no_personality
@@ -503,11 +510,8 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     try:
         project = config.load(str(root)) if existing_project else None
     except config.ConfigError as error:
-        if str(error).startswith(f"{config.TEAM_NAME}:"):
-            # The team's file's own error — it does not parse, or its grammar refuses it: removing cortex.toml — the
-            # developer's own, at a 2.B root — loses it, and changes nothing of this.
-            raise InitError(f"{error}\ncortex init reads {config.TEAM_NAME}: fix it — a conflict a pull left in it, "
-                            "say — then run cortex init again")
+        if str(error).startswith(f"{config.TEAM_NAME}:"):         # the team's file's own error
+            raise InitError(_team_s_error(error))
         raise InitError(f"{error}\ncortex init keeps an existing {config.PROJECT_FILE}: fix it, or remove it to "
                         "start over")
     # As the sync's own check (#310, #325): a link sync from a checkout replaces a link that leads nowhere.
@@ -526,7 +530,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             if team_data is not None:
                 grammar.check_team(team_data, config.TEAM_NAME)
         except grammar.ProjectFileError as error:
-            raise InitError(str(error))
+            raise InitError(_team_s_error(error))
     locks = {key: team_data[key] for key in team_data.get("locked", ())} if team_data else \
         {key: setting.value for key, setting in project.settings.settings.items() if setting.locked} if project else {}
     flags = {"theme": theme if options.theme is not None or options.no_personality else None, "sync": mode,

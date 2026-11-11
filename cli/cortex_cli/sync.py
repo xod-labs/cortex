@@ -190,11 +190,17 @@ def _read_above(project) -> str:
 def team_file_change(team_file: Path) -> Optional[str]:
     """``"moved"`` when the team's file pins another version than the one its repository has committed — moved there
     by hand —, ``"new"`` when it is committed nowhere yet: its lock goes with it then, or a teammate's checkout reads a
-    lock of another version than its file. ``None`` for a change of another key, the version as committed — the lock
-    goes alone —, where git cannot tell, and for a file that does not read."""
+    lock of another version than its file. ``"unknown"`` where git refuses the repository the file is in — another
+    user's, say: it may go with its lock. ``None`` for a change of another key, the version as committed — the lock
+    goes alone —, in no work tree, without git, and for a file that does not read."""
     folder = str(team_file.parent)
-    # Every untracked file listed, whatever status.showUntrackedFiles says: a new team's file is one.
-    status = _git(folder, "status", "--porcelain", "--untracked-files=all", "--", f":(literal){team_file.name}")
+    # Every untracked file listed, whatever status.showUntrackedFiles says: a new team's file is one. Without the
+    # optional locks: a status refreshes the index, and would write it — in the team's repository, which a sync, or a
+    # dry run, leaves as it was.
+    status = _git(folder, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all", "--",
+                  f":(literal){team_file.name}")
+    if status is not None and status.returncode != 0 and not in_no_repository(folder):
+        return "unknown"
     if status is None or status.returncode != 0 or not status.stdout.strip():
         return None                                     # no git, no work tree, or as committed
     try:
@@ -214,13 +220,16 @@ def team_file_change(team_file: Path) -> Optional[str]:
 
 def team_file_moved(team_file: Path) -> bool:
     """Whether the team's file goes with its lock (``team_file_change``): moved by hand, or committed nowhere yet."""
-    return team_file_change(team_file) is not None
+    return team_file_change(team_file) in ("moved", "new")
 
 
 def team_lock_commit(folder: Path) -> str:
     """Where the team's lock in ``folder`` is to be committed, as a note says it: in the team's folder — with the
-    team's file, when it was moved there by hand, or is committed nowhere yet (``team_file_change``)."""
+    team's file, when it was moved there by hand, or is committed nowhere yet — or may have been, where git refuses
+    the repository (``team_file_change``)."""
     change = team_file_change(folder / config.TEAM_FILE)
+    if change == "unknown":
+        return f" in {config.TEAM_FOLDER}/, with {config.TEAM_FILE} if you moved it"
     why = {"moved": "moved to its version by hand", "new": "committed nowhere yet"}.get(change)
     return f" in {config.TEAM_FOLDER}/" + (f", with {config.TEAM_FILE}, {why}" if why else "")
 
