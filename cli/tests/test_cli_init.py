@@ -337,6 +337,18 @@ class OptionTests(InitTestCase):
             self.assertNotIn("is in no git repository", proc.err)
             self.assertIn("cortex.local.toml", self.read(".gitignore").splitlines())
 
+    @harness.outside_a_repository
+    def test_in_no_repository_a_line_a_negation_takes_back_is_written_again(self):
+        # No repository to ask: a team's .gitignore there is read as written — the negation of the path takes its line
+        # back, so the line is added below it, as in a repository without git.
+        self.project.mkdir(parents=True, exist_ok=True)
+        (self.project / ".gitignore").write_bytes(b"cortex.local.toml\n!cortex.local.toml\n")
+        proc = self.init("--tool", "claude")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("is in no git repository", proc.err)
+        self.assertEqual((self.project / ".gitignore").read_bytes(),
+                         b"cortex.local.toml\n!cortex.local.toml\ncortex.local.toml\n")
+
     def test_a_root_inside_a_repository_is_not_said_to_be_in_none(self):
         # The repository is a .git at the root or above it, git or not on the PATH — as cortex upgrade tells it.
         # Without git to ask, .gitignore's own lines say what is ignored, in a subdirectory too: it is written.
