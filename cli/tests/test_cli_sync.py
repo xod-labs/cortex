@@ -481,6 +481,8 @@ class GitIgnoreTests(SyncTestCase):
         # git would not ignore cortex.local.toml for any of these: a negation below the line, a leading space, a
         # tab, a byte order mark not at the start of the file — each a note, never "ignored".
         for n, ignore in enumerate(("cortex.local.toml\n!cortex.local.toml\n", "cortex.local.toml\n!*.toml\n",
+                                    "cortex.local.toml\n!/cortex.local.toml\n", "cortex.local.toml\n!cortex.local.t?ml\n",
+                                    "cortex.local.toml\n!cortex.local.[t]oml\n", "cortex.local.toml\n!cortex\\.local.toml\n",
                                     " cortex.local.toml\n", "cortex.local.toml\t\n", "# ours\n\ufeffcortex.local.toml\n",
                                     # git splits at a line feed only, dropping one carriage return before it
                                     "a\rcortex.local.toml\n", "x\x0ccortex.local.toml\n", "cortex.local.toml\r\r\n",
@@ -495,12 +497,42 @@ class GitIgnoreTests(SyncTestCase):
         # line is taken back by it.
         for n, ignore in enumerate(("\ufeffcortex.local.toml\n", "cortex.local.toml  \n",
                                     "!cortex.local.toml\ncortex.local.toml\n", "cortex.local.toml\r\n",
-                                    "cortex.local.toml \r\n")):
+                                    "cortex.local.toml \r\n",
+                                    # a negation that cannot match the path takes back another one, never this one
+                                    "cortex.local.toml\nCLAUDE.md\n!.gitkeep\n", "cortex.local.toml\n!docs/README.md\n",
+                                    # the last line naming it is read, below the negation that took the first back
+                                    "cortex.local.toml\n!cortex.local.toml\ncortex.local.toml\n")):
             with self.subTest(ignore=ignore):
                 project = self.repository(ignore, f"is-{n}")
                 proc = self.sync(project)
                 self.assertTrue(self.check_ignore(project, "cortex.local.toml"))
                 self.assertNotIn("cortex.local.toml", proc.err)
+
+    def test_without_git_only_a_negation_that_can_match_the_path_takes_it_back(self):
+        # Its last component the path's — as a repository that ignores case reads it —, a glob or an escape: it may.
+        # A negation of another name, of the folder above, never does: the line still says the path is ignored.
+        name = ".claude/settings.local.json"
+        for below in ("!settings.local.json", "!/.claude/settings.local.json", "!SETTINGS.LOCAL.JSON", "!*.json",
+                      "!.claude/settings.local.jso?", "!.claude/settings\\.local.json"):
+            with self.subTest(below=below):
+                self.assertFalse(sync._named([name, below], {name}, name))
+        for below in ("!.gitkeep", "!.claude/", "!.claude", "!other.json", "# !settings.local.json"):
+            with self.subTest(below=below):
+                self.assertTrue(sync._named([name, below], {name}, name))
+
+    @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
+    def test_without_git_a_gitignore_that_is_a_link_is_not_read(self):
+        # git reads no .gitignore that is a symbolic link: its lines ignore nothing — a note, never "ignored".
+        project = self.repository("")
+        (project / ".gitignore").unlink()
+        (self.tmp / "shared-ignore").write_bytes(b"cortex.local.toml\n")
+        try:
+            (project / ".gitignore").symlink_to(self.tmp / "shared-ignore")
+        except OSError:
+            self.skipTest("no symbolic link here")
+        self.assertFalse(self.check_ignore(project, "cortex.local.toml"))
+        proc = self.sync(project)
+        self.assertIn("note: git could not be asked whether it ignores cortex.local.toml", proc.err)
 
     def test_without_git_a_pattern_is_not_said_not_ignored(self):
         # A glob, `**`: git ignores the file, which Cortex cannot tell without git — it does not say git does not.

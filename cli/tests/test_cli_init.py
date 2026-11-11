@@ -585,6 +585,38 @@ class OptionTests(InitTestCase):
         rule.write_text("This repository uses Cortex.\n\n# Cortex AI Team\n", encoding="utf-8")
         self.assertIn("cortex init --tool cursor --force replaces it", self.init().err)
 
+    def test_another_tool_s_single_project_file_of_no_one_marker_names_workspace_in_a_workspace_s_run(self):
+        # A single project's file written before the marker, or holding several markers, or no bootstrap: --force alone
+        # keeps the layout its title says, a single project's — a workspace's run names --workspace, which, followed, writes a
+        # workspace's (#329). A workspace's file before the marker names no option: --force keeps a workspace's.
+        self.assertEqual(self.init("--tool", "claude", "--workspace").returncode, 0)
+        rule = self.project / ".cursor" / "rules" / "cortex.mdc"
+        rule.parent.mkdir(parents=True)
+        single = "# Cortex AI Team\n\nRead cortex.local.toml first.\n"
+        marker = "<!-- cortex:bootstrap layout=single format=2 -->\n"
+        for n, (content, phrase) in enumerate((
+                (single, "an older Cortex bootstrap, written before the bootstrap marker"),
+                (marker + marker + single, "it holds several bootstrap markers, so none is read"),
+                ("# Our rules\n", "it holds no Cortex bootstrap"))):
+            with self.subTest(n=n):
+                rule.write_bytes(content.encode("utf-8"))
+                proc = self.init("--workspace")
+                self.assertEqual(proc.returncode, 0, proc.err)
+                self.assertIn(f"note: .cursor/rules/cortex.mdc is there and was kept: {phrase} — cortex init --tool "
+                              "cursor --workspace --force replaces it, and keeps it as .bak", proc.err)
+                proc = self.init("--tool", "cursor", "--workspace", "--force")              # the command the note names
+                self.assertEqual(proc.returncode, 0, proc.err)
+                self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read(".cursor/rules/cortex.mdc"))
+                for backup in rule.parent.glob("cortex.mdc.bak*"):
+                    backup.unlink()
+        rule.write_bytes(b"# Cortex AI Team \xe2\x80\x94 Workspace Mode\n\nRead cortex.local.toml first.\n")
+        proc = self.init("--workspace")
+        self.assertIn("note: .cursor/rules/cortex.mdc is there and was kept: an older Cortex bootstrap, written before the "
+                      "bootstrap marker — cortex init --tool cursor --force replaces it, and keeps it as .bak", proc.err)
+        proc = self.init("--tool", "cursor", "--force")                                     # the command the note names
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read(".cursor/rules/cortex.mdc"))
+
     def test_force_without_workspace_knows_a_workspace_written_before_the_marker(self):
         # The file of 1.3.0, which every workspace a team changed is sent to `cortex init --force` with.
         old = "# Cortex AI Team — Workspace Mode\n\nRead cortex.local.toml first.\n"
@@ -650,6 +682,38 @@ class OptionTests(InitTestCase):
         self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
         self.assertEqual(self.read("CLAUDE.md.bak"), old)
 
+    def test_force_over_a_title_below_a_line_of_text_says_a_single_project_s_is_written(self):
+        # --force alone over a workspace's file of before the marker, a line of text above its title: the layout cannot
+        # be told, and a single project's is written — said, with the --workspace that writes a workspace's (#329),
+        # which, followed, does; the file as it was stays in the backup the note names.
+        old = "Uses Cortex.\n\n# Cortex AI Team \u2014 Workspace Mode\n\nRead cortex.local.toml first.\n\n| @api | api/ |\n"
+        (self.project / "CLAUDE.md").write_bytes(old.encode("utf-8"))
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=single format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("note: CLAUDE.md held Cortex's title below a line of text, so neither its bootstrap nor its layout "
+                      "could be told, and a single project's is written — `cortex init --tool claude --workspace --force` "
+                      "writes a workspace's; what you wrote is in CLAUDE.md.bak",
+                      proc.err.replace(display(self.project.resolve()) + "/", "").replace(display(self.project) + "/", ""))
+        proc = self.init("--tool", "claude", "--workspace", "--force")                      # the command the note names
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertNotIn("below a line of text", proc.err)
+        self.assertEqual(self.read("CLAUDE.md.bak"), old)
+        # With --workspace, the option chose the layout: nothing to say.
+        (self.project / "CLAUDE.md").write_bytes(old.encode("utf-8"))
+        proc = self.init("--tool", "claude", "--workspace", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("below a line of text", proc.err)
+        # A marker tells the layout, whatever is above the title: nothing to say either.
+        (self.project / "CLAUDE.md").unlink()
+        self.assertEqual(self.init("--tool", "claude").returncode, 0)                       # a single project's
+        (self.project / "CLAUDE.md").write_bytes(("Ours.\n\n" + self.read("CLAUDE.md").replace("format=2", "format=1", 1))
+                                                 .encode("utf-8"))
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("below a line of text", proc.err)
+
     def test_in_a_repository_without_git_the_backup_is_not_said_left_to_git(self):
         # Without git to ask, a team's *.bak line is git's to read: the backup line says nothing of git.
         (self.project / ".git").mkdir(parents=True, exist_ok=True)
@@ -676,6 +740,17 @@ class OptionTests(InitTestCase):
             check = subprocess.run(["git", "-C", str(self.project), "check-ignore", "-q", "cortex.local.toml"],
                                    capture_output=True)
             self.assertEqual(check.returncode, 0, check.stderr)
+
+    def test_without_git_a_negation_of_another_path_adds_no_line(self):
+        # !.gitkeep takes back .gitkeep, never cortex.local.toml: init, with no git on its PATH, adds no second line,
+        # and says nothing of git.
+        self.project.mkdir(parents=True, exist_ok=True)
+        (self.project / ".git").mkdir()
+        (self.project / ".gitignore").write_bytes(b"cortex.local.toml\nCLAUDE.md\n!.gitkeep\n")
+        proc = self.init("--tool", "claude")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertEqual((self.project / ".gitignore").read_bytes(), b"cortex.local.toml\nCLAUDE.md\n!.gitkeep\n")
+        self.assertNotIn("Cortex cannot tell", proc.err)
 
     def test_force_with_workspace_says_nothing_of_a_layout_read_from_the_file(self):
         # The note is of the layout read from the file, without the option: with --workspace, the option chose it.
@@ -708,6 +783,19 @@ class OptionTests(InitTestCase):
         proc = self.init("--tool", "claude", "--force")
         self.assertIn("CLAUDE.md.bak: the file --force replaces, as it was — git does not ignore it: carry over",
                       proc.out)
+
+    @unittest.skipUnless(HAS_GIT, "needs git")
+    def test_a_custom_file_s_backup_outside_the_root_is_asked_of_its_own_repository(self):
+        # A --tool custom file outside the root, in a repository of its own: git is asked where the backup is.
+        self.project.mkdir(parents=True, exist_ok=True)
+        elsewhere = self.project.parent / "elsewhere"
+        for repository in (self.project, elsewhere):
+            subprocess.run(["git", "init", "-q", str(repository)], check=True)
+        (elsewhere / "ai.md").write_bytes(b"# mine\n")
+        self.env = dict(self.env, PATH=os.pathsep.join([os.path.dirname(shutil.which("git")), self.env["PATH"]]))
+        proc = self.init("--tool", "custom", "--instructions-file", str(elsewhere / "ai.md"), "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("ai.md.bak: the file --force replaces, as it was — git does not ignore it: carry over", proc.out)
 
     @unittest.skipUnless(HAS_GIT, "needs git")
     def test_a_backup_git_ignores_is_not_said_to_be_left_to_it(self):
@@ -1800,15 +1888,20 @@ class BootstrapMarkerTests(unittest.TestCase):
                 kept = (above + workspace).encode("utf-8")
                 self.assertEqual(init_command.title_line(kept), b"# Cortex AI Team \xe2\x80\x94 Workspace Mode")
                 self.assertTrue(init_command.written_for_workspace(kept))
-        for above in ("# Our notes\n\n```\n", "Our notes\n", "<!-- ours --> and text\n", "<!-- never closed\n"):
+        for above in ("# Our notes\n\n```\n", "Our notes\n", "<!-- ours --> and text\n", "Ours <!-- a -->\n"):
             with self.subTest(above=above):
                 kept = (above + workspace).encode("utf-8")
                 self.assertIsNone(init_command.title_line(kept))
                 self.assertFalse(init_command.bootstrap_of_cortex(kept))
                 self.assertFalse(init_command.written_for_workspace(kept))
                 self.assertIs(init_command.kept_bootstrap(kept, self.template(format=2)), init_command.TITLE_BELOW_TEXT)
-        # No title at all: no Cortex bootstrap.
+        # No title at all, or one inside a comment — never closed, or closed below it: no Cortex bootstrap.
         self.assertIs(init_command.kept_bootstrap(b"# Our notes\n", self.template(format=2)), init_command.NO_BOOTSTRAP)
+        for above, below in (("<!-- never closed\n", ""), ("<!-- an example\n", "-->\n"),
+                             ("Our notes <!-- an example\n", "-->\n"), ("<!-- a --> text <!-- b\n", "-->\n")):
+            with self.subTest(above=above, below=below):
+                kept = (above + workspace + below).encode("utf-8")
+                self.assertIs(init_command.kept_bootstrap(kept, self.template(format=2)), init_command.NO_BOOTSTRAP)
 
     def test_one_marker_says_the_layout_against_the_title(self):
         # A single marker is the layout, whatever the title says — a team that retitled the file, or a title of the
