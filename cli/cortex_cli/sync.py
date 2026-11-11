@@ -961,8 +961,9 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
         state = ignored(root, probe)
         if state is None:                       # no repository to ask
             name = probe.rstrip("/")
-            state = _named(lines, {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if probe.endswith("/") else set()))
-        if not state and not _named(lines, {line}):       # there already, with no negation below it: kept
+            state = _named(lines, {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if probe.endswith("/") else set()),
+                           name)
+        if not state and not _named(lines, {line}, probe):       # there already, with no negation below it: kept
             missing.append(line)
     if missing:
         newline = b"\r\n" if b"\r\n" in data else b"\n"
@@ -983,16 +984,22 @@ def gitignore_lines(text: str) -> List[str]:
     return [re.sub(r"(?<!\\) +$", "", line) for line in lines]
 
 
-def _negations(lines: List[str]) -> bool:
-    return any(line.startswith("!") for line in lines)
+def _negations(lines: List[str], name: str) -> bool:
+    """Whether a line of ``lines`` is a negation that can match ``name``: a glob — ``*``, ``?``, ``[`` — or an escape,
+    which only git reads, or one whose last component is the path's own, compared as a repository that ignores case
+    compares it. Any other negation — ``!.gitkeep`` — takes back another path, never this one."""
+    last = name.rstrip("/").rsplit("/", 1)[-1].casefold()
+    return any(line.startswith("!") and (any(char in line for char in "*?[\\")
+                                         or line[1:].rstrip("/").rsplit("/", 1)[-1].casefold() == last)
+               for line in lines)
 
 
-def _named(lines: List[str], wanted: Set[str]) -> bool:
-    """Whether a line of ``lines`` names the path as one of ``wanted`` writes it, with no negation below the last
-    such line — one could take it back: what Cortex can tell without git. A pattern, a negation, another
-    .gitignore, info/exclude or core.excludesFile is git's to read: not that Cortex can tell."""
+def _named(lines: List[str], wanted: Set[str], name: str) -> bool:
+    """Whether a line of ``lines`` names the path ``name`` as one of ``wanted`` writes it, with no negation below the
+    last such line that could take it back: what Cortex can tell without git. A pattern, another .gitignore,
+    info/exclude or core.excludesFile is git's to read: not that Cortex can tell."""
     found = [index for index, line in enumerate(lines) if line in wanted]
-    return bool(found) and not _negations(lines[found[-1] + 1:])
+    return bool(found) and not _negations(lines[found[-1] + 1:], name)
 
 
 def in_no_repository(root) -> bool:
@@ -1049,14 +1056,16 @@ def ignored(root: Path, name: str) -> Optional[bool]:
     # No git to ask, or git refusing the repository: the project's own .gitignore, at the root of the repository or
     # in a subdirectory of it, read for a line that names the path as Cortex writes it — no pattern, no negation
     # below it, no .gitignore of a folder above, which git would read too. A link is a file to git — `cortex/` does
-    # not match it.
+    # not match it. A .gitignore that is a link git does not read, nor does Cortex.
+    if is_link(root / ".gitignore"):
+        return False
     directory = (root / name).is_dir() and not is_link(root / name)
     wanted = {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if directory else set())
     try:
         lines = gitignore_lines((root / ".gitignore").read_bytes().decode("utf-8", errors="replace"))   # as written
     except OSError:
         return False
-    return _named(lines, wanted)
+    return _named(lines, wanted, name)
 
 
 def _not_ignored(root: Path, name: str, shown: str) -> Optional[str]:
