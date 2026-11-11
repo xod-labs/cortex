@@ -238,6 +238,13 @@ class AgentsOnTheDiskTests(SyncedProjectTestCase):
         self.assertNotIn("`svc-b/`", run.system_prompt)
         self.assertNotIn("`Agents/", run.system_prompt)
 
+    def test_a_service_no_disk_can_name_is_served_as_1_7_0_served_it(self):
+        # A NUL: the disk is asked nothing of it, and the run goes on without a service's files, as in 1.7.0.
+        for service in ("svc-a\x00", "agents-api\x00/roles"):
+            with self.subTest(service=service):
+                run = resolve_run(self.request(service=service), self.project, theme="h2g2")
+                self.assertNotIn("SERVICE-RULE", run.system_prompt)
+
     def test_agents_as_written_is_refused_where_the_disk_has_none(self):
         shutil.rmtree(self.project / "agents")
         with self.assertRaisesRegex(ValueError, "other than agents/"):

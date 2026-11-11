@@ -152,7 +152,7 @@ def _refused(root: Path, folder: str, team: Path) -> bool:
             try:
                 if os.path.samefile(path, other):
                     return True
-            except (OSError, ValueError):       # not there, or no name the disk takes
+            except OSError:       # not there: the scan found the service, by a name the disk takes
                 pass
     return False
 
