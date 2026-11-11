@@ -585,6 +585,38 @@ class OptionTests(InitTestCase):
         rule.write_text("This repository uses Cortex.\n\n# Cortex AI Team\n", encoding="utf-8")
         self.assertIn("cortex init --tool cursor --force replaces it", self.init().err)
 
+    def test_another_tool_s_single_project_file_of_no_one_marker_names_workspace_in_a_workspace_s_run(self):
+        # A single project's file written before the marker, or holding several markers, or no bootstrap: --force alone
+        # keeps the layout its title says, a single project's — a workspace's run names --workspace, which, followed, writes a
+        # workspace's (#329). A workspace's file before the marker names no option: --force keeps a workspace's.
+        self.assertEqual(self.init("--tool", "claude", "--workspace").returncode, 0)
+        rule = self.project / ".cursor" / "rules" / "cortex.mdc"
+        rule.parent.mkdir(parents=True)
+        single = "# Cortex AI Team\n\nRead cortex.local.toml first.\n"
+        marker = "<!-- cortex:bootstrap layout=single format=2 -->\n"
+        for n, (content, phrase) in enumerate((
+                (single, "an older Cortex bootstrap, written before the bootstrap marker"),
+                (marker + marker + single, "it holds several bootstrap markers, so none is read"),
+                ("# Our rules\n", "it holds no Cortex bootstrap"))):
+            with self.subTest(n=n):
+                rule.write_bytes(content.encode("utf-8"))
+                proc = self.init("--workspace")
+                self.assertEqual(proc.returncode, 0, proc.err)
+                self.assertIn(f"note: .cursor/rules/cortex.mdc is there and was kept: {phrase} — cortex init --tool "
+                              "cursor --workspace --force replaces it, and keeps it as .bak", proc.err)
+                proc = self.init("--tool", "cursor", "--workspace", "--force")              # the command the note names
+                self.assertEqual(proc.returncode, 0, proc.err)
+                self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read(".cursor/rules/cortex.mdc"))
+                for backup in rule.parent.glob("cortex.mdc.bak*"):
+                    backup.unlink()
+        rule.write_bytes(b"# Cortex AI Team \xe2\x80\x94 Workspace Mode\n\nRead cortex.local.toml first.\n")
+        proc = self.init("--workspace")
+        self.assertIn("note: .cursor/rules/cortex.mdc is there and was kept: an older Cortex bootstrap, written before the "
+                      "bootstrap marker — cortex init --tool cursor --force replaces it, and keeps it as .bak", proc.err)
+        proc = self.init("--tool", "cursor", "--force")                                     # the command the note names
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read(".cursor/rules/cortex.mdc"))
+
     def test_force_without_workspace_knows_a_workspace_written_before_the_marker(self):
         # The file of 1.3.0, which every workspace a team changed is sent to `cortex init --force` with.
         old = "# Cortex AI Team — Workspace Mode\n\nRead cortex.local.toml first.\n"

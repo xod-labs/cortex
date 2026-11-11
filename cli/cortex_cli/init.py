@@ -666,8 +666,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                     f"cortex init --tool {name} --force writes it again, a workspace's as it was written"
                 again += ", and keeps it as .bak"
             else:
-                # No layout --force could keep: a workspace's run names its option, or --force writes a single project's.
-                option = " --workspace" if workspace and found in (NO_BOOTSTRAP, TITLE_BELOW_TEXT) else ""
+                # No marker to tell the layout: --force alone keeps the one its title says, a single project's when it
+                # says none — a workspace's run names its option then, as for the run's own file.
+                option = " --workspace" if workspace and not written_for_workspace(content) else ""
                 again = f"cortex init --tool {name}{option} --force replaces it, and keeps it as .bak"
             err.write(f"note: {rel} is there and was kept: {found.phrase} — {again}\n")
         if project is not None and not known_before and instructions_file is not None:
