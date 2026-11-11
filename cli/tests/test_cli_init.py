@@ -621,7 +621,7 @@ class OptionTests(InitTestCase):
                               "cursor --workspace --force replaces it, and keeps it as .bak", proc.err)
                 proc = self.init("--tool", "cursor", "--workspace", "--force")              # the command the note names
                 self.assertEqual(proc.returncode, 0, proc.err)
-                self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read(".cursor/rules/cortex.mdc"))
+                self.assertIn("<!-- cortex:bootstrap layout=workspace format=3 digest=", self.read(".cursor/rules/cortex.mdc"))
                 for backup in rule.parent.glob("cortex.mdc.bak*"):
                     backup.unlink()
         rule.write_bytes(b"# Cortex AI Team \xe2\x80\x94 Workspace Mode\n\nRead cortex.local.toml first.\n")
@@ -630,7 +630,7 @@ class OptionTests(InitTestCase):
                       "bootstrap marker — cortex init --tool cursor --force replaces it, and keeps it as .bak", proc.err)
         proc = self.init("--tool", "cursor", "--force")                                     # the command the note names
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read(".cursor/rules/cortex.mdc"))
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=3 digest=", self.read(".cursor/rules/cortex.mdc"))
 
     def test_force_without_workspace_knows_a_workspace_written_before_the_marker(self):
         # The file of 1.3.0, which every workspace a team changed is sent to `cortex init --force` with.
@@ -705,14 +705,14 @@ class OptionTests(InitTestCase):
         (self.project / "CLAUDE.md").write_bytes(old.encode("utf-8"))
         proc = self.init("--tool", "claude", "--force")
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("<!-- cortex:bootstrap layout=single format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("<!-- cortex:bootstrap layout=single format=3 digest=", self.read("CLAUDE.md"))
         self.assertIn("note: CLAUDE.md held Cortex's title below a line of text, so neither its bootstrap nor its layout "
                       "could be told, and a single project's is written — `cortex init --tool claude --workspace --force` "
                       "writes a workspace's; what you wrote is in CLAUDE.md.bak",
                       proc.err.replace(display(self.project.resolve()) + "/", "").replace(display(self.project) + "/", ""))
         proc = self.init("--tool", "claude", "--workspace", "--force")                      # the command the note names
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=3 digest=", self.read("CLAUDE.md"))
         self.assertNotIn("below a line of text", proc.err)
         self.assertEqual(self.read("CLAUDE.md.bak"), old)
         # With --workspace, the option chose the layout: nothing to say.
