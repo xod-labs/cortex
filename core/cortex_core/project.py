@@ -192,7 +192,7 @@ def folded(name: str) -> str:
     fold the common names, and past them to one folder rather than two: decomposed (NFD), as APFS takes a
     name decomposed for the same one — a letter apart from its marks, so that ``ǰ``, whose upper case is
     longer, is ``j`` and a caron, as ``J̌`` is —, then each character in one case on its own, as NTFS's
-    table upper-cases it — a character whose case is longer kept as written —, then composed (NFC): ``i``
+    table upper-cases it — a character whose upper case is longer kept lower-cased —, then composed (NFC): ``i``
     and a dot above, upper-cased, is ``İ``. ``ς`` and ``σ`` are one, ``ß`` is not ``ss``. It takes for one folder
     every two that Unicode's simple upper case — NTFS's table — or simple case folding takes for one, ``ﬅ``
     and ``ﬆ`` aside, and some a disk keeps apart: the Kelvin sign and ``k`` — decomposed, it is ``K`` —, a

@@ -538,6 +538,15 @@ class GitIgnoreTests(SyncTestCase):
         self.assertFalse(self.check_ignore(project, "cortex.local.toml"))
         proc = self.sync(project)
         self.assertIn("note: git could not be asked whether it ignores cortex.local.toml", proc.err)
+        # A link of the spec's, and Claude Code's settings: nothing written through the link, and each note names it.
+        proc = self.sync(project, "--link", "--claude-access")
+        self.assert_ok(proc)
+        self.assertEqual((self.tmp / "shared-ignore").read_bytes(), b"cortex.local.toml\n")
+        self.assertNotIn(".gitignore:", proc.out)
+        self.assertIn("— .gitignore is a symbolic link, which git does not read: make it a file, with a `/cortex` line, "
+                      "without the final slash: a link is a file to git\n", proc.err)
+        self.assertIn("paths, and Cortex cannot tell from .gitignore that it does — .gitignore is a symbolic link, which "
+                      "git does not read: make it a file, with a line for it\n", proc.err)
 
     def test_without_git_a_pattern_is_not_said_not_ignored(self):
         # A glob, `**`: git ignores the file, which Cortex cannot tell without git — it does not say git does not.
