@@ -3266,6 +3266,42 @@ class ThirdCodeReviewTests(TeamTestCase):
                 self.assertIn("agents/cortex.team.toml and agents/cortex.team.lock — in no git work tree, so committed "
                               "nowhere", proc.out)
 
+    @SOURCE
+    @unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")
+    @harness.outside_a_repository
+    def test_team_beside_a_team_s_file_that_is_no_file_says_it_cannot_be_read(self):
+        # A committed pin before 1.8.0, which leaves the team's file unread: --team names the file there and unread,
+        # never "no agents/cortex.team.toml" — the team need not create it.
+        for kind, said in (("directory", "not a file"), ("nowhere", "a link that leads nowhere")):
+            with self.subTest(kind=kind):
+                root = self.project('version = "1.7.0"\ntheme = "h2g2"\n', name=kind)
+                (root / "agents").mkdir()
+                if kind == "directory":
+                    (root / TEAM).mkdir()
+                else:
+                    (root / TEAM).symlink_to(self.tmp / "gone.toml")
+                proc = self.cortex(root, "upgrade", "--team", "9.9.8")
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"{TEAM}: cannot be read — {said}", proc.err)
+                self.assertNotIn(f"no {TEAM}", proc.err)
+                self.assertIn("Nothing was changed", proc.err)
+
+    @SOURCE
+    @harness.outside_a_repository
+    def test_a_try_too_new_beside_a_team_s_file_that_is_no_file_names_team_which_names_the_file(self):
+        # The team's file there, unread: the refusal of a try newer than this cortex names --team among the moves —
+        # the file is the team's pin — and --team, followed, says why the file does not read.
+        root = self.project('version = "9.9.8"\ntheme = "h2g2"\n', local='version = "9.9.10"\n', committed=False)
+        (root / "agents").mkdir()
+        (root / TEAM).mkdir()
+        proc = self.cortex(root, "upgrade")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("this project reads Cortex 9.9.10, which its cortex.local.toml pins", proc.err)
+        self.assertIn("`cortex upgrade --team VERSION` moves the team's pin", proc.err)
+        proc = self.cortex(root, "upgrade", "--team", "9.9.8")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"{TEAM}: cannot be read — not a file", proc.err)
+
 
 def newer_refused(pin):
     """What --team with no VERSION says of a team's pin newer than this cortex."""

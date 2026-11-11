@@ -352,6 +352,18 @@ class OptionTests(InitTestCase):
             self.assertNotIn("is in no git repository", proc.err)
             self.assertIn("cortex.local.toml", self.read(".gitignore").splitlines())
 
+    @harness.outside_a_repository
+    def test_in_no_repository_a_line_a_negation_takes_back_is_written_again(self):
+        # No repository to ask: a team's .gitignore there is read as written — the negation of the path takes its line
+        # back, so the line is added below it, as in a repository without git.
+        self.project.mkdir(parents=True, exist_ok=True)
+        (self.project / ".gitignore").write_bytes(b"cortex.local.toml\n!cortex.local.toml\n")
+        proc = self.init("--tool", "claude")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("is in no git repository", proc.err)
+        self.assertEqual((self.project / ".gitignore").read_bytes(),
+                         b"cortex.local.toml\n!cortex.local.toml\ncortex.local.toml\n")
+
     def test_a_root_inside_a_repository_is_not_said_to_be_in_none(self):
         # The repository is a .git at the root or above it, git or not on the PATH — as cortex upgrade tells it.
         # Without git to ask, .gitignore's own lines say what is ignored, in a subdirectory too: it is written.
@@ -706,9 +718,9 @@ class OptionTests(InitTestCase):
         proc = self.init("--tool", "claude", "--force")
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn("<!-- cortex:bootstrap layout=single format=3 digest=", self.read("CLAUDE.md"))
-        self.assertIn("note: CLAUDE.md held Cortex's title below a line of text, so neither its bootstrap nor its layout "
-                      "could be told, and a single project's is written — `cortex init --tool claude --workspace --force` "
-                      "writes a workspace's; what you wrote is in CLAUDE.md.bak",
+        self.assertIn("note: CLAUDE.md held Cortex's title below a line of text, so its layout could not be told, and a "
+                      "single project's is written — `cortex init --tool claude --workspace --force` writes a "
+                      "workspace's; what you wrote is in CLAUDE.md.bak",
                       proc.err.replace(display(self.project.resolve()) + "/", "").replace(display(self.project) + "/", ""))
         proc = self.init("--tool", "claude", "--workspace", "--force")                      # the command the note names
         self.assertEqual(proc.returncode, 0, proc.err)
@@ -728,6 +740,36 @@ class OptionTests(InitTestCase):
         proc = self.init("--tool", "claude", "--force")
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertNotIn("below a line of text", proc.err)
+
+    def test_an_older_bootstrap_with_its_personality_block_and_a_line_above_its_title_says_its_layout_untold(self):
+        # A workspace's bootstrap of before the marker, its personality block in it — Cortex's, by that block — a line
+        # of text above its title: its layout cannot be told, with or without --force, and --force alone writes a
+        # single project's, said (#329); the --workspace --force the note names writes a workspace's.
+        template = (harness.REPO / "templates" / "bootstrap-instructions-workspace.md").read_text(encoding="utf-8")
+        before_the_marker = "".join(line for line in template.splitlines(keepends=True)
+                                    if not line.startswith("<!-- cortex:bootstrap"))
+        self.assertIn("<!-- PERSONALITY:BEGIN -->", before_the_marker)
+        old = "Uses Cortex.\n\n" + before_the_marker
+        (self.project / "CLAUDE.md").write_bytes(old.encode("utf-8"))
+        proc = self.init("--tool", "claude")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        shown = proc.err.replace(display(self.project.resolve()) + "/", "").replace(display(self.project) + "/", "")
+        self.assertIn("note: CLAUDE.md is an older Cortex bootstrap, written before the bootstrap marker, its title below "
+                      "a line of text, so its layout cannot be told; a workspace's takes --workspace — cortex init "
+                      "--tool claude --force writes it again", shown)
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=single format=3 digest=", self.read("CLAUDE.md"))
+        self.assertIn("note: CLAUDE.md held Cortex's title below a line of text, so its layout could not be told, and a "
+                      "single project's is written — `cortex init --tool claude --workspace --force` writes a "
+                      "workspace's; what you wrote is in CLAUDE.md.bak",
+                      proc.err.replace(display(self.project.resolve()) + "/", "").replace(display(self.project) + "/", ""))
+        self.assertEqual(self.read("CLAUDE.md.bak"), old)
+        proc = self.init("--tool", "claude", "--workspace", "--force")                      # the command the note names
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=3 digest=", self.read("CLAUDE.md"))
+        self.assertNotIn("below a line of text", proc.err)
+        self.assertEqual(self.read("CLAUDE.md.bak"), old)
 
     def test_in_a_repository_without_git_the_backup_is_not_said_left_to_git(self):
         # Without git to ask, a team's *.bak line is git's to read: the backup line says nothing of git.
@@ -755,6 +797,46 @@ class OptionTests(InitTestCase):
             check = subprocess.run(["git", "-C", str(self.project), "check-ignore", "-q", "cortex.local.toml"],
                                    capture_output=True)
             self.assertEqual(check.returncode, 0, check.stderr)
+
+    @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
+    def test_a_gitignore_that_is_a_link_is_never_written_through(self):
+        # git reads no .gitignore that is a symbolic link: init writes nothing through it — to its target, outside the
+        # project maybe, or one it would create — says no line was added, and the note names the link, with git or
+        # without, never "add it to .gitignore".
+        cases = [(git, dangling) for git in ((False, True) if HAS_GIT else (False,)) for dangling in (False, True)]
+        for n, (git, dangling) in enumerate(cases):
+            with self.subTest(git=git, dangling=dangling):
+                project = self.tmp / f"linked-{n}"
+                project.mkdir()
+                if git:
+                    subprocess.run(["git", "init", "-q", str(project)], check=True)
+                else:
+                    (project / ".git").mkdir()
+                target = self.tmp / f"shared-ignore-{n}"
+                if not dangling:
+                    target.write_bytes(b"other\n")
+                try:
+                    (project / ".gitignore").symlink_to(target)
+                except OSError:
+                    self.skipTest("no symbolic link here")
+                env = self.env
+                if git:
+                    self.env = dict(env, PATH=os.pathsep.join([os.path.dirname(shutil.which("git")), env["PATH"]]))
+                try:
+                    proc = self.init("--tool", "claude", cwd=project)
+                finally:
+                    self.env = env
+                self.assertEqual(proc.returncode, 0, proc.err)
+                if dangling:
+                    self.assertFalse(os.path.lexists(target))
+                else:
+                    self.assertEqual(target.read_bytes(), b"other\n")
+                self.assertNotIn(".gitignore:", proc.out)
+                said = "git does not ignore" if git else "git could not be asked whether it ignores"
+                self.assertIn(f"note: {said} cortex.local.toml, which holds this machine's paths", proc.err)
+                self.assertIn(".gitignore is a symbolic link, which git does not read: make it a file, with a line for "
+                              "it\n", proc.err)
+                self.assertNotIn("add it to .gitignore", proc.err)
 
     def test_without_git_a_negation_of_another_path_adds_no_line(self):
         # !.gitkeep takes back .gitkeep, never cortex.local.toml: init, with no git on its PATH, adds no second line,

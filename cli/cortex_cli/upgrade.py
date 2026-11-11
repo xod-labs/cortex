@@ -991,8 +991,12 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
     root, project = _project(cwd)
     name, folder = project.team_name, project.team_folder
     team_file = Path(project.team_dir) / config.TEAM_FILE
-    if not team_file.is_file():
+    team_data = cascade.read_team(root, folder)
+    if team_data is None:
         raise UpgradeError(f"no {name} — the team creates it, by a commit in its repository. Nothing was changed")
+    if isinstance(team_data, cascade.Unreadable):
+        # There and unread — a committed pin before 1.8.0 leaves it so: said as it is, never as no file.
+        raise UpgradeError(f"{team_data.error}. Nothing was changed")
     if not project.team_file:
         # Moved to 1.8.0 first, the project reads the team's file, whose version --team then moves.
         raise UpgradeError(f"{name} is not read: this project pins Cortex {project.team_version}, before "

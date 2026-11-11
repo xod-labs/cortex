@@ -1,5 +1,6 @@
 """The services of a workspace — found once, for the validator and for the prompt (#88)."""
 
+import os
 import shutil
 import sys
 import tempfile
@@ -49,6 +50,37 @@ class WorkspaceTests(unittest.TestCase):
             (root / tree / "project-overview.md").write_text("# not a service\n", encoding="utf-8")
         self.assertEqual(sorted(Path(s).relative_to(root).as_posix() for s in services(str(root))),
                          ["svc-a", "svc-b", "tools/batch"])
+
+    def test_a_service_whose_agents_is_the_team_s_folder_is_not_listed(self):
+        # The runtime refuses it — the team's overlays would be read twice (ADR-013 §3.6): the index names it not.
+        root = self.workspace()
+        (root / "team").mkdir()
+        for service, folder in (("svc-c", root / "agents"), ("svc-d", root / "team")):
+            (root / service).mkdir()
+            (root / service / "project-overview.md").write_text(f"# {service}\n", encoding="utf-8")
+            try:
+                os.symlink(folder, root / service / "agents", target_is_directory=True)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest(f"no symbolic link here: {error}")
+        self.assertNotIn("`svc-c/`", service_index(root))
+        self.assertIn("`svc-d/`", service_index(root))                   # team/ is no team's folder by default
+        index = service_index(root, team_folder=str(root / "team"))
+        self.assertNotIn("`svc-d/`", index)
+        self.assertIn("`svc-c/`", index)                                  # agents/ renamed: svc-c's is its own
+        self.assertIn("`svc-a/`", index)
+
+    def test_agents_in_another_case_is_not_listed_where_names_ignore_case(self):
+        # The scan compares names as written; the disk opens Agents/ as agents/, which the runtime refuses, and
+        # every service below it. On a disk that keeps case apart, Agents/ is a folder of its own, listed.
+        root = self.workspace()
+        (root / "agents" / "inner").mkdir()
+        (root / "agents" / "inner" / "project-overview.md").write_text("# Inner\n", encoding="utf-8")
+        (root / "agents").rename(root / "Agents")
+        if not (root / "agents").exists():
+            self.skipTest("this disk keeps case apart: Agents/ is no agents/")
+        index = service_index(root)
+        self.assertNotIn("`Agents/", index)
+        self.assertIn("`svc-a/`", index)
 
     def test_no_service_no_index(self):
         root = Path(tempfile.mkdtemp(prefix="cortex-workspace-"))
