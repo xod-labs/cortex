@@ -2512,6 +2512,14 @@ class CounterReviewRoundTwoTests(TeamTestCase):
                       "would never be read. Nothing was changed. To read 9.9.6, remove cortex.toml's version — the "
                       "team's 9.9.5 is read then, or a try above it — and run `cortex upgrade --local 9.9.6` again", proc.err)
         self.assertEqual(self.local(root)["version"], OWN)
+        # Bluspark's third pass: at or below the team's version, the try is removed — and cortex.toml's version, above
+        # the team's, is what is read then, as said.
+        for dry in (("--dry-run",), ()):
+            proc = self.cortex(root, "upgrade", "--local", "9.9.5", *dry, **env)
+            self.assert_ok(proc)
+            self.assertIn(f"cortex.local.toml: version {OWN} {'would be' if dry else 'is'} removed — cortex.toml's "
+                          f"9.9.7, not committed, is read, above the team's 9.9.5 ({TEAM})\n", proc.out)
+        self.assertEqual(self.value(root, "version"), "9.9.7")
         (root / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")                # followed
         self.assert_ok(self.cortex(root, "upgrade", "--local", "9.9.6", **env))
         self.assertEqual(self.value(root, "version"), "9.9.6")

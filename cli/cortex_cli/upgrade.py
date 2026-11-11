@@ -751,11 +751,15 @@ def local_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out:
             out.write(f"Cortex {target} is at or below the team's {team} ({project.team_origin}): there is no try "
                       "to remove — nothing to move\n")
             return Outcome(root, project.version, project.version)
-        out.write(f"{config.LOCAL_FILE}: version {tried.value} {'would be' if dry_run else 'is'} removed — the team's "
-                  f"{team} ({project.team_origin}) is read\n")
+        # The try removed, the higher of the team's version and this developer's own cortex.toml is read (§3.1).
+        mine = _developers_version(project)
+        read = mine if mine is not None and mine > team else team
+        what = f"{config.PROJECT_FILE}'s {mine}, not committed, is read, above the team's {team} " \
+               f"({project.team_origin})" if read is mine else f"the team's {team} ({project.team_origin}) is read"
+        out.write(f"{config.LOCAL_FILE}: version {tried.value} {'would be' if dry_run else 'is'} removed — {what}\n")
         if not dry_run:
             _local_then_sync(root, {"version": None}, out, err)
-        return Outcome(root, Version(str(tried.value)), team)
+        return Outcome(root, Version(str(tried.value)), read)
     mine = _developers_version(project)
     if mine is not None and mine > target:
         # The higher version is read (§3.1), a try on a tie: below the developer's own cortex.toml, it never would be.
