@@ -396,9 +396,32 @@ TITLE_BELOW_TEXT = Kept("holds Cortex's title below a line of text, so Cortex ca
 
 
 def title_below_text(content: bytes) -> bool:
-    """The templates' heading in Cortex's block of ``content``, below a line of text — no title (``title_line``)."""
-    return title_line(content) is None and any(
-        line.startswith(TITLE) for line in without_frontmatter(parts(normalised(content))[0]).split(b"\n"))
+    """The templates' heading in Cortex's block of ``content``, below a line of text — no title (``title_line``). A
+    heading inside a comment is none: the file holds no bootstrap, as ``title_line`` reads comments."""
+    if title_line(content) is not None:
+        return False
+    comment = False
+    for line in without_frontmatter(parts(normalised(content))[0]).split(b"\n"):
+        if not comment and line.startswith(TITLE):
+            return True
+        comment = _in_a_comment(line, comment)
+    return False
+
+
+def _in_a_comment(line: bytes, comment: bool) -> bool:
+    """Whether the end of ``line`` is inside an HTML comment, its start being inside one when ``comment``."""
+    at = 0
+    while True:
+        if comment:
+            end = line.find(b"-->", at)
+            if end < 0:
+                return True
+            at, comment = end + 3, False
+        else:
+            begin = line.find(b"<!--", at)
+            if begin < 0:
+                return False
+            at, comment = begin + 4, True
 
 
 def forced(path: Path, template: bytes, personality: bool, current: Optional[bytes]) -> bytes:
@@ -684,7 +707,8 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                 else:
                     os.replace(instructions_file, backup)
                     # Said when git says so: a team's .gitignore may hold *.bak, and a root in no repository has no git.
-                    left = sync.git_ignores(root, os.path.relpath(backup, root)) is False
+                    # Asked where the backup is: a --tool custom file may be outside the root, on another drive even.
+                    left = sync.git_ignores(backup.parent, backup.name) is False
                     out.write(f"✓ {display(str(backup))}: the file --force replaces, as it was — "
                               f"{'git does not ignore it: ' if left else ''}carry over what you wrote in it, "
                               "then delete it\n")
@@ -695,6 +719,13 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                           "again — to write a single project's, remove it and run "
                           f"`cortex init {tool_options(instructions_file, tool)}`, then copy the team's part back from "
                           f"{display(str(backup))}, below the end marker\n")
+            elif replaced and not options.workspace and kept_bootstrap(current, template) is TITLE_BELOW_TEXT:
+                # No marker, and a title below a line of text: the layout cannot be told, and --force alone writes a
+                # single project's — said, as the run without --force says it (#329).
+                err.write(f"note: {display(str(instructions_file))} held Cortex's title below a line of text, so neither "
+                          "its bootstrap nor its layout could be told, and a single project's is written — "
+                          f"`cortex init {tool_options(instructions_file, tool)} --workspace --force` writes a "
+                          f"workspace's; what you wrote is in {display(str(backup))}\n")
     if not tool_named:
         # Found, not written: a file of another tool's, which a new project's default leaves alone.
         for name, rel in TOOLS.items():
@@ -718,8 +749,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                     f"cortex init --tool {name} --force writes it again, a workspace's as it was written"
                 again += ", and keeps it as .bak"
             else:
-                # No layout --force could keep: a workspace's run names its option, or --force writes a single project's.
-                option = " --workspace" if workspace and found in (NO_BOOTSTRAP, TITLE_BELOW_TEXT) else ""
+                # No marker to tell the layout: --force alone keeps the one its title says, a single project's when it
+                # says none — a workspace's run names its option then, as for the run's own file.
+                option = " --workspace" if workspace and not written_for_workspace(content) else ""
                 again = f"cortex init --tool {name}{option} --force replaces it, and keeps it as .bak"
             err.write(f"note: {rel} is there and was kept: {found.phrase} — {again}\n")
         if project is not None and not known_before and instructions_file is not None:
