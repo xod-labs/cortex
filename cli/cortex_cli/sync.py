@@ -1012,7 +1012,9 @@ def ignored(root: Path, name: str) -> Optional[bool]:
     # No git to ask, or git refusing the repository: the project's own .gitignore, at the root of the repository or
     # in a subdirectory of it, read for a line that names the path as Cortex writes it — no pattern, no negation
     # below it, no .gitignore of a folder above, which git would read too. A link is a file to git — `cortex/` does
-    # not match it.
+    # not match it. A .gitignore that is a link git does not read, nor does Cortex.
+    if is_link(root / ".gitignore"):
+        return False
     directory = (root / name).is_dir() and not is_link(root / name)
     wanted = {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if directory else set())
     try:

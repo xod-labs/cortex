@@ -520,6 +520,20 @@ class GitIgnoreTests(SyncTestCase):
             with self.subTest(below=below):
                 self.assertTrue(sync._named([name, below], {name}, name))
 
+    @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
+    def test_without_git_a_gitignore_that_is_a_link_is_not_read(self):
+        # git reads no .gitignore that is a symbolic link: its lines ignore nothing — a note, never "ignored".
+        project = self.repository("")
+        (project / ".gitignore").unlink()
+        (self.tmp / "shared-ignore").write_bytes(b"cortex.local.toml\n")
+        try:
+            (project / ".gitignore").symlink_to(self.tmp / "shared-ignore")
+        except OSError:
+            self.skipTest("no symbolic link here")
+        self.assertFalse(self.check_ignore(project, "cortex.local.toml"))
+        proc = self.sync(project)
+        self.assertIn("note: git could not be asked whether it ignores cortex.local.toml", proc.err)
+
     def test_without_git_a_pattern_is_not_said_not_ignored(self):
         # A glob, `**`: git ignores the file, which Cortex cannot tell without git — it does not say git does not.
         for n, ignore in enumerate(("*.local.toml\n", "**/cortex.local.toml\n")):
