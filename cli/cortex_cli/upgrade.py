@@ -1316,15 +1316,10 @@ def _theirs(root: str, pin: Path, before: List[Path], error: Optional[str], writ
     is the same whatever it held. A git that cannot tell stops the commit, never the upgrade."""
     if error is not None:
         return f"git could not tell whether {config.PROJECT_FILE} or a bootstrap file held changes of yours — {error}"
+    # The team's file counts where the commit carries it with its lock, moved to its version by hand — a follower's
+    # resume writes the two (``_resume``): it is then among ``written``.
     wrote = {_real(path) for path in written}
-    # The team's file is a pin too where the commit carries its lock — a follower's resume writes it — and it was
-    # moved to its version by hand: it would stay out of the commit, and a teammate's checkout read a lock of
-    # another version. Another key changed, the version as committed, the lock goes alone.
-    team_lock = Path(root) / config.TEAM_FOLDER / config.TEAM_LOCK_FILE
-    team_file = team_lock.with_name(config.TEAM_FILE)
-    pins = {_real(pin)} | ({_real(team_file)} if _real(team_lock) in wrote and sync.team_file_moved(team_file)
-                           else set())
-    theirs = [path for path in before if _real(path) in pins or _real(path) in wrote]
+    theirs = [path for path in before if _real(path) == _real(pin) or _real(path) in wrote]
     if not theirs:
         return None
     return (f"{_and([_shown_path(path, root) for path in theirs])} held changes of yours before the upgrade — "
