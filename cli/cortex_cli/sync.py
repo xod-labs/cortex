@@ -950,8 +950,12 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
     """Add to ``.gitignore`` each line of ``entries`` whose path — its value — git does not ignore
     yet, and return them. The file keeps its bytes: its encoding, its byte order mark, its line
     endings. Without a repository to ask, a line is added unless it, or one that means the same,
-    is there with no negation below it — and no .gitignore is created: it would keep nothing out of any commit."""
+    is there with no negation below it — and no .gitignore is created: it would keep nothing out of any commit. A
+    .gitignore that is a symbolic link is never written through — git does not read it, and its target may be outside
+    the project, or none yet: the note names the link (``_notes``)."""
     path = root / ".gitignore"
+    if is_link(path):
+        return []
     if not path.is_file() and ignored(root, config.LOCAL_FILE) is None:
         return []
     data = path.read_bytes() if path.is_file() else b""
@@ -1080,13 +1084,16 @@ def _not_ignored(root: Path, name: str, shown: str) -> Optional[str]:
 
 
 def _notes(root: Path, mode: str, err: TextIO) -> None:
+    # A .gitignore that is a symbolic link, which git does not read: no line added to it would count (#329).
+    linked = ".gitignore is a symbolic link, which git does not read: make it a file, with " \
+        if is_link(root / ".gitignore") else None
     said = _not_ignored(root, LINK, f"{LINK}/") if mode != "store" else None
     if said is not None:
-        err.write(f"note: {said} — add a `/{LINK}` line to .gitignore, without the final slash: a link is a file to "
-                  "git\n")
+        line = f"a `/{LINK}` line" + ("" if linked else " to .gitignore")
+        err.write(f"note: {said} — {linked or 'add '}{line}, without the final slash: a link is a file to git\n")
     said = _not_ignored(root, config.LOCAL_FILE, f"{config.LOCAL_FILE}, which holds this machine's paths")
     if said is not None:
-        err.write(f"note: {said} — add it to .gitignore\n")
+        err.write(f"note: {said} — {linked + 'a line for it' if linked else 'add it to .gitignore'}\n")
 
 
 def run(args: List[str]) -> int:
