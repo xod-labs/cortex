@@ -1888,15 +1888,20 @@ class BootstrapMarkerTests(unittest.TestCase):
                 kept = (above + workspace).encode("utf-8")
                 self.assertEqual(init_command.title_line(kept), b"# Cortex AI Team \xe2\x80\x94 Workspace Mode")
                 self.assertTrue(init_command.written_for_workspace(kept))
-        for above in ("# Our notes\n\n```\n", "Our notes\n", "<!-- ours --> and text\n", "<!-- never closed\n"):
+        for above in ("# Our notes\n\n```\n", "Our notes\n", "<!-- ours --> and text\n", "Ours <!-- a -->\n"):
             with self.subTest(above=above):
                 kept = (above + workspace).encode("utf-8")
                 self.assertIsNone(init_command.title_line(kept))
                 self.assertFalse(init_command.bootstrap_of_cortex(kept))
                 self.assertFalse(init_command.written_for_workspace(kept))
                 self.assertIs(init_command.kept_bootstrap(kept, self.template(format=2)), init_command.TITLE_BELOW_TEXT)
-        # No title at all: no Cortex bootstrap.
+        # No title at all, or one inside a comment — never closed, or closed below it: no Cortex bootstrap.
         self.assertIs(init_command.kept_bootstrap(b"# Our notes\n", self.template(format=2)), init_command.NO_BOOTSTRAP)
+        for above, below in (("<!-- never closed\n", ""), ("<!-- an example\n", "-->\n"),
+                             ("Our notes <!-- an example\n", "-->\n"), ("<!-- a --> text <!-- b\n", "-->\n")):
+            with self.subTest(above=above, below=below):
+                kept = (above + workspace + below).encode("utf-8")
+                self.assertIs(init_command.kept_bootstrap(kept, self.template(format=2)), init_command.NO_BOOTSTRAP)
 
     def test_one_marker_says_the_layout_against_the_title(self):
         # A single marker is the layout, whatever the title says — a team that retitled the file, or a title of the

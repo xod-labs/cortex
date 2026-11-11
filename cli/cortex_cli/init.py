@@ -394,9 +394,32 @@ TITLE_BELOW_TEXT = Kept("holds Cortex's title below a line of text, so Cortex ca
 
 
 def title_below_text(content: bytes) -> bool:
-    """The templates' heading in Cortex's block of ``content``, below a line of text — no title (``title_line``)."""
-    return title_line(content) is None and any(
-        line.startswith(TITLE) for line in without_frontmatter(parts(normalised(content))[0]).split(b"\n"))
+    """The templates' heading in Cortex's block of ``content``, below a line of text — no title (``title_line``). A
+    heading inside a comment is none: the file holds no bootstrap, as ``title_line`` reads comments."""
+    if title_line(content) is not None:
+        return False
+    comment = False
+    for line in without_frontmatter(parts(normalised(content))[0]).split(b"\n"):
+        if not comment and line.startswith(TITLE):
+            return True
+        comment = _in_a_comment(line, comment)
+    return False
+
+
+def _in_a_comment(line: bytes, comment: bool) -> bool:
+    """Whether the end of ``line`` is inside an HTML comment, its start being inside one when ``comment``."""
+    at = 0
+    while True:
+        if comment:
+            end = line.find(b"-->", at)
+            if end < 0:
+                return True
+            at, comment = end + 3, False
+        else:
+            begin = line.find(b"<!--", at)
+            if begin < 0:
+                return False
+            at, comment = begin + 4, True
 
 
 def forced(path: Path, template: bytes, personality: bool, current: Optional[bytes]) -> bytes:
