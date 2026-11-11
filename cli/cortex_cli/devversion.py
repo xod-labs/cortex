@@ -11,10 +11,11 @@ run's number. ``X.Y.Z`` is the version the branch prepares, which ``CHANGELOG.md
   ``Deprecated``, a minor; anything else — ``Fixed`` and ``Security`` only, or no entry yet — a
   patch. A kind is read in any case, the heading's first word, an emoji before it or a note after it:
   ``### ✨ Added``, ``### Fixed (CLI)`` — ``### Notes: nothing removed`` names none. Markdown's rules
-  hold: a heading or an entry may be indented up to three spaces, a space or a tab after its ``###``,
-  an entry starts with ``-``, ``*`` or ``+``, a fenced code block holds no section, heading nor entry —
-  one opened in a list item ends with it — and a line ends at a line feed or a carriage return alone — not at the other breaks Python splits
-  text at, which an entry may hold;
+  hold, as ``markdown_lines`` reads them — the release actions read the changelog through the same
+  file: a heading or an entry may be indented up to three spaces, a space or a tab after its ``###``;
+  an entry is an item of the section's own list, started with ``-``, ``*`` or ``+`` — an item in an
+  entry is its text; a fenced code block or an HTML comment holds no section, heading nor entry —
+  one opened in a list item ends with it; a line ends at a line feed or a carriage return alone;
 - a changelog that writes a pre-release's section — Cortex's does not (ADR-009 §3.7) — has it as
   a floor: above the base, ``3.1.0-rc.1`` makes the version the higher of its release and the
   bump's — ``3.1.0`` after a fix or an addition, ``4.0.0`` after a removal.
@@ -28,22 +29,17 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional
 
+from .markdown_lines import SECTION, lines, sections
 from .semver import Version
 
 UNRELEASED = "unreleased"
-# A second-level section: `## [1.7.0] - 2026-11-06 — …`, `## [Unreleased]` — indented up to three spaces, as
-# Markdown has a heading.
-SECTION = re.compile(r" {0,3}##[ \t]+\[(?P<label>[^\]]+)\].*")
 KIND = re.compile(r" {0,3}###[ \t]+(?P<kind>.+?)\s*")
 # The kinds of Keep a Changelog, as a heading names one — its first word, after an emoji or a mark: `### Added`,
 # `### ✨ Added`, `### fixed (CLI)`; `### Notes: nothing removed` names none.
 KINDS = re.compile(r"^[\W_]*(added|changed|deprecated|removed|fixed|security)\b", re.IGNORECASE)
-# An entry is a line of its own starting a list item, indented up to three spaces; what follows it, indented
-# further, is its text.
+# An entry is a list item of the section's own list — none in another item, which is its text — marked `-`, `*` or
+# `+`, indented up to three spaces.
 ENTRY = re.compile(r" {0,3}[-*+][ \t]+(?P<text>.*)")
-# A code fence opens and closes a block that holds no Markdown: three backticks or tildes, or more, indented up to
-# three spaces — closed by a line of the same character, at least as many.
-FENCE = re.compile(r" {0,3}(?P<fence>`{3,}|~{3,})(?P<info>.*)")
 BREAKING = re.compile(r"(?:\*\*)?💥")
 # A heading marked breaking, `### 💥 Breaking`, `### Breaking changes`: its entries are, whatever kind it names.
 # The word first, or the mark: `### Fixed (no breaking change)` and `### Non-breaking` are not.
@@ -55,12 +51,7 @@ MINOR = frozenset({"Added", "Changed", "Deprecated"})
 def released(text: str) -> List[Version]:
     """The version of every section the changelog holds, ``[Unreleased]`` and any label that is
     no version aside, in the file's order."""
-    found = []
-    for line in _lines(text):
-        match = SECTION.fullmatch(line.rstrip())
-        if match and Version.valid(match.group("label")):
-            found.append(Version(match.group("label")))
-    return found
+    return [Version(label) for label, _ in sections(text) if Version.valid(label)]
 
 
 def unreleased(text: str) -> Dict[str, List[str]]:
@@ -70,8 +61,10 @@ def unreleased(text: str) -> Dict[str, List[str]]:
     nothing."""
     entries: Dict[str, List[str]] = {}
     inside, kind = False, None
-    for line in _lines(text):
-        line = line.rstrip()
+    for read in lines(text):
+        if read.code:
+            continue
+        line = read.text.rstrip()
         section = SECTION.fullmatch(line)
         if section:
             inside = section.group("label").strip().lower() == UNRELEASED
@@ -84,7 +77,7 @@ def unreleased(text: str) -> Dict[str, List[str]]:
             kind = "Breaking" if BREAKING_KIND.search(heading.group("kind")) else \
                 named.group(1).capitalize() if named else heading.group("kind")
             continue
-        entry = ENTRY.fullmatch(line)
+        entry = ENTRY.fullmatch(line) if read.item and not read.nested else None
         if entry and kind is not None:
             entries.setdefault(kind, []).append(entry.group("text"))
     return entries
@@ -111,63 +104,6 @@ def prepared(text: str) -> Version:
     # A pre-release below the base is of a release at or below it: no floor above the bump.
     floors = [Version("{}.{}.{}".format(*version.core)) for version in versions if version.pre]
     return max([bumped, *floors])
-
-
-def _lines(text: str) -> List[str]:
-    """The lines Markdown reads as such, those of a fenced code block left out — an example of a changelog in one
-    is none of its sections. A fence opened in a list item ends with the item, as Markdown has it: at its closing
-    fence, or at the first line not blank indented less than it — what follows is read. One at the top level never
-    closed hides nothing, where Markdown would hide the rest of the file. Markdown's line endings alone:
-    ``splitlines`` would also break at U+2028, U+0085 or a form feed in an entry."""
-    lines = re.split(r"\r\n|\r|\n", text.removeprefix("\ufeff"))
-    kept: List[str] = []
-    index = 0
-    while index < len(lines):
-        found = FENCE.fullmatch(lines[index].rstrip())
-        if found and not (found.group("fence")[0] == "`" and "`" in found.group("info")):
-            indent = _indent(lines[index])
-            end = _block_end(lines, index, found.group("fence"), indent if _in_an_item(lines, index, indent) else 0)
-            if end is not None:
-                index = end
-                continue
-        kept.append(lines[index])
-        index += 1
-    return kept
-
-
-def _indent(line: str) -> int:
-    return len(line) - len(line.lstrip(" "))
-
-
-def _in_an_item(lines: List[str], index: int, indent: int) -> bool:
-    """Whether the fence at ``lines[index]``, indented ``indent`` spaces, is in a list item: the nearest line above
-    it, not blank, indented less, starts an entry."""
-    if indent == 0:
-        return False
-    for line in reversed(lines[:index]):
-        if line.strip() and _indent(line) < indent:
-            return ENTRY.fullmatch(line.rstrip()) is not None
-    return False
-
-
-def _block_end(lines: List[str], index: int, fence: str, item: int) -> Optional[int]:
-    """The index of the first line past the block the fence at ``lines[index]`` opens — in a list item whose
-    content is indented ``item`` spaces, the item's end bounds it; ``None`` for a block at the top level never
-    closed, which holds nothing."""
-    for later in range(index + 1, len(lines)):
-        line = lines[later]
-        if item and line.strip() and _indent(line) < item:
-            return later                        # the item ends, and its block: this line is read
-        if _closes(line[item:], fence):
-            return later + 1
-    return len(lines) if item else None
-
-
-def _closes(line: str, fence: str) -> bool:
-    """Whether ``line`` closes a block ``fence`` opened: its character, as many or more, and nothing after it."""
-    found = FENCE.fullmatch(line.rstrip())
-    return found is not None and found.group("fence")[0] == fence[0] and len(found.group("fence")) >= len(fence) \
-        and not found.group("info").strip()
 
 
 def development(text: str, build: Optional[int] = None) -> str:

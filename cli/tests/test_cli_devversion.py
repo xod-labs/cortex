@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a p
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 
 import cli_harness as harness  # noqa: E402
-from cortex_cli import devversion  # noqa: E402
+from cortex_cli import devversion, markdown_lines  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
 
 HEAD = "# Changelog\n\nAll notable changes.\n\n"
@@ -233,6 +233,100 @@ class BumpTests(unittest.TestCase):
         text = "## [Unreleased]\n### Fixed\n- a:\n\n  ```\n  ## [9.9.9]\n\n  ```\n### Added\n- b\n## [2.3.4] - x\n"
         self.assertEqual(devversion.released(text), [Version("2.3.4")])
         self.assertEqual(prepared(text), "2.4.0")
+
+    def test_a_fence_in_an_item_is_bounded_by_the_item_s_content(self):
+        # Bluspark's third pass. Above the fence, a line of the item's text, as indented as it: the fence is still the
+        # item's, and ends with it — never left open at the top level, where it would hide nothing.
+        text = "## [Unreleased]\n### Fixed\n- a:\n  its text\n  ```\n  ## [9.9.9]\n- b\n## [2.3.4] - x\n"
+        self.assertEqual(devversion.released(text), [Version("2.3.4")])
+        # Indented one space under an item whose content is at two, a fence is the top level's: it holds what follows
+        # to its closing fence, a line at column 0 included.
+        text = "## [Unreleased]\n### Fixed\n- a\n ```\n## [9.9.9]\n### Removed\n- b\n ```\n## [2.3.4] - x\n"
+        self.assertEqual(devversion.released(text), [Version("2.3.4")])
+        self.assertEqual(prepared(text), "2.3.5")
+        # Indented past the item's content, it is still the item's: a line as indented as the content is its code.
+        text = "## [Unreleased]\n### Fixed\n- a\n   ```\n  ## [9.9.9]\n  ### Removed\n   ```\n## [2.3.4] - x\n"
+        self.assertEqual(devversion.released(text), [Version("2.3.4")])
+        self.assertEqual(prepared(text), "2.3.5")
+        # Its closing fence is read past the item's content, up to three spaces: what follows it is read.
+        text = "## [2.3.4] - x\n## [Unreleased]\n### Fixed\n- a\n  ```\n  x\n    ```\n  ### Removed\n  - b\n"
+        self.assertEqual(prepared(text), "3.0.0")
+
+    def test_a_fence_closes_as_indented_as_it_may_and_on_as_many_marks(self):
+        # Bluspark's third pass: a closing fence indented up to three spaces closes the block — the fence at column 0
+        # below, never closed, then hides nothing; a shorter one never closes a longer one.
+        text = changelog("### Fixed\n- a fix\n\nNotes:\n\n  ```\n  x\n  ```\n### Removed\n- a thing\n```\n", "2.3.4")
+        self.assertEqual(prepared(text), "3.0.0")
+        text = changelog("### Fixed\n- a fix\n\n````\n```\n### Removed\n- a thing\n```\n````\n", "2.3.4")
+        self.assertEqual(prepared(text), "2.3.5")
+
+    def test_an_html_comment_holds_no_section_heading_nor_entry(self):
+        # Bluspark's third pass: from <!-- to the line that holds -->, as Markdown hides it.
+        for comment in ("<!--\n### Removed\n- a thing\n## [9.9.9]\n-->",
+                        "\nNotes:\n\n  <!-- a note\n### Removed\n- a thing -->",
+                        "- a fix\n  <!--\n  ### Removed\n  - a thing\n  -->"):
+            with self.subTest(comment=comment):
+                text = changelog(f"### Fixed\n- a fix\n{comment}\n", "2.3.4")
+                self.assertEqual(devversion.released(text), [Version("2.3.4")])
+                self.assertEqual(prepared(text), "2.3.5")
+        # On one line, it hides that line only; never closed at the top level, it hides nothing.
+        self.assertEqual(prepared(changelog("<!-- ### Removed -->\n### Added\n- a thing\n", "2.3.4")), "2.4.0")
+        text = changelog("### Fixed\n- a fix\n\n<!-- a note\n\n### Added\n- a thing\n", "2.3.4")
+        self.assertEqual(prepared(text), "2.4.0")
+
+    def test_an_entry_is_an_item_of_the_section_s_own_list(self):
+        # Bluspark's third pass: an item in an entry is its text — its 💥 marks no entry, its kind asks nothing more.
+        for kind, bumped in (("Changed", "2.4.0"), ("Fixed", "2.3.5")):
+            for nested in ("- a\n  - 💥 b\n", "- a\n\n  - 💥 b\n", "- a\nlazily continued\n  - 💥 b\n",
+                           "- a\n  - b\n    - 💥 c\n", "-   a\n    - 💥 b\n"):
+                with self.subTest(kind=kind, nested=nested):
+                    text = changelog(f"### {kind}\n{nested}", "2.3.4")
+                    self.assertEqual(prepared(text), bumped)
+        self.assertEqual(devversion.unreleased(changelog("### Fixed\n- a\n  - b\n* c\n")), {"Fixed": ["a", "c"]})
+        # In an ordered item — no entry of its own — too.
+        self.assertEqual(prepared(changelog("### Fixed\n- a\n\n### Changed\n1. a\n   - 💥 b\n", "2.3.4")), "2.3.5")
+        # Less indented than the content of the entry above, an item is the list's own: an entry.
+        for sibling in ("- a\n - 💥 b\n", " - a\n- 💥 b\n", "-   a\n   - 💥 b\n"):
+            with self.subTest(sibling=sibling):
+                self.assertEqual(prepared(changelog(f"### Fixed\n{sibling}", "2.3.4")), "3.0.0")
+        # A paragraph after a code block is not the entry's: the list ends there, and the item below starts one.
+        text = changelog("### Fixed\n- a\n  ```\n  x\n  ```\ntext\n  - 💥 b\n", "2.3.4")
+        self.assertEqual(prepared(text), "3.0.0")
+        # A thematic break is no entry.
+        self.assertEqual(prepared(changelog("### Removed\n- - -\n", "2.3.4")), "2.3.5")
+
+    def test_what_opens_or_closes_a_block_and_what_does_not(self):
+        # Indented four spaces from its container, a fence is code: the fence at column 0 below opens the block.
+        text = changelog("### Fixed\n- a fix\n\nNotes:\n\n    ```\n### Removed\n- a thing\n```\n", "2.3.4")
+        self.assertEqual(prepared(text), "3.0.0")
+        # Nor does one indented four spaces close it.
+        text = changelog("### Fixed\n- a fix\n\n```\nx\n    ```\n### Removed\n- a thing\n```\n", "2.3.4")
+        self.assertEqual(prepared(text), "2.3.5")
+        # `<!-->` is a comment of its own, closed on its line.
+        text = changelog("### Fixed\n- a fix\n\n<!-->\n### Removed\n- a thing\n-->\n", "2.3.4")
+        self.assertEqual(prepared(text), "3.0.0")
+        # A blank line in an item's block keeps it open.
+        text = "## [Unreleased]\n### Fixed\n- a:\n  ```\n\n  ## [9.9.9]\n  ```\n### Added\n- b\n## [2.3.4] - x\n"
+        self.assertEqual(devversion.released(text), [Version("2.3.4")])
+        # A fence on the item's own line opens the item's block.
+        text = "## [Unreleased]\n### Fixed\n- ```\n  ## [9.9.9]\n  ```\n## [2.3.4] - x\n"
+        self.assertEqual(devversion.released(text), [Version("2.3.4")])
+        # Five spaces after the marker: the item's content is one past it, code — what is indented two is in it.
+        self.assertEqual(prepared(changelog("### Fixed\n-     a\n  - 💥 b\n", "2.3.4")), "2.3.5")
+        # No space after the marker, no item: what follows is the list's own.
+        self.assertEqual(prepared(changelog("### Fixed\n-a\n  - 💥 b\n", "2.3.4")), "3.0.0")
+        # An empty item holds no paragraph: a line at column 0 ends it, and the item below starts a list.
+        self.assertEqual(prepared(changelog("### Fixed\n-\ntext\n  - 💥 b\n", "2.3.4")), "3.0.0")
+
+    def test_every_line_is_read_once_with_what_markdown_makes_of_it(self):
+        text = "### Fixed\n- a\nlazy\n  - b\n  ```\n  x\n  ```\n- ```\n  y\n  ```\n\n<!--\nz\n-->\ntext\n"
+        self.assertEqual([tuple(line) for line in markdown_lines.lines(text)], [
+            ("### Fixed", False, False, False), ("- a", False, False, True), ("lazy", False, True, False),
+            ("  - b", False, True, True), ("  ```", True, True, False), ("  x", True, True, False),
+            ("  ```", True, True, False), ("- ```", False, False, True), ("  y", True, True, False),
+            ("  ```", True, True, False), ("", False, True, False), ("<!--", True, False, False),
+            ("z", True, False, False), ("-->", True, False, False), ("text", False, False, False),
+            ("", False, False, False)])
 
     def test_a_section_heading_takes_a_tab(self):
         text = "## [Unreleased]\n\n### Fixed\n- a fix\n\n##\t[2.3.4] - 2026-11-01\n"
