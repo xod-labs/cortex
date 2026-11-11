@@ -225,6 +225,19 @@ class AgentsOnTheDiskTests(SyncedProjectTestCase):
         run = resolve_run(self.request(service="svc-a"), self.project, theme="h2g2")      # an agents/ of its own
         self.assertIn("SERVICE-RULE", run.system_prompt)
 
+    def test_a_service_the_runtime_refuses_is_not_listed(self):
+        # The index the agents are shown names no service the runtime would refuse them.
+        (self.project / "svc-b").mkdir()
+        (self.project / "svc-b" / "project-overview.md").write_text("# B\n", encoding="utf-8")
+        _link(self, self.project / "agents", self.project / "svc-b" / "agents")
+        if self.ignores_case():
+            shutil.copytree(self.project / "svc-a", self.project / "agents" / "inner")
+            (self.project / "agents").rename(self.project / "Agents")
+        run = resolve_run(self.request(service="svc-a"), self.project, theme="h2g2")
+        self.assertIn("`svc-a/`", run.system_prompt)
+        self.assertNotIn("`svc-b/`", run.system_prompt)
+        self.assertNotIn("`Agents/", run.system_prompt)
+
     def test_agents_as_written_is_refused_where_the_disk_has_none(self):
         shutil.rmtree(self.project / "agents")
         with self.assertRaisesRegex(ValueError, "other than agents/"):
@@ -247,6 +260,14 @@ class TeamFolderOnTheDiskTests(TeamFolderTestCase):
         _link(self, self.project / FOLDER, self.project / "svc-b" / "agents")
         with self.assertRaisesRegex(ValueError, "whose agents/ is the team's folder"):
             resolve_run(self.request(service="svc-b"), self.project, theme="h2g2")
+
+    def test_a_service_whose_agents_is_the_team_s_folder_is_not_listed(self):
+        (self.project / "svc-b").mkdir()
+        (self.project / "svc-b" / "project-overview.md").write_text("# B\n", encoding="utf-8")
+        _link(self, self.project / FOLDER, self.project / "svc-b" / "agents")
+        run = resolve_run(self.request(service="svc-a"), self.project, theme="h2g2")
+        self.assertIn("`svc-a/`", run.system_prompt)
+        self.assertNotIn("`svc-b/`", run.system_prompt)
 
     def test_a_service_whose_agents_leads_to_the_root_s_agents_left_behind_is_served(self):
         # The folder renamed, the root's agents/ is no tier: a service whose agents/ leads there reads it once, as

@@ -141,6 +141,22 @@ def check_team_folder(project_root: str, folder: str, base_root: Optional[str] =
                                    f"{shown('/'.join(rel))} — the team's folder is the workspace's, no service's")
 
 
+def _refused(root: Path, folder: str, team: Path) -> bool:
+    """Whether the runtime refuses the service ``folder`` as the disk opens it (ADR-013 §3.6): it, or a folder
+    above it, is ``agents/`` or the team's folder — ``Agents`` where names ignore case — or its own ``agents/``
+    is the team's folder, a link to it, whose overlays would be read twice. The scan compares names as written."""
+    parts = Path(folder).parts
+    above = [root.joinpath(*parts[:depth]) for depth in range(1, len(parts) + 1)]
+    for path, folders in [(path, (root / "agents", team)) for path in above] + [(root / folder / "agents", (team,))]:
+        for other in folders:
+            try:
+                if os.path.samefile(path, other):
+                    return True
+            except (OSError, ValueError):       # not there, or no name the disk takes
+                pass
+    return False
+
+
 def service_index(project_root, base_root=None, active: Optional[str] = None, team_folder: Optional[str] = None) -> str:
     """The workspace's services as an agent is shown them — one line each, by folder:
     ``- `@alias` — `folder/` — title``, the alias from the overview's ``<!-- @alias: … -->``
@@ -148,8 +164,11 @@ def service_index(project_root, base_root=None, active: Optional[str] = None, te
     service of the run — is marked. Empty when the workspace has no service.
     """
     root = Path(project_root)
+    team = Path(team_folder) if team_folder is not None else root / "agents"
     lines = []
     for folder in sorted(Path(s).relative_to(root).as_posix() for s in services(str(root), base_root, team_folder)):
+        if _refused(root, folder, team):
+            continue
         text = (root / folder / "project-overview.md").read_text(encoding="utf-8", errors="replace")
         alias = _ALIAS.search(text)
         title = next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), "")
