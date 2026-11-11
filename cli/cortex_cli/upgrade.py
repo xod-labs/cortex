@@ -198,8 +198,9 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     content = init.normalised(kept)
     found = init.markers(content)
     # No --workspace for a workspace's file: --force keeps the layout it was written for — by its markers, or, written
-    # before the marker, by its title — and the option would also write the team's pair in agents/ (#329).
-    again = f"cortex init {init.tool_options(path)} --force writes it again, and keeps yours as .bak"
+    # before the marker, by its title — and the option would also write the team's pair in agents/ (#329). At the
+    # project root: `cortex upgrade` finds it above a subdirectory, where `cortex init` would make another.
+    again = f"cortex init {init.tool_options(path)} --force, at the project root, writes it again, and keeps yours as .bak"
     if len(found) > 1:
         return None, f"{display(str(path))} holds several bootstrap markers, so none is read, and it is kept: {again}"
     if not (found or init.bootstrap_of_cortex(content)):
