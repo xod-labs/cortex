@@ -691,9 +691,9 @@ class OptionTests(InitTestCase):
         proc = self.init("--tool", "claude", "--force")
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn("<!-- cortex:bootstrap layout=single format=2 digest=", self.read("CLAUDE.md"))
-        self.assertIn("note: CLAUDE.md held Cortex's title below a line of text, so neither its bootstrap nor its layout "
-                      "could be told, and a single project's is written — `cortex init --tool claude --workspace --force` "
-                      "writes a workspace's; what you wrote is in CLAUDE.md.bak",
+        self.assertIn("note: CLAUDE.md held Cortex's title below a line of text, so its layout could not be told, and a "
+                      "single project's is written — `cortex init --tool claude --workspace --force` writes a "
+                      "workspace's; what you wrote is in CLAUDE.md.bak",
                       proc.err.replace(display(self.project.resolve()) + "/", "").replace(display(self.project) + "/", ""))
         proc = self.init("--tool", "claude", "--workspace", "--force")                      # the command the note names
         self.assertEqual(proc.returncode, 0, proc.err)
@@ -713,6 +713,36 @@ class OptionTests(InitTestCase):
         proc = self.init("--tool", "claude", "--force")
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertNotIn("below a line of text", proc.err)
+
+    def test_an_older_bootstrap_with_its_personality_block_and_a_line_above_its_title_says_its_layout_untold(self):
+        # A workspace's bootstrap of before the marker, its personality block in it — Cortex's, by that block — a line
+        # of text above its title: its layout cannot be told, with or without --force, and --force alone writes a
+        # single project's, said (#329); the --workspace --force the note names writes a workspace's.
+        template = (harness.REPO / "templates" / "bootstrap-instructions-workspace.md").read_text(encoding="utf-8")
+        before_the_marker = "".join(line for line in template.splitlines(keepends=True)
+                                    if not line.startswith("<!-- cortex:bootstrap"))
+        self.assertIn("<!-- PERSONALITY:BEGIN -->", before_the_marker)
+        old = "Uses Cortex.\n\n" + before_the_marker
+        (self.project / "CLAUDE.md").write_bytes(old.encode("utf-8"))
+        proc = self.init("--tool", "claude")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        shown = proc.err.replace(display(self.project.resolve()) + "/", "").replace(display(self.project) + "/", "")
+        self.assertIn("note: CLAUDE.md is an older Cortex bootstrap, written before the bootstrap marker, its title below "
+                      "a line of text, so its layout cannot be told; a workspace's takes --workspace — cortex init "
+                      "--tool claude --force writes it again", shown)
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=single format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("note: CLAUDE.md held Cortex's title below a line of text, so its layout could not be told, and a "
+                      "single project's is written — `cortex init --tool claude --workspace --force` writes a "
+                      "workspace's; what you wrote is in CLAUDE.md.bak",
+                      proc.err.replace(display(self.project.resolve()) + "/", "").replace(display(self.project) + "/", ""))
+        self.assertEqual(self.read("CLAUDE.md.bak"), old)
+        proc = self.init("--tool", "claude", "--workspace", "--force")                      # the command the note names
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertNotIn("below a line of text", proc.err)
+        self.assertEqual(self.read("CLAUDE.md.bak"), old)
 
     def test_in_a_repository_without_git_the_backup_is_not_said_left_to_git(self):
         # Without git to ask, a team's *.bak line is git's to read: the backup line says nothing of git.
