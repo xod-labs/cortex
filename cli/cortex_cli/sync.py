@@ -169,13 +169,16 @@ GIT_LOCAL = config.GIT_LOCAL                   # ADR-013 §3.1: git asked of the
 git_environment = config.git_environment
 
 
-def _git(root: str, *args: str) -> Optional[subprocess.CompletedProcess]:
+def _git(root: str, *args: str, optional_locks: bool = True) -> Optional[subprocess.CompletedProcess]:
     git = shutil.which("git")
     if git is None:
         return None
+    # Without optional locks through the environment, not --no-optional-locks: a git before 2.15 refuses the
+    # option, and ignores the variable.
+    env = git_environment() if optional_locks else {**git_environment(), "GIT_OPTIONAL_LOCKS": "0"}
     try:
         return subprocess.run([git, "-C", root, *args], capture_output=True, encoding="utf-8", errors="replace",
-                              timeout=30, env=git_environment())
+                              timeout=30, env=env)
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -197,8 +200,8 @@ def team_file_change(team_file: Path) -> Optional[str]:
     # Every untracked file listed, whatever status.showUntrackedFiles says: a new team's file is one. Without the
     # optional locks: a status refreshes the index, and would write it — in the team's repository, which a sync, or a
     # dry run, leaves as it was.
-    status = _git(folder, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all", "--",
-                  f":(literal){team_file.name}")
+    status = _git(folder, "status", "--porcelain", "--untracked-files=all", "--", f":(literal){team_file.name}",
+                  optional_locks=False)
     if status is not None and status.returncode != 0 and not in_no_repository(folder):
         return "unknown"
     if status is None or status.returncode != 0 or not status.stdout.strip():
