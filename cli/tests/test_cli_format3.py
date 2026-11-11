@@ -59,12 +59,18 @@ class TemplateTests(unittest.TestCase):
                              # A pre-release or a development build of 1.8.0 is 1.8.0 (ADR-009), and each
                              # self-update is followed by one sync only: no loop when nothing newer is out.
                              b"read the numbers before any `-`: `1.7.3` is below it, `1.8.0-rc.1` and `1.8.0-dev.2` "
-                             b"are not", b"run `cortex self-update`, then `cortex sync`, once each. No `synced` still",
+                             b"are not", b"run `cortex self-update` \xe2\x80\x94 unless one already ran \xe2\x80\x94 then `cortex sync`, "
+                             b"once each. No `synced` still",
                              b"then `cortex sync` again, once; when it still says so, tell the user, and go no further",
                              # A sync of a version moved that says too old falls through to that rule; a self-update
                              # that installed nothing is said, not read as a project before 1.8.0.
                              b"Run `cortex sync`, once \xe2\x80\x94 when it says this cortex is too old, follow that rule "
                              b"below instead",
+                             # Only a `synced` that is there is compared; a sync that leaves none hands over to the
+                             # rule without one, which does not stop on a difference with nothing.
+                             b"With `synced` there, a file's `version` \xe2\x80\x94 or its absence \xe2\x80\x94 that is not "
+                             b"what it records for it",
+                             b"when it leaves no `synced`, follow the **No `synced`** rule below, its sync already run;",
                              b"No `synced` still \xe2\x86\x92 run `cortex --version` again: still below 1.8.0 \xe2\x86\x92 "
                              b"the self-update installed nothing \xe2\x80\x94 tell the user, and go no further; otherwise",
                              b"`cortex sync`, once each; otherwise, or when it still refuses, tell the user",
@@ -72,20 +78,24 @@ class TemplateTests(unittest.TestCase):
                              # told: a binary below the team's pin does not go on silently on the old spec.
                              b"run `cortex sync`, once \xe2\x80\x94 when it fails, follow the rules below for what it "
                              b"says, or, when none names it, tell the user what it says, and go no further",
-                             # A project before 1.8.0, alone, in step: no sync and no self-update to stop on.
-                             b"and neither `cortex.local.toml` nor the team's file sets a `version`",
-                             b"before 1.8.0: when the spec is of that version, run nothing.",
+                             # A project before 1.8.0, alone, in step: no sync and no self-update to stop on. A spec of
+                             # another version is in the condition: it falls to the sync, never through both rules.
+                             b"neither `cortex.local.toml` nor the team's file sets a `version`, and the spec is of that "
+                             b"version \xe2\x86\x92 the ", b"reads a version before 1.8.0: run nothing. **No `synced`** in "
+                             b"any other case, while the spec names a version",
                              b"**It names a missing team's folder**",
                              b"the team's file's own when its `locked` lists `theme`",
                              b"in `cortex.local.toml` or in the team's file, of your own accord"):
                     self.assertIn(rule, text)
                 self.assertNotIn(b"**The spec is of a version other than", text)
+                self.assertNotIn(b"when the spec is of that version, run nothing", text)
+                self.assertNotIn(b"**No `synced`** otherwise", text)
                 # A checkout is said before a version moved, a missing team's folder before a missing version.
                 self.assertLess(text.index(b"**A checkout**"), text.index(b"**A version moved**"))
                 self.assertLess(text.index(b"**A version moved**"), text.index(b"says this cortex is too old for the"))
                 self.assertLess(text.index(b"**It names a missing team's folder**"), text.index(b"**It refuses"))
                 # Compared before any sync; the first that names "below 1.8.0" says how to read it.
-                self.assertLess(text.index(b"when the spec is of that version, run nothing"),
+                self.assertLess(text.index(b"and the spec is of that version"),
                                 text.index(b"when it fails, follow the rules below"))
                 self.assertLess(text.index(b"`1.8.0-rc.1` and `1.8.0-dev.2` are not"), text.index(b"below 1.8.0, read as above,"))
                 self.assertIn(b"**No `synced`** in `cortex.local.toml`, and `cortex/` a link \xe2\x86\x92 nothing to "
