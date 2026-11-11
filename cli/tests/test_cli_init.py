@@ -759,7 +759,7 @@ class OptionTests(InitTestCase):
                       "--tool claude --force writes it again", shown)
         proc = self.init("--tool", "claude", "--force")
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("<!-- cortex:bootstrap layout=single format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("<!-- cortex:bootstrap layout=single format=3 digest=", self.read("CLAUDE.md"))
         self.assertIn("note: CLAUDE.md held Cortex's title below a line of text, so its layout could not be told, and a "
                       "single project's is written — `cortex init --tool claude --workspace --force` writes a "
                       "workspace's; what you wrote is in CLAUDE.md.bak",
@@ -767,7 +767,7 @@ class OptionTests(InitTestCase):
         self.assertEqual(self.read("CLAUDE.md.bak"), old)
         proc = self.init("--tool", "claude", "--workspace", "--force")                      # the command the note names
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=3 digest=", self.read("CLAUDE.md"))
         self.assertNotIn("below a line of text", proc.err)
         self.assertEqual(self.read("CLAUDE.md.bak"), old)
 
