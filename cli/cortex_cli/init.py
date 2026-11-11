@@ -632,7 +632,8 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                 else:
                     os.replace(instructions_file, backup)
                     # Said when git says so: a team's .gitignore may hold *.bak, and a root in no repository has no git.
-                    left = sync.git_ignores(root, os.path.relpath(backup, root)) is False
+                    # Asked where the backup is: a --tool custom file may be outside the root, on another drive even.
+                    left = sync.git_ignores(backup.parent, backup.name) is False
                     out.write(f"✓ {display(str(backup))}: the file --force replaces, as it was — "
                               f"{'git does not ignore it: ' if left else ''}carry over what you wrote in it, "
                               "then delete it\n")

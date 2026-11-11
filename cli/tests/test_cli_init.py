@@ -785,6 +785,19 @@ class OptionTests(InitTestCase):
                       proc.out)
 
     @unittest.skipUnless(HAS_GIT, "needs git")
+    def test_a_custom_file_s_backup_outside_the_root_is_asked_of_its_own_repository(self):
+        # A --tool custom file outside the root, in a repository of its own: git is asked where the backup is.
+        self.project.mkdir(parents=True, exist_ok=True)
+        elsewhere = self.project.parent / "elsewhere"
+        for repository in (self.project, elsewhere):
+            subprocess.run(["git", "init", "-q", str(repository)], check=True)
+        (elsewhere / "ai.md").write_bytes(b"# mine\n")
+        self.env = dict(self.env, PATH=os.pathsep.join([os.path.dirname(shutil.which("git")), self.env["PATH"]]))
+        proc = self.init("--tool", "custom", "--instructions-file", str(elsewhere / "ai.md"), "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("ai.md.bak: the file --force replaces, as it was — git does not ignore it: carry over", proc.out)
+
+    @unittest.skipUnless(HAS_GIT, "needs git")
     def test_a_backup_git_ignores_is_not_said_to_be_left_to_it(self):
         # A team's .gitignore that holds *.bak: git ignores the backup, and the line asks git rather than saying so.
         self.project.mkdir(parents=True, exist_ok=True)
