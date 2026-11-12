@@ -214,7 +214,8 @@ class AgentsOnTheDiskTests(SyncedProjectTestCase):
                 resolve_run(self.request(service=service), self.project, theme="h2g2")
 
     def test_a_service_whose_agents_the_disk_opens_as_agents_is_refused(self):
-        # A link to agents/, or to the root: the workspace's overlays read twice, the second time as a service's.
+        # Its agents/ a link to agents/, or the service a link to the root: the workspace's overlays read twice,
+        # the second time as a service's.
         (self.project / "svc-b").mkdir()
         _link(self, self.project / "agents", self.project / "svc-b" / "agents")
         _link(self, self.project, self.project / "root-alias")
@@ -224,6 +225,16 @@ class AgentsOnTheDiskTests(SyncedProjectTestCase):
                 resolve_run(self.request(service=service), self.project, theme="h2g2")
         run = resolve_run(self.request(service="svc-a"), self.project, theme="h2g2")      # an agents/ of its own
         self.assertIn("SERVICE-RULE", run.system_prompt)
+
+    def test_a_service_whose_agents_links_to_the_root_is_served_and_listed(self):
+        # Its agents/ is the root, whose own roles/ and the like it reads — not agents/, the team's: nothing twice.
+        # A service that is itself a link to the root is refused above: its agents/ is the team's folder.
+        (self.project / "svc-e").mkdir()
+        (self.project / "svc-e" / "project-overview.md").write_text("# E\n", encoding="utf-8")
+        _link(self, self.project, self.project / "svc-e" / "agents")
+        run = resolve_run(self.request(service="svc-e"), self.project, theme="h2g2")
+        self.assertIn("`svc-e/`", run.system_prompt)
+        self.assertIn("`svc-a/`", run.system_prompt)
 
     def test_a_service_the_runtime_refuses_is_not_listed(self):
         # The index the agents are shown names no service the runtime would refuse them.

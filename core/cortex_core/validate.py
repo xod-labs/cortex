@@ -25,7 +25,7 @@ import sys
 from typing import List, Optional, Sequence, TextIO, Tuple
 
 from . import catalog, resolver
-from .workspace import find, same_directory, services  # noqa: F401 — find is part of this module's API
+from .workspace import find, listed_services, same_directory, services  # noqa: F401 — find, services: this module's API
 
 LAYERS = ("roles", "capabilities", "personalities", "workflows")
 
@@ -272,7 +272,8 @@ def check_overlay(file: str, root: str, project_root: str, base_root: str, repor
 def overlay_roots(project_root: str, base_root: str, service: str, team_folder: Optional[str] = None) -> List[str]:
     """The workspace, when it has its team's folder — ``agents/``, unless ``cortex.toml`` renames it
     (ADR-013 §3.6) — then every service that has both a ``project-overview.md`` and an ``agents/`` — or
-    the one ``--service`` names.
+    the one ``--service`` names. A service the runtime refuses is none: one whose ``agents/`` is the team's
+    folder, a link to it, holds the team's overlays, which the workspace's root checks already (ADR-013 §3.6).
 
     A project root that is the base itself — Cortex validating itself — is no workspace tier:
     its files are the base, read once and never stacked onto themselves (ADR-007 §3.1).
@@ -285,7 +286,7 @@ def overlay_roots(project_root: str, base_root: str, service: str, team_folder: 
     is_base = same_directory(project_root, base_root) and team_folder is None
     roots = [project_root] if os.path.isdir(layer_directory(project_root, project_root, team_folder)) \
         and not is_base else []
-    return roots + [s for s in services(project_root, base_root, team_folder) if os.path.isdir(f"{s}/agents")]
+    return roots + [s for s in listed_services(project_root, base_root, team_folder) if os.path.isdir(f"{s}/agents")]
 
 
 # --------------------------------------------------------------------------- #

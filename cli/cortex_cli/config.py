@@ -685,12 +685,12 @@ def _without_synced(text: str, line: bool = False) -> str:
 
 def render_project(root: str, values: Dict[str, object]) -> str:
     """``cortex.toml`` with each key of ``values`` set — a new file when there is none — checked
-    against the grammar before anything is written: beside a team's file, its ``version`` and
-    ``theme`` may be the file's."""
+    against the grammar before anything is written: each key it holds. Whether ``version`` and ``theme``
+    are there, or the team's file's, is the reader's to say (``load``) — every caller writes them, or
+    has read a project that holds them or a team's file that gives them."""
     text = set_keys(_read_text(os.path.join(root, PROJECT_FILE)), values, PROJECT_FILE, PROJECT_HEADER)
-    team = cascade.team_file_there(root, loose_team_folder(root))
     try:
-        project.check_project(tomllib.loads(text.lstrip("\ufeff")), project.PROJECT_REQUIRED if team else ())
+        project.check_project(tomllib.loads(text.lstrip("\ufeff")), project.PROJECT_REQUIRED)
     except project.ProjectFileError as error:
         raise ConfigError(str(error))
     return text
