@@ -142,6 +142,13 @@ class BumpTests(unittest.TestCase):
             with self.subTest(unreleased=unreleased):
                 self.assertEqual(prepared(changelog(unreleased, "2.3.4")), "2.3.5")
 
+    def test_an_empty_heading_names_no_kind(self):
+        # CommonMark: `###` alone is a heading, with no text — the entries below it are of no kind, which asks nothing.
+        self.assertEqual(devversion.unreleased(changelog("### Added\n###\n- old\n")), {"": ["old"]})
+        self.assertEqual(prepared(changelog("### Added\n###\n- old\n", "2.3.4")), "2.3.5")
+        self.assertEqual(prepared(changelog("### Added\n   ###\n- 💥 old\n", "2.3.4")), "3.0.0")
+        self.assertEqual(prepared(changelog("### Added\n###x\n- old\n", "2.3.4")), "2.4.0")
+
     def test_a_heading_marked_breaking_is_a_major(self):
         for heading in ("### 💥 Breaking", "### Breaking changes", "### 💥 Changed", "### BREAKING"):
             with self.subTest(heading=heading):

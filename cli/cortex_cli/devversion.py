@@ -12,7 +12,8 @@ run's number. ``X.Y.Z`` is the version the branch prepares, which ``CHANGELOG.md
   patch. A kind is read in any case, the heading's first word, an emoji before it or a note after it:
   ``### ✨ Added``, ``### Fixed (CLI)`` — ``### Notes: nothing removed`` names none. Markdown's rules
   hold, as ``markdown_lines`` reads them — the release actions read the changelog through the same
-  file: a heading or an entry may be indented up to three spaces, a space or a tab after its ``###``;
+  file: a heading or an entry may be indented up to three spaces, a space or a tab after its ``###``,
+  an empty ``###`` naming no kind;
   an entry is an item of the section's own list, started with ``-``, ``*`` or ``+``, its text on
   its line or below it — an item in an entry is its text; a fenced code block, an HTML comment or a
   block quote holds no section, heading nor entry — one opened in a list item ends with it; a line
@@ -33,8 +34,8 @@ from typing import Dict, List, Optional
 from .markdown_lines import SECTION, is_unreleased, lines, sections
 from .semver import Version
 
-# Matched against a line without its trailing white space.
-KIND = re.compile(r" {0,3}###[ \t]+(?P<kind>\S.*)")
+# Matched against a line without its trailing white space. An empty `###` is a heading too: it names no kind.
+KIND = re.compile(r" {0,3}###(?:[ \t]+(?P<kind>\S.*))?")
 # The kinds of Keep a Changelog, as a heading names one — its first word, after an emoji or a mark: `### Added`,
 # `### ✨ Added`, `### fixed (CLI)`; `### Notes: nothing removed` names none.
 KINDS = re.compile(r"^[\W_]*(added|changed|deprecated|removed|fixed|security)\b", re.IGNORECASE)
@@ -78,9 +79,9 @@ def unreleased(text: str) -> Dict[str, List[str]]:
             continue
         heading = KIND.fullmatch(line)
         if heading:
-            named = KINDS.search(heading.group("kind"))
-            kind = "Breaking" if BREAKING_KIND.search(heading.group("kind")) else \
-                named.group(1).capitalize() if named else heading.group("kind")
+            words = heading.group("kind") or ""
+            named = KINDS.search(words)
+            kind = "Breaking" if BREAKING_KIND.search(words) else named.group(1).capitalize() if named else words
             continue
         entry = ENTRY.fullmatch(line) if read.item and not read.nested else None
         if entry and kind is not None:
