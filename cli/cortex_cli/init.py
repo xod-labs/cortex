@@ -42,6 +42,8 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import List, NamedTuple, Optional, TextIO, Tuple
 
+from cortex_core import cascade
+from cortex_core import project as grammar
 from cortex_core.project import is_theme
 
 from . import config, console, store, sync
@@ -499,6 +501,14 @@ def _services(options: argparse.Namespace, root: Path, out: TextIO, err: TextIO)
     return [service_path(name) for name in names]
 
 
+def _team_s_error(error: Exception) -> str:
+    """The team's file's own error — it does not parse, cannot be read, or its grammar refuses it — and its remedy:
+    removing cortex.toml, the developer's own at a 2.B root, loses it and changes nothing of this. A file that cannot
+    be read — not a file, a link that leads nowhere, a folder this user cannot search — holds no conflict to fix."""
+    how = "make it a file you can read" if ": cannot be read — " in str(error) else "a conflict a pull left in it, say"
+    return f"{error}\ncortex init reads {config.TEAM_NAME}: fix it — {how} — then run cortex init again"
+
+
 def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> None:
     root = Path(display(os.path.normpath(os.path.join(cwd, options.dir) if options.dir else cwd)))
     personality = not options.no_personality
@@ -536,15 +546,39 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     try:
         project = config.load(str(root)) if existing_project else None
     except config.ConfigError as error:
+        if str(error).startswith(f"{config.TEAM_NAME}:"):         # the team's file's own error
+            raise InitError(_team_s_error(error))
         raise InitError(f"{error}\ncortex init keeps an existing {config.PROJECT_FILE}: fix it, or remove it to "
                         "start over")
     # As the sync's own check (#310, #325): a link sync from a checkout replaces a link that leads nowhere.
     links = (mode or (project.sync if project else None)) == "link"
     sync.existing_entry(root / sync.LINK, the_store, project or _blank(root), replaces=options.source is not None and links,
                         pinned=project is not None)
-    # A project keeps the version it pins — never another, older or newer; a new one takes this
-    # binary's. A version newer than this binary is refused here.
-    version = project.version if project else the_store.own
+    # A new project beside a team's file takes the team's version, and leaves out of cortex.toml what
+    # the file sets (ADR-013 §3.8, step 4): a version from the binary would put a developer ahead of
+    # the team on their first init.
+    team_data = None
+    if project is None:
+        try:
+            team_data = cascade.read_team(str(root))
+            if isinstance(team_data, cascade.Unreadable):
+                raise grammar.ProjectFileError(team_data.error)
+            if team_data is not None:
+                grammar.check_team(team_data, config.TEAM_NAME)
+        except grammar.ProjectFileError as error:
+            raise InitError(_team_s_error(error))
+    locks = {key: team_data[key] for key in team_data.get("locked", ())} if team_data else \
+        {key: setting.value for key, setting in project.settings.settings.items() if setting.locked} if project else {}
+    flags = {"theme": theme if options.theme is not None or options.no_personality else None, "sync": mode,
+             "claude_access": options.claude_access}
+    for key, value in flags.items():
+        if value is not None and key in locks and locks[key] != value:
+            raise InitError(f"{key} is locked to {config.toml_value(locks[key])} by {config.TEAM_NAME} — the team's "
+                            "choice, which an option does not undo")
+    team_pins = bool(team_data) and "version" in team_data
+    # A project keeps the version it reads — never another, older or newer; a new one takes the team's,
+    # or this binary's. A version newer than this binary is refused here.
+    version = project.version if project else store.Version(team_data["version"]) if team_pins else the_store.own
     if options.source:
         # A contributor's checkout (§3.5, --from): its templates and its spec, no version checked.
         spec = Path(os.path.abspath(options.source))
@@ -556,8 +590,16 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         the_store.ensure(version)
         spec = the_store.path(version)
         described = f"Cortex {version}"
+    # The bootstrap is committed: it follows the team's version, never a developer's try (ADR-013 §3.10).
+    pinned = project.team_version if project else version
+    templates_spec = spec
+    if not options.source and pinned != version:
+        the_store.ensure(pinned)
+        templates_spec = the_store.path(pinned)
+    team_theme = team_data.get("theme") if team_data else None
+    chosen = options.theme is not None or options.no_personality
     if project is None and theme is None:
-        theme = "h2g2"
+        theme = team_theme or "h2g2"
     # A theme Cortex ships, or one of the project's own, in its agents/personalities/.
     own_themes = root / "agents" / "personalities"
     if theme not in (None, "none") and not any((base / theme).is_dir()
@@ -579,31 +621,39 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
 
     # cortex.toml: a new one, or only the keys the options name.
     if project is None:
-        values = {"version": str(version), "theme": theme, **({"sync": mode} if mode else {}),
-                  **({"claude_access": True} if claude_access else {})}
+        values = {**({} if team_pins else {"version": str(version)}),
+                  **({} if team_theme is not None and not chosen else {"theme": theme}),
+                  **({"sync": mode} if mode else {}), **({"claude_access": True} if claude_access else {})}
     else:
         values = {**({"theme": theme} if theme is not None and theme != project.theme else {}),
                   **({"sync": mode} if mode and mode != project.sync else {}),
                   **({"claude_access": claude_access}
                      if claude_access is not None and claude_access != project.claude_access else {})}
-    project_text = config.render_project(str(root), values) if values else None
-    personality = (theme if theme is not None else project.theme) != "none"
+    project_text = config.render_project(str(root), values) if values or project is None else None
+    personality = (theme if theme is not None else project.team_theme) != "none"
     if not options.source:
-        # cortex.lock, read as sync reads it: a spec it does not name, or a file that is no lock,
-        # stops init here, before its first write — as sync stops before its own.
-        sync.check_lock(str(root), version, the_store, out)
+        # The lock, read as sync reads it: a spec it does not name, or a file that is no lock, stops
+        # init here, before its first write — as sync stops before its own. Beside the file the
+        # version comes from: the team's, in its folder (ADR-013 §3.4); none for a local try.
+        where = config.lock_of(project) if project else \
+            (str(root / config.TEAM_FOLDER), config.TEAM_LOCK_FILE, config.TEAM_LOCK_NAME) if team_pins else \
+            (str(root), config.LOCK_FILE, config.LOCK_FILE)
+        if where is not None:
+            sync.check_lock(where[0], version, the_store, out, name=where[1])
 
     # Now the writes.
     root.mkdir(parents=True, exist_ok=True)
     if project_text is not None:
         config.write_text(str(root / config.PROJECT_FILE), project_text)
     if project is None:
-        out.write(f"✓ {config.PROJECT_FILE}: Cortex {version}, theme {theme}\n")
+        given = [key for key in ("version", "theme") if key not in values]
+        out.write(f"✓ {config.PROJECT_FILE}: Cortex {version}, theme {theme}"
+                  + (f" — {' and '.join(given)} from {config.TEAM_NAME}" if given else "") + "\n")
     elif values:
         shown = ", ".join(f"{key} = {config.toml_value(value)}" for key, value in values.items())
-        out.write(f"✓ {config.PROJECT_FILE}: {shown} — the rest kept, at Cortex {version}\n")
+        out.write(f"✓ {config.PROJECT_FILE}: {shown} — the rest kept, at Cortex {pinned}\n")
     else:
-        out.write(f"✓ {config.PROJECT_FILE} kept, at Cortex {version}\n")
+        out.write(f"✓ {config.PROJECT_FILE} kept, at Cortex {pinned}\n")
 
     # The spec, where the project finds it — then what git must ignore, asked of git once
     # cortex/ has its final form: a copy turned into a link is a file to git.
@@ -627,7 +677,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     else:
         sync._notes(root, spec_mode, err)
 
-    templates = spec / "templates"
+    templates = templates_spec / "templates"
     # Without --workspace, a workspace's instructions file stays a workspace's (#329): no option names the other
     # layout, and the marker says the one the file was written for, as `cortex upgrade` reads it.
     kept_workspace = not options.workspace and instructions_file is not None and instructions_file.is_file() \

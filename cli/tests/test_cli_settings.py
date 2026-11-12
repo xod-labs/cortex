@@ -560,7 +560,9 @@ class SameAsBeforeTests(SettingsTestCase):
         self.assertEqual(snapshot(project), before)
         self.assertEqual(set(before), {"cortex.toml", "cortex.local.toml", "cortex.lock"})
         local = before["cortex.local.toml"].decode()
-        self.assertEqual([line.split(" =")[0] for line in local.splitlines() if " = " in line], ["theme", "spec"])
+        # synced, for a project whose team's version is 1.8.0 or later — this suite's (ADR-013 §3.1).
+        self.assertEqual([line.split(" =")[0] for line in local.splitlines() if " = " in line],
+                         ["theme", "spec", "synced"])
 
 
 if __name__ == "__main__":

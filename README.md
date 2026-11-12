@@ -183,11 +183,28 @@ If no alias is mentioned, Cortex infers the service from the active file context
 | the bootstrap file | yes | `CLAUDE.md`, `AGENTS.md`, … — what your AI tool reads first |
 | `project-overview.md`, `project-context.md` | yes | your project's vision and stack — per service, too, in a workspace |
 | `agents/` | yes | your overlays, if any |
-| `cortex.local.toml` | no — git-ignored | `spec`, where the spec is on this machine; your own `theme` and `claude_access`, which win over the team's |
+| `agents/cortex.team.toml`, `agents/cortex.team.lock` | yes, in the team's repository | the team's settings — its `version`, `theme`, `sync`, `claude_access` and the keys it locks — and the lock of its version ([the team's file](#the-teams-file)) |
+| `cortex.local.toml` | no — git-ignored | `spec`, where the spec is on this machine; your own `theme` and `claude_access`, which win over the team's; a `version` you try; `synced`, what `cortex sync` read |
 | `cortex/` | no — git-ignored | the link or the copy, in `link` or `copy` mode |
 | `.claude/settings.local.json` | no — git-ignored | where `cortex sync` lets Claude Code read the store, with `claude_access` |
 
-A workspace root that is no git repository — a folder holding the services' repositories — has nowhere to commit `cortex.toml`: each developer runs `cortex init --workspace` in their own root instead of `cortex sync`.
+A workspace root that is no git repository — a folder holding the services' repositories — has nowhere to commit `cortex.toml`: each developer runs `cortex init --workspace` in their own root instead of `cortex sync`, unless the team pins its version in its own `agents/` repository, with the team's file.
+
+### The team's file
+
+`agents/cortex.team.toml`, in the team's folder and committed in the team's repository, gives every project that reads the folder the team's settings ([ADR-013](docs/adr/ADR-013-configuration-cascade.md)) — read once the team's version is 1.8.0 or later:
+
+```toml
+version = "1.8.0"
+theme = "h2g2"
+claude_access = false
+locked = ["claude_access"]
+```
+
+- **The version.** At a root no repository holds, the team's file's `version` is the team's, and its lock, `agents/cortex.team.lock`, sits beside it; one commit there moves every teammate. A committed `cortex.toml` that pins a version keeps its own, behind the team's if it likes; one without `version` follows the team's file.
+- **A try.** A `version` in your `cortex.local.toml` — `cortex upgrade --local VERSION` writes it — is read when it is higher than the team's, never lower: a version to try before you propose it. It has no lock, and every `cortex sync` says you are ahead; at or below the team's, it changes nothing, and `cortex upgrade --local` with the team's version removes it. `cortex sync --locked`, in CI, checks the team's version and its lock, never a try.
+- **The other keys** are defaults: `cortex.toml`'s and yours win over them. A key the file lists in `locked` takes the team's value, with a warning at every sync, and `cortex validate --strict` fails; a flag against it is refused. `version` is never locked: moving it is the team's matter, and a developer may try a later one.
+- **`claude_access` locks to `false` only.** A team may forbid a permission, never grant one on a developer's machine: locked to `false`, Claude Code asks before it reads the spec, whatever you set; locked to `true`, it would read it without asking over a developer who declined — so that lock is refused.
 
 ### Coming from a git submodule or clone
 
@@ -252,7 +269,9 @@ Puts the version `cortex.toml` pins in the store — from the binary itself when
 
 ```text
 cortex upgrade [VERSION] [--dry-run] [--force] [--instructions-file PATH] [--branch NAME] [--commit --message MESSAGE]
-cortex upgrade --all [VERSION] [--dry-run] [--force] [--branch NAME] [--commit --message MESSAGE]
+cortex upgrade --team [VERSION] [--dry-run] [--force] [--branch NAME] [--commit --message MESSAGE]
+cortex upgrade --local VERSION [--dry-run] [--force]
+cortex upgrade --all [--team] [VERSION] [--dry-run] [--force] [--branch NAME] [--commit --message MESSAGE]
 ```
 
 Moves the project to `VERSION`, or to the binary's own version — never down to it: a project pinned to a newer version moves down only when `VERSION` names it. It puts the target in the store, then says what changes — the roles, capabilities, personalities and workflows added, removed and changed, the templates, and where the release notes are — and checks the project's overlays against the target: an overlay that fails stops it, having changed nothing. Then it writes the bootstrap file again when nobody changed it and the target's template differs — one your team adapted is kept, and the command names `cortex init --force` — writes `version` in `cortex.toml`, and syncs, which rewrites `cortex.lock`. If anything fails, `cortex.toml`, `cortex.lock` and the bootstrap file are put back as they were. It ends with what to commit — at a root in no git repository, that its files are committed nowhere. Run on the version already pinned, it finishes what an upgrade cut short left.
@@ -266,10 +285,14 @@ With no `VERSION`, it also says when a release newer than the binary is out — 
 | `--force` | move the project even if its overlays fail against the target |
 | `--instructions-file PATH` | the bootstrap file to write again, when it is no known tool's |
 | `--all` | every project of the registry, in name order, to the same target |
+| `--team` | move the team's file's version, and its lock, in `agents/` — with no `VERSION`, to this cortex's version, never below the team's pin — a source checkout or a development build serves no release, and the pin is moved from a released cortex; the overlays of the projects that follow it checked before a move; at the pin, with its lock, nothing moves, and `--commit` commits what a run before left of the file and its lock — without it, the lock alone is written; `--branch` and `--commit` act in the team's repository, and `--commit` commits nothing where the file holds changes of yours besides its version, or is not committed yet and holds more, and says so; a project that follows the file is synced, and its untouched bootstrap written again, left for you to commit |
+| `--local` | try `VERSION` here, in `cortex.local.toml`: no committed file is written; at or below the team's version, the try is removed |
 | `--branch NAME` | create and switch to the branch `NAME` in each project that is a git work tree, once its checks pass and before its first write — none for a project with nothing to write, nor where git ignores every file written; a project already on `NAME` is written there, and one where `NAME` exists while it is on another branch is refused. Nothing is stashed |
 | `--commit --message MESSAGE` | commit, in each project the upgrade wrote files in — moved, or finished on its pinned version — those files and nothing else, with `MESSAGE` — required: your team's commit convention is its own. A project where `cortex.toml`, or a bootstrap file the upgrade wrote, held changes of yours before it — staged or not — gets no commit, and the command says so; the lock, written whole from the pin, does not count, and a file it wrote outside the work tree is left out, and named where it is, to commit there. Nothing is pushed |
 
-**`--all`** gives each registered project the upgrade above. A project that is not `ok` in `cortex project list` is skipped, and said; the release check asks once. A project that refuses — overlays that fail, a sync that refuses, a pin newer than the binary — does not stop the others. The command ends with one line per project — moved, already on the target, refused and why, skipped and why — and what each must commit, by path, and exits 1 if any project refused — one skipped does not. An empty registry moves nothing, and exits 0; a `VERSION` this cortex does not serve is refused once, before any project. Nothing is committed without `--commit`, and the command says so; with it, a project outside git, one whose `cortex.toml` git does not track, and one where git ignores a file the upgrade wrote are said, and nothing is committed there, while a commit git refuses — a hook, say — is that project's refusal, its upgrade done, and its files stay staged. Without git on `PATH`, `--branch` and `--commit` are refused before anything changes. `--dry-run` creates no branch, and `--force` is passed to each project. `--instructions-file` names one project's file, and is refused with `--all`. Interrupted — Ctrl-C — it still ends with its summary: the project cut short, which may be half written, its branch if one was made, and the projects not reached; it exits 130. The same command again finishes the project cut short, and names the files a run before it left to commit — `git status` there says what.
+**A project that follows the team's file** — its `cortex.toml` holds no committed `version`, an uncommitted one at a 2.B root included — is moved by `--team`, or tried with `--local`: a plain `cortex upgrade VERSION` there is refused, naming both, and with no `VERSION` it finishes what an upgrade cut short left. During a try, a plain upgrade writes `cortex.toml`, `cortex.lock` and the bootstrap from the version it moves, never from the try's, and `cortex init` writes the bootstrap from the team's version.
+
+**`--all`** gives each registered project the upgrade above — a project that follows its team's file is skipped, and said, exit 0; `--all --team` moves each project's team's file instead, skipping a project with none, or that pins its own version. A project that is not `ok` in `cortex project list` is skipped, and said; the release check asks once. A project that refuses — overlays that fail, a sync that refuses, a pin newer than the binary — does not stop the others. The command ends with one line per project — moved, already on the target, refused and why, skipped and why — and what each must commit, by path, and exits 1 if any project refused — one skipped does not. An empty registry moves nothing, and exits 0; a `VERSION` this cortex does not serve is refused once, before any project. Nothing is committed without `--commit`, and the command says so; with it, a project outside git, one whose `cortex.toml` git does not track, and one where git ignores a file the upgrade wrote are said, and nothing is committed there, while a commit git refuses — a hook, say — is that project's refusal, its upgrade done, and its files stay staged. Without git on `PATH`, `--branch` and `--commit` are refused before anything changes. `--dry-run` creates no branch, and `--force` is passed to each project. `--instructions-file` names one project's file, and is refused with `--all`. Interrupted — Ctrl-C — it still ends with its summary: the project cut short, which may be half written, its branch if one was made, and the projects not reached; it exits 130. The same command again finishes the project cut short, and names the files a run before it left to commit — `git status` there says what.
 
 ### `cortex self-update`
 

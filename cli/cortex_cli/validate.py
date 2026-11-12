@@ -15,11 +15,18 @@ A spec of a known version is also checked against ``cortex.lock`` (ADR-010 §3.4
 lock of another version, a spec whose digest is not the lock's. Warnings, by the version rule of
 ADR-008 §9 — a project of 1.3 has no lock — which ``--strict`` makes errors. A checkout synced
 with ``--from`` has no version, and no lock.
+
+Where the team's version is 1.8.0 or later (ADR-013 §3.11), each file's version is first checked
+against what ``cortex sync`` recorded — a bump pulled and not synced refuses, as a spec of another
+version does — then the spec against the version it recorded as read. The lock checked is the one
+beside the file that version comes from: none for a developer's try in ``cortex.local.toml``. A key
+the team's file locks, set otherwise, and the default team's folder left empty, are warnings.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -69,27 +76,67 @@ def _spec_path(root: str, spec: str) -> str:
     return spec if os.path.isabs(spec) else f"{root}/{spec}"
 
 
-def lock_warnings(project: config.Project, base: str, files: Optional[Dict[str, str]] = None) -> List[Tuple[str, str, str]]:
-    """What ``cortex.lock`` says of the spec at ``base``, a spec of the pinned version — a copy's
-    digest from its manifest, ``files``, checked already against the copy."""
+def lock_warnings(project: config.Project, base: str, files: Optional[Dict[str, str]] = None,
+                  origin: Optional[str] = None, version: Optional[store.Version] = None) -> List[Tuple[str, str, str]]:
+    """What the lock says of the spec at ``base``, a spec of ``version`` — the version read, by
+    default — from ``origin``: ``cortex.lock``, or the team's beside its file, none for a local try
+    (ADR-013 §3.4). A copy's digest from its manifest, ``files``, checked already against the copy."""
+    where = config.lock_of(project, origin)
+    if where is None:
+        return []
+    directory, name, shown_name = where
+    version = version or project.version
+    pins = config.PROJECT_FILE if shown_name == config.LOCK_FILE else config.TEAM_NAME
+    # The lock of a version a plain sync does not read — the team's, or the committed pin's, synced with --locked
+    # beside a try — is written by the upgrade that resumes it, named with the version (ADR-013 §3.4): a plain
+    # `cortex sync` reads the try and leaves it, and a plain `cortex upgrade` would move a pin of the project's own.
+    writer = f"`cortex upgrade {version}`" if version != project.version else "`cortex sync`"
     try:
-        lock = config.load_lock(project.root)
+        lock = config.load_lock(directory, name, writer=writer)
     except config.ConfigError as error:
-        return [(config.LOCK_FILE, "LOCK_INVALID", str(error))]
-    commit = "" if sync.in_no_repository(project.root) else ", then commit it"     # committed nowhere (ADR-008 §9)
+        return [(shown_name, "LOCK_INVALID", str(error))]
+    commit = "" if sync.in_no_repository(directory) else ", then commit it"     # committed nowhere (ADR-008 §9)
+    # The team's lock in a folder this user cannot write: the sync only warns of it here (ADR-013 §3.4). A
+    # prediction: on Windows, os.access does not read a folder's ACL.
+    fix = (f"{config.TEAM_FOLDER}/ cannot be written here — a {writer} where it can be writes it, committed in "
+           "the team's repository") if shown_name == config.TEAM_LOCK_NAME and not os.access(directory, os.W_OK) \
+        else f"run {writer}{commit}"
     if lock is None:
-        return [(config.LOCK_FILE, "LOCK_MISSING", f"no cortex.lock — run `cortex sync`{commit}")]
-    if lock.version != project.version:
-        return [(config.LOCK_FILE, "LOCK_STALE", f"cortex.lock names Cortex {lock.version}, and cortex.toml pins "
-                 f"{project.version} — run `cortex sync`{commit}")]
+        return [(shown_name, "LOCK_MISSING", f"no {shown_name} — {fix}")]
+    if lock.version != version:
+        return [(shown_name, "LOCK_STALE", f"{shown_name} names Cortex {lock.version}, and {pins} pins "
+                 f"{version} — {fix}")]
     try:
         actual = store.digest_of(files) if files is not None else store.digest(Path(base))
     except store.StoreError as error:      # a version removed from the store meanwhile
-        return [(config.LOCK_FILE, "LOCK_DIGEST", f"{error} — run `cortex sync`")]
+        return [(shown_name, "LOCK_DIGEST", f"{error} — run `cortex sync`")]
     if actual != lock.digest:
-        return [(config.LOCK_FILE, "LOCK_DIGEST", f"the spec synced is {actual}, and cortex.lock names {lock.digest} — "
+        return [(shown_name, "LOCK_DIGEST", f"the spec synced is {actual}, and {shown_name} names {lock.digest} — "
                  "run `cortex sync`, which puts it in the store again")]
     return []
+
+
+ROLES = {"team": config.TEAM_NAME, "project": config.PROJECT_FILE, "local": config.LOCAL_FILE}
+
+
+def _recorded(project: config.Project) -> Optional[str]:
+    """What, of the files' versions, is not what ``cortex sync`` recorded — ``None`` when all are
+    (ADR-013 §3.11): the test the bootstrap gives the assistant, by plain equality."""
+    candidates = project.settings.candidates if project.settings is not None else {}
+    for role, name in ROLES.items():
+        now, then = candidates.get(role), (project.synced or {}).get(role)
+        if now != then:
+            return (f"{name} {'pins Cortex ' + now if now else 'pins no version'}, and `cortex sync` recorded "
+                    f"{then or 'none'} — run `cortex sync`")
+    return None
+
+
+def _origin_of(project: config.Project, reads: str) -> Optional[str]:
+    """The file the version read comes from — the team's, or the developer's try."""
+    if reads == str(project.team_version):
+        return project.team_origin
+    found = project.developer_version
+    return found.origin if found is not None and reads == str(found.value) else None
 
 
 def roots(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]]]:
@@ -114,10 +161,17 @@ def roots(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]]]:
             raise RootsError(f"{config.LOCAL_FILE} names no spec yet — run `cortex sync`")
         if not os.path.isdir(base):
             raise RootsError(f"the spec {config.LOCAL_FILE} names, {shown(display(base))}, is not there — run `cortex sync`")
+        expected = str(project.version)
+        if project.synced is not None:
+            off = _recorded(project)
+            if off is not None:
+                raise RootsError(off)
+            expected = project.synced["reads"]
         synced = _synced_version(project.root, project.spec, base)
-        if synced and synced != str(project.version):
-            raise RootsError(f"{config.PROJECT_FILE} pins Cortex {project.version}, and the spec synced is {shown(synced)} "
-                             "— run `cortex sync`")
+        if synced and expected and synced != expected:
+            raise RootsError((f"{config.PROJECT_FILE} pins Cortex {project.version}" if project.synced is None else
+                              f"`cortex sync` recorded Cortex {expected}") +
+                             f", and the spec synced is {shown(synced)} — run `cortex sync`")
         copy = Path(project.root) / sync.LINK
         marker = sync.read_marker(copy) if project.spec == sync.LINK and not sync.is_link(copy) else None
         if marker is not None:
@@ -126,7 +180,19 @@ def roots(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]]]:
                 raise RootsError(f"{sync.LINK}/ no longer holds what sync copied — {len(off)} file(s) added, changed "
                                  f"or missing, {shown(off[0])} first: it would be validated against another spec. "
                                  "Run `cortex sync`, which says what to do")
-        return root, base, lock_warnings(project, base, marker.get("files") if marker else None) if synced else []
+        for note in sync.version_notes(project):
+            if "is locked by" not in note and "is not read" not in note:
+                sys.stderr.write(f"note: {note}\n")
+        warnings = [(config.TEAM_NAME, "LOCKED_KEY" if "is locked by" in note else "TEAM_NOT_READ", note)
+                    for note in (project.settings.notes if project.settings is not None else ())]
+        folder = sync._team_folder_note(project)
+        if folder is not None:
+            warnings.append((config.TEAM_FOLDER + "/", "TEAM_FOLDER_EMPTY", folder))
+        if synced:
+            origin = _origin_of(project, synced) if project.synced is not None else None
+            warnings += lock_warnings(project, base, marker.get("files") if marker else None,
+                                      origin or project.version_origin, store.Version(synced))
+        return root, base, warnings
     if sync.is_checkout(Path(cwd)) and os.path.isfile(os.path.join(cwd, "templates", "bootstrap-instructions.md")):
         return cwd, cwd, []
     hint = (" — a cortex/ submodule or clone is here: `cortex init` says how to leave it"

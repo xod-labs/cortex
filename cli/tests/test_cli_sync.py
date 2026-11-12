@@ -1023,11 +1023,11 @@ class ProjectFileTests(SyncTestCase):
 
     def test_a_bad_cortex_local_toml_is_refused(self):
         project = self.project()
-        (project / "cortex.local.toml").write_text('version = "1.0.0"\n', encoding="utf-8")
+        (project / "cortex.local.toml").write_text('pinned = "1.0.0"\n', encoding="utf-8")
         proc = self.sync(project)
         self.assertEqual(proc.returncode, 1)
-        self.assertIn('unknown key "version"', proc.err)
-        self.assertIn("theme, spec, claude_access and claude_entry only", proc.err)
+        self.assertIn('unknown key "pinned"', proc.err)
+        self.assertIn("version, theme, spec, claude_access, claude_entry and synced only", proc.err)
 
     def test_two_modes_at_once_are_a_bad_argument(self):
         proc = self.sync(self.project(), "--link", "--copy")
@@ -1073,6 +1073,14 @@ class ValidateTests(SyncTestCase):
                 self.assert_ok(self.sync(project))
                 (project / "cortex.toml").write_text(f'version = "9.9.8"\ntheme = "h2g2"\nsync = "{mode}"\n',
                                                      encoding="utf-8")
+                proc = self.validate(project)
+                self.assertEqual(proc.returncode, 2)
+                # ADR-013 §3.11: the bump pulled, said against what sync recorded — first.
+                self.assertIn("cortex.toml pins Cortex 9.9.8, and `cortex sync` recorded 9.9.7 — run `cortex sync`",
+                              proc.err)
+                local = project / "cortex.local.toml"                      # without the record, as 1.7.0 said it
+                local.write_text("".join(line for line in local.read_text(encoding="utf-8").splitlines(True)
+                                         if not line.startswith("synced")), encoding="utf-8")
                 proc = self.validate(project)
                 self.assertEqual(proc.returncode, 2)
                 self.assertIn('pins Cortex 9.9.8, and the spec synced is "9.9.7"', proc.err)
