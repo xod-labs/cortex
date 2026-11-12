@@ -226,10 +226,10 @@ def resolve(project_data: Optional[Mapping], local_data: Optional[Mapping], mach
 
 
 def _toml(path: str) -> Dict:
-    return tomllib.loads(_read_file(path).decode("utf-8-sig"))    # a byte order mark, as Notepad writes one
+    return tomllib.loads(read_file(path).decode("utf-8-sig"))    # a byte order mark, as Notepad writes one
 
 
-def _read_file(path: str) -> bytes:
+def read_file(path: str) -> bytes:
     """The bytes of the file at ``path`` — ``OSError`` for what is no file, as ``open`` raises it for a
     directory. Opened without blocking, then checked: a named pipe at the path of a file Cortex reads,
     opened as a file, would wait for a writer, and every command with it."""
@@ -241,6 +241,9 @@ def _read_file(path: str) -> bytes:
         if not stat.S_ISREG(mode):
             raise OSError(errno.EINVAL, "not a file", path)
         return fh.read()
+
+
+_read_file = read_file
 
 
 def _checked_toml(path: str, name: str) -> Dict:
