@@ -385,12 +385,26 @@ class BumpTests(unittest.TestCase):
         self.assertEqual(prepared(changelog("### Fixed\n2. x\nlazy\n      h\ntext\n   - 💥 y\n", "2.3.4")), "2.3.5")
         # A quote holding a heading, a fence, a break or code holds no paragraph: the line below starts one, which a
         # line of - makes a heading — no entry.
-        for quoted in ("# h", "```", "---", "    code", "- ```", "> # h"):
+        for quoted in ("# h", "```", "~~~", "---", "___", "    code", "- ```", "> # h", "<!-- c", "-", "1. -", ">     x"):
             with self.subTest(quoted=quoted):
                 self.assertEqual(prepared(changelog(f"### Changed\n> {quoted}\ntext\n-\n", "2.3.4")), "2.3.5")
-        for quoted in ("text", "- a", "> b"):
+        for quoted in ("text", "- a", "> b", "#tag", "__", "* *x", ">    x"):
             with self.subTest(quoted=quoted):
                 self.assertEqual(prepared(changelog(f"### Changed\n> {quoted}\ntext\n-\n", "2.3.4")), "2.4.0")
+
+    def test_a_quote_nested_thousands_of_times_is_read_in_one_pass(self):
+        # The counter-review of the fourth pass: each quote or item nested in a quote's line was read again from its
+        # start, by recursion — a line of a thousand `> ` raised RecursionError, in the CLI and in the release gate.
+        start = time.monotonic()
+        for nested in ("> " * 5000, "> " + "1. " * 5000, "> " + "- " * 5000, ">- " * 5000):
+            with self.subTest(nested=nested[:6]):
+                self.assertEqual(prepared(changelog(f"### Changed\n{nested}text\nlazy\n-\n", "2.3.4")), "2.4.0")
+                self.assertEqual(prepared(changelog(f"### Changed\n{nested}# h\ntext\n-\n", "2.3.4")), "2.3.5")
+                self.assertEqual(prepared(changelog(f"### Changed\n{nested}```\ntext\n-\n", "2.3.4")), "2.3.5")
+        # A thematic break past the items: a break; one more character after it, a paragraph's text.
+        self.assertEqual(prepared(changelog("### Changed\n> " + "1. " * 5000 + "* * *\ntext\n-\n", "2.3.4")), "2.3.5")
+        self.assertEqual(prepared(changelog("### Changed\n> " + "- " * 5000 + "x\ntext\n-\n", "2.3.4")), "2.4.0")
+        self.assertLess(time.monotonic() - start, 5)
 
     def test_an_html_block_other_than_a_comment_is_read_as_markdown(self):
         # A limit the reader states: CommonMark holds no Markdown in a <pre>, which is read here — its section too.
