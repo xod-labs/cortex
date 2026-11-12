@@ -192,6 +192,13 @@ def roots(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]]]:
             origin = _origin_of(project, synced) if project.synced is not None else None
             warnings += lock_warnings(project, base, marker.get("files") if marker else None,
                                       origin or project.version_origin, store.Version(synced))
+        # The team's bootstrap behind its version's template (ADR-013 §3.10) — told from the store, never fetched.
+        from . import upgrade       # upgrade imports sync, which this module's importers reach first
+        for path, note in upgrade.behind(root, project, None, fetch=False):
+            if path is None:
+                sys.stderr.write(f"note: {note}\n")
+            else:
+                warnings.append((Path(os.path.relpath(path, root)).as_posix(), "BOOTSTRAP_BEHIND", note))
         return root, base, warnings
     if sync.is_checkout(Path(cwd)) and os.path.isfile(os.path.join(cwd, "templates", "bootstrap-instructions.md")):
         return cwd, cwd, []

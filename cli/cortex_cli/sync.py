@@ -794,19 +794,30 @@ def unswap(target: Path, aside: Optional[Path]) -> None:
 
 def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
          claude_access: Optional[bool] = None, notes: bool = True, locked: bool = False,
-         announce: bool = True, registers: bool = True, said: Collection[str] = ()) -> None:
+         announce: bool = True, registers: bool = True, bootstraps: Optional[bool] = None,
+         said: Collection[str] = ()) -> None:
     """Sync the project at or above ``cwd``. ``notes`` off, what git ignores is left to the
     caller — ``cortex init`` writes .gitignore once ``cortex/`` has its final form. ``locked``,
     ``cortex.lock`` is never written: a sync that would write it stops. ``announce`` off, the
     project is not named: ``cortex upgrade`` has named it already. ``registers`` off, the project
-    is not registered: ``cortex init`` registers it once all of it succeeded, not only its sync. ``said``:
-    the notes of the versions the caller said already — ``cortex upgrade``'s — not said again."""
+    is not registered: ``cortex init`` registers it once all of it succeeded, not only its sync.
+    ``bootstraps`` — `cortex sync`'s own run, and ``cortex upgrade --local``'s — writes the developer's
+    own bootstrap again and says whether the team's is behind (ADR-013 §3.10), still under the
+    project's lock: ``True`` writes the developer's own whatever the team's file, ``False`` only
+    where there is one. ``said``: the notes of the versions the caller said already —
+    ``cortex upgrade``'s — not said again."""
     root = config.find_project(cwd)
     if root is None:
         raise SyncError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
                         "a Cortex project")
     with project_lock(Path(root), err):
         _sync(root, mode, source, out, err, claude_access, notes, locked, announce, said)
+        if bootstraps is not None and source is None and not locked:
+            from . import upgrade       # upgrade imports this module: the bootstraps are its
+            project = config.load(root)
+            upgrade.own_bootstraps(root, project, store.Store(), out, err, forced=bootstraps)
+            for path, note in upgrade.behind(root, project, None, fetch=True):
+                err.write(f"note: {note}\n" if path is None else f"note: {upgrade._shown_path(path, root)} is behind: {note}\n")
     if registers:
         register(root, out, err)
 
@@ -1358,6 +1369,18 @@ def _not_ignored(root: Path, name: str, shown: str) -> Optional[str]:
     return f"git could not be asked whether it ignores {shown}, and Cortex cannot tell from .gitignore that it does"
 
 
+def developers_own(path: Path) -> bool:
+    """Whether the bootstrap at ``path`` is the developer's own (ADR-013 §3.1): one git ignores, or one in no
+    repository — a link asked of the file it resolves to, in that file's repository; a file not yet written,
+    of the first folder there is on its way. Any other is the team's."""
+    real = Path(os.path.realpath(path))
+    folder = real.parent
+    while not folder.is_dir() and folder != folder.parent:
+        folder = folder.parent
+    # git matches its patterns against `/`: a Windows relative path would match none of them.
+    return in_no_repository(folder) or ignored(folder, Path(os.path.relpath(real, folder)).as_posix()) is True
+
+
 def _notes(root: Path, mode: str, err: TextIO) -> None:
     # A .gitignore that is a symbolic link, which git does not read: no line added to it would count (#329).
     linked = ".gitignore is a symbolic link, which git does not read: make it a file, with " \
@@ -1400,7 +1423,7 @@ def run(args: List[str]) -> int:
         parser.error("--locked checks cortex.lock, and --from reads none: a checkout has no version")
     try:
         sync(working_directory(), options.mode, options.source, sys.stdout, sys.stderr, options.claude_access,
-             locked=options.locked)
+             locked=options.locked, bootstraps=False)
     except (config.ConfigError, store.StoreError, SyncError) as error:
         return failed("cortex sync", str(error))
     except OSError as error:

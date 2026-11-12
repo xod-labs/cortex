@@ -134,7 +134,7 @@ cortex init --no-personality        # neutral professional agents (no theme)
 
 `cortex init` writes `cortex.toml` — the binary's own version and the team's theme — adds `cortex.local.toml` to `.gitignore`, and runs `cortex sync`, which puts the spec in the store, writes `cortex.lock`, and writes `spec` in `cortex.local.toml`. It then writes the bootstrap file, `project-overview.md` and `project-context.md`, each when it is missing. Fill those two in: they are what the agents know of your project.
 
-The bootstrap file is in two parts. **Cortex's block** runs from the top to the line `<!-- cortex:bootstrap end -->`: `cortex init --force` and `cortex upgrade` write it again, so keep its marker line as it is — `<!-- cortex:bootstrap layout=single format=2 digest=… -->` under the title, from which `cortex init` reads the layout and format, and `cortex upgrade`, by its digest, whether anyone changed the block. **Below the end marker, the file is yours**: write there what your tool must read first, and every later Cortex keeps it byte for byte ([ADR-012](docs/adr/ADR-012-bootstrap-block.md)). A rule of your own machine goes in your tool's user-level instructions (`~/.claude/CLAUDE.md`, …) or in your `project-context.md`; a team convention, in `project-context.md` — `agents/project-context.md` in a workspace.
+The bootstrap file is in two parts. **Cortex's block** runs from the top to the line `<!-- cortex:bootstrap end -->`: `cortex init --force` and `cortex upgrade` write it again, so keep its marker line as it is — `<!-- cortex:bootstrap layout=single format=3 digest=… -->` under the title, from which `cortex init` reads the layout and format, and `cortex upgrade`, by its digest, whether anyone changed the block. **Below the end marker, the file is yours**: write there what your tool must read first, and every later Cortex keeps it byte for byte ([ADR-012](docs/adr/ADR-012-bootstrap-block.md)). A rule of your own machine goes in your tool's user-level instructions (`~/.claude/CLAUDE.md`, …) or in your `project-context.md`; a team convention, in `project-context.md` — `agents/project-context.md` in a workspace.
 
 Then talk to the Prompt Manager in your AI tool — `@Oolon` with the H2G2 theme, `@prompt-manager` without one:
 
@@ -473,6 +473,20 @@ cortex validate --strict
 
 The PowerShell lines for a Windows runner are in [extending-layers.md](docs/extending-layers.md#-validating-your-overlays). On a runner that outlives its jobs, set `CORTEX_NO_REGISTER=1` so that its registry does not collect every checkout.
 
+**A project with a team's file** pins its version there, or in a committed `cortex.toml` that wins over it ([ADR-013](docs/adr/ADR-013-configuration-cascade.md) §3.13): the job installs the latest release, asks it the team's version — `cortex config version --locked` answers whatever the version — then installs that one. Check out a team's folder that is its own repository, a submodule, with the project:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/xod-labs/cortex/main/install.sh | sh                   # the latest release
+export PATH="$HOME/.cortex/bin:$PATH"
+version="$(cortex config version --locked)"                                                      # the team's version
+[ -n "$version" ] || exit 1                                                                      # none: the job stops
+curl -fsSL https://raw.githubusercontent.com/xod-labs/cortex/main/install.sh | sh -s -- "$version"
+cortex sync --locked
+cortex validate --strict
+```
+
+**The team's repository checked alone** is checked out at `agents/` in a scratch project whose `cortex.toml` sets nothing the team's file gives — an empty file — and the same lines run there.
+
 ### Add an overlay
 
 Teach an agent your project's conventions without forking Cortex: mirror the base file's path under `agents/` — or `{service}/agents/` for one service — start the file with an `OVERLAY` header whose `Base:` names the base file, `cortex/agents/roles/engineering/lead-backend.md` say, tag its sections `(additive)`, and run `cortex validate`. [Getting Started](docs/getting-started.md#override-a-base-layer-for-your-project-the-cascade) has a short example; [Extending layers](docs/extending-layers.md) the header, the four layers, what cannot be overridden, and more examples; [Creating a theme](docs/creating-a-theme.md), a personality of your own.
@@ -486,7 +500,8 @@ The bootstrap file has the assistant keep the machine in step with the project b
 | no `cortex.local.toml`, or no `spec` in it | runs `cortex sync` at the project root — the workspace root in workspace mode |
 | a `spec` naming a directory that does not exist — `cortex prune` removed the version, or the store was emptied | runs `cortex sync`, which gets the version back |
 | a spec of another version than `cortex.toml`'s — a teammate moved it | runs `cortex sync`, and goes no further until it succeeded |
-| `cortex sync` saying this cortex is too old for the project — a newer pin, or a later lock format | runs the command the refusal names — `cortex self-update X.Y.Z`, or the install script's from a binary before 1.4.0 — then `cortex sync` again |
+| from 1.8.0, a file's `version` — `cortex.toml`'s, `cortex.local.toml`'s, the team's file's — or the spec's, other than what `cortex sync` recorded in `synced` | runs `cortex sync`, once: a plain comparison, nothing to run while they match ([ADR-013](docs/adr/ADR-013-configuration-cascade.md) §3.10) |
+| `cortex sync` saying this cortex is too old for the project — a newer pin, or a later lock format | runs the command the refusal names — `cortex self-update X.Y.Z`, or the install script's from a binary before 1.4.0 — then `cortex sync` again, once; still too old, it tells you and goes no further |
 | no `cortex` command, nor `cortex-ai`, on `PATH` or in `~/.cortex/bin` | tells you to install it, as [Installation](#-installation) says, and goes no further |
 
 - **Which command.** `cortex-ai` when there is one; otherwise `cortex`, once `cortex --version` printed `cortex` followed by a version — anything else is another program, whose `sync` it must not run. It looks in `~/.cortex/bin` (`%USERPROFILE%\.cortex\bin`) too when its tool's `PATH` has neither: an editor started before the install changed `PATH`.

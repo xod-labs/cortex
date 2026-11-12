@@ -8,6 +8,7 @@ README's CI how-to copies extending-layers' lines whole.
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -110,6 +111,72 @@ class CiLinesTests(unittest.TestCase):
                 else:
                     self.assertEqual(proc.returncode, 0, proc.stderr)
                     self.assertEqual(proc.stdout.strip(), expected)
+
+
+def team_block():
+    """The README's lines for a project with a team's file (ADR-013 §3.13)."""
+    text = README.read_text(encoding="utf-8")
+    return next(found for found in re.findall(r"```bash\n(.*?)```", text, re.S) if "config version --locked" in found)
+
+
+@unittest.skipIf(os.name == "nt" or not os.path.exists("/bin/sh"), "a POSIX shell's lines")
+class TeamCiLinesTests(unittest.TestCase):
+    """The README's CI lines for a team's file, run with this checkout's ``cortex``: the install script stood in
+    for, the version it is asked for recorded."""
+
+    def setUp(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from release_fixture import FakeRelease
+
+        self.tmp = Path(tempfile.mkdtemp(prefix="cortex-docs-team-")).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.release = FakeRelease(("1.7.0",))
+        self.addCleanup(self.release.close)
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        self.log = self.tmp / "installed"
+        repo = DOCS.parent
+        call = ("import sys; sys.path[:0] = [sys.argv.pop(1), sys.argv.pop(1)]; "
+                "from cortex_cli.main import main; sys.exit(main())")
+        self.env = {"PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin", "HOME": str(self.tmp),
+                    "CORTEX_HOME": str(self.tmp / "cortex-home"), "CORTEX_SOURCE_VERSION": "9.9.9",
+                    "CORTEX_RELEASES_URL": self.release.url, "CORTEX_NO_REGISTER": "1", "CORTEX_NO_UPDATE_CHECK": "1"}
+        scripts = {"curl": "#!/bin/sh\nexit 0\n",                                  # nothing downloaded
+                   "sh": f'#!/bin/sh\necho "$*" >> "{self.log}"\n',                # the install script: recorded
+                   "cortex": f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -I -S -c {shlex.quote(call)} "
+                             f"{shlex.quote(str(repo / 'core'))} {shlex.quote(str(repo / 'cli'))} \"$@\"\n"}
+        for name, text in scripts.items():
+            (self.bin / name).write_text(text, encoding="utf-8")
+            (self.bin / name).chmod(0o755)
+
+    def run_lines(self, root, code=0):
+        proc = subprocess.run(["/bin/sh", "-c", team_block()], cwd=root, env=self.env, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, code, proc.stdout + proc.stderr)
+        return self.log.read_text(encoding="utf-8").splitlines()
+
+    def test_a_project_whose_version_is_the_team_s_file_s(self):
+        root = self.tmp / "team"
+        (root / "agents").mkdir(parents=True)
+        (root / "cortex.toml").write_text("", encoding="utf-8")                   # sets nothing the team's file gives
+        (root / "agents" / "cortex.team.toml").write_text('version = "9.9.9"\ntheme = "h2g2"\n', encoding="utf-8")
+        subprocess.run([str(self.bin / "cortex"), "sync"], cwd=root, env=self.env, check=True,
+                       capture_output=True)                                       # its lock, as the team commits it
+        self.assertEqual(self.run_lines(root), ["", "-s -- 9.9.9"])
+
+    def test_a_project_of_1_7_0(self):
+        root = self.tmp / "old"
+        root.mkdir()
+        (root / "cortex.toml").write_text('version = "1.7.0"\ntheme = "h2g2"\n', encoding="utf-8")
+        subprocess.run([str(self.bin / "cortex"), "sync"], cwd=root, env=self.env, check=True, capture_output=True)
+        self.assertEqual(self.run_lines(root), ["", "-s -- 1.7.0"])
+
+    def test_no_version_read_stops_the_job_before_the_second_install(self):
+        root = self.tmp / "refused"
+        (root / "agents").mkdir(parents=True)
+        (root / "cortex.toml").write_text("", encoding="utf-8")
+        (root / "agents" / "cortex.team.toml").write_text("version = \n", encoding="utf-8")   # refused: no version
+        self.assertEqual(self.run_lines(root, code=1), [""])
 
 
 if __name__ == "__main__":

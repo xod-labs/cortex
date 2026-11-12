@@ -683,8 +683,24 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     kept_workspace = not options.workspace and instructions_file is not None and instructions_file.is_file() \
         and written_for_workspace(instructions_file.read_bytes())
     workspace = options.workspace or kept_workspace
-    bootstrap = templates / ("bootstrap-instructions-workspace.md" if workspace else "bootstrap-instructions.md")
-    template = bootstrap.read_bytes()
+    layout = "bootstrap-instructions-workspace.md" if workspace else "bootstrap-instructions.md"
+    team_personality = personality
+
+    def as_forced(path: Path, name: str) -> Tuple[bytes, bool]:
+        """The template ``name`` and the personality `cortex init --tool X --force` writes ``path`` with. The
+        developer's own instructions file follows the version this machine reads, and its theme, from a team's
+        version of 1.8.0 (ADR-013 §3.10): before it, as 1.7.0 writes it — git asked only where they are not the
+        team's. Any other file, the team's."""
+        if project is not None and not grammar.before_team(str(project.team_version)):
+            # The theme as read once cortex.toml is written: a local theme, or a lock, wins over --theme still.
+            mine = config.load(str(root)).active_theme != "none"
+            if (templates_spec != spec or mine != team_personality) and sync.developers_own(path):
+                return (spec / "templates" / name).read_bytes(), mine
+        return (templates / name).read_bytes(), team_personality
+
+    template = (templates / layout).read_bytes()
+    if instructions_file is not None:
+        template, personality = as_forced(instructions_file, layout)
     if instructions_file is None:
         out.write("✓ the instructions files are kept — several are there; --tool names the one to write\n")
     elif instructions_file.exists() and not options.force:
@@ -750,14 +766,16 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             if other == instructions_file or not other.is_file():
                 continue
             content = other.read_bytes()
-            found = kept_bootstrap(content, template)
+            # Told against the template --force writes it with: the developer's own follows their version.
+            found = kept_bootstrap(content, as_forced(other, layout)[0])
             if found is None:
                 continue
             if not found.force:
                 again = "kept as it is"
             elif found.layout and not workspace and content == forced(
-                    other, (templates / "bootstrap-instructions-workspace.md").read_bytes(), personality, content):
-                # A workspace's file as --force, which keeps its layout (#329), would write it: no command to name.
+                    other, *as_forced(other, "bootstrap-instructions-workspace.md"), content):
+                # A workspace's file as --force, which keeps its layout (#329), would write it: no command to name —
+                # judged as that run writes this file, the developer's own with their theme and version.
                 err.write(f"note: {rel} is there and was kept: {found.phrase}, up to date as one\n")
                 continue
             elif found.layout:
