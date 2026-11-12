@@ -35,8 +35,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
-from typing import Dict, List, Optional, Set, TextIO, Tuple
+from typing import Dict, List, Optional, Pattern, Set, TextIO, Tuple
 
 from cortex_core.validate import shown
 
@@ -965,13 +966,106 @@ def gitignore_lines(text: str) -> List[str]:
 
 
 def _negations(lines: List[str], name: str) -> bool:
-    """Whether a line of ``lines`` is a negation that can match ``name``: a glob — ``*``, ``?``, ``[`` — or an escape,
-    which only git reads, or one whose last component is the path's own, compared as a repository that ignores case
-    compares it. Any other negation — ``!.gitkeep`` — takes back another path, never this one."""
-    last = name.rstrip("/").rsplit("/", 1)[-1].casefold()
-    return any(line.startswith("!") and (any(char in line for char in "*?[\\")
-                                         or line[1:].rstrip("/").rsplit("/", 1)[-1].casefold() == last)
-               for line in lines)
+    """Whether a line of ``lines`` is a negation that can match ``name``, read as git reads a pattern of the root's
+    .gitignore (``_pattern``): one with a ``/`` but at its end against the path from the root, any other against its
+    last component too — and against both, over-matching being the safe side —, compared as a repository that ignores
+    case compares it, and a name written decomposed as the same name composed (macOS writes them so). A negation
+    Cortex cannot read is one that may: only git can tell. Any other — ``!.gitkeep``, ``!*.d.ts`` — takes back
+    another path, never this one."""
+    path = _folded(name.rstrip("/"))
+    last = path.rsplit("/", 1)[-1]
+    for line in lines:
+        if not line.startswith("!"):
+            continue
+        pattern = _pattern(line[1:])
+        if pattern is None or pattern.fullmatch(path) or pattern.fullmatch(last):
+            return True
+    return False
+
+
+def _folded(text: str) -> str:
+    """``text`` as a repository that ignores case compares it, composed: a letter with its accent and the letter
+    followed by a combining accent are one."""
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", text).casefold())
+
+
+def _pattern(text: str) -> Optional[Pattern[str]]:
+    """A .gitignore pattern, its ``!`` left out, as git's wildmatch reads it, case folded (``_folded``): ``*`` and
+    ``?`` within one component, ``**`` as a whole component across any number of them, a bracket expression, a
+    backslash that makes the next character a literal — one of the root's .gitignore, its leading ``/`` and a final
+    ``/`` set aside: a final ``/`` keeps it to directories, and over-matching is the safe side. ``None`` for what only
+    git reads: a character class such as ``[:alpha:]``, a bracket never closed, a backslash at the end."""
+    text = _folded(text)
+    if text.endswith("/"):
+        text = text[:-1]
+    if text.startswith("/"):
+        text = text[1:]
+    out, at = [], 0
+    while at < len(text):
+        char = text[at]
+        if char == "\\":
+            if at + 1 == len(text):
+                return None
+            out.append(re.escape(text[at + 1]))
+            at += 2
+        elif char == "*":
+            end = at
+            while end < len(text) and text[end] == "*":
+                end += 1
+            whole = end - at >= 2 and (at == 0 or text[at - 1] == "/") and (end == len(text) or text[end] == "/")
+            if whole and end < len(text):
+                out.append("(?:.*/)?")          # `**/`: any number of folders, none included
+                end += 1
+            else:
+                out.append(".*" if whole else "[^/]*")
+            at = end
+        elif char == "?":
+            out.append("[^/]")
+            at += 1
+        elif char == "[":
+            found = _bracket(text, at + 1)
+            if found is None:
+                return None
+            out.append(found[0])
+            at = found[1]
+        else:
+            out.append(re.escape(char))
+            at += 1
+    try:
+        return re.compile("".join(out), re.DOTALL)
+    except re.error:                            # a range backwards, say: git's to read
+        return None
+
+
+def _bracket(text: str, at: int) -> Optional[Tuple[str, int]]:
+    """The bracket expression of ``text`` that starts at ``at``, past its ``[``, as a regular expression that never
+    matches ``/``, and where it ends; ``None`` for a class such as ``[:alpha:]``, or one never closed."""
+    negated = at < len(text) and text[at] in "!^"
+    at += negated
+    members, first = [], True
+    while at < len(text):
+        char = text[at]
+        if char == "]" and not first:
+            return f"(?!/)[{'^' if negated else ''}{''.join(members)}]", at + 1
+        if char == "[" and text.startswith("[:", at):
+            return None
+        if char == "\\":
+            if at + 1 == len(text):
+                return None
+            char, at = text[at + 1], at + 1
+        if at + 2 < len(text) and text[at + 1] == "-" and text[at + 2] != "]":
+            high = text[at + 2]
+            if high == "\\":
+                if at + 3 == len(text):
+                    return None
+                high, at = text[at + 3], at + 1
+            members.append(f"{re.escape(char)}-{re.escape(high)}")
+            at += 3
+        else:
+            members.append(re.escape(char))
+            at += 1
+        first = False
+    return None
 
 
 def _named(lines: List[str], wanted: Set[str], name: str) -> bool:
