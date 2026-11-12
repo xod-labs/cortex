@@ -9,20 +9,25 @@ ADR extends, and a typo that silently does nothing is the failure they must not 
 
 ``cortex.lock``, next to ``cortex.toml`` and committed, is the spec the project resolved: its
 version and its digest (ADR-010 §3.2). ``cortex sync`` writes it whole; nobody edits it.
+
+What a project reads of each key — the local file's over ``cortex.toml``'s — is the core's
+resolution (``cortex_core.cascade``, ADR-013 §3.1), the one the runtime reads with too.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
 import tomllib
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
-from cortex_core import project
+from cortex_core import cascade, project
 from cortex_core.project import LOCAL_FILE, LOCK_FILE, MODES, PROJECT_FILE  # noqa: F401 — part of this module's API
 
+from . import store
 from .semver import Version
 
 PROJECT_HEADER = "# Written by `cortex init`. Committed: the Cortex version this project uses, and the team's theme.\n"
@@ -35,7 +40,7 @@ class ConfigError(Exception):
     """A configuration file cortex refuses — the message names the file and the key."""
 
 
-@dataclass
+@dataclass(frozen=True)
 class Project:
     root: str                  # the directory holding cortex.toml, as the shell names it
     version: Version
@@ -46,15 +51,26 @@ class Project:
     claude_access: Optional[bool] = None        # cortex.toml's, when set
     local_claude_access: Optional[bool] = None  # cortex.local.toml's, which wins
     claude_entry: Optional[str] = None          # the entry sync keeps in Claude Code's settings
+    settings: Optional[cascade.Resolution] = None   # the project's keys, each with its origin, as load resolved them
+
+    def _settings(self) -> cascade.Resolution:
+        """The resolution ``load`` made — or, of a project another reader built, the one its fields make."""
+        return self.settings if self.settings is not None else _resolved(self)
 
     @property
     def active_theme(self) -> str:
-        return self.local_theme or self.theme
+        return str(self._settings().value("theme"))
 
     @property
     def active_claude_access(self) -> Optional[bool]:
         """``None`` while neither file sets it: Claude Code's settings are then left alone."""
-        return self.claude_access if self.local_claude_access is None else self.local_claude_access
+        return self._settings().value("claude_access")     # type: ignore[return-value]
+
+    def with_claude_access(self, value: bool) -> "Project":
+        """This project with this developer's ``claude_access`` — ``cortex sync --claude-access``, written
+        with ``spec`` — over ``cortex.toml``'s."""
+        changed = dataclasses.replace(self, local_claude_access=value, settings=None)
+        return dataclasses.replace(changed, settings=_resolved(changed))
 
     def spec_directory(self) -> Optional[str]:
         """The directory ``spec`` names: absolute as written, or relative to the project root."""
@@ -62,6 +78,15 @@ class Project:
             return None
         spec = self.spec
         return spec if os.path.isabs(spec) else f"{self.root}/{spec}"
+
+
+def _resolved(found: Project) -> cascade.Resolution:
+    data = {**({"version": str(found.version)} if found.version is not None else {}), "theme": found.theme,
+            **({"sync": found.sync} if found.sync else {}),
+            **({"claude_access": found.claude_access} if found.claude_access is not None else {})}
+    local = {**({"theme": found.local_theme} if found.local_theme else {}),
+             **({"claude_access": found.local_claude_access} if found.local_claude_access is not None else {})}
+    return cascade.resolve(data, local, {}, {}, machine=False)
 
 
 @dataclass
@@ -95,21 +120,38 @@ def _read(path: str) -> Dict:
 
 
 def load(root: str) -> Project:
-    """Read and validate both files of the project at ``root`` — with the core's grammar, which
-    the runtime reads them with too."""
-    data = _read(os.path.join(root, PROJECT_FILE))
-    local = {}
+    """Read and validate both files of the project at ``root`` — with the core's reader and grammar,
+    which the runtime reads them with too — and resolve its keys once."""
     try:
-        project.check_project(data)
-        if os.path.isfile(os.path.join(root, LOCAL_FILE)):
-            local = _read(os.path.join(root, LOCAL_FILE))
-            project.check_local(local)
+        data, found = cascade.read_project(root)
     except project.ProjectFileError as error:
         raise ConfigError(str(error))
-    return Project(root=root, version=Version(data["version"]), theme=data["theme"], sync=data.get("sync"),
-                   local_theme=local.get("theme"), spec=local.get("spec"),
+    local = found or {}
+    settings = cascade.resolve(data, local, {}, {}, machine=False)
+    return Project(root=root, version=Version(str(settings.value("version"))), theme=data["theme"],
+                   sync=data.get("sync"), local_theme=local.get("theme"), spec=local.get("spec"),
                    claude_access=data.get("claude_access"), local_claude_access=local.get("claude_access"),
-                   claude_entry=local.get("claude_entry"))
+                   claude_entry=local.get("claude_entry"), settings=settings)
+
+
+def loose_pin(root: str) -> Optional[Tuple[str, Version]]:
+    """The file that pins the project's version and that version, read before any other key is
+    checked (ADR-013 §3.8, step 1) — ``None`` when none reads."""
+    found = cascade.loose_version(root)
+    return None if found is None else (found[0], Version(found[1]))
+
+
+def too_new(root: str, own: Version) -> Optional[str]:
+    """Why this cortex is too old for the project at ``root`` — or ``None`` — from the version read
+    before any other key (ADR-013 §3.8, steps 1–2): a key of a later version is then said as the
+    version it comes with, which ``cortex self-update`` brings, not as a key this cortex does not
+    know. Said as the store says it, which the bootstrap's rule acts on."""
+    found = loose_pin(root)
+    if found is None or not store.too_old_for(found[1], own):
+        return None
+    name, version = found
+    return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
+            f"    {store.update_command(version)}")
 
 
 def local_spec(root: str) -> Optional[str]:

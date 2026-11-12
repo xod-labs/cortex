@@ -325,6 +325,21 @@ class OptionTests(InitTestCase):
                 self.assertIn("no theme name", proc.err)
                 self.assertEqual(list(self.project.iterdir()), [])
 
+    @unittest.skipUnless(HAS_GIT, "needs git")
+    def test_a_hook_s_git_dir_names_no_repository_for_a_root_in_none(self):
+        # A hook exports GIT_DIR: git asked of the root by its folder, not of that repository — a root in no repository
+        # is said to be in none, and gets no .gitignore, which would keep nothing out of any commit.
+        if not init_command.sync.in_no_repository(self.project.parent):
+            self.skipTest("needs a temporary directory in no git repository — set TMPDIR outside one")
+        other = self.tmp / "other"
+        subprocess.run(["git", "init", "-q", str(other)], check=True)
+        self.env = dict(self.env, PATH=os.path.dirname(shutil.which("git")), GIT_DIR=str(other / ".git"))
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("is in no git repository", proc.err)
+        self.assertFalse((self.project / ".gitignore").exists())
+        self.assertFalse((other / ".gitignore").exists())
+
     @harness.outside_a_repository
     def test_a_root_that_is_no_repository_is_said_and_gets_no_gitignore(self):
         proc = self.init()

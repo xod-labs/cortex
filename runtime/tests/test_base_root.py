@@ -181,6 +181,45 @@ class QueuedRunTests(SyncedProjectTestCase):
         self.assertIn("Cortex 9.9.9", record.error)
 
 
+class CascadeTests(SyncedProjectTestCase):
+    """The pin is the core's resolution, the team's (ADR-013 §3.1, §3.12): cortex.local.toml left out,
+    and no git asked — the container's read-only mount of the host's files may make git refuse."""
+
+    def test_the_developer_s_local_file_and_git_are_not_read(self):
+        from cortex_runtime.base import read_pin
+
+        (self.project / "cortex.local.toml").write_text('theme = "none"\nspec = "/host/path"\n', encoding="utf-8")
+        refused = mock.Mock(side_effect=AssertionError("the runtime asked git"))
+        with mock.patch("subprocess.run", refused), mock.patch("subprocess.Popen", refused), \
+                mock.patch("shutil.which", refused):
+            pin = read_pin(self.project)
+        self.assertEqual((pin.version, pin.theme), ("9.9.9", "h2g2"))
+
+    @unittest.skipIf(os.name == "nt", "a read-only directory, as POSIX permissions make it")
+    def test_a_read_only_mount_resolves_what_the_host_s_cortex_config_locked_prints(self):
+        import json
+        import subprocess
+
+        from cortex_runtime.base import read_pin
+
+        repo = Path(__file__).resolve().parents[2]
+        call = ("import sys; sys.path[:0] = [sys.argv.pop(1), sys.argv.pop(1)]; "
+                "from cortex_cli.main import main; sys.exit(main())")
+        env = {"CORTEX_HOME": str(self.home), "CORTEX_SOURCE_VERSION": "9.9.9", "CORTEX_NO_REGISTER": "1",
+               "CORTEX_NO_UPDATE_CHECK": "1", "PATH": "", "HOME": str(self.home)}
+        proc = subprocess.run([sys.executable, "-I", "-S", "-c", call, str(repo / "core"), str(repo / "cli"),
+                               "config", "--locked", "--json"], cwd=self.project, env=env, capture_output=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        host = json.loads(proc.stdout)["settings"]
+        mode = self.project.stat().st_mode
+        for path in (self.project / "cortex.toml", self.project):
+            path.chmod(0o555 if path.is_dir() else 0o444)
+        self.addCleanup(self.project.chmod, mode)
+        self.addCleanup((self.project / "cortex.toml").chmod, 0o644)
+        pin = read_pin(self.project)
+        self.assertEqual((pin.version, pin.theme), (host["version"]["value"], host["theme"]["value"]))
+
+
 class WithoutCortexTomlTests(unittest.TestCase):
     def test_the_base_stays_under_the_project(self):
         self.assertIsNone(base_root_for(FIXTURE))

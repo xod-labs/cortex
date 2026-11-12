@@ -47,7 +47,7 @@ from typing import Callable, Dict, List, Optional, TextIO, Tuple
 from cortex_core import validate as overlay_validator
 from cortex_core.project import shown
 
-from . import config, init, registry, self_update, store, sync
+from . import config, init, machine, registry, self_update, store, sync
 from .paths import display, working_directory
 from .semver import Version
 from .version import VERSION
@@ -379,8 +379,8 @@ class _NewerRelease(threading.Thread):
 
 def _asking(wanted: Optional[str]) -> Optional[_NewerRelease]:
     """The question of a release newer than this binary: asked with no ``VERSION``, once per command,
-    unless ``CORTEX_NO_UPDATE_CHECK`` is set."""
-    if wanted is not None or os.environ.get("CORTEX_NO_UPDATE_CHECK"):
+    unless the machine's ``update_check`` is off — ``CORTEX_NO_UPDATE_CHECK`` set, or ``config.toml``."""
+    if wanted is not None or not machine.setting(store.cortex_home, "update_check").value:
         return None
     return _NewerRelease(Version(VERSION))
 
@@ -457,15 +457,21 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     if root is None:
         raise UpgradeError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
                            "a Cortex project")
-    project = config.load(root)
     the_store = store.Store()
-    current, target = project.version, Version(wanted) if wanted else the_store.own
-    if wanted is None and current > the_store.own:
+    pinned = config.loose_pin(root)
+    if wanted is None and pinned is not None and pinned[1] > the_store.own:
         # The default moves a project to this cortex's version, never down: a teammate's older binary
-        # would otherwise undo the team's pin.
-        raise UpgradeError(f"this project uses Cortex {current}, newer than this cortex, {the_store.own} — nothing was "
-                           f"changed. Update this cortex to serve it:\n    {store.update_command(current)}\nor move the "
-                           f"project down to this cortex's version by naming it: cortex upgrade {the_store.own}")
+        # would otherwise undo the team's pin. Said from the version read before any key is checked,
+        # whatever key of a later version the file holds (ADR-013 §3.8). A source checkout or a
+        # development build is refused too, as in 1.7.0: passing, it would move the project down to
+        # its own 0.0.0-dev.
+        name, newer = pinned
+        raise UpgradeError(f"this project uses Cortex {newer}, which its {name} pins, newer than this cortex, "
+                           f"{the_store.own} — nothing was changed. Update this cortex to serve it:\n"
+                           f"    {store.update_command(newer)}\nor move the project down to this cortex's version by "
+                           f"naming it: cortex upgrade {the_store.own}")
+    project = config.load(root)
+    current, target = project.version, Version(wanted) if wanted else the_store.own
     _served(the_store, target, f"cortex upgrade {target}")
     if announce:
         out.write(f"Project: {display(root)}\n")
@@ -623,7 +629,7 @@ def _git(root: str, *args: str, timeout: Optional[float] = 30) -> subprocess.Com
         raise UpgradeError("git is not on PATH")
     try:
         return subprocess.run([git, "-C", root, *args], capture_output=True, encoding="utf-8", errors="replace",
-                              stdin=subprocess.DEVNULL, timeout=timeout)
+                              stdin=subprocess.DEVNULL, timeout=timeout, env=sync.git_environment())
     except (OSError, subprocess.SubprocessError) as error:
         raise UpgradeError(f"git {args[0]} could not run — {error}")
 

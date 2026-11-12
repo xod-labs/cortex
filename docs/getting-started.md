@@ -363,6 +363,26 @@ A project this machine never synced since 1.5.0 is not registered, and loses its
 
 A project it did not see — not registered, or under none of the directories — gets its version back at its next `cortex sync`, checked against its `cortex.lock`.
 
+### Your machine's settings — `config.toml` and `cortex config`
+
+Three settings are this machine's, for every project of its user ([ADR-013](adr/ADR-013-configuration-cascade.md) §3.7): where releases are downloaded from, whether `cortex upgrade` says a newer release is out, and whether `init`, `sync` and `upgrade` keep the registry. Write them in `config.toml`, in the Cortex home — `~/.cortex/config.toml` by default:
+
+```toml
+releases_url = "https://mirror.example.com/cortex/releases"   # a mirror of the releases, over https
+update_check = false                                          # no question of the latest release
+register = false                                              # a throwaway machine: no registry
+```
+
+The variables `CORTEX_RELEASES_URL`, `CORTEX_NO_UPDATE_CHECK` and `CORTEX_NO_REGISTER` go over the file, as they always did. A key the file does not know, or a value of the wrong type, is a warning — the rest is read, and no command stops on it.
+
+`cortex config` prints each setting of the project and of the machine, and where it comes from — a file, a variable, or `default`. `cortex config --locked` leaves your `cortex.local.toml` out: it gives the version and the lock `cortex sync --locked` checks in CI, and what the runtime reads — your own `theme` and `claude_access` still apply to your machine:
+
+```bash
+cortex config                   # each setting, its value and its origin
+cortex config theme             # one value alone
+cortex config --locked --json   # the team's resolution, as JSON
+```
+
 ### Add a capability (contributing to cortex)
 
 Capabilities live in `cortex/agents/capabilities/`. To add a *new* capability to the framework (PR upstream), work in a clone of the Cortex repository — the spec in the store is read-only — and test it in a host project with `cortex sync --from PATH`:

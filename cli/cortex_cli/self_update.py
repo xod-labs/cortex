@@ -191,8 +191,8 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
         # Integrity against the host the releases come from, not authenticity (ADR-010 §3.7):
         # another host than GitHub's says so, before it is downloaded from.
         if base != store.DEFAULT_RELEASES_URL:
-            err.write(f"note: downloading from {base}, set by CORTEX_RELEASES_URL — the binary is checked against "
-                      "that host's SHA256SUMS, not against GitHub's releases\n")
+            err.write(f"note: downloading from {base}, set by {store.releases_origin()} — the binary is checked "
+                      "against that host's SHA256SUMS, not against GitHub's releases\n")
 
     sums: Optional[bytes] = None
     if wanted is None:

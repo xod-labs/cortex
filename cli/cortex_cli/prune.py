@@ -121,7 +121,7 @@ def versions_of(root: Path, err: TextIO) -> List[str]:
     used = [str(project.version)]
     spec = project.spec_directory()
     if spec is not None and os.path.isdir(spec):
-        synced = validate._synced_version(project, spec)
+        synced = validate._synced_version(project.root, project.spec, spec)
         if synced and synced not in used:
             used.append(synced)
     if refused is not None:

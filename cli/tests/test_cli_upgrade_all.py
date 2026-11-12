@@ -156,10 +156,11 @@ class AllTests(AllTestCase):
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assert_moved(alpha)
         self.assertEqual(snapshot(beta), before)
-        self.assertIn(f"cortex upgrade: this project uses Cortex 9.10.0, newer than this cortex, {OWN} — nothing was "
-                      "changed. Update this cortex to serve it:\n    cortex self-update 9.10.0\n", proc.err)
-        self.assertIn(f"  beta   refused: this project uses Cortex 9.10.0, newer than this cortex, {OWN} — nothing was "
-                      "changed. Update this cortex to serve it\n", self.summary(proc))
+        self.assertIn(f"cortex upgrade: this project uses Cortex 9.10.0, which its cortex.toml pins, newer than this "
+                      f"cortex, {OWN} — nothing was changed. Update this cortex to serve it:\n    cortex self-update "
+                      "9.10.0\n", proc.err)
+        self.assertIn(f"  beta   refused: this project uses Cortex 9.10.0, which its cortex.toml pins, newer than this "
+                      f"cortex, {OWN} — nothing was changed. Update this cortex to serve it\n", self.summary(proc))
 
     def test_a_version_named_moves_every_project_to_it_down_too(self):
         alpha, beta = self.make("alpha", OWN), self.make("beta", "9.10.0", synced=False)

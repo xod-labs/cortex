@@ -530,6 +530,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
 
     the_store = store.Store()
     existing_project = (root / config.PROJECT_FILE).is_file()
+    old = config.too_new(str(root), the_store.own) if existing_project and not options.source else None
+    if old is not None:
+        raise InitError(old)                # before any key is checked (ADR-013 §3.8)
     try:
         project = config.load(str(root)) if existing_project else None
     except config.ConfigError as error:

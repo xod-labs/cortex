@@ -15,7 +15,7 @@ write — a submodule, a clone, any other directory at ``cortex/`` is refused, i
 switching back to ``store`` removes the link or the copy it made, and nothing else.
 
 A sync that succeeded registers the project in the machine's ``projects.toml`` when it is not
-listed there, and says so once (ADR-011 §3.3) — unless ``CORTEX_NO_REGISTER`` is set.
+listed there, and says so once (ADR-011 §3.3) — unless the machine's ``register`` is off (ADR-013 §3.7).
 """
 
 from __future__ import annotations
@@ -41,14 +41,13 @@ from typing import Dict, List, Optional, Pattern, Set, TextIO, Tuple
 
 from cortex_core.validate import shown
 
-from . import claude, config, registry, store
+from . import claude, config, machine, registry, store
 from .paths import display, working_directory
 
 LINK = "cortex"
 MARKER = ".synced"
 MARKER_NOTE = "A read-only copy of the Cortex spec, written by `cortex sync`: run it again to change this copy, never edit it."
 STAGING = ".cortex-sync-"
-NO_REGISTER = "CORTEX_NO_REGISTER"     # set, and not empty: init, sync and upgrade leave the registry alone
 
 
 class SyncError(Exception):
@@ -166,13 +165,32 @@ def only_submodule(path: Path) -> bool:
     return paths == {path.name}
 
 
+# The variables that point git at one repository — a copy of what `git rev-parse --local-env-vars` lists (git
+# 2.43), which a hook exports — and those that change how a pathspec matches. Git asked about a project runs without
+# them, from the project's folder: a hook's GIT_DIR would make it answer of another repository. The configuration
+# given by GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS stays, as git keeps it itself on its way to another repository
+# (prepare_other_repo_env): a CI's identity, its safe.directory. The others stay too — the author's name, the
+# transport.
+GIT_LOCAL = frozenset({
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG",
+    "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
+    "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS",
+})
+
+
+def git_environment() -> Dict[str, str]:
+    """The environment git runs in, asked about a project: this process's, without ``GIT_LOCAL``."""
+    return {key: value for key, value in os.environ.items() if key.upper() not in GIT_LOCAL}
+
+
 def _git(root: str, *args: str) -> Optional[subprocess.CompletedProcess]:
     git = shutil.which("git")
     if git is None:
         return None
     try:
         return subprocess.run([git, "-C", root, *args], capture_output=True, encoding="utf-8", errors="replace",
-                              timeout=30)
+                              timeout=30, env=git_environment())
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -746,9 +764,9 @@ def register(root: str, out: TextIO, err: TextIO) -> None:
 
     A project listed already costs a read of the registry, without its lock, and no look at the
     other entries' directories: nothing is written, and nothing waits for another command's write.
-    ``CORTEX_NO_REGISTER``, set to anything but an empty value, leaves the registry alone, neither
-    read nor written."""
-    if os.environ.get(NO_REGISTER):
+    The machine's ``register`` off — ``CORTEX_NO_REGISTER`` set to anything but an empty value, or
+    ``register = false`` in ``config.toml`` — leaves the registry alone, neither read nor written."""
+    if not machine.setting(store.cortex_home, "register").value:
         return
     root = os.path.abspath(root)
     try:
@@ -796,13 +814,19 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
 
 def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
           claude_access: Optional[bool], notes: bool, locked: bool = False, announce: bool = True) -> None:
+    if source is None:
+        # A version newer than this cortex, said before any key is checked (ADR-013 §3.8) — `--from`
+        # checks no version, as before.
+        old = config.too_new(root, store.own_version())
+        if old is not None:
+            raise SyncError(old)
     project = config.load(root)
     if announce:
         out.write(f"Project: {display(root)}\n")
     if claude_access is not None:
         # This developer's choice, written with spec and kept for the next syncs: cortex.local.toml's
         # wins over the team's.
-        project.local_claude_access = claude_access
+        project = project.with_claude_access(claude_access)
     mode = mode or project.sync or "store"
     the_store = store.Store()
     target = Path(root) / LINK
@@ -1108,6 +1132,26 @@ def in_no_repository(root) -> bool:
                    for directory in (start, *map(str, Path(start).parents)))
 
 
+def committed(root) -> bool:
+    """Whether ``cortex.toml`` at ``root`` is committed (ADR-013 §3.1): git tracks it — ADR-011 §3.5's
+    test. Without git on ``PATH``, or with a git that refuses — a repository another user owns, say —
+    a ``.git`` at or above the root counts. A ``cortex.toml`` git does not track, in a repository, is
+    not committed: the developer's own. Git is asked of the root's own repository, without the variables
+    that point it at one (``GIT_LOCAL``) — a hook exports ``GIT_DIR``, which would make it another's —
+    and of the file's name as written, no pattern."""
+    git = shutil.which("git")
+    if git is not None:
+        try:
+            proc = subprocess.run([git, "-C", str(root), "ls-files", "--error-unmatch", "--",
+                                   f":(literal){config.PROJECT_FILE}"], capture_output=True, timeout=30,
+                                  env=git_environment())
+        except (OSError, subprocess.SubprocessError):
+            proc = None
+        if proc is not None and proc.returncode in (0, 1):
+            return proc.returncode == 0                     # 1: a pathspec git does not know — untracked
+    return not in_no_repository(root)
+
+
 def git_ignores(root: Path, name: str) -> Optional[bool]:
     """git's own answer, whether it ignores ``name`` in the project: ``None`` when there is no git to ask, or it
     refuses the repository — its owner, say — or there is none."""
@@ -1116,7 +1160,7 @@ def git_ignores(root: Path, name: str) -> Optional[bool]:
         return None
     try:
         proc = subprocess.run([git, "-C", str(root), "check-ignore", "-q", "--", name],
-                              capture_output=True, timeout=30)
+                              capture_output=True, timeout=30, env=git_environment())
     except (OSError, subprocess.SubprocessError):
         return None
     return proc.returncode == 0 if proc.returncode in (0, 1) else None

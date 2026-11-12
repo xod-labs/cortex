@@ -1070,8 +1070,8 @@ class PinAfterThisCortexTests(UpgradeTestCase):
         before = snapshot(project)
         proc = self.upgrade(project)
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-        self.assertIn(f"this project uses Cortex 9.10.0, newer than this cortex, {OWN} — nothing was changed. Update "
-                      "this cortex to serve it:\n    cortex self-update 9.10.0\n", proc.err)
+        self.assertIn(f"this project uses Cortex 9.10.0, which its cortex.toml pins, newer than this cortex, {OWN} — "
+                      "nothing was changed. Update this cortex to serve it:\n    cortex self-update 9.10.0\n", proc.err)
         self.assertIn(f"cortex upgrade {OWN}", proc.err)
         self.assertEqual(snapshot(project), before)
 
@@ -1134,6 +1134,20 @@ class NewerReleaseTests(UpgradeTestCase):
         self.assertNotIn("is out", proc.out)
         self.assertFalse([path for path in self.release.requested if path.startswith("/latest/")])
         self.env["CORTEX_NO_UPDATE_CHECK"] = ""         # empty is unset
+        self.assertIn(self.NOTICE, self.upgrade(project).out)
+
+    def test_update_check_off_in_the_machine_s_file_asks_for_no_release(self):
+        # ADR-013 §3.7: the machine's config.toml, which the variable goes over — and none turns it back on.
+        self.latest_is("99.0.0")
+        project = self.project(OWN)
+        self.home.mkdir(exist_ok=True)
+        (self.home / "config.toml").write_text("update_check = false\n", encoding="utf-8")
+        self.env["CORTEX_NO_UPDATE_CHECK"] = ""
+        proc = self.upgrade(project)
+        self.assert_ok(proc)
+        self.assertNotIn("is out", proc.out)
+        self.assertFalse([path for path in self.release.requested if path.startswith("/latest/")])
+        (self.home / "config.toml").write_text("update_check = true\n", encoding="utf-8")
         self.assertIn(self.NOTICE, self.upgrade(project).out)
 
     def test_offline_nothing_is_said(self):

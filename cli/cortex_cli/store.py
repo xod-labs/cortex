@@ -35,13 +35,14 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, Iterator, Optional
 
-from . import net
+from cortex_core.project import DEFAULT_RELEASES_URL  # noqa: F401 — part of this module's API
+
+from . import machine, net
 from .semver import FIRST_SPEC_ARCHIVE, Version
 from .version import VERSION
 
 SPEC_TREES = ("agents", "templates", "docs")
 SPEC_ARCHIVE = "cortex-spec.tar.gz"
-DEFAULT_RELEASES_URL = "https://github.com/xod-labs/cortex/releases"
 # The largest spec archive and SHA256SUMS a download accepts: a version is under a megabyte.
 MAX_ARCHIVE = 64 * 1024 * 1024
 MAX_SUMS = 1024 * 1024
@@ -58,14 +59,22 @@ def cortex_home() -> Path:
 
 
 def releases_url() -> str:
-    """Where releases are downloaded from — ``$CORTEX_RELEASES_URL``, as for the install scripts:
-    https, or http to this machine for tests."""
-    url = (os.environ.get("CORTEX_RELEASES_URL") or DEFAULT_RELEASES_URL).rstrip("/")
+    """Where releases are downloaded from — the machine's ``releases_url`` (ADR-013 §3.7):
+    ``$CORTEX_RELEASES_URL``, as for the install scripts, else ``config.toml`` in the Cortex home,
+    else GitHub's. https, or http to this machine for tests: refused otherwise, naming where it is
+    set."""
+    found = machine.setting(cortex_home, "releases_url")
+    url = str(found.value).rstrip("/")
     try:
         net.check_url(url)
     except net.DownloadError as error:
-        raise StoreError(f"CORTEX_RELEASES_URL: {error}")
+        raise StoreError(f"{found.origin}: {error}")
     return url
+
+
+def releases_origin() -> str:
+    """Where ``releases_url`` is set: the variable, the machine's file, or ``default``."""
+    return machine.setting(cortex_home, "releases_url").origin
 
 
 def known_specs() -> Dict[str, str]:
@@ -95,6 +104,27 @@ def listed_checksum(sums: str, name: str) -> Optional[str]:
         if len(fields) == 2 and fields[1].lstrip("*") == name:
             return fields[0].lower()
     return None
+
+
+def own_version() -> Version:
+    """This binary's version — what the version gate compares a project's with (ADR-013 §3.8): no
+    store to build, so no home to find, for a command that never needed one."""
+    return Version(VERSION)
+
+
+def development(version: Version) -> bool:
+    """A source checkout's version, ``0.0.0-dev``, or a development build's, ``0.0.0-dev.N`` — a
+    dispatch of the binary workflow builds one: no release, and no project pins it."""
+    return version.core == (0, 0, 0) and version.pre[:1] == ("dev",) and len(version.pre) <= 2 \
+        and all(part.isdigit() for part in version.pre[1:])
+
+
+def too_old_for(version: Version, own: Version) -> bool:
+    """Whether a binary of version ``own`` is too old for a project of ``version``, as the commands say
+    it before any key is checked (ADR-013 §3.8): ``version`` newer than ``own`` — but a source checkout
+    or a development build passes, its commands then going as 1.7.0's went: the store serves it what it
+    can, ``Store.check_served`` refusing the rest."""
+    return version > own and not development(own)
 
 
 def update_command(version: Version) -> str:

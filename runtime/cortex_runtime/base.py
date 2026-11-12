@@ -7,7 +7,9 @@ the runtime's container does not see. A project without ``cortex.toml`` keeps it
 always was, ``{root}/cortex``.
 
 ``cortex.toml`` is read with the core's grammar, the one ``cortex sync`` reads it with: a file one
-refuses, the other refuses too.
+refuses, the other refuses too. Its values are the core's resolution (ADR-013 §3.1) — the team's,
+which leaves the developer's ``cortex.local.toml`` out, and asks no git, which the container's
+read-only mount of another user's files may refuse (§3.12).
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from cortex_core import project
+from cortex_core import cascade, project
 
 
 @dataclass(frozen=True)
@@ -61,7 +63,8 @@ def read_pin(root: Path) -> Optional[Pin]:
         raise ValueError(f"{project.PROJECT_FILE} of this workspace cannot be read: {error}")
     except project.ProjectFileError as error:
         raise ValueError(f"{error} — cortex sync refuses this file too")
-    return Pin(version=data["version"], theme=data["theme"])
+    found = cascade.resolve(data, None, {}, {}, locked=True)
+    return Pin(version=str(found.value("version")), theme=str(found.value("theme")))
 
 
 def base_for(pin: Optional[Pin]) -> Optional[Path]:
