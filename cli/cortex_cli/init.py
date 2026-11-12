@@ -497,9 +497,10 @@ def _services(options: argparse.Namespace, root: Path, out: TextIO, err: TextIO)
 
 def _team_s_error(error: Exception) -> str:
     """The team's file's own error — it does not parse, cannot be read, or its grammar refuses it — and its remedy:
-    removing cortex.toml, the developer's own at a 2.B root, loses it and changes nothing of this."""
-    return (f"{error}\ncortex init reads {config.TEAM_NAME}: fix it — a conflict a pull left in it, say — then run "
-            "cortex init again")
+    removing cortex.toml, the developer's own at a 2.B root, loses it and changes nothing of this. A file that cannot
+    be read — not a file, a link that leads nowhere, a folder this user cannot search — holds no conflict to fix."""
+    how = "make it a file you can read" if ": cannot be read — " in str(error) else "a conflict a pull left in it, say"
+    return f"{error}\ncortex init reads {config.TEAM_NAME}: fix it — {how} — then run cortex init again"
 
 
 def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> None:

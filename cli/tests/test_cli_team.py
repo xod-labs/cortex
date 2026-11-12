@@ -2256,7 +2256,8 @@ class ThirdCodeReviewTests(TeamTestCase):
         proc = self.cortex(root, "init", "--tool", "claude")
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertIn(f"{TEAM}: cannot be read — Permission denied", proc.err)
-        self.assertIn(f"cortex init reads {TEAM}: fix it", proc.err)
+        self.assertIn(f"cortex init reads {TEAM}: fix it — make it a file you can read — then", proc.err)
+        self.assertNotIn("conflict", proc.err)
         self.assertFalse((root / "cortex.toml").exists())
         os.chmod(root / "agents", 0o755)
         self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
@@ -2482,6 +2483,36 @@ class FourthCodeReviewTests(TeamTestCase):
         self.assertIn(f"{TEAM} is not read: the team's version is 1.7.0, before 1.8.0", proc.err)
         self.assertEqual(self.cortex_within(root, "config", "version").out.strip(), "1.7.0")
 
+    @SOURCE
+    @unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")
+    @harness.outside_a_repository
+    def test_a_fresh_init_beside_a_team_s_file_that_cannot_be_read_names_no_conflict(self):
+        # No conflict to fix in what cannot be read — a directory, a link that leads nowhere, a named pipe: the
+        # remedy says to make it a file, which, followed, lets init run.
+        kinds = (("directory", "not a file"), ("nowhere", "a link that leads nowhere")) + \
+            ((("pipe", "not a file"),) if hasattr(os, "mkfifo") else ())
+        for kind, said in kinds:
+            with self.subTest(kind=kind):
+                root = self.tmp / f"fresh-{kind}"
+                (root / "agents").mkdir(parents=True)
+                if kind == "directory":
+                    (root / TEAM).mkdir()
+                elif kind == "nowhere":
+                    (root / TEAM).symlink_to(self.tmp / "gone.toml")
+                else:
+                    os.mkfifo(root / TEAM)
+                proc = self.cortex_within(root, "init", "--tool", "claude")
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"{TEAM}: cannot be read — {said}", proc.err)
+                self.assertIn(f"cortex init reads {TEAM}: fix it — make it a file you can read — then run cortex init "
+                              "again", proc.err)
+                self.assertNotIn("conflict", proc.err)
+                if kind == "directory":
+                    (root / TEAM).rmdir()
+                else:
+                    (root / TEAM).unlink()
+                (root / TEAM).write_text(f'version = "{OWN}"\n', encoding="utf-8")
+                self.assert_ok(self.cortex_within(root, "init", "--tool", "claude"))
 
 
 
