@@ -60,7 +60,7 @@ class TemplateTests(unittest.TestCase):
                              # self-update is followed by one sync only: no loop when nothing newer is out.
                              b"read the numbers before any `-`: `1.7.3` is below it, `1.8.0-rc.1` and `1.8.0-dev.2` "
                              b"are not", b"run `cortex self-update` \xe2\x80\x94 unless one already ran \xe2\x80\x94 then `cortex sync`, "
-                             b"once each. No `synced` still",
+                             b"once each, and, no `synced` still, `cortex --version` again",
                              b"then `cortex sync` again, once; when it still says so, tell the user, and go no further",
                              # A sync of a version moved that says too old falls through to that rule; a self-update
                              # that installed nothing is said, not read as a project before 1.8.0.
@@ -71,8 +71,8 @@ class TemplateTests(unittest.TestCase):
                              b"With `synced` there, a file's `version` \xe2\x80\x94 or its absence \xe2\x80\x94 that is not "
                              b"what it records for it",
                              b"when it leaves no `synced`, follow the **No `synced`** rule below, its sync already run;",
-                             b"No `synced` still \xe2\x86\x92 run `cortex --version` again: still below 1.8.0 \xe2\x86\x92 "
-                             b"the self-update installed nothing \xe2\x80\x94 tell the user, and go no further; otherwise",
+                             b"again: still below 1.8.0 \xe2\x86\x92 the self-update installed nothing \xe2\x80\x94 tell the user, and go no "
+                             b"further. A `cortex --version` of 1.8.0 or later, and no `synced` \xe2\x86\x92 the ",
                              b"`cortex sync`, once each; otherwise, or when it still refuses, tell the user",
                              # A sync that fails without `synced` reaches the rule that names what it says, or is
                              # told: a binary below the team's pin does not go on silently on the old spec.
@@ -80,9 +80,15 @@ class TemplateTests(unittest.TestCase):
                              b"says, or, when none names it, tell the user what it says, and go no further",
                              # A project before 1.8.0, alone, in step: no sync and no self-update to stop on. A spec of
                              # another version is in the condition: it falls to the sync, never through both rules.
-                             b"neither `cortex.local.toml` nor the team's file sets a `version`, and the spec is of that "
-                             b"version \xe2\x86\x92 the ", b"reads a version before 1.8.0: run nothing. **No `synced`** in "
-                             b"any other case, while the spec names a version",
+                             b"`cortex.local.toml` sets no `version`, the team's file sets none or `cortex.toml` is committed \xe2\x80\x94 "
+                             b"`git ls-files cortex.toml`, at the ",
+                             b"prints it: below 1.8.0 its version is the team's, and the team's file is not read \xe2\x80\x94 "
+                             b"and the spec is of that version \xe2\x86\x92 the ", b"reads a version before 1.8.0: run "
+                             b"nothing. **No `synced`** in any other case, while the spec names a version",
+                             # Synced to a version before 1.8.0 that no sync records `synced` for — a committed pin
+                             # beside a team's file that pins 1.8.0 — the sync ran once: nothing more runs, no stop.
+                             b"Still no `synced` afterwards \xe2\x86\x92 when the rule that runs nothing now holds, run "
+                             b"nothing more; otherwise run `cortex --version`",
                              b"**It names a missing team's folder**",
                              b"the team's file's own when its `locked` lists `theme`",
                              b"in `cortex.local.toml` or in the team's file, of your own accord"):
@@ -90,6 +96,8 @@ class TemplateTests(unittest.TestCase):
                 self.assertNotIn(b"**The spec is of a version other than", text)
                 self.assertNotIn(b"when the spec is of that version, run nothing", text)
                 self.assertNotIn(b"**No `synced`** otherwise", text)
+                self.assertNotIn(b"neither `cortex.local.toml` nor the team's file sets a `version`", text)
+                self.assertNotIn(b"No `synced` still \xe2\x86\x92 run `cortex --version` again", text)
                 # A checkout is said before a version moved, a missing team's folder before a missing version.
                 self.assertLess(text.index(b"**A checkout**"), text.index(b"**A version moved**"))
                 self.assertLess(text.index(b"**A version moved**"), text.index(b"says this cortex is too old for the"))
