@@ -589,6 +589,22 @@ class TeamVersionTests(SyncedProjectTestCase):
         pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local="spec = [\n")
         self.assertEqual(pin().version, "9.9.9")
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipes here")
+    def test_a_named_pipe_at_cortex_local_toml_is_none_never_waited_on(self):
+        import threading
+
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n')
+        os.mkfifo(self.project / "cortex.local.toml")
+        read = []
+        reader = threading.Thread(target=lambda: read.append(pin()), daemon=True)
+        reader.start()
+        reader.join(30)
+        if reader.is_alive():
+            # Free the reader blocked on the pipe, so the suite ends: a writer that opens it and closes.
+            os.close(os.open(self.project / "cortex.local.toml", os.O_WRONLY | os.O_NONBLOCK))
+            self.fail("read_pin waited on a named pipe at cortex.local.toml")
+        self.assertEqual(read[0].version, "9.9.9")
+
     def test_cortex_theme_is_under_the_team_s_lock(self):
         self.files('version = "9.9.9"\n', team='theme = "h2g2"\nlocked = ["theme"]\n')
         self.assertIn("BASE-THEME", resolve_run(self.request(), self.project, theme="none").system_prompt)
