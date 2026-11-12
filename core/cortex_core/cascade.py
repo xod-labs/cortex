@@ -233,9 +233,6 @@ def read_file(path: str) -> bytes:
         return fh.read()
 
 
-_read_file = read_file
-
-
 def _checked_toml(path: str, name: str) -> Dict:
     try:
         return _toml(path)

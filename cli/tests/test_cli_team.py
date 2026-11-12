@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import sys
 import tempfile
 import tomllib
@@ -2534,6 +2535,27 @@ class FourthCodeReviewTests(TeamTestCase):
         proc = self.cortex(root, "sync")
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertIn(f"{TEAM}: cannot be read — ", proc.err)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipe here")
+    @harness.outside_a_repository
+    def test_a_named_pipe_at_gitignore_holds_neither_sync_nor_init(self):
+        # A named pipe as .gitignore: git waits on it — check-ignore as git status —, and so did Cortex, reading it
+        # without git's answer or writing a line to it. Neither git nor the pipe is asked: nothing is added to it,
+        # and a note says to make it a file. In a repository git refuses (a bare .git) and in one git takes alike.
+        kinds = ("refused",) + (("git",) if GIT is not None and os.name != "nt" else ())
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', name=f"pipe-{kind}",
+                                    committed=kind == "refused")
+                if kind == "git":
+                    self.git(root, "init", "-q")
+                os.mkfifo(root / ".gitignore")
+                for args in (("sync",), ("init", "--tool", "claude", "--force")):
+                    proc = self.cortex_within(root, *args)
+                    self.assert_ok(proc)
+                    self.assertIn(".gitignore is not a file, which git cannot read: make it a file, with ", proc.err)
+                    self.assertNotIn("Traceback", proc.err)
+                self.assertTrue(stat.S_ISFIFO(os.lstat(root / ".gitignore").st_mode))
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipe here")
     @harness.outside_a_repository
