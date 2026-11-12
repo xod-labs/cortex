@@ -40,6 +40,7 @@ import unicodedata
 from pathlib import Path
 from typing import Collection, Dict, List, Optional, Pattern, Set, TextIO, Tuple
 
+from cortex_core import cascade
 from cortex_core.validate import shown
 
 from . import claude, config, machine, registry, store
@@ -70,6 +71,16 @@ def is_junction(path: Path) -> bool:
 
 def is_link(path: Path) -> bool:
     return os.path.islink(path) or is_junction(path)
+
+
+def not_a_file(path: Path) -> bool:
+    """Whether ``path`` is there as neither a file, a directory nor a link: a named pipe, a socket, a device — which
+    git, reading it as .gitignore, waits on, as would Cortex opening it as a file."""
+    try:
+        mode = os.lstat(path).st_mode
+    except OSError:
+        return False
+    return not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode) or is_link(path))
 
 
 def link_target(path: Path) -> str:
@@ -1199,7 +1210,7 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
     .gitignore that is a symbolic link is never written through — git does not read it, and its target may be outside
     the project, or none yet: the note names the link (``_notes``)."""
     path = root / ".gitignore"
-    if is_link(path):
+    if is_link(path) or not_a_file(path):        # never written through, nor waited on: the note names it
         return []
     if not path.is_file() and ignored(root, config.LOCAL_FILE) is None:
         return []
@@ -1374,9 +1385,9 @@ def _named(lines: List[str], wanted: Set[str], name: str, glob: Optional[Pattern
 
 def git_ignores(root: Path, name: str) -> Optional[bool]:
     """git's own answer, whether it ignores ``name`` in the project: ``None`` when there is no git to ask, or it
-    refuses the repository — its owner, say — or there is none."""
+    refuses the repository — its owner, say — or there is none, or it would wait on a .gitignore that is no file."""
     git = shutil.which("git")
-    if git is None:
+    if git is None or not_a_file(root / ".gitignore"):     # a named pipe there: git would wait on it
         return None
     try:
         proc = subprocess.run([git, "-C", str(root), "check-ignore", "-q", "--", name],
@@ -1404,7 +1415,7 @@ def ignored(root: Path, name: str) -> Optional[bool]:
     directory = (root / name).is_dir() and not is_link(root / name)
     wanted = {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if directory else set())
     try:
-        lines = gitignore_lines((root / ".gitignore").read_bytes().decode("utf-8", errors="replace"))   # as written
+        lines = gitignore_lines(cascade.read_file(str(root / ".gitignore")).decode("utf-8", errors="replace"))
     except OSError:
         return False
     return _named(lines, wanted, name)
@@ -1436,7 +1447,8 @@ def developers_own(path: Path) -> bool:
 def _notes(root: Path, mode: str, err: TextIO) -> None:
     # A .gitignore that is a symbolic link, which git does not read: no line added to it would count (#329).
     linked = ".gitignore is a symbolic link, which git does not read: make it a file, with " \
-        if is_link(root / ".gitignore") else None
+        if is_link(root / ".gitignore") else ".gitignore is not a file, which git cannot read: make it a file, with " \
+        if not_a_file(root / ".gitignore") else None
     said = _not_ignored(root, LINK, f"{LINK}/") if mode != "store" else None
     if said is not None:
         line = f"a `/{LINK}` line" + ("" if linked else " to .gitignore")

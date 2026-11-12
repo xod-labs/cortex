@@ -561,7 +561,10 @@ class GitIgnoreTests(SyncTestCase):
                       (".claude/settings.local.json", "!.claude/settings.local.[\\j]son"),
                       (".claude/settings.local.json", "!.claude/settings.local.[]j]son"),
                       (".claude/settings.local.json", "!.claude/settings.local.[]j]so[n]"),
-                      (".claude/settings.local.json", "!.claude/settings.local.[z-aj]son"))
+                      (".claude/settings.local.json", "!.claude/settings.local.[z-aj]son"),
+                      # A name as written, not only folded: `[!a-z]` takes back `N`, which folding would hide, and `?`
+                      # matches the one `ß` folding turns into two letters.
+                      ("Notes.md", "![!a-z]otes.md"), ("Straße.md", "!Stra?e.md"))
         # A bracket that cannot match it, as git reads it — an escaped `-` is no range —: the path stays ignored.
         keeps = (("cortex.local.toml", "![!a-z]*"), (".claude/settings.local.json", "!.claude/settings.local.[i\\-k]son"),
                  (".claude/settings.local.json", "!.claude/settings.local.[!j]son"), ("cortex", "!cortex**x"))
