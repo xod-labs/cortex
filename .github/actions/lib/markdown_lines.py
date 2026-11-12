@@ -19,16 +19,18 @@ What is read, as CommonMark has it:
   list item is ``nested``; an item's own line is when it starts in another item. An item whose first line holds
   only its marker ends at a blank line below it;
 - a heading — one to six ``#``, indented up to three spaces — ends every list: a changelog's headings are its own,
-  never an item's, even indented as far as one's content;
+  never an item's, even indented as far as one's content. Indented further, as far as an item's content, it is the
+  item's: no paragraph, which the line below would continue;
 - a paragraph is interrupted by a list item, but not by an empty one nor an ordered one that does not start at 1, and
   not by a line indented as code: such a line continues it. Indented code — four spaces past its container's
   content — is no paragraph, which a less indented line would continue;
 - a line of ``=`` or ``-`` under a paragraph, in its container, makes it a heading — never a list item;
 - a block quote's line, ``>``, is text: it ends the lists it is not indented into — no list item's line continues
-  in it lazily — and holds no entry nor section.
+  in it lazily — and holds no entry nor section. The line below continues it lazily only when it holds a paragraph's
+  text — not a heading, a fence, a comment, a thematic break nor indented code, quoted.
 
-Not read: HTML blocks other than comments — ``<details>``, ``<pre>`` — whose lines are read as Markdown. A blank line
-holds spaces and tabs only.
+Not read: HTML blocks other than comments — ``<details>``, ``<pre>`` — whose lines are read as Markdown: a section or
+an entry in one is read. A blank line holds spaces and tabs only.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ FENCE = re.compile(r"(?P<fence>`{3,}|~{3,})(?P<info>.*)")
 ITEM = re.compile(r"(?P<marker>[-*+]|[0-9]{1,9}[.)])(?P<gap> *)(?P<text>.*)")
 BREAK = re.compile(r"([-*_])(?: *\1){2,} *")              # a thematic break: `- - -` is no list item
 HEADING = re.compile(r" {0,3}#{1,6}(?:[ \t].*)?")
+HEADING_TEXT = re.compile(r"#{1,6}(?:[ \t].*)?")          # past its indentation: a heading in a list item
 COMMENT, COMMENT_END = "<!--", "-->"
 # A second-level section: `## [1.7.0] - 2026-11-06 — …`, `## [Unreleased]` — indented up to three spaces, a space or
 # a tab after its ##.
@@ -69,7 +72,7 @@ def lines(text: str) -> List[Line]:
     paragraph = False               # the line before is a paragraph's, which a less indented line continues
     quoted = False                  # that paragraph is a block quote's: no list item is refused for interrupting it
     empty = False                   # the line before opens an empty list item, which a blank line ends
-    unclosed: Dict[str, int] = {}   # by fence character, "" a comment's: the shortest a top-level block never closed
+    closers = _closers(raw)         # what each line and those below it close, for a block opened at the top level
     index = 0
     while index < len(raw):
         line = raw[index]
@@ -98,8 +101,9 @@ def lines(text: str) -> List[Line]:
             continue
         content = None if rest is None else _item(rest, interrupts=own)
         quote = rest is not None and rest.startswith(QUOTE)
+        heading = rest is not None and HEADING_TEXT.fullmatch(rest) is not None   # in an item, indented past three
         opens = rest is not None and (_opens(rest) is not None or BREAK.fullmatch(rest) is not None or quote or
-                                      content is not None)
+                                      heading or content is not None)
         if len(inner) < len(items) and (opens or not paragraph):
             del items[len(inner):]                                  # the items it is not indented into end
         # Otherwise, not indented into them, a line that opens nothing continues the paragraph lazily: still in them.
@@ -111,9 +115,9 @@ def lines(text: str) -> List[Line]:
         quoted = quote
         if quote:
             read.append(Line(line, False, bool(items)))
-            paragraph, index = not _blank(rest[len(QUOTE):]), index + 1
+            paragraph, index = _paragraph(rest), index + 1          # a heading, code, a break quoted: none
             continue
-        if BREAK.fullmatch(rest):
+        if heading or BREAK.fullmatch(rest):
             read.append(Line(line, False, bool(items)))
             paragraph, index = False, index + 1
             continue
@@ -128,10 +132,10 @@ def lines(text: str) -> List[Line]:
                 paragraph, index = not _blank(text_after) and _indent(text_after) < 4, index + 1
                 empty = _blank(text_after)
                 continue
-            index = _block(raw, index, block, column, read, unclosed, first_line_read=True)
+            index = _block(raw, index, block, column, read, closers, first_line_read=True)
             paragraph = False
             continue
-        index = _block(raw, index, _opens(rest), base, read, unclosed)
+        index = _block(raw, index, _opens(rest), base, read, closers)
         paragraph = not read[-1].code                               # a block never closed is a paragraph's line
     return read
 
@@ -146,13 +150,13 @@ def sections(text: str) -> List[Tuple[str, Line]]:
     return found
 
 
-def _block(raw: List[str], index: int, block: Tuple[str, str], base: int, read: List[Line], unclosed: Dict[str, int],
-           first_line_read: bool = False) -> int:
+def _block(raw: List[str], index: int, block: Tuple[str, str], base: int, read: List[Line],
+           closers: List[Dict[str, int]], first_line_read: bool = False) -> int:
     """The fenced block or HTML comment ``block`` opened at ``raw[index]``, in a container whose content is indented
     ``base`` columns — 0 at the top level: its lines appended to ``read``, as code; the index of the line after it.
     ``first_line_read``: the opening line is already in ``read`` — a list item's, which holds the block.
-    ``unclosed``: what a top-level block above found no line to close — a block as long or longer finds none either,
-    and the file is read once, however many such blocks it holds."""
+    ``closers``: ``_closers(raw)`` — a top-level block that no line below closes is known so without reading them, and
+    the file is read once, however many such blocks it holds."""
     kind, fence = block
     opening = _expand(raw[index])
     start = opening.find(COMMENT) if kind == "comment" else -1
@@ -161,8 +165,8 @@ def _block(raw: List[str], index: int, block: Tuple[str, str], base: int, read: 
         end = index + 1                                  # `<!-- … -->` on one line, `<!-->` too
     key = fence[:1]
     later = index + 1
-    if end is None and not base and key in unclosed and len(fence) >= unclosed[key]:
-        later = len(raw)
+    if end is None and not base and closers[later].get(key, 0) < max(len(fence), 1):
+        later = len(raw)                                 # no line below closes it
     while end is None and later < len(raw):
         line = raw[later]
         width = _indent(line)
@@ -176,7 +180,6 @@ def _block(raw: List[str], index: int, block: Tuple[str, str], base: int, read: 
         later += 1
     if end is None:
         if not base:                                     # at the top level, never closed: it hides nothing
-            unclosed[key] = min(len(fence), unclosed.get(key, len(fence)))
             if not first_line_read:
                 read.append(Line(raw[index], False, False))
             return index + 1
@@ -185,6 +188,41 @@ def _block(raw: List[str], index: int, block: Tuple[str, str], base: int, read: 
         index += 1
     read.extend(Line(line, True, bool(base)) for line in raw[index:end])
     return end
+
+
+def _closers(raw: List[str]) -> List[Dict[str, int]]:
+    """For each index of ``raw``, and one past its end, what the lines from there to the end close at the top level:
+    by fence character, the longest closing fence — and ``""``, 1 when one holds ``-->``."""
+    found: List[Dict[str, int]] = [{}]
+    for line in reversed(raw):
+        here = dict(found[-1])
+        width = _indent(line)
+        fence = FENCE.fullmatch(_expand(line)[width:].rstrip(" \t")) if width < 4 else None
+        if fence is not None and _blank(fence.group("info")):
+            key = fence.group("fence")[0]
+            here[key] = max(here.get(key, 0), len(fence.group("fence")))
+        if COMMENT_END in line:
+            here[""] = 1
+        found.append(here)
+    found.reverse()
+    return found
+
+
+def _paragraph(rest: str) -> bool:
+    """Whether a block quote's line, ``rest`` past its indentation, holds a paragraph's text — which a less indented
+    line would continue — and not a heading, a fenced block or a comment opened, a thematic break, indented code, or
+    nothing: its content as a list item's or a nested quote's too."""
+    content = rest[len(QUOTE):]
+    content = content[1:] if content.startswith(" ") else content
+    if _blank(content) or _indent(content) >= 4:
+        return False
+    content = content.lstrip(" ")
+    if content.startswith(QUOTE):
+        return _paragraph(content)
+    if HEADING_TEXT.fullmatch(content) or BREAK.fullmatch(content) or _opens(content) is not None:
+        return False
+    item = _item(content)
+    return True if item is None else _paragraph(QUOTE + " " + content[item:])
 
 
 def _opens(rest: str) -> Optional[Tuple[str, str]]:

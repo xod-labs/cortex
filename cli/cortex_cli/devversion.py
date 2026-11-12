@@ -62,7 +62,11 @@ def unreleased(text: str) -> Dict[str, List[str]]:
     nothing."""
     entries: Dict[str, List[str]] = {}
     inside, kind = False, None
+    below: Optional[List[str]] = None       # the kind's entries, the last one's marker alone on its line
     for read in lines(text):
+        if below is not None and read.nested and not read.item and not read.code and read.text.strip():
+            below[-1] = read.text.strip()                       # its text, below it: the item's first line
+        below = None
         if read.code:
             continue
         line = read.text.rstrip()
@@ -81,6 +85,7 @@ def unreleased(text: str) -> Dict[str, List[str]]:
         entry = ENTRY.fullmatch(line) if read.item and not read.nested else None
         if entry and kind is not None:
             entries.setdefault(kind, []).append(entry.group("text") or "")
+            below = entries[kind] if not entry.group("text") else None
     return entries
 
 
