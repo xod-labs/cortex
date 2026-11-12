@@ -605,6 +605,29 @@ class SyncedTests(TeamTestCase):
         self.assert_ok(self.cortex(root, "sync"))
         self.assertLessEqual(set(self.local(root)), {"theme", "spec", "claude_access", "claude_entry"})
 
+    def test_a_committed_pin_before_1_8_0_beside_a_team_s_file_syncs_its_own_version_and_records_nothing(self):
+        # The state the bootstrap's rule without `synced` reads (ADR-013 §3.10): a committed cortex.toml before
+        # 1.8.0 is the team's version, its team's file not read — the sync reads 1.7.0 and records no `synced`,
+        # so the assistant, seeing `cortex.toml` committed and a spec of 1.7.0, runs nothing. Committed as git
+        # says, and where git refuses — a `.git` it cannot read — by the `.git` above.
+        cases = ["refusing"] + ([] if GIT is None or os.name == "nt" else ["tracked"])
+        for case in cases:
+            with self.subTest(case):
+                root = self.project('version = "1.7.0"\ntheme = "h2g2"\n', team='version = "1.8.0"\n',
+                                    committed=case == "refusing", name=case)
+                if case == "tracked":
+                    self.git(root, "init", "-q")
+                    self.git(root, "add", "cortex.toml")
+                    self.git(root, "commit", "-q", "-m", "pin")
+                git = {"PATH": os.path.dirname(GIT), **GIT_ENV} if case == "tracked" else {}
+                proc = self.cortex(root, "sync", **git)
+                self.assert_ok(proc)
+                self.assertIn(f"note: {TEAM} is not read: the team's version is 1.7.0, before 1.8.0", proc.err)
+                local = self.local(root)
+                self.assertNotIn("synced", local)
+                self.assertEqual(Path(local["spec"]).name, "1.7.0")
+                self.assertEqual(Path(local["spec"]).parent.name, "versions")
+
     @DOWNLOADS
     def test_a_move_below_1_8_0_removes_synced(self):
         root = self.project('version = "9.9.8"\ntheme = "h2g2"\n')
@@ -3361,10 +3384,11 @@ class ThirdCodeReviewTests(TeamTestCase):
     @SOURCE
     @DOWNLOADS
     @harness.outside_a_repository
-    def test_a_build_of_no_release_pinned_by_hand_beside_a_team_s_file_that_is_no_file_is_moved_by_hand(self):
+    def test_a_build_of_no_release_pinned_beside_a_team_s_file_that_is_no_file_names_its_fix_then_the_hand(self):
         # Bluspark's fourth pass, of #338: this developer's cortex.toml, beside a team's file that is a directory or a
-        # link that leads nowhere — there, so the pin is this developer's, moved by hand. Fixed first, the file reads,
-        # and the remedy named by hand, followed, syncs.
+        # link that leads nowhere — the fix of that file is named first; fixed, the file reads, and the remedy named
+        # by hand, followed, syncs. What it does not pin: loose_team_file's team_file_there over isfile — every caller
+        # asks team_refusal first, so a file there and unread never reaches it (an equivalent mutant).
         HAND = ("pin a release by hand: set cortex.toml's version to one, or remove it to read the team's — "
                 "uncommitted beside the team's file, it is this developer's, which no command writes")
         for kind, follow in (("a directory", 'version = "9.9.8"\ntheme = "h2g2"\n'), ("a link", 'theme = "h2g2"\n')):
@@ -3416,7 +3440,7 @@ class FourthCodeReviewTests(TeamTestCase):
             proc = subprocess.run(harness.command(*args), cwd=cwd, env={**self.env, "PWD": str(cwd), **env},
                                   stdin=subprocess.DEVNULL, capture_output=True, timeout=seconds)
         except subprocess.TimeoutExpired:
-            self.fail(f"cortex {' '.join(args)} did not end: it waits on what is at {TEAM}")
+            self.fail(f"cortex {' '.join(args)} did not end: it waits on a named pipe")
         proc.out, proc.err = proc.stdout.decode(), proc.stderr.decode()
         return proc
 
@@ -3495,6 +3519,213 @@ class FourthCodeReviewTests(TeamTestCase):
         proc = self.cortex(root, "sync")
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertIn(f"{TEAM}: cannot be read — ", proc.err)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipe here")
+    @harness.outside_a_repository
+    def test_a_named_pipe_at_cortex_local_toml_holds_no_command_of_the_machine(self):
+        # The registry's commands read a cortex.local.toml left without its cortex.toml, and prune one beside a
+        # project this cortex refuses: opened as a file, a named pipe there waited for a writer, and the command with
+        # it. Read without blocking, it is a file that cannot be read: the project is unreadable, never gone.
+        env = {"CORTEX_NO_REGISTER": ""}
+        left = self.project('version = "9.9.8"\ntheme = "h2g2"\n', name="left")
+        self.assert_ok(self.cortex_within(left, "project", "add", **env))
+        (left / "cortex.toml").unlink()                 # a branch without Cortex checked out
+        os.mkfifo(left / "cortex.local.toml")
+        for args in (("project", "list"), ("prune", "--dry-run"), ("upgrade", "--all", "--dry-run")):
+            with self.subTest(args=args):
+                proc = self.cortex_within(self.tmp, *args, **env)
+                self.assertNotIn("Traceback", proc.err)
+        listed = self.cortex_within(self.tmp, "project", "list", **env)
+        self.assertIn("unreadable", listed.out + listed.err)
+        refused = self.project('version = "9.9.8"\ntheme = "h2g2"\n', team="version = \n", name="refused")
+        os.mkfifo(refused / "cortex.local.toml")
+        proc = self.cortex_within(self.tmp, "prune", "--dry-run", str(refused), **env)
+        self.assertNotIn("Traceback", proc.err)
+
+
+class FourthCounterReviewTests(TeamTestCase):
+    """What the counter-review of the fourth pass's fixes found (2026-11-12): every remedy of a version too new,
+    followed, does what it says — beside a team's file the grammar refuses, a try no --local moves, a team's file in
+    a renamed folder."""
+
+    UPDATE = "cortex self-update 9.9.10"
+
+    def refused(self, root, *runs):
+        """Each of ``runs`` — ``sync``, ``upgrade``, ``validate``, ``init`` — refused, its output."""
+        said = {}
+        for args in runs or (("sync",), ("upgrade",), ("validate",), ("init", "--tool", "claude")):
+            proc = self.cortex(root, *args)
+            self.assertNotEqual(proc.returncode, 0, proc.out + proc.err)
+            self.assertNotIn("Traceback", proc.err)
+            said[args[0]] = proc.out + proc.err
+        return said
+
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_a_try_beside_a_committed_pin_before_1_8_0_is_dropped_by_hand_whatever_the_team_s_file(self):
+        # A committed pin before 1.8.0 makes the team's version cortex.toml's, which reads nothing of the team's file:
+        # never "fix the team's file". It reads no try either: --local is refused at every move — the try is removed
+        # by hand, which, followed, syncs.
+        for kind, team in (("a directory", None), ("garbled", 'version = 9.9.8"\n'), ("a pin", 'version = "9.9.8"\n')):
+            with self.subTest(kind=kind):
+                root = self.project('version = "1.7.0"\ntheme = "h2g2"\n', local='version = "9.9.10"\n',
+                                    name=kind.replace(" ", "-"))
+                (root / "agents").mkdir()
+                (root / TEAM).mkdir() if team is None else (root / TEAM).write_text(team, encoding="utf-8")
+                for run, said in self.refused(root).items():
+                    self.assertNotIn("fix or restore the team's file", said.replace("Fix", "fix"), run)
+                    self.assertNotIn("--local", said, run)
+                    self.assertIn("drop the try by hand: remove `version` from cortex.local.toml — the team's version, "
+                                  "1.7.0, is before 1.8.0, which reads none", said, run)
+                    if run != "upgrade":                                # beside the update, another way
+                        self.assertIn("\nor drop the try by hand", said, run)
+                proc = self.cortex(root, "upgrade", "--local", "1.7.0")             # what used to be named
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn('"version" is read once the team\'s version is 1.8.0 or later', proc.err)
+                (root / "cortex.local.toml").write_text("", encoding="utf-8")       # followed, by hand
+                self.assert_ok(self.cortex(root, "sync"))
+                self.assertEqual(self.value(root, "version"), "1.7.0")
+        # Not committed, beside a team's file that pins none: the team's version is cortex.toml's too, which reads
+        # nothing of that file — a key this cortex does not know in it included.
+        root = self.project('version = "1.7.0"\ntheme = "h2g2"\n', team="claude_acces = false\n",
+                            local='version = "9.9.10"\n', committed=False, name="pinless")
+        for run, said in self.refused(root).items():
+            self.assertNotIn("claude_acces", said, run)
+            self.assertIn("drop the try by hand: remove `version` from cortex.local.toml", said, run)
+        (root / "cortex.local.toml").write_text("", encoding="utf-8")
+        self.assert_ok(self.cortex(root, "sync"))
+        self.assertEqual(self.value(root, "version"), "1.7.0")
+
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_a_team_s_file_the_grammar_refuses_names_its_fix_or_the_update_never_a_move(self):
+        # A team's file that parses but that this cortex refuses: no move works before it is fixed — or, a key this
+        # cortex does not know, before a release that knows it serves the project: the update alone.
+        for kind, team, error, later in (
+                ("before 1.8.0", 'version = "1.7.0"\n', f'{TEAM}: version "1.7.0" is before 1.8.0', False),
+                ("version locked", 'version = "9.9.8"\nlocked = ["version"]\n', f'{TEAM}: "version" is never locked',
+                 False),
+                ("unknown key", 'version = "9.9.8"\nclaude_acces = false\n', f'{TEAM}: unknown key "claude_acces"', True)):
+            with self.subTest(kind=kind):
+                root = self.project('version = "9.9.8"\ntheme = "h2g2"\n', team=team, local='version = "9.9.10"\n',
+                                    committed=False, name=kind.replace(" ", "-"))
+                for run, said in self.refused(root).items():
+                    for move in ("--local", "--team", "cortex upgrade 9", "cortex upgrade VERSION"):
+                        self.assertNotIn(move, said, run)
+                    if later or run != "upgrade":       # cortex upgrade names the fix alone, then itself again
+                        self.assertIn(self.UPDATE, said, run)
+                    if later:
+                        self.assertNotIn("fix or restore", said.replace("Fix", "fix"), run)
+                    else:
+                        self.assertIn(f"fix or restore the team's file: no command reads the project while it does "
+                                      f"not — {error}", said.replace("Fix", "fix"), run)
+                proc = self.cortex(root, "upgrade", "--local", "9.9.8")             # what used to be named
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(error, proc.err)
+                if later:
+                    continue                    # the update named is a release this suite cannot serve
+                (root / TEAM).write_text('version = "9.9.8"\n', encoding="utf-8")   # the fix, followed
+                proc = self.cortex(root, "sync")
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn("\nor drop the try: cortex upgrade --local 9.9.8", proc.err)
+                self.assert_ok(self.cortex(root, "upgrade", "--local", "9.9.8"))    # drops it
+                self.assertEqual(self.value(root, "version"), "9.9.8")
+        # The team's pin too new, beside a key this cortex does not know: no --team, which refuses the key first.
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.10"\nclaude_acces = false\n', name="team-pin")
+        for run, said in self.refused(root).items():
+            self.assertNotIn("--team", said, run)
+            self.assertIn(self.UPDATE, said, run)
+        proc = self.cortex(root, "upgrade", "--team", OWN)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn('unknown key "claude_acces"', proc.err)
+
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_a_try_beside_an_agents_every_command_refuses_names_that_refusal_never_local(self):
+        # cortex.toml's agents refused — not committed, or naming a folder that holds a project's cortex.toml: every
+        # command refuses it first, --local included. Its own remedy is named; followed, the try moves as named then.
+        for case, committed, toml in (
+                ("not committed", False, 'version = "9.9.8"\ntheme = "h2g2"\nagents = "team"\n'),
+                ("a project", True, 'version = "9.9.8"\ntheme = "h2g2"\nagents = "sub"\n')):
+            with self.subTest(case=case):
+                root = self.project(toml, local='version = "9.9.10"\n', committed=committed, name=case.replace(" ", "-"))
+                if case == "a project":
+                    (root / "sub").mkdir()
+                    (root / "sub" / "cortex.toml").write_text('version = "9.9.8"\ntheme = "h2g2"\n', encoding="utf-8")
+                    error = 'agents "sub" holds a project\'s cortex.toml'
+                else:
+                    (root / "team").mkdir()
+                    (root / "team" / "cortex.team.toml").write_text('version = "9.9.8"\n', encoding="utf-8")
+                    error = '"agents" is read from a committed cortex.toml only'
+                for run, said in self.refused(root).items():
+                    self.assertNotIn("--local", said, run)
+                    self.assertIn("no command moves the try while cortex.toml is refused — ", said, run)
+                    self.assertNotIn("or no command", said, run)        # no other way than that fix
+                    self.assertIn(error, said, run)
+                proc = self.cortex(root, "upgrade", "--local", "9.9.8")             # what used to be named
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(error, proc.err)
+                (root / "cortex.toml").write_text('version = "9.9.8"\ntheme = "h2g2"\n', encoding="utf-8")  # `agents`
+                proc = self.cortex(root, "sync")                                                          # removed
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn("\nor drop the try: cortex upgrade --local 9.9.8", proc.err)
+                self.assert_ok(self.cortex(root, "upgrade", "--local", "9.9.8"))
+                self.assertEqual(self.value(root, "version"), "9.9.8")
+        # A folder this cortex does not take by its name, .team, which a later release may: the update alone.
+        root = self.project('version = "9.9.8"\ntheme = "h2g2"\nagents = ".team"\n', local='version = "9.9.10"\n',
+                            name="dot-team")
+        (root / ".team").mkdir()
+        (root / ".team" / "cortex.team.toml").write_text('version = "9.9.8"\n', encoding="utf-8")
+        for run, said in self.refused(root).items():
+            self.assertNotIn("--local", said, run)
+            self.assertIn(FourthCounterReviewTests.UPDATE, said, run)
+            self.assertIn("no command of this cortex moves the try: it does not take the team's folder .team/, which a "
+                          "later release may", said, run)
+        proc = self.cortex(root, "upgrade", "--local", "9.9.8")                     # what used to be named
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn('agents ".team"', proc.err)
+
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_this_developer_s_cortex_toml_too_new_beside_the_team_s_file_is_moved_down_by_hand(self):
+        # cortex.toml, not committed, beside a team's file: this developer's, which no command writes — a plain
+        # upgrade VERSION follows the team's file and refuses. The move down named is by hand, and each edit,
+        # followed, syncs.
+        for number, (team, edit, read) in enumerate((
+                ('version = "9.9.8"\n', 'version = "9.9.7"\ntheme = "h2g2"\n', "9.9.8"),     # the higher is read
+                ('version = "9.9.8"\n', 'theme = "h2g2"\n', "9.9.8"),
+                ('theme = "h2g2"\n', 'version = "9.9.7"\ntheme = "h2g2"\n', "9.9.7"))):
+            with self.subTest(team=team, edit=edit):
+                root = self.project('version = "9.9.10"\ntheme = "h2g2"\n', team=team, committed=False,
+                                    name=f"mine-{number}")
+                proc = self.cortex(root, "upgrade")
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertNotIn("cortex upgrade 9", proc.err)
+                self.assertIn("or move it down by hand: set cortex.toml's version to one this cortex serves", proc.err)
+                self.assertEqual("version" in team, ", or remove it to read the team's" in proc.err)
+                proc = self.cortex(root, "upgrade", OWN)                                    # what used to be named
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                (root / "cortex.toml").write_text(edit, encoding="utf-8")                  # followed, by hand
+                self.assert_ok(self.cortex(root, "sync"))
+                self.assertEqual(self.value(root, "version"), read)
+
+    @SOURCE
+    @harness.outside_a_repository
+    def test_a_team_s_file_that_does_not_read_in_a_renamed_folder_is_named_there(self):
+        # The team's folder renamed by a committed cortex.toml: the file to fix is named in it — read in agents/, the
+        # file would not be there, and --local would be named, which refuses it.
+        root = self.project('version = "9.9.8"\ntheme = "h2g2"\nagents = "team"\n', local='version = "9.9.10"\n')
+        (root / "team").mkdir()
+        (root / "team" / "cortex.team.toml").write_text('version = 9.9.8"\n', encoding="utf-8")
+        for run, said in self.refused(root).items():
+            self.assertIn("fix or restore the team's file: no command reads the project while it does not — "
+                          "team/cortex.team.toml: ", said.replace("Fix", "fix"), run)
+            self.assertNotIn(TEAM, said, run)
+            self.assertNotIn("--local", said, run)
 
 
 def newer_refused(pin):

@@ -427,12 +427,53 @@ def loose_team_file(root: str) -> bool:
     return cascade.team_file_there(root, loose_team_folder(root))
 
 
-def unread_team(root: str) -> Optional[str]:
-    """Why the team's file, there in the team's folder read loosely, does not read — ``None`` when it reads or is not
-    there (ADR-013 §3.5). A version too new is said before any key is checked (§3.8, step 2), but no command moves a
-    pin while the file does not read: each refuses it first."""
-    found = cascade.read_team(root, loose_team_folder(root))
-    return found.error if isinstance(found, cascade.Unreadable) else None
+def team_refusal(root: str) -> Optional[Tuple[str, bool]]:
+    """Why every command refuses the team's file, in the team's folder read loosely — it does not read, or its grammar
+    refuses it (ADR-013 §3.5) — and whether a later release may take it: a key this cortex does not know. ``None``
+    when it is not there, reads and checks, or is not read: a committed ``cortex.toml`` before 1.8.0 — or one not
+    committed beside a team's file that pins none — makes the team's version cortex.toml's, which reads nothing of it
+    (§3.8, step 3). A version too new is said before any key is checked (step 2), but no command moves a pin while
+    the file is refused: each refuses it first."""
+    folder = loose_team_folder(root)
+    found = cascade.read_team(root, folder)
+    if found is None:
+        return None
+    pin = cascade.loose_versions(root, folder).get("project")
+    pinless = isinstance(found, dict) and "version" not in found
+    if pin is not None and project.before_team(pin[1]) and (pinless or committed(root)):
+        return None
+    if isinstance(found, cascade.Unreadable):
+        return found.error, False
+    later = any(key not in project.TEAM_KEYS for key in found) and "agents" not in found
+    try:
+        project.check_team(found, cascade.team_name(folder))
+    except project.ProjectFileError as error:
+        return str(error), later
+    return None
+
+
+# How a try no ``--local`` moves is moved (``try_unmoved``): by a later release, by a fix of cortex.toml, by hand.
+LATER, REFUSED, BY_HAND = "later", "refused", "by hand"
+
+
+def try_unmoved(root: str) -> Optional[Tuple[str, str]]:
+    """Why no ``cortex upgrade --local`` moves or drops the try of the project at ``root`` — what to do instead — and
+    how it is moved; ``None`` when ``--local`` does (ADR-013 §3.8). ``LATER``: the team's folder is one this cortex
+    does not take by its name, ``.team``, which a later release may. ``REFUSED``: ``cortex.toml``'s ``agents`` is
+    refused, every command refusing it first — its own remedy said. ``BY_HAND``: the team's version is before 1.8.0,
+    which reads no try, refused at every move — the try is removed by hand, another way than updating."""
+    folder = loose_team_folder(root)
+    if not takes_folder(folder):            # .team: a later release may take it, which updating brings (§3.8, step 1)
+        return (f"no command of this cortex moves the try: it does not take the team's folder {folder}/, which a later "
+                "release may", LATER)
+    refused = _team_pin_refused(root, folder)
+    if refused is not None:
+        return f"no command moves the try while {PROJECT_FILE} is refused — {refused}", REFUSED
+    teams = loose_team(root)
+    if teams is not None and project.before_team(str(teams[1])):
+        return (f"drop the try by hand: remove `version` from {LOCAL_FILE} — the team's version, {teams[1]}, is "
+                f"before {project.FIRST_TEAM_VERSION}, which reads none", BY_HAND)
+    return None
 
 
 def fix_team_file(unread: str) -> str:
@@ -458,20 +499,23 @@ def too_new(root: str, own: Version) -> Optional[str]:
     if found is None or not store.too_old_for(found[1], own):
         return None
     name, version = found
+    refusal = team_refusal(root)
     if store.development(version):          # no self-update installs it: the pin moves (ADR-009 §9)
-        unread = unread_team(root)
         return (f"this project uses Cortex {version}, which its {name} pins — a build of no release, newer than "
-                f"this cortex, {own}: {pin_a_release(root, name) if unread is None else fix_team_file(unread)}")
-    unread = unread_team(root)
-    if unread is not None:
-        # Every move refuses that file first: a try dropped, a pin moved — none is named before it reads (§3.5).
-        return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
-                f"    {store.update_command(version)}\nand {fix_team_file(unread)}")
+                f"this cortex, {own}: {pin_a_release(root, name) if refusal is None else fix_team_file(refusal[0])}")
+    update = (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
+              f"    {store.update_command(version)}")
+    if refusal is not None:
+        # Every move refuses that file first: a try dropped, a pin moved — none is named before it reads (§3.5). A key
+        # this cortex does not know, a later release may: the update alone, which takes it.
+        return update if refusal[1] else f"{update}\nand {fix_team_file(refusal[0])}"
     teams = loose_team(root)
     # A build of no release names no version of its own to move to: no teammate can download it (ADR-009 §9).
     down = "VERSION" if store.development(own) else str(own)
     folder = name[:-len(TEAM_FILE) - 1] if name.endswith(f"/{TEAM_FILE}") else None
-    other = (f"\nor drop the try: cortex upgrade --local {teams[1] if teams else down}" if name == LOCAL_FILE else
+    unmoved = try_unmoved(root) if name == LOCAL_FILE else None
+    other = (f"\n{'or ' if unmoved[1] == BY_HAND else ''}{unmoved[0]}" if unmoved is not None else
+             f"\nor drop the try: cortex upgrade --local {teams[1] if teams else down}" if name == LOCAL_FILE else
              f"\nor move the team's pin: cortex upgrade --team {down}"
              if folder is not None and moves_team_pin(root, folder, own) else "")
     return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
@@ -482,7 +526,9 @@ def pin_a_release(root: str, name: str) -> str:
     """How the pin of no release ``name`` holds is moved to a release, on a line of its own: by a command, or by
     hand — a developer's ``cortex.toml`` (``developers_toml``), or a team's file in a folder this cortex does not
     take, or one ``--team`` refuses for ``cortex.toml``'s ``agents`` (``release_remedy``)."""
-    return _in_a_refused_folder(name, root) or store.pin_remedy(name, developers_toml(root, name), block=True)
+    unmoved = try_unmoved(root) if name == LOCAL_FILE else None
+    return (unmoved[0] if unmoved is not None else None) or _in_a_refused_folder(name, root) \
+        or store.pin_remedy(name, developers_toml(root, name), block=True)
 
 
 def release_remedy(found: Optional[cascade.Resolution], origin: str, block: bool = False,
@@ -491,10 +537,12 @@ def release_remedy(found: Optional[cascade.Resolution], origin: str, block: bool
     (``store.pin_remedy``), or by hand — a developer's ``cortex.toml`` (``by_hand``), or a team's file in a folder
     this cortex does not take, ``.team``, read for its version alone: no ``--team`` of it moves the pin (§3.8) — nor,
     ``root`` given, of one ``cortex.toml``'s ``agents`` makes ``--team`` refuse, as a resolution read loosely has."""
-    unread = unread_team(root) if root is not None else None
-    if unread is not None:                  # no command moves the pin before that file reads (§3.5)
-        return fix_team_file(unread)
-    return _in_a_refused_folder(origin, root) or store.pin_remedy(origin, by_hand(found, origin), block)
+    refusal = team_refusal(root) if root is not None else None
+    if refusal is not None:                 # no command moves the pin before that file reads (§3.5)
+        return fix_team_file(refusal[0])
+    unmoved = try_unmoved(root) if root is not None and origin == LOCAL_FILE else None
+    return (unmoved[0] if unmoved is not None else None) or _in_a_refused_folder(origin, root) \
+        or store.pin_remedy(origin, by_hand(found, origin), block)
 
 
 def _in_a_refused_folder(name: str, root: Optional[str] = None) -> Optional[str]:

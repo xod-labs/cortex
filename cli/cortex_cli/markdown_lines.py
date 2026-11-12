@@ -40,7 +40,7 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 
 # Matched after the line's indentation, relative to its container.
 FENCE = re.compile(r"(?P<fence>`{3,}|~{3,})(?P<info>.*)")
-ITEM = re.compile(r"(?P<marker>[-*+]|[0-9]{1,9}[.)])(?P<gap> *)(?P<text>.*)")
+ITEM = re.compile(r"(?P<marker>[-*+]|[0-9]{1,9}[.)])(?P<gap> *)")     # its text: what follows
 BREAK = re.compile(r"([-*_])(?: *\1){2,} *")              # a thematic break: `- - -` is no list item
 HEADING = re.compile(r" {0,3}#{1,6}(?:[ \t].*)?")
 HEADING_TEXT = re.compile(r"#{1,6}(?:[ \t].*)?")          # past its indentation: a heading in a list item
@@ -209,20 +209,36 @@ def _closers(raw: List[str]) -> List[Dict[str, int]]:
 
 
 def _paragraph(rest: str) -> bool:
-    """Whether a block quote's line, ``rest`` past its indentation, holds a paragraph's text — which a less indented
-    line would continue — and not a heading, a fenced block or a comment opened, a thematic break, indented code, or
-    nothing: its content as a list item's or a nested quote's too."""
-    content = rest[len(QUOTE):]
-    content = content[1:] if content.startswith(" ") else content
-    if _blank(content) or _indent(content) >= 4:
-        return False
-    content = content.lstrip(" ")
-    if content.startswith(QUOTE):
-        return _paragraph(content)
-    if HEADING_TEXT.fullmatch(content) or BREAK.fullmatch(content) or _opens(content) is not None:
-        return False
-    item = _item(content)
-    return True if item is None else _paragraph(QUOTE + " " + content[item:])
+    """Whether a block quote's line, ``rest`` past its indentation — its tabs expanded — holds a paragraph's text,
+    which a less indented line would continue, and not a heading, a fenced block or a comment opened, a thematic
+    break, indented code, or nothing: its content as a list item's or a nested quote's too. Read once, from left to
+    right, however many quotes and items it nests: a line of a thousand ``> `` is no deeper than one."""
+    at = len(QUOTE) + (1 if rest.startswith(" ", len(QUOTE)) else 0)
+    breaks: Dict[str, int] = {}                     # by a break's character, where the line's run of it begins
+    while True:
+        start = at
+        while at < len(rest) and rest[at] == " ":
+            at += 1
+        if at >= len(rest) or at - start >= 4:
+            return False                            # nothing — an empty item's past it — or indented code
+        char = rest[at]
+        if char == QUOTE:                           # a nested quote
+            at += len(QUOTE) + (1 if rest.startswith(" ", at + len(QUOTE)) else 0)
+            continue
+        if char == "#" and HEADING_TEXT.fullmatch(rest, at):
+            return False
+        if char in "-*_":
+            # A thematic break holds that character and spaces only, to the end of the line — three of it at least.
+            if char not in breaks:
+                breaks[char] = len(rest.rstrip(char + " "))
+            if at >= breaks[char] and rest.count(char, at) >= 3:
+                return False
+        if char in "`~<" and _opens(rest[at:]) is not None:
+            return False
+        item = _item(rest, at=at)
+        if item is None:
+            return True
+        at += item                                  # the item's content, as its own container's
 
 
 def _opens(rest: str) -> Optional[Tuple[str, str]]:
@@ -244,18 +260,19 @@ def _closes(rest: str, fence: str) -> bool:
         and _blank(found.group("info"))
 
 
-def _item(rest: str, interrupts: bool = False) -> Optional[int]:
-    """The columns from a list item's marker to its content when ``rest`` — a line past its indentation, no thematic
-    break — starts one; ``None`` otherwise. Five spaces or more after the marker make the content start one past it:
-    code. ``interrupts``: the line would otherwise continue a paragraph, which neither an empty item nor an ordered
-    one that does not start at 1 interrupts."""
-    found = ITEM.fullmatch(rest)
+def _item(rest: str, interrupts: bool = False, at: int = 0) -> Optional[int]:
+    """The columns from a list item's marker to its content when ``rest`` from ``at`` — a line past its indentation,
+    its tabs expanded, no thematic break — starts one; ``None`` otherwise. Five spaces or more after the marker make the content start
+    one past it: code. ``interrupts``: the line would otherwise continue a paragraph, which neither an empty item nor
+    an ordered one that does not start at 1 interrupts."""
+    found = ITEM.match(rest, at)
     if found is None:
         return None
-    marker, gap, text = found.group("marker"), len(found.group("gap")), found.group("text")
-    if interrupts and (_blank(text) or (marker[-1] in ".)" and int(marker[:-1]) != 1)):
+    # Past the spaces after its marker — the line's tabs expanded — its text is blank only when it is empty.
+    marker, gap, text = found.group("marker"), len(found.group("gap")), found.end()   # text: where it starts
+    if interrupts and (text == len(rest) or (marker[-1] in ".)" and int(marker[:-1]) != 1)):
         return None
-    if not text:
+    if text == len(rest):
         return len(marker) + 1                           # an empty item, or one of spaces only
     if gap == 0:
         return None                                      # `-x`, `1.x`: no item
