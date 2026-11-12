@@ -968,7 +968,9 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
             name = probe.rstrip("/")
             state = _named(lines, {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if probe.endswith("/") else set()),
                            name)
-        if not state and not _named(lines, {line}, probe):       # there already, with no negation below it: kept
+        # A line that is a pattern is asked of a name standing in for the paths it matches: a negation below it that
+        # is a pattern too, or names one of them, may take back another — `!/.cortex-sync-[0-9]*` the real ones.
+        if not state and not _named(lines, {line}, probe, _stands_in(line)):  # there, with no negation below: kept
             missing.append(line)
     if missing:
         newline = b"\r\n" if b"\r\n" in data else b"\n"
@@ -989,20 +991,34 @@ def gitignore_lines(text: str) -> List[str]:
     return [re.sub(r"(?<!\\) +$", "", line) for line in lines]
 
 
-def _negations(lines: List[str], name: str) -> bool:
+_GLOB = re.compile(r"[*?\[\\]")
+
+
+def _stands_in(line: str) -> Optional[Pattern[str]]:
+    """The paths ``line`` of .gitignore matches, when it is a pattern — one Cortex cannot read matching any —, for
+    which a name only stands in (``_negations``); ``None`` for a line that names one path."""
+    if _GLOB.search(line) is None:
+        return None
+    return _pattern(line) or re.compile(".*", re.DOTALL)
+
+
+def _negations(lines: List[str], name: str, glob: Optional[Pattern[str]] = None) -> bool:
     """Whether a line of ``lines`` is a negation that can match ``name``, read as git reads a pattern of the root's
     .gitignore (``_pattern``): one with a ``/`` but at its end against the path from the root, any other against its
-    last component too — and against both, over-matching being the safe side —, compared as a repository that ignores
-    case compares it, and a name written decomposed as the same name composed (macOS writes them so). A negation
-    Cortex cannot read is one that may: only git can tell. Any other — ``!.gitkeep``, ``!*.d.ts`` — takes back
-    another path, never this one."""
-    path = _folded(name.rstrip("/"))
-    last = path.rsplit("/", 1)[-1]
+    last component too — and against both, over-matching being the safe side —, the name as written and case folded,
+    as a repository that does not ignore case and one that does compare it, and a name written decomposed as the same
+    name composed (macOS writes them so). A negation Cortex cannot read is one that may: only git can tell; and so is
+    any pattern, or any name ``glob`` matches, when ``name`` stands in for the paths of the pattern ``glob``. Any
+    other — ``!.gitkeep``, ``!*.d.ts`` — takes back another path, never this one."""
+    paths = {unicodedata.normalize("NFC", name.rstrip("/")), _folded(name.rstrip("/"))}
+    paths |= {path.rsplit("/", 1)[-1] for path in paths}
     for line in lines:
         if not line.startswith("!"):
             continue
         pattern = _pattern(line[1:])
-        if pattern is None or pattern.fullmatch(path) or pattern.fullmatch(last):
+        if pattern is None or any(pattern.fullmatch(path) for path in paths) or (
+                glob is not None and (_GLOB.search(line[1:]) is not None
+                                      or glob.fullmatch(unicodedata.normalize("NFC", line[1:].strip("/"))))):
             return True
     return False
 
@@ -1014,16 +1030,19 @@ def _folded(text: str) -> str:
 
 
 def _pattern(text: str) -> Optional[Pattern[str]]:
-    """A .gitignore pattern, its ``!`` left out, as git's wildmatch reads it, case folded (``_folded``): ``*`` and
-    ``?`` within one component, ``**`` as a whole component across any number of them, a bracket expression, a
+    """A .gitignore pattern, its ``!`` left out, as git's wildmatch reads it, composed, and blind to case but in a
+    negated bracket, whose members are compared as written — over-matching in a repository that ignores case and one
+    that does not: ``*`` and ``?`` within one component, ``**`` as a whole component across any number of them —
+    one right after the literal head too, which git compares before it globs the rest —, a bracket expression, a
     backslash that makes the next character a literal — one of the root's .gitignore, its leading ``/`` and a final
     ``/`` set aside: a final ``/`` keeps it to directories, and over-matching is the safe side. ``None`` for what only
     git reads: a character class such as ``[:alpha:]``, a bracket never closed, a backslash at the end."""
-    text = _folded(text)
+    text = unicodedata.normalize("NFC", text)       # case: re.IGNORECASE, a negated bracket aside
     if text.endswith("/"):
         text = text[:-1]
     if text.startswith("/"):
         text = text[1:]
+    head = next((index for index, char in enumerate(text) if char in "*?[\\"), len(text))
     out, at = [], 0
     while at < len(text):
         char = text[at]
@@ -1036,7 +1055,9 @@ def _pattern(text: str) -> Optional[Pattern[str]]:
             end = at
             while end < len(text) and text[end] == "*":
                 end += 1
-            whole = end - at >= 2 and (at == 0 or text[at - 1] == "/") and (end == len(text) or text[end] == "/")
+            # git compares the literal head before the first wildcard, then globs the rest: a `**` right after the
+            # head is at the start of what it globs — whole, as one after a `/` is (dir.c, match_pathname).
+            whole = end - at >= 2 and (at == head or text[at - 1] == "/") and (end == len(text) or text[end] == "/")
             if whole and end < len(text):
                 out.append("(?:.*/)?")          # `**/`: any number of folders, none included
                 end += 1
@@ -1056,7 +1077,7 @@ def _pattern(text: str) -> Optional[Pattern[str]]:
             out.append(re.escape(char))
             at += 1
     try:
-        return re.compile("".join(out), re.DOTALL)
+        return re.compile("".join(out), re.DOTALL | re.IGNORECASE)
     except re.error:                            # a range backwards, say: git's to read
         return None
 
@@ -1070,7 +1091,9 @@ def _bracket(text: str, at: int) -> Optional[Tuple[str, int]]:
     while at < len(text):
         char = text[at]
         if char == "]" and not first:
-            return f"(?!/)[{'^' if negated else ''}{''.join(members)}]", at + 1
+            if negated:                         # never narrowed by case: git compares its members as written
+                return f"(?-i:(?!/)[^{''.join(members)}])", at + 1
+            return f"(?!/)[{''.join(members)}]", at + 1
         if char == "[" and text.startswith("[:", at):
             return None
         if char == "\\":
@@ -1092,12 +1115,13 @@ def _bracket(text: str, at: int) -> Optional[Tuple[str, int]]:
     return None
 
 
-def _named(lines: List[str], wanted: Set[str], name: str) -> bool:
+def _named(lines: List[str], wanted: Set[str], name: str, glob: Optional[Pattern[str]] = None) -> bool:
     """Whether a line of ``lines`` names the path ``name`` as one of ``wanted`` writes it, with no negation below the
     last such line that could take it back: what Cortex can tell without git. A pattern, another .gitignore,
-    info/exclude or core.excludesFile is git's to read: not that Cortex can tell."""
+    info/exclude or core.excludesFile is git's to read: not that Cortex can tell. ``glob``: the paths of the line of
+    ``wanted``, a pattern, ``name`` stands in for (``_stands_in``)."""
     found = [index for index, line in enumerate(lines) if line in wanted]
-    return bool(found) and not _negations(lines[found[-1] + 1:], name)
+    return bool(found) and not _negations(lines[found[-1] + 1:], name, glob)
 
 
 def in_no_repository(root) -> bool:
