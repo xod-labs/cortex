@@ -495,13 +495,26 @@ def try_unmoved(root: str) -> Optional[Tuple[str, str]]:
     if project.before_team(str(teams[1])):
         return (f"drop the try by hand: remove `version` from {LOCAL_FILE} — the team's version, {teams[1]}, is "
                 f"before {project.FIRST_TEAM_VERSION}, which reads none", BY_HAND)
-    if store.too_old_for(teams[1], store.own_version()):
-        # --local at or below the team's version removes the try, then reads the team's — refused, the removal put
-        # back: the try is removed by hand, and the team's pin moved as the run after it says.
+    own = store.own_version()
+    # --local at or below the team's version removes the try, then reads the higher of the team's version and this
+    # developer's own cortex.toml (§3.1) — refused when too new, the removal put back: the try is removed by hand.
+    found = cascade.loose_versions(root, folder).get("project") if developers_toml(root) is True else None
+    mine = Version(found[1]) if found is not None else None
+    if mine is not None and mine > teams[1] and store.too_old_for(mine, own):
+        return (f"drop the try by hand: remove `version` from {LOCAL_FILE}, and {mine_by_hand(mine)}", BY_HAND)
+    if store.too_old_for(teams[1], own):
+        # The team's pin moved then, as the run after the edit says.
         return (f"drop the try by hand: remove `version` from {LOCAL_FILE} — the team's version, {teams[1]}, is newer "
                 "than this cortex too, which `cortex upgrade --local` would read once the try is removed, and refuse",
                 BY_HAND)
     return None
+
+
+def mine_by_hand(mine: object) -> str:
+    """The edit of this developer's own ``cortex.toml``, of version ``mine`` — newer than this cortex, read above the
+    team's once a try is removed (§3.1): uncommitted beside the team's file, no command writes it."""
+    return (f"set {PROJECT_FILE}'s version, {mine}, to one this cortex serves, or remove it to read the team's — "
+            "uncommitted beside the team's file, it is this developer's, which no command writes")
 
 
 def fix_team_file(unread: str) -> str:
@@ -545,7 +558,8 @@ def too_new(root: str, own: Version) -> Optional[str]:
     other = (f"\n{'or ' if unmoved[1] == BY_HAND else ''}{unmoved[0]}" if unmoved is not None else
              f"\nor drop the try: cortex upgrade --local {teams[1]}" if name == LOCAL_FILE else
              f"\nor move the team's pin: cortex upgrade --team {down}"
-             if folder is not None and moves_team_pin(root, folder, own) else "")
+             if folder is not None and moves_team_pin(root, folder, own) else
+             f"\nor {mine_by_hand(version)}" if developers_toml(root, name) is True else "")
     return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
             f"    {store.update_command(version)}{other}")
 

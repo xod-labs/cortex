@@ -803,21 +803,24 @@ def _developers_version(project: config.Project) -> Optional[Version]:
     return Version(str(value)) if grammar.is_version(value) else None
 
 
-def _drop_first(project: config.Project, developer: config.cascade.Setting, target: Version,
-                the_store: store.Store) -> str:
+def _drop_first(project: config.Project, developer: config.cascade.Setting, the_store: store.Store) -> str:
     """How a move to ``target`` is let through where ``developer``, this developer's version read above it, is newer
-    than this cortex: the try dropped by ``--local target`` — which removes it, at or below the team's version, then
-    reads what is left. Left too new as well — the team's pin, or this developer's ``cortex.toml`` — that run would
+    than this cortex: the try dropped by ``--local`` to the team's version — at or below it, the try is removed, and
+    what is left read. Left too new as well — the team's pin, or this developer's ``cortex.toml`` — that run would
     refuse it and put the try back: the try is removed by hand. A developer's ``cortex.toml`` no command writes."""
     if developer.origin != config.LOCAL_FILE:
         return (f"move it by hand first: set {developer.origin}'s version to one this cortex serves — uncommitted beside "
                 "the team's file, it is this developer's, which no command writes")
     mine = _developers_version(project)
-    left = max(project.team_version, mine) if mine is not None else project.team_version
-    if store.too_old_for(left, the_store.own):
+    team = project.team_version
+    if mine is not None and mine > team and store.too_old_for(mine, the_store.own):
+        return (f"drop the try by hand first: remove `version` from {config.LOCAL_FILE}, and "
+                f"{config.mine_by_hand(mine)}")
+    if store.too_old_for(team, the_store.own):
         return (f"drop the try by hand first: remove `version` from {config.LOCAL_FILE} — what is read once it is "
-                f"removed, Cortex {left}, is newer than this cortex too, which `cortex upgrade --local` would refuse")
-    return f"drop the try first: cortex upgrade --local {target}"
+                f"removed, Cortex {team}, is newer than this cortex too, which `cortex upgrade --local` would refuse")
+    # --local at or below the team's version drops the try — above it, it moves it.
+    return f"drop the try first: cortex upgrade --local {team}"
 
 
 def _read_floor(project: config.Project) -> Optional[Version]:
@@ -1053,7 +1056,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
         after = max(target, Version(str(mine.value)))
         if store.too_old_for(after, the_store.own):
             raise UpgradeError(f"after the move, this project would read Cortex {after}, {mine.origin}'s, newer "
-                               f"than this cortex, {the_store.own} — {_drop_first(project, mine, target, the_store)}. "
+                               f"than this cortex, {the_store.own} — {_drop_first(project, mine, the_store)}. "
                                "Nothing was changed")
         if after != target:
             # The developer's version, still read over the team's after the move: one this cortex does not serve —
@@ -1332,7 +1335,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         after = max(target, Version(str(developer.value)))
         if store.too_old_for(after, the_store.own):
             raise UpgradeError(f"after the move, this project would read Cortex {after}, {developer.origin}'s, newer "
-                               f"than this cortex, {the_store.own} — {_drop_first(project, developer, target, the_store)}"
+                               f"than this cortex, {the_store.own} — {_drop_first(project, developer, the_store)}"
                                ". Nothing was changed")
     if target != current and grammar.before_team(str(target)):
         uses = [what for what, used in ((project.team_name, project.team_file),
@@ -1349,7 +1352,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
         # The team's file, read by the version moved to, which refuses it first: said now, not after the move.
         refusal = config.team_file_refusal(root)
         if refusal is not None:
-            again = "cortex upgrade" + (f" {wanted}" if wanted else "")
+            again = "cortex upgrade" + ("" if announce else " --all") + (f" {wanted}" if wanted else "")
             raise UpgradeError(f"{project.team_name} is not read: this project pins Cortex {current}, before "
                                f"{grammar.FIRST_TEAM_VERSION} — {_fix_first(target, refusal)}, then run `{again}` "
                                "again. Nothing was changed")
