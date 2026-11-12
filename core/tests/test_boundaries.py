@@ -173,6 +173,14 @@ class TestLayoutTests(unittest.TestCase):
         self.assertIn("python3 -m unittest discover -s tests", macos)
         self.assertEqual(re.findall(r"\btests\.(test_\w+)", workflow), [])
 
+    def test_the_workflow_runs_this_suite_on_a_change_of_what_decides_it_runs(self):
+        # The changes action decides whether the job runs: a change of it that its path filter leaves out skips the
+        # suite, which GitHub counts as passing — as the core's own change, or the workflow's.
+        workflow = (self.REPO / ".github" / "workflows" / "core-tests.yml").read_text(encoding="utf-8")
+        paths = workflow.split("paths: |\n", 1)[1].split("\n\n", 1)[0].split()
+        for path in ("core/**", ".github/actions/changes/**", ".github/workflows/core-tests.yml"):
+            self.assertIn(path, paths)
+
 
 if __name__ == "__main__":
     unittest.main()
