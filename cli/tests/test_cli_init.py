@@ -790,7 +790,7 @@ class OptionTests(InitTestCase):
                       "--workspace — cortex init --tool claude --force writes it again", shown)
         proc = self.init("--tool", "claude", "--force")
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("<!-- cortex:bootstrap layout=single format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("<!-- cortex:bootstrap layout=single format=3 digest=", self.read("CLAUDE.md"))
         self.assertIn("note: CLAUDE.md held Cortex's personality block, with no title Cortex can read, so its layout "
                       "could not be told, and a single project's is written — `cortex init --tool claude --workspace "
                       "--force` writes a workspace's; what you wrote is in CLAUDE.md.bak",
@@ -798,7 +798,7 @@ class OptionTests(InitTestCase):
         self.assertEqual(self.read("CLAUDE.md.bak"), old)
         proc = self.init("--tool", "claude", "--workspace", "--force")                      # the command the note names
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=3 digest=", self.read("CLAUDE.md"))
         self.assertNotIn("could not be told", proc.err)
         self.assertEqual(self.read("CLAUDE.md.bak"), old)
 
@@ -812,7 +812,7 @@ class OptionTests(InitTestCase):
         (self.project / "CLAUDE.md").write_bytes(before_the_marker.encode("utf-8"))
         proc = self.init("--tool", "claude", "--force")
         self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertIn("<!-- cortex:bootstrap layout=single format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("<!-- cortex:bootstrap layout=single format=3 digest=", self.read("CLAUDE.md"))
         self.assertNotIn("could not be told", proc.err)
 
     def test_a_file_with_neither_title_nor_personality_block_is_replaced_saying_nothing_of_a_layout(self):
