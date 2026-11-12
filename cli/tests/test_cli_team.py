@@ -2550,8 +2550,11 @@ class FourthCodeReviewTests(TeamTestCase):
                 if kind == "git":
                     self.git(root, "init", "-q")
                 os.mkfifo(root / ".gitignore")
+                # git on the PATH where the repository is git's: without it, Cortex never asks git, and that half of
+                # the test would pass with the guard before git removed.
+                env = {"PATH": os.path.dirname(GIT), **GIT_ENV} if kind == "git" else {}
                 for args in (("sync",), ("init", "--tool", "claude", "--force")):
-                    proc = self.cortex_within(root, *args)
+                    proc = self.cortex_within(root, *args, **env)
                     self.assert_ok(proc)
                     self.assertIn(".gitignore is not a file, which git cannot read: make it a file, with ", proc.err)
                     self.assertNotIn("Traceback", proc.err)
