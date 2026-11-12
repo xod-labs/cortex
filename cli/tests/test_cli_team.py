@@ -2514,6 +2514,26 @@ class FourthCodeReviewTests(TeamTestCase):
                 (root / TEAM).write_text(f'version = "{OWN}"\n', encoding="utf-8")
                 self.assert_ok(self.cortex_within(root, "init", "--tool", "claude"))
 
+    @SOURCE
+    @unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")
+    @harness.outside_a_repository
+    def test_a_team_s_folder_that_is_a_loop_of_links_is_never_said_missing(self):
+        # A cortex.toml without version, beside agents/ that is a loop of links — the team's file there, unread —
+        # and a cortex.local.toml that does not read: the local file's error, never "agents/ is not there", with
+        # its submodule remedy; fixed, the team's file's own error.
+        root = self.project('theme = "h2g2"\n', local="bogus = 1\n", committed=False)
+        (root / "agents").symlink_to(root / "others")
+        (root / "others").symlink_to(root / "agents")
+        for args in (("sync",), ("validate",), ("upgrade", "9.9.8"), ("init", "--tool", "claude")):
+            with self.subTest(args=args):
+                proc = self.cortex(root, *args)
+                self.assertNotEqual(proc.returncode, 0, proc.out + proc.err)
+                self.assertIn('cortex.local.toml: unknown key "bogus"', proc.err)
+                self.assertNotIn("agents/ is not there", proc.err)
+        (root / "cortex.local.toml").write_text("", encoding="utf-8")
+        proc = self.cortex(root, "sync")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"{TEAM}: cannot be read — ", proc.err)
 
 
 def newer_refused(pin):
