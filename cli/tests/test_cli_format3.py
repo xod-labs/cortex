@@ -80,9 +80,13 @@ class TemplateTests(unittest.TestCase):
                              b"says, or, when none names it, tell the user what it says, and go no further",
                              # A project before 1.8.0, alone, in step: no sync and no self-update to stop on. A spec of
                              # another version is in the condition: it falls to the sync, never through both rules.
-                             b"`cortex.local.toml` sets no `version`, the team's file sets none or `cortex.toml` is committed \xe2\x80\x94 "
-                             b"`git ls-files cortex.toml`, at the ",
-                             b"prints it: below 1.8.0 its version is the team's, and the team's file is not read \xe2\x80\x94 "
+                             # "and either": read as three alternatives, a local `version` absent alone would run
+                             # nothing. A git that refuses, or none, reads a `.git` above, as the CLI does.
+                             b"`cortex.local.toml` sets no `version`, and either the team's file sets none or `cortex.toml` "
+                             b"is committed \xe2\x80\x94 `git ls-files cortex.toml`, at the ",
+                             b"prints it, or, where git is not installed or that command fails, a `.git` is at the ",
+                             b" root or above it: below 1.8.0 its version is the team's, and the team's file is not read "
+                             b"\xe2\x80\x94 "
                              b"and the spec is of that version \xe2\x86\x92 the ", b"reads a version before 1.8.0: run "
                              b"nothing. **No `synced`** in any other case, while the spec names a version",
                              # Synced to a version before 1.8.0 that no sync records `synced` for — a committed pin
@@ -97,6 +101,7 @@ class TemplateTests(unittest.TestCase):
                 self.assertNotIn(b"when the spec is of that version, run nothing", text)
                 self.assertNotIn(b"**No `synced`** otherwise", text)
                 self.assertNotIn(b"neither `cortex.local.toml` nor the team's file sets a `version`", text)
+                self.assertNotIn(b"sets no `version`, the team's file sets none or", text)
                 self.assertNotIn(b"No `synced` still \xe2\x86\x92 run `cortex --version` again", text)
                 # A checkout is said before a version moved, a missing team's folder before a missing version.
                 self.assertLess(text.index(b"**A checkout**"), text.index(b"**A version moved**"))
