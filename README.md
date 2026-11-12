@@ -178,11 +178,11 @@ If no alias is mentioned, Cortex infers the service from the active file context
 
 | File | Committed | What it holds |
 |---|---|---|
-| `cortex.toml` | yes | `version`, the Cortex version the project pins; the team's `theme`; optionally `sync` and `claude_access` |
+| `cortex.toml` | yes | `version`, the Cortex version the project pins; the team's `theme`; optionally `sync`, `claude_access` and `agents`, the team's folder |
 | `cortex.lock` | yes | the pinned version and the digest of its spec — `cortex sync` writes it, nobody edits it |
 | the bootstrap file | yes | `CLAUDE.md`, `AGENTS.md`, … — what your AI tool reads first |
 | `project-overview.md`, `project-context.md` | yes | your project's vision and stack — per service, too, in a workspace |
-| `agents/` | yes | your overlays, if any |
+| `agents/` | yes | your overlays, if any — the team's folder, unless `cortex.toml` renames it ([the team's folder](#the-teams-folder)) |
 | `agents/cortex.team.toml`, `agents/cortex.team.lock` | yes, in the team's repository | the team's settings — its `version`, `theme`, `sync`, `claude_access` and the keys it locks — and the lock of its version ([the team's file](#the-teams-file)) |
 | `cortex.local.toml` | no — git-ignored | `spec`, where the spec is on this machine; your own `theme` and `claude_access`, which win over the team's; a `version` you try; `synced`, what `cortex sync` read |
 | `cortex/` | no — git-ignored | the link or the copy, in `link` or `copy` mode |
@@ -205,6 +205,20 @@ locked = ["claude_access"]
 - **A try.** A `version` in your `cortex.local.toml` — `cortex upgrade --local VERSION` writes it — is read when it is higher than the team's, never lower: a version to try before you propose it. It has no lock, and every `cortex sync` says you are ahead; at or below the team's, it changes nothing, and `cortex upgrade --local` with the team's version removes it. `cortex sync --locked`, in CI, checks the team's version and its lock, never a try.
 - **The other keys** are defaults: `cortex.toml`'s and yours win over them. A key the file lists in `locked` takes the team's value, with a warning at every sync, and `cortex validate --strict` fails; a flag against it is refused. `version` is never locked: moving it is the team's matter, and a developer may try a later one.
 - **`claude_access` locks to `false` only.** A team may forbid a permission, never grant one on a developer's machine: locked to `false`, Claude Code asks before it reads the spec, whatever you set; locked to `true`, it would read it without asking over a developer who declined — so that lock is refused.
+
+### The team's folder
+
+The team's folder is `agents/`, at the root: the workspace's overlays — roles, capabilities, themes, workflows — the team's `project-overview.md` and `project-context.md`, and the team's file and its lock. A committed `cortex.toml` may rename it, and that is all it can do ([ADR-013](docs/adr/ADR-013-configuration-cascade.md) §3.6):
+
+```toml
+agents = "team-agents"
+```
+
+- **Inside the workspace.** A relative path, with `/`: no `..`, no absolute path of any platform, no `\` nor `:`. Not the root, `cortex/` or what it holds, a service's `agents/` or any folder inside a service, a folder that is a service or holds one, a folder holding a project's `cortex.toml`, nor a folder whose name starts with `.`, or ends with `.` or a space, which Windows drops — names compared in any case, as file systems that ignore case fold the common names — `straße` is not `strasse`. The default, `agents/`, is never refused, even named `agents = "agents"`; `Agents` names a folder of its own, as written.
+- **In a committed `cortex.toml` only**, so that every developer reads the same folder. `cortex.local.toml` and the team's file refuse it — the team's file is in the folder; the machine's `config.toml` warns and reads nothing of it. In a `cortex.toml` git does not track — a workspace root that is no repository — it is refused, and the team's folder is `agents/`.
+- **Everything follows it**: the team's file and its lock, the overlays `cortex validate` checks, the team's context files, the project's own themes, what `cortex init` scaffolds there, the bootstrap — which reads the folder `cortex sync` records — and the runtime's reading. The service scan leaves it out. It may be a symbolic link leading outside the workspace — a team's repository checked out elsewhere: Cortex reads through it, and checks its path as written.
+- **Missing, or left behind.** A folder `agents` names that is not there is a warning at `cortex sync`, an error under `--locked`, and `TEAM_FOLDER_MISSING` in `cortex validate`. An `agents/` that still holds overlays, the team's context files, or a team's file and lock once the folder is renamed is said — `TEAM_FOLDER_LEFT_BEHIND` — and not read: move what it holds. An `agents/` inside the team's folder is said unread too — `TEAM_FOLDER_NESTED` — naming `agents = "<folder>/agents"`.
+- **From 1.8.0.** `agents` is read once the team's version is 1.8.0 or later; before it, it is refused naming 1.8.0, and `cortex upgrade` refuses to move below 1.8.0 a project that uses it. A version newer than this cortex, pinned by the team's file in a folder whose name this cortex refuses — `.team` — is said first, with `cortex self-update` alone: a later version may take the name.
 
 ### Coming from a git submodule or clone
 
@@ -485,7 +499,7 @@ cortex sync --locked
 cortex validate --strict
 ```
 
-**The team's repository checked alone** is checked out at `agents/` in a scratch project whose `cortex.toml` sets nothing the team's file gives — an empty file — and the same lines run there.
+**The team's repository checked alone** is checked out at `agents/` — whatever the projects that read it call it — in a scratch project whose `cortex.toml` sets nothing the team's file gives — an empty file — and the same lines run there.
 
 ### Add an overlay
 

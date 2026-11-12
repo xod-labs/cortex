@@ -306,3 +306,11 @@ After the counter-review of 2026-11-05:
 - **A commit git refuses** — a hook, a signature it cannot make — says that git refused it, with what git said, and that the files stay staged, ready to commit by hand.
 - **`--branch` takes a name as it is written**: `git check-ref-format refs/heads/NAME` as well as `--branch`, which expands `@{-1}` to the branch it names; such a name is an argument error, exit 2.
 - **The edges of git** (§3.5): a branch the run made in one work tree is said to be checked out there when a linked work tree of the same repository comes next, rather than *exists already*; a project that is a submodule says, once committed, that its superproject shows it changed; where git ignores every file the upgrade writes, no branch is made, and the command says there is nothing to commit rather than *must commit*.
+
+### 2026-11-08 — ADR-013, the configuration cascade
+
+Carried by [#334](https://github.com/xod-labs/cortex/issues/334), for 1.8.0.
+
+- **§3.2 — `PINNED`** is the team's version ([ADR-013](ADR-013-configuration-cascade.md) §3.1): a committed `cortex.toml`'s, else the team's file's, read loosely of a project this cortex cannot read whole; `--json` adds its origin.
+- **§3.4 — `cortex prune`** keeps each project's candidate versions — `cortex.toml`'s, the team's file's, a try — and the version of the spec read now.
+- **§3.5 — `--all`** moves the projects that pin their own version; one that follows the team's file is skipped, *follows the team's 1.8.0*, exit 0. `--all --team` groups the projects by their team's folder, checks every follower's overlays, then moves each team's file once (ADR-013 §3.11).

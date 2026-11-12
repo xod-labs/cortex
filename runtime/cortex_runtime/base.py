@@ -22,25 +22,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from cortex_core import cascade, project
+from cortex_core import cascade, project, workspace
 
 
 @dataclass(frozen=True)
 class Pin:
     """What a project's files say the runtime needs: the team's version, and the team's theme — locked by
-    the team's file, it wins over the deployment's ``CORTEX_THEME`` (ADR-013 §3.12)."""
+    the team's file, it wins over the deployment's ``CORTEX_THEME`` (ADR-013 §3.12) — and the team's
+    folder, ``cortex.toml``'s ``agents``, where the workspace's overlays and the team's context are (§3.6)."""
 
     version: str
     theme: str
     theme_locked: bool = False
+    team_folder: str = project.TEAM_FOLDER
 
     def to_job(self) -> dict:
-        return {"version": self.version, "theme": self.theme, "theme_locked": self.theme_locked}
+        return {"version": self.version, "theme": self.theme, "theme_locked": self.theme_locked,
+                "team_folder": self.team_folder}
 
     @classmethod
     def from_job(cls, data: Optional[Mapping[str, Any]]) -> Optional["Pin"]:
         return None if data is None else cls(version=data["version"], theme=data["theme"],
-                                             theme_locked=bool(data.get("theme_locked", False)))
+                                             theme_locked=bool(data.get("theme_locked", False)),
+                                             team_folder=str(data.get("team_folder", project.TEAM_FOLDER)))
 
 
 def cortex_home() -> Path:
@@ -88,7 +92,31 @@ def read_pin(root: Path) -> Optional[Pin]:
             # — a 422 there no sync could ever clear (§9).
             found = cascade.resolve(data, None, {}, {}, locked=True)
             return Pin(version=_team_version(data["version"], None, local), theme=str(found.value("theme")))
-        team = cascade.read_team(str(root))    # never raises: what is there and unread is an Unreadable
+        # The team's folder cortex.toml names, inside the root the runtime mounts (§3.6) — asked of no git,
+        # whose committedness the command checks: its text, and what the file system says of it.
+        folder = project.check_agents(data["agents"]) if "agents" in data else project.TEAM_FOLDER
+        synced = local.get("synced")
+        # pinned other than cortex.toml's: the team's file won over an uncommitted cortex.toml (decision 24 lets a
+        # committed one win), whose keys the team's resolution leaves out where the file sets them (§3.1).
+        committed = False if isinstance(synced, dict) and "project" in synced \
+            and synced.get("pinned") != synced["project"] else None
+        if folder != project.TEAM_FOLDER:
+            workspace.check_team_folder(str(root), folder)
+        if folder != project.TEAM_FOLDER and committed is False:
+            raise project.ProjectFileError(project.AGENTS_UNCOMMITTED)      # as the command refuses it (§9)
+        if folder != project.TEAM_FOLDER and not (isinstance(synced, dict) and synced.get("agents") == folder):
+            # Read from a committed cortex.toml only, which sync checks with git and records (§3.1, §9).
+            raise ValueError(f"{project.PROJECT_FILE}: agents {project.shown(folder)} is not the team's folder "
+                             f"`cortex sync` recorded in {project.LOCAL_FILE} — run `cortex sync` in the project, "
+                             f"which reads it from a committed {project.PROJECT_FILE} only")
+        recorded = synced.get("agents") if isinstance(synced, dict) else None
+        if folder == project.TEAM_FOLDER and recorded is not None and recorded != folder:
+            # The folder sync recorded is gone from cortex.toml: the template reads the recorded one (§3.10), and
+            # the runtime would serve another — a sync tells which, once more.
+            raise ValueError(f"{project.LOCAL_FILE}: the team's folder `cortex sync` recorded, {project.shown(recorded)}, "
+                             f"is not the one {project.PROJECT_FILE} names, {folder}/ — run `cortex sync` in the project")
+        name = cascade.team_name(folder)
+        team = cascade.read_team(str(root), folder)    # never raises: what is there and unread is an Unreadable
         project.check_project(data, project.PROJECT_REQUIRED if team is not None else ())
         if before and alone is None:
             # A synced left from another version: `cortex sync` reads a committed cortex.toml before 1.8.0 alone, and
@@ -97,12 +125,7 @@ def read_pin(root: Path) -> Optional[Pin]:
                       f"{project.FIRST_TEAM_VERSION} alone — not committed, it refuses this file too")
         if isinstance(team, cascade.Unreadable):
             raise project.ProjectFileError(team.error)
-        synced = local.get("synced")
-        # pinned other than cortex.toml's: the team's file won over an uncommitted cortex.toml (decision 24 lets a
-        # committed one win), whose keys the team's resolution leaves out where the file sets them (§3.1).
-        committed = False if isinstance(synced, dict) and "project" in synced \
-            and synced.get("pinned") != synced["project"] else None
-        found = cascade.resolve(data, None, {}, {}, locked=True, team_data=team, committed=committed)
+        found = cascade.resolve(data, None, {}, {}, locked=True, team_data=team, committed=committed, team_name=name)
     except OSError as error:
         raise ValueError(f"{project.PROJECT_FILE} of this workspace cannot be read: {error.strerror or error}")
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
@@ -111,20 +134,24 @@ def read_pin(root: Path) -> Optional[Pin]:
         raise ValueError(f"{error} — {remedy}")
     team_version = None if not found.team or team is None else team.get("version")
     try:
-        version = _team_version(data.get("version"), team_version, local)
+        version = _team_version(data.get("version"), team_version, local, name)
     except Unrecorded:
         if alone is None:
             raise
         # The record is another version's, and the sync it names refuses or replaces cortex.toml as 1.7.0 reads it.
         # Only that refusal: a try, a version that is none, keep their own — the sync clears neither.
         raise ValueError(f"{alone} — {remedy}") from None
-    return Pin(version=version, theme=str(found.value("theme")), theme_locked=found["theme"].locked)
+    return Pin(version=version, theme=str(found.value("theme")), theme_locked=found["theme"].locked, team_folder=folder)
 
 
 def _gives_what_it_lacks(root: Path, data: Mapping[str, Any]) -> bool:
     """Whether ``cortex.toml`` fails 1.7.0's grammar only for a key the team's file gives instead — the one
     case a sync that reads the team's file clears (ADR-013 §3.12): a team's file of its own grammar, which
-    pins a version — 1.8.0 or later, above this one — and sets each required key ``cortex.toml`` lacks."""
+    pins a version — 1.8.0 or later, above this one — and sets each required key ``cortex.toml`` lacks. Never
+    one that names a team's folder: a sync reads ``agents`` from a committed ``cortex.toml`` of 1.8.0 or later
+    only, and refuses this one (§3.6)."""
+    if "agents" in data:
+        return False
     try:
         project.check_project(data, project.PROJECT_REQUIRED)
     except project.ProjectFileError:
@@ -154,7 +181,8 @@ class Unrecorded(ValueError):
     """The versions the workspace's files pin are not those ``cortex sync`` recorded: a ``422`` naming the sync."""
 
 
-def _team_version(pin: Optional[str], team: Optional[str], local: Mapping[str, Any]) -> str:
+def _team_version(pin: Optional[str], team: Optional[str], local: Mapping[str, Any],
+                  team_name: str = cascade.TEAM_NAME) -> str:
     """The team's version (ADR-013 §3.12), with no git to ask: ``synced``'s ``pinned``, once each file's
     ``version`` is still what ``cortex sync`` recorded; without ``synced``, ``cortex.toml``'s when it pins
     one — alone before 1.8.0, ``team`` then ``None`` — else the team's file's. ``ValueError`` — a ``422``
@@ -181,7 +209,7 @@ def _team_version(pin: Optional[str], team: Optional[str], local: Mapping[str, A
                              f"{version}: remove the try, or move the team to it, to run")
         return version
     if pin is not None and team is not None and pin != team:
-        raise ValueError(f"{project.PROJECT_FILE} pins Cortex {pin} and {cascade.TEAM_NAME} Cortex {team}, and "
+        raise ValueError(f"{project.PROJECT_FILE} pins Cortex {pin} and {team_name} Cortex {team}, and "
                          f"`cortex sync` recorded neither: run `cortex sync` in the project")
     version = pin if pin is not None else team
     if tried is not None and project.version_key(tried) > project.version_key(version):

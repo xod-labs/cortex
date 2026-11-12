@@ -102,11 +102,12 @@ class ConfigCommandTests(SettingsTestCase):
         proc = self.cortex(project, "config")
         self.assert_ok(proc)
         lines = {line.split()[0]: line.split(None, 2)[1:] for line in proc.out.splitlines()}
-        self.assertEqual(list(lines), ["version", "theme", "sync", "claude_access", "releases_url", "update_check",
-                                       "register"])
+        self.assertEqual(list(lines), ["version", "theme", "sync", "claude_access", "agents", "releases_url",
+                                       "update_check", "register"])
         self.assertEqual(lines["version"], [OWN, "cortex.toml"])
         self.assertEqual(lines["theme"], ["none", "cortex.local.toml"])
         self.assertEqual(lines["sync"], ["store", "default"])
+        self.assertEqual(lines["agents"], ["agents", "default"])
         self.assertEqual(lines["claude_access"], ["true", "cortex.toml"])
         self.assertEqual(lines["register"], ["false", "CORTEX_NO_REGISTER"])
         self.assertEqual(snapshot(self.tmp), before)                     # it writes nothing
@@ -401,14 +402,14 @@ class TooNewTests(SettingsTestCase):
     @DEVELOPMENT
     def test_validate_of_a_checkout_s_copy_checks_no_version(self):
         # A copy of a checkout — its marker says no version — passes the gate: the key is said, not the version.
-        project = self.project("99.0.0", extra='agents = "team"\n')
+        project = self.project("99.0.0", extra='endpoints = "team"\n')        # a key no version takes yet
         for tree in ("agents", "templates", "docs"):
             shutil.copytree(harness.REPO / tree, project / "cortex" / tree)
         (project / "cortex" / ".synced").write_text('{"version": null, "files": {}}', encoding="utf-8")
         (project / "cortex.local.toml").write_text('spec = "cortex"\n', encoding="utf-8")
         proc = self.cortex(project, "validate")
         self.assertEqual(proc.returncode, 2, proc.err)
-        self.assertIn('unknown key "agents"', proc.err)
+        self.assertIn('unknown key "endpoints"', proc.err)
         self.assertNotIn(self.WHY, proc.err)
 
     def test_upgrade_says_the_version_not_the_key(self):
@@ -433,6 +434,7 @@ class TooNewTests(SettingsTestCase):
                 self.assertIn("register", proc.out)
 
     @DEVELOPMENT
+    @harness.outside_a_repository
     def test_a_known_key_of_a_project_too_new_says_the_version_and_an_unknown_one_is_unknown(self):
         project = self.project("99.0.0", extra='agents = "team"\n')
         proc = self.cortex(project, "config", "theme")
@@ -440,7 +442,7 @@ class TooNewTests(SettingsTestCase):
         self.assertIn(self.WHY, proc.err)
         proc = self.cortex(project, "config", "verison")
         self.assertEqual(proc.returncode, 2, proc.err)
-        self.assertIn("cortex config knows version, theme, sync, claude_access, releases_url", proc.err)
+        self.assertIn("cortex config knows version, theme, sync, claude_access, agents, releases_url", proc.err)
         found = self.settings(project)
         self.assertIs(found["too_new"], True)
 

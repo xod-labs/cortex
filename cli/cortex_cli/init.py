@@ -501,12 +501,13 @@ def _services(options: argparse.Namespace, root: Path, out: TextIO, err: TextIO)
     return [service_path(name) for name in names]
 
 
-def _team_s_error(error: Exception) -> str:
+def _team_s_error(error: Exception, name: str = config.TEAM_NAME) -> str:
     """The team's file's own error — it does not parse, cannot be read, or its grammar refuses it — and its remedy:
-    removing cortex.toml, the developer's own at a 2.B root, loses it and changes nothing of this. A file that cannot
-    be read — not a file, a link that leads nowhere, a folder this user cannot search — holds no conflict to fix."""
+    removing cortex.toml, the developer's own at a 2.B root, loses it and changes nothing of this. ``name`` is the
+    file as the team's folder shows it. A file that cannot be read — not a file, a link that leads nowhere, a folder
+    this user cannot search — holds no conflict to fix."""
     how = "make it a file you can read" if ": cannot be read — " in str(error) else "a conflict a pull left in it, say"
-    return f"{error}\ncortex init reads {config.TEAM_NAME}: fix it — {how} — then run cortex init again"
+    return f"{error}\ncortex init reads {name}: fix it — {how} — then run cortex init again"
 
 
 def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> None:
@@ -546,8 +547,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     try:
         project = config.load(str(root)) if existing_project else None
     except config.ConfigError as error:
-        if str(error).startswith(f"{config.TEAM_NAME}:"):         # the team's file's own error
-            raise InitError(_team_s_error(error))
+        folder = config.loose_team_folder(str(root))
+        if str(error).startswith(f"{cascade.team_name(folder)}:"):       # the team's file's own error
+            raise InitError(_team_s_error(error, cascade.team_name(folder)))
         raise InitError(f"{error}\ncortex init keeps an existing {config.PROJECT_FILE}: fix it, or remove it to "
                         "start over")
     # As the sync's own check (#310, #325): a link sync from a checkout replaces a link that leads nowhere.
@@ -573,8 +575,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
              "claude_access": options.claude_access}
     for key, value in flags.items():
         if value is not None and key in locks and locks[key] != value:
-            raise InitError(f"{key} is locked to {config.toml_value(locks[key])} by {config.TEAM_NAME} — the team's "
-                            "choice, which an option does not undo")
+            raise InitError(f"{key} is locked to {config.toml_value(locks[key])} by "
+                            f"{project.team_name if project else config.TEAM_NAME} — the team's choice, which an option "
+                            "does not undo")
     team_pins = bool(team_data) and "version" in team_data
     # A project keeps the version it reads — never another, older or newer; a new one takes the team's,
     # or this binary's. A version newer than this binary is refused here.
@@ -600,13 +603,14 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     chosen = options.theme is not None or options.no_personality
     if project is None and theme is None:
         theme = team_theme or "h2g2"
-    # A theme Cortex ships, or one of the project's own, in its agents/personalities/.
-    own_themes = root / "agents" / "personalities"
+    # A theme Cortex ships, or one of the project's own, in its team's folder's personalities/ (ADR-013 §3.6).
+    team_folder = project.team_folder if project else config.TEAM_FOLDER
+    own_themes = root / team_folder / "personalities"
     if theme not in (None, "none") and not any((base / theme).is_dir()
                                                for base in (spec / "agents" / "personalities", own_themes)):
         themes = sorted({p.name for base in (spec / "agents" / "personalities", own_themes) if base.is_dir()
                          for p in base.iterdir() if p.is_dir()})
-        raise InitError(f"theme '{theme}' is neither in {described} nor in agents/personalities/ — "
+        raise InitError(f"theme '{theme}' is neither in {described} nor in {team_folder}/personalities/ — "
                         f"the themes are: {', '.join(themes)}")
 
     # Claude Code asks before it reads the store (ADR-008 §9): on a terminal, offer the team setting
@@ -639,7 +643,8 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             (str(root / config.TEAM_FOLDER), config.TEAM_LOCK_FILE, config.TEAM_LOCK_NAME) if team_pins else \
             (str(root), config.LOCK_FILE, config.LOCK_FILE)
         if where is not None:
-            sync.check_lock(where[0], version, the_store, out, name=where[1])
+            sync.check_lock(where[0], version, the_store, out, name=where[1],
+                            folder=project.team_folder if project else config.TEAM_FOLDER)
 
     # Now the writes.
     root.mkdir(parents=True, exist_ok=True)
@@ -809,12 +814,13 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                 if not (folder / file).exists():
                     (folder / file).write_bytes(with_alias(content, alias))
                     out.write(f"✓ {name}/{file} — @{alias}\n")
-        agents = root / "agents"
+        agents = root / team_folder
         if is_git_working_tree(agents):
             for file, content in (("project-overview.md", overview), ("project-context.md", context)):
                 if not (agents / file).exists():
                     (agents / file).write_bytes(content)
-                    out.write(f"✓ agents/{file} — the team's, agents/ is its own git repository (ADR-006)\n")
+                    out.write(f"✓ {team_folder}/{file} — the team's, {team_folder}/ is its own git repository "
+                              "(ADR-006)\n")
     sync.register(str(root), out, err)
     if options.tool == "claude" and claude_access is None and spec_mode != "copy" \
             and not config.load(str(root)).active_claude_access:

@@ -10,11 +10,13 @@ over it, so the contract stays testable with zero install.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from cortex_core.project import folded
 from cortex_core.workspace import service_index
 
 from .base import Pin, base_for, read_pin
@@ -61,9 +63,28 @@ class ResolvedRun:
     cortex_version: Optional[str] = None  # the version cortex.toml pins; None: the base is {root}/cortex
 
 
-def _service_inside(service: Optional[str]) -> Optional[str]:
+def _opens(root: Optional[Path], path: PurePosixPath, folder: str) -> bool:
+    """Whether ``path``, or a folder of the workspace above it, is ``folder`` on the disk — both there, one
+    folder: ``Agents`` where names ignore case, ``agents.`` and ``AGENTS~1`` on Windows, a link to it."""
+    if root is None:
+        return False
+    for depth in range(1, len(path.parts) + 1):
+        try:
+            if os.path.samefile(root / PurePosixPath(*path.parts[:depth]), root / folder):
+                return True
+        except (OSError, ValueError):       # not there, or no name the disk takes: nothing to ask it
+            pass
+    return False
+
+
+def _service_inside(service: Optional[str], team_folder: Optional[str] = "agents",
+                    root: Optional[Path] = None) -> Optional[str]:
     """The service as a folder of the workspace — relative, normalised, never climbing out of it.
-    Its files reach the prompt: a service naming ``../elsewhere`` would read a neighbour's."""
+    Its files reach the prompt: a service naming ``../elsewhere`` would read a neighbour's. Never
+    ``agents/`` nor the team's folder that renames it (ADR-013 §3.6): the workspace's tier, no service.
+    ``agents`` is refused as written, as 1.7.0 refused it, and as the disk under ``root`` opens it; the
+    team's folder that renames it in any case too (§9) — nor a folder whose ``agents/`` the disk opens as the team's
+    folder. ``team_folder`` ``None``: not known yet — what depends on it is left to a second call."""
     if not service:
         return service
     path = PurePosixPath(service.replace("\\", "/"))
@@ -71,8 +92,23 @@ def _service_inside(service: Optional[str]) -> Optional[str]:
         raise ValueError(f"service must be a folder inside the workspace, got {service!r}")
     if not path.parts:
         return None                  # "." is the workspace itself: no service
-    if path.parts[0] == "agents":
+    if path.parts[0] == "agents" or _opens(root, path, "agents"):     # Agents/ on Linux is a service of its own
         raise ValueError(f"service must be a folder of the workspace other than agents/, got {service!r}")
+    if team_folder is None:
+        return str(path)
+    if team_folder == "agents" and _opens(root, path / "agents", "agents"):
+        # its agents/ the workspace's — a link to it, or the service a link to the root: the same overlays, twice
+        raise ValueError(f"service must not be the folder whose agents/ is the team's folder, agents/, got {service!r}")
+    if team_folder != "agents":         # a renamed team's folder, in any case (ADR-013 §3.6, §9)
+        team = tuple(folded(part) for part in PurePosixPath(team_folder).parts)
+        parts = tuple(folded(part) for part in path.parts)
+        if parts[:len(team)] == team or _opens(root, path, team_folder):
+            raise ValueError(f"service must be a folder of the workspace other than {team_folder}/, the team's "
+                             f"folder, got {service!r}")
+        if parts + (folded("agents"),) == team or _opens(root, path / "agents", team_folder):
+            # its agents/ the team's folder: the same overlays, twice
+            raise ValueError(f"service must not be the folder whose agents/ is the team's folder, {team_folder}/, "
+                             f"got {service!r}")
     return str(path)
 
 
@@ -96,31 +132,36 @@ def resolve_run(req: RunRequest, root: Path, theme: Optional[str] = None, *,
     ``pin`` is what ``cortex.toml`` said when the run was accepted — a queued run resolves as it
     was checked, whatever the file says by the time a worker takes it (``None``: it had none)."""
     root = Path(root)
-    req = replace(req, service=_service_inside(req.service))
+    req = replace(req, service=_service_inside(req.service, None, root))
     if pin is READ_NOW:
         pin = read_pin(root)
+    folder = pin.team_folder if pin is not None else "agents"
+    _service_inside(req.service, folder, root)          # what depends on the team's folder, known now
+    team = root / folder if folder != "agents" else None        # None: the core's default, {root}/agents
     base_root = base_for(pin)
     if pin is not None and (theme is None or pin.theme_locked):
         theme = pin.theme       # the team's file's lock wins over the deployment's CORTEX_THEME (ADR-013 §3.12)
 
-    capabilities = derive_capabilities(root, req.service, base_root=base_root)
+    capabilities = derive_capabilities(root, req.service, base_root=base_root, team_folder=folder)
     system_prompt = build_system_prompt(
         role=req.role,
         service=req.service,
         theme=theme,
         root=root,
         base_root=base_root,
+        team_folder=team,
         capabilities=capabilities,
-        project_overview=read_project_overview(root, req.service),
-        workspace_services=service_index(root, base_root, active=req.service),
-        project_context=read_project_context(root, req.service),
+        project_overview=read_project_overview(root, req.service, folder),
+        workspace_services=service_index(root, base_root, active=req.service, team_folder=team),
+        project_context=read_project_context(root, req.service, folder),
     )
 
     workflow_text: Optional[str] = None
     if req.workflow:
         wf_rel = find_workflow_relpath(req.workflow, root, base_root=base_root)
         if wf_rel:
-            workflow_text = read_resolved("workflows", wf_rel, req.service, root, base_root=base_root) or None
+            workflow_text = read_resolved("workflows", wf_rel, req.service, root, base_root=base_root,
+                                          team_folder=team) or None
 
     # Validate & normalise the per-request autonomy (raises ValueError on an unknown action).
     policy = ActionPolicy.from_names(req.autonomy)
@@ -129,7 +170,7 @@ def resolve_run(req: RunRequest, root: Path, theme: Optional[str] = None, *,
         system_prompt=system_prompt,
         capabilities=capabilities,
         workflow=workflow_text,
-        layers=layers_for(req.role, theme, root, base_root=base_root),
+        layers=layers_for(req.role, theme, root, base_root=base_root, team_folder=team),
         model=req.model,
         allowed_actions=sorted(k.value for k in policy.allowed),
         cortex_version=pin.version if pin is not None else None,

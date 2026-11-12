@@ -446,6 +446,30 @@ class PathTests(unittest.TestCase):
             (root / "project-overview.md").write_text("# overview\n", encoding="utf-8")
         self.assertEqual(overlay_roots(str(project), str(project / "cortex"), ""), [f"{project}/svc-a"])
 
+    def test_a_service_the_runtime_refuses_is_no_overlay_root(self):
+        # Its agents/ the team's folder, a link to it: the team's overlays, checked once, at the workspace's root
+        # (ADR-013 §3.6). One whose agents/ links to the root holds the root's own folders, and is checked.
+        tmp = Path(tempfile.mkdtemp(prefix="cortex-validator-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        project = tmp / "host"
+        (project / "agents" / "roles").mkdir(parents=True)
+        (project / "team" / "roles").mkdir(parents=True)
+        (project / "svc-a" / "agents").mkdir(parents=True)
+        links = {"svc-c": project / "agents", "svc-d": project / "team", "svc-e": project}
+        for service, target in links.items():
+            (project / service).mkdir()
+        for service in ("svc-a", *links):
+            (project / service / "project-overview.md").write_text("# overview\n", encoding="utf-8")
+        for service, target in links.items():
+            try:
+                os.symlink(target, project / service / "agents", target_is_directory=True)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest(f"no symbolic link here: {error}")
+        found = overlay_roots(str(project), str(project / "cortex"), "")
+        self.assertEqual(found, [str(project)] + [f"{project}/{s}" for s in ("svc-a", "svc-d", "svc-e")])
+        found = overlay_roots(str(project), str(project / "cortex"), "", f"{project}/team")
+        self.assertEqual(found, [str(project)] + [f"{project}/{s}" for s in ("svc-a", "svc-c", "svc-e")])
+
 
 class OutputTests(unittest.TestCase):
     """#85 — the validator prints what it read; its colours are the only escapes it emits."""

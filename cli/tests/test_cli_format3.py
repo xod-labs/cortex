@@ -52,7 +52,15 @@ class TemplateTests(unittest.TestCase):
             with self.subTest(template=name):
                 self.assertEqual(init.markers(text), [(name, 3)])
                 self.assertIsNotNone(init.END_MARKER.search(text))
-                for rule in (b"**The team's folder** is the folder `agents` names in `cortex.toml`, else `agents/`",
+                for rule in (b"**The team's folder** is the folder `synced`, in `cortex.local.toml`, records as `agents`, "
+                             b"else `agents/`", b"**`cortex.toml` names another folder**",
+                             # `./x/` names x (ADR-013 §9): no sync on every conversation for its spelling.
+                             b"compared with every leading `./` and every final `/` dropped",
+                             # A sync that fails — a cortex before 1.8.0 refuses the key, a release candidate or a
+                             # development build is too old for the team's version — reaches its rule, a self-update.
+                             b"When the sync fails, follow the rules below for what it says; when it ran and the "
+                             b"folders still differ, tell the user, and go no further.",
+                             b"on a checkout, below, tell the user instead, and go no further",
                              b"`cortex.team.toml`", b"**A version moved**", b"never order versions",
                              b"**A checkout**", b"**No `synced`**",
                              b"below 1.8.0, read as above \xe2\x80\x94 the numbers before any `-` \xe2\x80\x94 run `cortex self-update`",
@@ -107,6 +115,9 @@ class TemplateTests(unittest.TestCase):
                 self.assertLess(text.index(b"**A checkout**"), text.index(b"**A version moved**"))
                 self.assertLess(text.index(b"**A version moved**"), text.index(b"says this cortex is too old for the"))
                 self.assertLess(text.index(b"**It names a missing team's folder**"), text.index(b"**It refuses"))
+                for later in (b"**`cortex sync` says this cortex is too old", b"**It refuses `cortex.toml` or "
+                              b"`cortex.local.toml` for a key"):
+                    self.assertLess(text.index(b"When the sync fails, follow the rules below"), text.index(later))
                 # Compared before any sync; the first that names "below 1.8.0" says how to read it.
                 self.assertLess(text.index(b"and the spec is of that version"),
                                 text.index(b"when it fails, follow the rules below"))

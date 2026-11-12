@@ -6,7 +6,8 @@ both run it.
 Layout consumed:
 
     {base_root}/agents/{layer}/{file}              ← base       (default base_root: {project_root}/cortex)
-    {project_root}/agents/{layer}/{file}           ← workspace  (workspace overlay)
+    {team_folder}/{layer}/{file}                   ← workspace  (workspace overlay; default {project_root}/agents,
+                                                                  renamed by cortex.toml's `agents`, ADR-013 §3.6)
     {project_root}/{service}/agents/{layer}/{file} ← service    (service overlay)
 
 Resolution is a pure path cascade; merging applies a per-layer semantic.
@@ -43,6 +44,11 @@ def _base(project_root: Path, base_root: Optional[Path]) -> Path:
     return Path(base_root) if base_root is not None else default_base_root(project_root)
 
 
+def default_team_folder(project_root: Path) -> Path:
+    """The team's folder when ``cortex.toml`` names none: ``{project_root}/agents`` (ADR-006)."""
+    return Path(project_root) / "agents"
+
+
 def _same_directory(a: Path, b: Path) -> bool:
     """Whether two paths name one directory — also where a file system ignores case (macOS,
     Windows), which comparing resolved paths would miss."""
@@ -52,19 +58,25 @@ def _same_directory(a: Path, b: Path) -> bool:
         return False
 
 
-def _tiers(root: Path, service: Optional[str], base_root: Optional[Path]) -> List[Path]:
-    """The directories whose ``agents/`` holds a tier of the cascade, base first.
+def _tiers(root: Path, service: Optional[str], base_root: Optional[Path],
+           team_folder: Optional[Path] = None) -> List[Path]:
+    """The layer directories of the cascade — each holds ``roles/``, ``capabilities/``, … — base first:
+    the base's ``agents/``, the team's folder — ``{root}/agents`` unless ``cortex.toml`` renames it
+    (ADR-013 §3.6) — and the service's ``agents/``.
 
-    When base_root is the project root, the base and the workspace tier are one directory,
-    listed once: a file found there is read once, never stacked onto itself (ADR-007 §3.1).
-    The roots are compared only when base_root is given — the default path pays nothing.
+    When the base's ``agents/`` is the team's folder — base_root the project root, Cortex itself — the
+    two tiers are one directory, listed once: a file found there is read once, never stacked onto
+    itself (ADR-007 §3.1). They are compared only when base_root or team_folder is given — the default
+    path pays nothing.
     """
     root = Path(root)
-    tiers = [_base(root, base_root)]                                   # base
-    if base_root is None or not _same_directory(Path(base_root), root):
-        tiers.append(root)                                             # workspace
+    base = _base(root, base_root) / "agents"
+    team = Path(team_folder) if team_folder is not None else default_team_folder(root)
+    tiers = [base]                                                     # base
+    if (base_root is None and team_folder is None) or not _same_directory(base, team):
+        tiers.append(team)                                             # workspace
     if service:
-        tiers.append(root / service)                                   # service
+        tiers.append(root / service / "agents")                        # service
     return tiers
 
 
@@ -78,13 +90,15 @@ def resolve_layer(
     root: Path,
     *,
     base_root: Optional[Path] = None,
+    team_folder: Optional[Path] = None,
 ) -> List[Path]:
     """Return existing cascade files for one (layer, file), ordered base → workspace → service.
 
     Faithful port of ADR-001 §3.1 ``resolveLayer``. ``root`` is the project root;
-    ``base_root`` locates the base (ADR-007 §3.1).
+    ``base_root`` locates the base (ADR-007 §3.1); ``team_folder`` is the workspace tier, the team's
+    folder, ``{root}/agents`` by default (ADR-013 §3.6).
     """
-    candidates = (tier / "agents" / layer / file for tier in _tiers(root, service, base_root))
+    candidates = (tier / layer / file for tier in _tiers(root, service, base_root, team_folder))
     return [p for p in candidates if p.is_file()]
 
 
@@ -111,12 +125,13 @@ def read_resolved(
     root: Path,
     *,
     base_root: Optional[Path] = None,
+    team_folder: Optional[Path] = None,
 ) -> str:
     """Resolve a (layer, file) through the cascade and merge per its semantic.
 
     Returns ``""`` if the file exists at no level — callers treat that as "skip".
     """
-    paths = resolve_layer(layer, file, service, root, base_root=base_root)
+    paths = resolve_layer(layer, file, service, root, base_root=base_root, team_folder=team_folder)
     if not paths:
         return ""
 
@@ -157,14 +172,15 @@ def find_workflow_relpath(workflow: str, root: Path, *, base_root: Optional[Path
 
 
 def character_for_role(
-    role: str, theme: str, root: Path, *, base_root: Optional[Path] = None
+    role: str, theme: str, root: Path, *, base_root: Optional[Path] = None, team_folder: Optional[Path] = None
 ) -> Optional[str]:
     """Find the character card assigned to ``role`` in a theme's ``characters.md``.
 
     ``characters.md`` is NOT overridable (ADR-001 §3.2), so only the base mapping is read.
     Returns the cascade-relative path ``{theme}/{Card}.md`` or ``None``.
     """
-    table = read_resolved("personalities", f"{theme}/characters.md", None, root, base_root=base_root)
+    table = read_resolved("personalities", f"{theme}/characters.md", None, root, base_root=base_root,
+                          team_folder=team_folder)
     if not table:
         return None
     for line in table.splitlines():

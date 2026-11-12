@@ -35,10 +35,12 @@ def resolution(root: Optional[str], locked: bool = False) -> cascade.Resolution:
     values, warnings, name = machine.read(store.cortex_home)
     if root is None:
         return cascade.resolve(None, None, values, os.environ, machine_name=name, warnings=warnings)
+    folder, known = config.team_folder(root)        # cortex.toml's agents, before the other keys (ADR-013 §3.8)
     try:
-        data, local = cascade.read_project(root, local=not locked)
+        data, local = cascade.read_project(root, local=not locked, folder=folder)
         return cascade.resolve(data, local, values, os.environ, machine_name=name, locked=locked,
-                               committed=sync.committed(root), warnings=warnings, team_data=cascade.read_team(root))
+                               committed=known if known is not None else sync.committed(root), warnings=warnings,
+                               team_data=cascade.read_team(root, folder), team_name=cascade.team_name(folder))
     except project.ProjectFileError as error:
         raise config.ConfigError(str(error))
 

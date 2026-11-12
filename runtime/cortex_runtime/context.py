@@ -23,26 +23,27 @@ _OVERVIEW_FILE = "project-overview.md"
 _CONTEXT_LABELS = ("## Team context", "## Developer notes", "## Service context")
 
 
-def _tiers(root: Path, service: Optional[str], name: str, labels):
-    """One file's tiers that exist — team ``agents/{name}``, developer ``{name}``, then the
-    service's own — as (label, text) pairs, in that order."""
+def _tiers(root: Path, service: Optional[str], name: str, labels, team_folder: str = "agents"):
+    """One file's tiers that exist — team ``{team_folder}/{name}``, the team's folder ``agents/`` unless
+    ``cortex.toml`` renames it (ADR-013 §3.6), developer ``{name}``, then the service's own — as
+    (label, text) pairs, in that order."""
     root = Path(root)
-    tiers = [(labels[0], root / "agents" / name), (labels[1], root / name)]
+    tiers = [(labels[0], root / team_folder / name), (labels[1], root / name)]
     if service:
         tiers.append((f"{labels[2]} — {service}", root / service / name))
     return [(label, path.read_text(encoding="utf-8")) for label, path in tiers if path.is_file()]
 
 
-def _read_tiers(root: Path, service: Optional[str], name: str, labels) -> str:
+def _read_tiers(root: Path, service: Optional[str], name: str, labels, team_folder: str = "agents") -> str:
     """The tiers of ``_tiers``, each labelled once two or more exist; a single tier reads as it
     always did."""
-    found = _tiers(root, service, name, labels)
+    found = _tiers(root, service, name, labels, team_folder)
     if len(found) == 1:
         return found[0][1]
     return "\n\n".join(f"{label}\n\n{text}" for label, text in found)
 
 
-def read_project_context(root: Path, service: Optional[str] = None) -> str:
+def read_project_context(root: Path, service: Optional[str] = None, team_folder: str = "agents") -> str:
     """The project context, tier by tier: team, developer, then the service's own.
 
     ADR-006 splits the workspace context in two: the **team** tier ``agents/project-context.md``
@@ -51,27 +52,30 @@ def read_project_context(root: Path, service: Optional[str] = None) -> str:
     §3.3) — the text reaches the agent's prompt, where the tiers must be told apart; with a
     single tier there is no scope to tell apart, and the text stays exactly as it was.
     """
-    return _read_tiers(root, service, _CONTEXT_FILE, _CONTEXT_LABELS)
+    return _read_tiers(root, service, _CONTEXT_FILE, _CONTEXT_LABELS, team_folder)
 
 
-def read_project_overview(root: Path, service: Optional[str] = None) -> str:
+def read_project_overview(root: Path, service: Optional[str] = None, team_folder: str = "agents") -> str:
     """The project overview — vision, actors, business — in the same tiers and order as the
     context (#88): what the Prompt Manager reads first in the editor."""
-    return _read_tiers(root, service, _OVERVIEW_FILE, ("## Team overview", "## Developer overview", "## Service overview"))
+    return _read_tiers(root, service, _OVERVIEW_FILE, ("## Team overview", "## Developer overview", "## Service overview"),
+                       team_folder)
 
 
-def derive_capabilities(root: Path, service: Optional[str] = None, *, base_root: Optional[Path] = None) -> List[str]:
+def derive_capabilities(root: Path, service: Optional[str] = None, *, base_root: Optional[Path] = None,
+                        team_folder: str = "agents") -> List[str]:
     """Return cascade-relative capability paths whose techno is named in project-context.md.
 
     Deterministic replacement for the Prompt Manager's manual stack cross-reference.
     Role-based narrowing (a frontend role ignoring DB capabilities) is a later refinement.
     """
     # The files' own words: a label — ``## Service context — php-api`` — names no technology.
-    context = "\n\n".join(text for _, text in _tiers(root, service, _CONTEXT_FILE, _CONTEXT_LABELS)).lower()
+    context = "\n\n".join(text for _, text in _tiers(root, service, _CONTEXT_FILE, _CONTEXT_LABELS, team_folder)).lower()
     if not context.strip():
         return []
     selected = []
-    for rel in capability_catalog(root, service, base_root=base_root):
+    team = None if team_folder == "agents" else Path(root) / team_folder      # None: the core's default
+    for rel in capability_catalog(root, service, base_root=base_root, team_folder=team):
         techno = Path(rel).stem.lower()
         if re.search(rf"\b{re.escape(techno)}\b", context):
             selected.append(rel)

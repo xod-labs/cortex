@@ -23,6 +23,7 @@ def layers_for(
     root: Path,
     *,
     base_root: Optional[Path] = None,
+    team_folder: Optional[Path] = None,
 ) -> List[Tuple[str, str]]:
     """Ordered (layer, file) pairs that make up an agent's identity + protocol.
 
@@ -34,7 +35,7 @@ def layers_for(
 
     if theme and theme.strip().lower() not in ("", "none"):
         pairs.append(("personalities", f"{theme}/theme.md"))
-        character = character_for_role(role, theme, root, base_root=base_root)
+        character = character_for_role(role, theme, root, base_root=base_root, team_folder=team_folder)
         if character:
             pairs.append(("personalities", character))
 
@@ -53,6 +54,7 @@ def build_system_prompt(
     capabilities: Optional[Sequence[str]] = None,
     *,
     base_root: Optional[Path] = None,
+    team_folder: Optional[Path] = None,
     project_overview: str = "",
     workspace_services: str = "",
     project_context: str = "",
@@ -64,15 +66,16 @@ def build_system_prompt(
     view, read upstream, closes the prompt: ``project_overview`` (its ``project-overview.md``
     tiers), ``workspace_services`` (the index of the workspace's services) and ``project_context``
     (its ``project-context.md`` tiers), each under its own heading. An empty one is left out.
+    ``team_folder`` is the workspace tier, the team's folder (ADR-013 §3.6).
     """
     parts: List[str] = []
-    for layer, file in layers_for(role, theme, root, base_root=base_root):
-        merged = read_resolved(layer, file, service, root, base_root=base_root)
+    for layer, file in layers_for(role, theme, root, base_root=base_root, team_folder=team_folder):
+        merged = read_resolved(layer, file, service, root, base_root=base_root, team_folder=team_folder)
         if merged.strip():
             parts.append(merged)
 
     for cap in capabilities or []:
-        merged = read_resolved("capabilities", cap, service, root, base_root=base_root)
+        merged = read_resolved("capabilities", cap, service, root, base_root=base_root, team_folder=team_folder)
         if merged.strip():
             parts.append(merged)
 

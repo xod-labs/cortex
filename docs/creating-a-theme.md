@@ -187,6 +187,8 @@ A custom theme can live in **any** of these places (the cascade resolves at boot
 | `{workspace_root}/agents/personalities/{theme}/` | Workspace mode — theme shared across all services in your workspace |
 | `{service}/agents/personalities/{theme}/` | Workspace mode — theme specific to one service |
 
+`agents/` at the root is the team's folder: when the project's `cortex.toml` renames it — `agents = "team-agents"` — a theme of your own lives in `team-agents/personalities/{theme}/`, where `cortex init --theme` and `cortex sync` look for it ([ADR-013](adr/ADR-013-configuration-cascade.md) §3.6).
+
 A theme that exists **only** in your overlay tree (no cortex base) is fully supported. The PM walks the cascade and finds the files wherever they are. You don't need to PR your theme upstream just to use it.
 
 When you add a custom theme:

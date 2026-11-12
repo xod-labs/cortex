@@ -15,18 +15,22 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 from typing import Dict, List, Mapping, Tuple
 
 PROJECT_FILE = "cortex.toml"
 LOCAL_FILE = "cortex.local.toml"
 MODES = ("store", "link", "copy")
-PROJECT_KEYS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access")
+PROJECT_KEYS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access", "agents")
+# The keys an unknown key's message names to a project before 1.8.0, as 1.7.0 named them.
+PROJECT_LISTED: Tuple[str, ...] = ("version", "theme", "sync", "claude_access")
+LOCAL_LISTED: Tuple[str, ...] = ("theme", "spec", "claude_access", "claude_entry")
 PROJECT_REQUIRED: Tuple[str, ...] = ("version", "theme")
 LOCAL_KEYS: Tuple[str, ...] = ("version", "theme", "spec", "claude_access", "claude_entry", "synced")
 BOOLEAN_KEYS: Tuple[str, ...] = ("claude_access",)
 # The team's settings, in the team's folder, committed in the team's repository (ADR-013 §3.5): read
 # only once the team's version is 1.8.0 or later — an earlier version's templates know none of it.
-TEAM_FOLDER = "agents"
+TEAM_FOLDER = "agents"      # the team's folder, which a committed cortex.toml's `agents` renames (ADR-013 §3.6)
 TEAM_FILE = "cortex.team.toml"
 TEAM_LOCK_FILE = "cortex.team.lock"
 TEAM_KEYS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access", "locked")
@@ -34,7 +38,7 @@ TEAM_LOCKABLE: Tuple[str, ...] = ("theme", "sync", "claude_access")
 FIRST_TEAM_VERSION = "1.8.0"
 # What `cortex sync` records in cortex.local.toml (ADR-013 §3.1): the version read from each file, the
 # team's, and the one synced — "" for a checkout.
-SYNCED_KEYS: Tuple[str, ...] = ("team", "project", "local", "pinned", "reads")
+SYNCED_KEYS: Tuple[str, ...] = ("team", "project", "local", "pinned", "reads", "agents")
 SYNCED_REQUIRED: Tuple[str, ...] = ("pinned", "reads")
 LOCK_FILE = "cortex.lock"
 LOCK_KEYS: Tuple[str, ...] = ("format", "version", "digest")
@@ -128,12 +132,13 @@ def listed(keys: Tuple[str, ...]) -> str:
 
 
 def _check_keys(name: str, data: Mapping, allowed: Tuple[str, ...], required: Tuple[str, ...],
-                others: Tuple[str, ...] = ()) -> None:
+                others: Tuple[str, ...] = (), named: Tuple[str, ...] = ()) -> None:
     """Every key allowed, the required ones there, each a string or a boolean — but ``others``,
-    which their reader checks."""
+    which their reader checks. ``named``, the keys an unknown key's message lists — ``allowed`` by
+    default."""
     for key in data:
         if key not in allowed:
-            raise ProjectFileError(f'{name}: unknown key {shown(key)} — {name} takes {listed(allowed)}'
+            raise ProjectFileError(f'{name}: unknown key {shown(key)} — {name} takes {listed(named or allowed)}'
                                    + (" only" if name == LOCAL_FILE else ""))
     for key in required:
         if key not in data:
@@ -161,11 +166,100 @@ def _check_version(name: str, value: object) -> None:
         raise ProjectFileError(f'{name}: version {shown(value)} is no version — X.Y.Z, for instance 1.0.0')
 
 
+_AGENTS_ONLY = (f'"agents" is set in {PROJECT_FILE} only — every developer reads the same team\'s folder '
+                "(ADR-013, decision 30)")
+
+
+def agents_before(version: str) -> str:
+    """The refusal of ``agents`` while the team's version is before 1.8.0 (ADR-013 §3.8, step 3)."""
+    return (f'{PROJECT_FILE}: "agents" is read once the team\'s version is {FIRST_TEAM_VERSION} or later — the '
+            f"team's is {version}: move to {FIRST_TEAM_VERSION} first, or remove `agents`")
+
+
+# An ``agents`` in a cortex.toml that is not committed (decision 30): said by the command, which asks git, and by
+# the runtime, from ``synced``.
+AGENTS_UNCOMMITTED = (f'{PROJECT_FILE}: "agents" is read from a committed {PROJECT_FILE} only, and this one is not — '
+                      "every developer reads the same team's folder (ADR-013, decision 30): commit it, or remove "
+                      f"`agents` — the team's folder is then {TEAM_FOLDER}/")
+
+
+def _one_case(char: str) -> str:
+    """A character of a name decomposed in one case: lower-cased — ẞ is ß, ϴ is θ, as the simple case folding folds
+    them; no decomposed character is longer lower-cased — then upper-cased, kept lower-cased where that is longer."""
+    lower = char.lower()
+    upper = lower.upper()
+    return upper if len(upper) == 1 else lower
+
+
+def folded(name: str) -> str:
+    """A name of the workspace, folded to compare it in any case — as the file systems that ignore case
+    fold the common names, and past them to one folder rather than two: decomposed (NFD), as APFS takes a
+    name decomposed for the same one — a letter apart from its marks, so that ``ǰ``, whose upper case is
+    longer, is ``j`` and a caron, as ``J̌`` is —, then each character in one case on its own, as NTFS's
+    table upper-cases it — a character whose upper case is longer kept lower-cased —, then composed (NFC): ``i``
+    and a dot above, upper-cased, is ``İ``. ``ς`` and ``σ`` are one, ``ß`` is not ``ss``. It takes for one folder
+    every two that Unicode's simple upper case — NTFS's table — or simple case folding takes for one, ``ﬅ``
+    and ``ﬆ`` aside, and some a disk keeps apart: the Kelvin sign and ``k`` — decomposed, it is ``K`` —, a
+    name composed and decomposed, two on NTFS; ``ı`` and ``i``, two on APFS. ``str.casefold`` folds
+    further, ``ß`` as ``ss``, and would take two folders of every disk for one. Compare what it gives with
+    what it gives, never with a literal."""
+    return unicodedata.normalize("NFC", "".join(_one_case(char) for char in unicodedata.normalize("NFD", name)))
+
+
+def check_agents(value: object, name: str = PROJECT_FILE, loose: bool = False) -> str:
+    """Refuse an ``agents`` that names no folder inside the workspace (ADR-013 §3.6), from its text
+    alone: a relative path with ``/`` — no ``\\`` nor ``:``, no absolute path of any platform, no ``..`` nor a
+    component that starts with ``.`` or ends with ``.`` or a space, neither the project root itself nor
+    ``cortex/``, the spec, nor what it holds. ``cortex`` is told in any case: the file is committed, and
+    read where names ignore case too, macOS and Windows — which drops a final ``.`` or space, ``cortex.``
+    naming ``cortex``. A service's folder, or one holding a project's ``cortex.toml``, takes the file
+    system: its reader checks them. The folder, as the messages name it: without a final ``/``.
+
+    ``loose`` — the version gate's reading, before the text is checked (§3.8, step 1) — takes what a later
+    version may take, a component that starts with ``.``; what names no folder inside the workspace, nor
+    one any version reads, is refused all the same."""
+    rule = f"a relative path, with /, naming a folder inside the workspace — {TEAM_FOLDER} by default"
+    if not isinstance(value, str) or not value:
+        raise ProjectFileError(f'{name}: "agents" must be {rule}, in quotes')
+    if CONTROL.search(value) or "\\" in value:
+        raise ProjectFileError(f"{name}: agents {shown(value)} is not {rule}")
+    if value.startswith("/") or re.match(r"^[A-Za-z]:", value):
+        raise ProjectFileError(f"{name}: agents {shown(value)} is an absolute path — it must be {rule}")
+    if ":" in value:
+        # NTFS reads "cortex::$INDEX_ALLOCATION" as cortex/, a stream of the folder: another alias of a name.
+        raise ProjectFileError(f"{name}: agents {shown(value)} holds a \":\", which Windows reads as a stream — it "
+                               f"must be {rule}")
+    written = value                     # quoted as written in every refusal
+    while value.startswith("./"):
+        value = value[2:]               # ./team-agents names team-agents
+    parts = value.rstrip("/").split("/")
+    if parts in ([""], ["."]) or any(not part for part in parts):
+        raise ProjectFileError(f"{name}: agents {shown(written)} names the project root, or an empty folder name — "
+                               f"it must be {rule}")
+    for part in parts:
+        if part == "..":
+            raise ProjectFileError(f"{name}: agents {shown(written)} climbs out of the folder it is in — it must be {rule}")
+        if part.endswith((".", " ")):
+            # Windows drops it: "cortex." and "cortex " name cortex, "team." names team.
+            raise ProjectFileError(f"{name}: agents {shown(written)} names a folder that ends with \".\" or a space, "
+                                   f"which Windows drops — it must be {rule}")
+        if part.startswith(".") and not loose:
+            raise ProjectFileError(f"{name}: agents {shown(written)} names a folder that starts with \".\" — it must be "
+                                   f"{rule}")
+    if folded(parts[0]) == folded("cortex"):
+        raise ProjectFileError(f"{name}: agents {shown(written)} is in cortex/, the spec's place — it must be {rule}")
+    # Only agents itself is the default: Agents names a folder of its own, as written (§9).
+    return "/".join(parts)
+
+
 def check_project(data: Mapping, optional: Tuple[str, ...] = ()) -> None:
     """Refuse a ``cortex.toml`` that is not one — ``ProjectFileError`` names the file and the key.
     ``optional``, of the required keys, those a team's file may give instead (ADR-013 §3.2): whether it
     does is its reader's to check."""
-    _check_keys(PROJECT_FILE, data, PROJECT_KEYS, tuple(key for key in PROJECT_REQUIRED if key not in optional))
+    _check_keys(PROJECT_FILE, data, PROJECT_KEYS, tuple(key for key in PROJECT_REQUIRED if key not in optional),
+                named=PROJECT_LISTED if lists_1_7_0(data) else PROJECT_KEYS)
+    if "agents" in data:
+        check_agents(data["agents"])
     if "version" in data:
         _check_version(PROJECT_FILE, data["version"])
     if "theme" in data:
@@ -174,9 +268,20 @@ def check_project(data: Mapping, optional: Tuple[str, ...] = ()) -> None:
         raise ProjectFileError(f'{PROJECT_FILE}: sync {shown(data["sync"])} is none of {listed(MODES)}')
 
 
-def check_local(data: Mapping) -> None:
-    """Refuse a ``cortex.local.toml`` that is not one."""
-    _check_keys(LOCAL_FILE, data, LOCAL_KEYS, (), ("synced",))
+def lists_1_7_0(project_data: Mapping) -> bool:
+    """Whether an unknown key's message names 1.7.0's keys, as 1.7.0 named them: a ``cortex.toml`` whose
+    ``version`` is before 1.8.0, or does not read. One of 1.8.0 or later, or that leaves its version to the
+    team's file, is told the keys it may set."""
+    return "version" in project_data and not (is_version(project_data["version"])
+                                              and not before_team(str(project_data["version"])))
+
+
+def check_local(data: Mapping, listed_1_7_0: bool = False) -> None:
+    """Refuse a ``cortex.local.toml`` that is not one — an unknown key named among 1.7.0's keys when
+    ``listed_1_7_0``, ``lists_1_7_0`` of the project's ``cortex.toml``."""
+    if "agents" in data:
+        raise ProjectFileError(f"{LOCAL_FILE}: {_AGENTS_ONLY}")
+    _check_keys(LOCAL_FILE, data, LOCAL_KEYS, (), ("synced",), named=LOCAL_LISTED if listed_1_7_0 else LOCAL_KEYS)
     if "version" in data:
         _check_version(LOCAL_FILE, data["version"])
     if "theme" in data:
@@ -199,6 +304,14 @@ def check_synced(value: object) -> None:
         if key not in value:
             raise ProjectFileError(f'{name}: "{key}" is required{again}')
     for key, version in value.items():
+        if key == "agents":             # the team's folder sync read, when cortex.toml renames it (ADR-013 §3.1)
+            try:
+                folder = check_agents(version, name)
+            except ProjectFileError as error:
+                raise ProjectFileError(f"{error}{again}")
+            if folder == TEAM_FOLDER:
+                raise ProjectFileError(f"{name}: agents is written only for a folder other than {TEAM_FOLDER}{again}")
+            continue
         if not (is_version(version) or (key == "reads" and version == "")):
             raise ProjectFileError(f"{name}: {key} {shown(version)} is no version{again}")
 
@@ -209,6 +322,8 @@ def check_team(data: Mapping, name: str = f"{TEAM_FOLDER}/{TEAM_FILE}") -> None:
     sets, each once, never ``version`` nor ``locked``, and ``claude_access`` only at ``false``: a team
     may forbid a permission, never grant one on a developer's machine (decision 25). ``name`` is how
     the messages name the file."""
+    if "agents" in data:
+        raise ProjectFileError(f"{name}: {_AGENTS_ONLY} — the team's file is in the folder it names")
     _check_keys(name, data, TEAM_KEYS, (), ("locked",))
     if "version" in data:
         _check_version(name, data["version"])
@@ -322,7 +437,10 @@ def machine_values(data: Mapping, name: str = MACHINE_FILE) -> Tuple[Dict[str, o
     values: Dict[str, object] = {}
     warnings: List[str] = []
     for key, value in data.items():
-        if key not in MACHINE_KEYS:
+        if key == "agents":
+            warnings.append(f'{name}: "agents" is set in {PROJECT_FILE} only, not read — every developer reads the same '
+                            "team's folder (ADR-013, decision 30)")
+        elif key not in MACHINE_KEYS:
             warnings.append(f"{name}: unknown key {shown(key)}, not read — {MACHINE_FILE} takes {listed(MACHINE_KEYS)}")
         elif key in MACHINE_BOOLEAN_KEYS and not isinstance(value, bool):
             warnings.append(f'{name}: "{key}" must be true or false, without quotes — not read')

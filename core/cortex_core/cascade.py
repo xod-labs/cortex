@@ -26,10 +26,10 @@ from typing import Dict, List, Mapping, Optional, Tuple
 from . import project
 from .project import LOCAL_FILE, MACHINE_FILE, MACHINE_KEYS, PROJECT_FILE, TEAM_FILE, TEAM_FOLDER, version_key
 
-PROJECT_SETTINGS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access")
+PROJECT_SETTINGS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access", "agents")
 KEYS: Tuple[str, ...] = PROJECT_SETTINGS + MACHINE_KEYS
 DEFAULT = "default"
-DEFAULTS: Mapping[str, object] = {"sync": "store", "claude_access": None,
+DEFAULTS: Mapping[str, object] = {"sync": "store", "claude_access": None, "agents": TEAM_FOLDER,
                                   "releases_url": project.DEFAULT_RELEASES_URL, "update_check": True, "register": True}
 # The environment's keys (§3.7), as they behave since they were variables only: CORTEX_RELEASES_URL
 # names the host, an empty one counting as unset; the two others, set and not empty, turn their key
@@ -40,6 +40,12 @@ NEGATING: Tuple[str, ...] = ("update_check", "register")
 
 
 TEAM_NAME = f"{TEAM_FOLDER}/{TEAM_FILE}"
+
+
+def team_name(folder: str = TEAM_FOLDER) -> str:
+    """How the team's file in the team's folder ``folder`` is named: from the project root, as an
+    origin and a message name it."""
+    return f"{folder}/{TEAM_FILE}"
 
 
 @dataclass(frozen=True)
@@ -158,6 +164,8 @@ def resolve(project_data: Optional[Mapping], local_data: Optional[Mapping], mach
     an origin names those files. ``variables`` are the environment's keys, each reader's own: the
     command's are ``VARIABLES``. ``ProjectFileError`` for what the team's version refuses (§3.8)."""
     keys = (KEYS if machine else PROJECT_SETTINGS) if project_data is not None else MACHINE_KEYS
+    if project_data is not None and "agents" in project_data:       # the folder as every message names it
+        project_data = {**project_data, "agents": project.check_agents(project_data["agents"])}
     settings: Dict[str, Setting] = {}
     notes: List[str] = []
     team_version = developer_version = None
@@ -169,6 +177,8 @@ def resolve(project_data: Optional[Mapping], local_data: Optional[Mapping], mach
         candidates = {name: data["version"] for name, data in
                       (("team", team_data), ("project", project_data), ("local", local_data))
                       if data is not None and "version" in data}
+        if "agents" in project_data and project.before_team(team[1]):
+            raise project.ProjectFileError(project.agents_before(team[1]))
     else:
         team_data = None
     lock_keys = tuple(team_data.get("locked", ())) if team_data is not None else ()
@@ -282,14 +292,15 @@ def team_file_there(root: str, folder: str = TEAM_FOLDER) -> bool:
     return True
 
 
-def read_project(root: str, local: bool = True, lenient: bool = False) -> Tuple[Mapping, Optional[Mapping]]:
+def read_project(root: str, local: bool = True, lenient: bool = False,
+                 folder: str = TEAM_FOLDER) -> Tuple[Mapping, Optional[Mapping]]:
     """``cortex.toml`` at ``root``, and ``cortex.local.toml`` unless ``local`` is off — or ``None``
     when it is not there — each checked with the grammar. Raises ``project.ProjectFileError`` naming
     the file; ``OSError`` for a file that cannot be opened. The one reader of the two files, the
-    command's and ``cortex config``'s. Beside a team's file, ``cortex.toml``'s ``version`` and
-    ``theme`` may be the file's: ``resolve`` says whether they are."""
+    command's and ``cortex config``'s. Beside a team's file — in the team's folder ``folder`` — the
+    ``version`` and ``theme`` of ``cortex.toml`` may be the file's: ``resolve`` says whether they are."""
     data = _checked_toml(os.path.join(root, PROJECT_FILE), PROJECT_FILE)
-    team = team_file_there(root)
+    team = team_file_there(root, folder)
     project.check_project(data, project.PROJECT_REQUIRED if team else ())
     local_data = None
     path = os.path.join(root, LOCAL_FILE)
@@ -301,7 +312,8 @@ def read_project(root: str, local: bool = True, lenient: bool = False) -> Tuple[
             except project.ProjectFileError:
                 local_data = {key: value for key, value in local_data.items() if key != "synced"}
                 local_data["synced"] = UNREADABLE_SYNCED
-        project.check_local({key: value for key, value in local_data.items() if value is not UNREADABLE_SYNCED})
+        project.check_local({key: value for key, value in local_data.items() if value is not UNREADABLE_SYNCED},
+                            project.lists_1_7_0(data))
     return data, local_data
 
 
@@ -334,12 +346,22 @@ def loose_version(root: str) -> Optional[Tuple[str, str]]:
     return (PROJECT_FILE, version) if project.is_version(version) else None
 
 
-def loose_versions(root: str) -> Dict[str, Tuple[str, str]]:
+def loose_agents(root: str) -> Optional[object]:
+    """``cortex.toml``'s ``agents`` at ``root``, as written — read before any other key, with the
+    versions (§3.8, step 1), to find the team's file. ``None`` when the file does not read or sets none:
+    its reader checks the value, and whether ``cortex.toml`` is committed (§3.6)."""
+    try:
+        return _toml(os.path.join(root, PROJECT_FILE)).get("agents")
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, AttributeError):
+        return None
+
+
+def loose_versions(root: str, folder: str = TEAM_FOLDER) -> Dict[str, Tuple[str, str]]:
     """Each file's ``version`` that reads, by its role — ``project``, ``team``, ``local`` — as
     ``(name, version)``, read before any other key is checked (§3.8, step 1): what a too-new version
-    is said from, and what ``cortex prune`` keeps."""
+    is said from, and what ``cortex prune`` keeps. The team's file is in the team's folder ``folder``."""
     found: Dict[str, Tuple[str, str]] = {}
-    for role, name in (("project", PROJECT_FILE), ("team", TEAM_NAME), ("local", LOCAL_FILE)):
+    for role, name in (("project", PROJECT_FILE), ("team", team_name(folder)), ("local", LOCAL_FILE)):
         try:
             version = _toml(os.path.join(root, name)).get("version")
         except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, AttributeError):

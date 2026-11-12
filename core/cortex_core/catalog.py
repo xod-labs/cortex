@@ -18,16 +18,18 @@ def is_readme(name: str) -> bool:
     return name.lower() == "readme.md"
 
 
-def capability_dirs(root: Path, service: Optional[str] = None, *, base_root: Optional[Path] = None) -> List[Path]:
+def capability_dirs(root: Path, service: Optional[str] = None, *, base_root: Optional[Path] = None,
+                    team_folder: Optional[Path] = None) -> List[Path]:
     """The capability directories of the cascade, base first — one per tier, as the resolver
-    counts them."""
-    return [tier / "agents" / "capabilities" for tier in _tiers(root, service, base_root)]
+    counts them; the workspace's in the team's folder (ADR-013 §3.6)."""
+    return [tier / "capabilities" for tier in _tiers(root, service, base_root, team_folder)]
 
 
-def capability_catalog(root: Path, service: Optional[str] = None, *, base_root: Optional[Path] = None) -> List[str]:
+def capability_catalog(root: Path, service: Optional[str] = None, *, base_root: Optional[Path] = None,
+                       team_folder: Optional[Path] = None) -> List[str]:
     """Cascade-relative paths of every capability available (e.g. ``languages/php.md``)."""
     found = set()
-    for cap_dir in capability_dirs(root, service, base_root=base_root):
+    for cap_dir in capability_dirs(root, service, base_root=base_root, team_folder=team_folder):
         if not cap_dir.is_dir():
             continue
         for md in cap_dir.rglob("*.md"):

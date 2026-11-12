@@ -426,6 +426,22 @@ class TeamVersionTests(SyncedProjectTestCase):
 
     @unittest.skipIf(os.name == "nt", "the source's cortex run with an empty environment")
     @outside_a_repository
+    def test_below_1_8_0_a_cortex_toml_naming_a_team_s_folder_names_no_sync(self):
+        # `agents` is read from a committed cortex.toml of 1.8.0 or later only: the sync refuses this file, with
+        # its theme or without, whatever the team's file gives — naming it would send the user round in a circle.
+        for text in ('version = "1.7.0"\nagents = "team-agents"\n',
+                     'version = "1.7.0"\ntheme = "h2g2"\nagents = "team-agents"\n'):
+            with self.subTest(text=text):
+                pin = self.files(text, team='version = "1.8.0"\ntheme = "h2g2"\n')
+                with self.assertRaisesRegex(ValueError, "— cortex sync refuses this file too$") as caught:
+                    pin()
+                self.assertNotIn("run `cortex sync`", str(caught.exception))
+                host = self.cli("config", "--locked")
+                self.assertNotEqual(host.returncode, 0, host.stdout.decode())
+                self.assertIn('"agents"', host.stderr.decode())
+
+    @unittest.skipIf(os.name == "nt", "the source's cortex run with an empty environment")
+    @outside_a_repository
     def test_below_1_8_0_the_sync_is_named_only_where_it_reads_the_team_s_file(self):
         # `cortex sync` is named only where the host's cortex resolves these files — where the team's file pins
         # 1.8.0 or later and gives the theme cortex.toml lacks. A team's file that gives nothing in its place —

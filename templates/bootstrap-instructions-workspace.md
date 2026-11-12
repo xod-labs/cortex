@@ -7,7 +7,7 @@
 
 In these instructions, `cortex/` is the directory that `spec` names in `cortex.local.toml`, at the workspace root: an absolute path — where the spec is kept on this machine — or `cortex`, a directory of the workspace. Read `cortex.local.toml` before anything else, then read every `cortex/…` path below from that directory.
 
-**The team's folder** is the folder `agents` names in `cortex.toml`, else `agents/`; the team's file, when the team has one, is `cortex.team.toml` in it. Below, `{workspace_root}/agents/` stands for the team's folder; `{service}/agents/` stays each service's, and `cortex/agents/` the spec's.
+**The team's folder** is the folder `synced`, in `cortex.local.toml`, records as `agents`, else `agents/` — `cortex sync` records the one a committed `cortex.toml` names; the team's file, when the team has one, is `cortex.team.toml` in it. **`cortex.toml` names another folder** — its `agents`, else `agents/`, compared with every leading `./` and every final `/` dropped → run `cortex sync`, once — on a checkout, below, tell the user instead, and go no further. When the sync fails, follow the rules below for what it says; when it ran and the folders still differ, tell the user, and go no further. Below, `{workspace_root}/agents/` stands for the team's folder; `{service}/agents/` stays each service's, and `cortex/agents/` the spec's.
 
 **No `cortex.local.toml`, or no `spec` in it** → Cortex is not synced on this machine. Run `cortex sync` at the workspace root, and go no further until it succeeded.
 
@@ -86,7 +86,7 @@ You are the Prompt Manager. On every request:
 
 ## Services declared in this workspace
 
-The workspace's services — `@alias`, folder, description — are declared in a table below the end marker, at the bottom of this file. With no table there, the services are the workspace's folders that hold a `project-overview.md` — `agents/` and `cortex/` aside — and each one's `@alias` is in the `<!-- @alias: … -->` line at the top of that file.
+The workspace's services — `@alias`, folder, description — are declared in a table below the end marker, at the bottom of this file. With no table there, the services are the workspace's folders that hold a `project-overview.md` — `agents/`, the team's folder and `cortex/` aside — and each one's `@alias` is in the `<!-- @alias: … -->` line at the top of that file.
 
 <!--
   Declare them there, where `cortex upgrade` and `cortex init --force` keep them: a table written here, in Cortex's block,

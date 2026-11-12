@@ -127,8 +127,8 @@ class LocalFileTests(ConfigTestCase):
         for key in ("sync", "specs", "locked"):
             with self.subTest(key=key):
                 self.write("cortex.local.toml", f'{key} = "x"\n')
-                self.assert_refused(f'unknown key "{key}"',
-                                    "version, theme, spec, claude_access, claude_entry and synced only")
+                # A project before 1.8.0 is told 1.7.0's keys, as 1.7.0 told it (ADR-013 §9).
+                self.assert_refused(f'unknown key "{key}"', "takes theme, spec, claude_access and claude_entry only")
 
     def test_claude_access_is_the_teams_unless_the_developer_says(self):
         # Neither file sets it: None, not False — Claude Code's settings are then left alone.

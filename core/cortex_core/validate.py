@@ -25,7 +25,7 @@ import sys
 from typing import List, Optional, Sequence, TextIO, Tuple
 
 from . import catalog, resolver
-from .workspace import find, same_directory, services  # noqa: F401 — find is part of this module's API
+from .workspace import find, listed_services, same_directory, services  # noqa: F401 — find, services: this module's API
 
 LAYERS = ("roles", "capabilities", "personalities", "workflows")
 
@@ -151,15 +151,29 @@ def base_file(base: str, project_root: str, base_root: str) -> str:
 _NON_OVERRIDABLE = "characters.md is not overridable; fork the theme instead (see docs/creating-a-theme.md)"
 
 
-def check_overlay(file: str, root: str, project_root: str, base_root: str, report: Report) -> None:
-    """Validate one overlay file, found under ``{root}/agents/`` — the script's ``validate_overlay_file``.
+def layer_directory(root: str, project_root: str, team_folder: Optional[str] = None) -> str:
+    """Where the overlays of ``root`` are: the team's folder for the workspace — ``{project_root}/agents``
+    unless ``cortex.toml`` renames it (ADR-013 §3.6) — and ``{service}/agents`` for a service."""
+    if team_folder is not None and os.path.normpath(root) == os.path.normpath(project_root):
+        return str(team_folder)
+    return f"{root}/agents"             # as 1.7.0 wrote it: `--service .` reads ./agents
 
-    Its path under ``agents/`` and whether it is a workspace or a service overlay come from
+
+def check_overlay(file: str, root: str, project_root: str, base_root: str, report: Report,
+                  team_folder: Optional[str] = None) -> None:
+    """Validate one overlay file, found under ``root``'s layer directory — the script's
+    ``validate_overlay_file``: ``{root}/agents/``, or the team's folder ``team_folder`` for the workspace.
+
+    Its path under that directory and whether it is a workspace or a service overlay come from
     ``root``, never from the absolute path: where the project sits on disk changes nothing (#84).
     """
     rel_path = strip_prefix(file, f"{project_root}/")
-    file_rel_to_agents = strip_prefix(file, f"{root}/agents/")
+    layers = layer_directory(root, project_root, team_folder)
+    file_rel_to_agents = strip_prefix(file, f"{layers}/")
     in_workspace = os.path.normpath(root) == os.path.normpath(project_root)
+    # A renamed team's folder is named as cortex.toml names it; otherwise "agents", as 1.7.0 said — `--service .` too.
+    shown_layers = strip_prefix(layers, f"{project_root}/") if in_workspace and team_folder is not None else "agents"
+    shown_team = strip_prefix(str(team_folder) if team_folder is not None else f"{project_root}/agents", f"{project_root}/")
     # The file's layer, and its path within it, as the resolver sees them
     layer, _, file_in_layer = file_rel_to_agents.partition("/")
     rule = resolver.semantic_for(layer, file_in_layer)
@@ -213,14 +227,16 @@ def check_overlay(file: str, root: str, project_root: str, base_root: str, repor
     # Tier 1.5 — replacement only where the resolver replaces: workflows
     if semantic == "replacement" and rule is not resolver.MergeSemantic.REPLACEMENT:
         report.error(rel_path, "REPLACEMENT_OUTSIDE_WORKFLOWS",
-                     "Semantic: replacement is only allowed for files under agents/workflows/")
+                     f"Semantic: replacement is only allowed for files under "
+                     f"{shown_team if in_workspace and team_folder is not None else 'agents'}/workflows/")
         return
 
     # Tier 1.6 — path mirroring
     base_rel_to_agents = strip_prefix(base, "cortex/agents/")
     if file_rel_to_agents != base_rel_to_agents:
         report.error(rel_path, "PATH_MIRROR",
-                     f"overlay path 'agents/{file_rel_to_agents}' must mirror base 'cortex/agents/{base_rel_to_agents}'")
+                     f"overlay path '{shown_layers}/{file_rel_to_agents}' must mirror base "
+                     f"'cortex/agents/{base_rel_to_agents}'")
         return
 
     # Tier 2.1 — non-overridable, as the resolver says: characters.md (reported as an error,
@@ -234,7 +250,8 @@ def check_overlay(file: str, root: str, project_root: str, base_root: str, repor
 
     # Tier 2.3 — scope vs location
     if scope.startswith("workspace") and not in_workspace:
-        report.warning(rel_path, "SCOPE_MISMATCH", f"Scope: '{scope}' but file is not at workspace root (agents/...)")
+        report.warning(rel_path, "SCOPE_MISMATCH",
+                       f"Scope: '{scope}' but file is not at workspace root ({shown_team}/...)")
     if scope.startswith("service") and in_workspace:
         report.warning(rel_path, "SCOPE_MISMATCH",
                        f"Scope: '{scope}' but file is at workspace root — should be under {{service}}/agents/")
@@ -252,9 +269,11 @@ def check_overlay(file: str, root: str, project_root: str, base_root: str, repor
 # --------------------------------------------------------------------------- #
 
 
-def overlay_roots(project_root: str, base_root: str, service: str) -> List[str]:
-    """The workspace, when it has ``agents/``, then every service that has both a
-    ``project-overview.md`` and an ``agents/`` — or the one ``--service`` names.
+def overlay_roots(project_root: str, base_root: str, service: str, team_folder: Optional[str] = None) -> List[str]:
+    """The workspace, when it has its team's folder — ``agents/``, unless ``cortex.toml`` renames it
+    (ADR-013 §3.6) — then every service that has both a ``project-overview.md`` and an ``agents/`` — or
+    the one ``--service`` names. A service the runtime refuses is none: one whose ``agents/`` is the team's
+    folder, a link to it, holds the team's overlays, which the workspace's root checks already (ADR-013 §3.6).
 
     A project root that is the base itself — Cortex validating itself — is no workspace tier:
     its files are the base, read once and never stacked onto themselves (ADR-007 §3.1).
@@ -264,20 +283,22 @@ def overlay_roots(project_root: str, base_root: str, service: str) -> List[str]:
     """
     if service:
         return [service if os.path.isabs(service) else f"{project_root}/{service}"]
-    is_base = same_directory(project_root, base_root)
-    roots = [project_root] if os.path.isdir(f"{project_root}/agents") and not is_base else []
-    return roots + [s for s in services(project_root, base_root) if os.path.isdir(f"{s}/agents")]
+    is_base = same_directory(project_root, base_root) and team_folder is None
+    roots = [project_root] if os.path.isdir(layer_directory(project_root, project_root, team_folder)) \
+        and not is_base else []
+    return roots + [s for s in listed_services(project_root, base_root, team_folder) if os.path.isdir(f"{s}/agents")]
 
 
 # --------------------------------------------------------------------------- #
 # The run
 # --------------------------------------------------------------------------- #
 def validate(project_root: str, base_root: str, service: str, strict: bool, out: TextIO, colors: Colors,
-             project_warnings: Sequence[Tuple[str, str, str]] = ()) -> int:
+             project_warnings: Sequence[Tuple[str, str, str]] = (), team_folder: Optional[str] = None) -> int:
     """Validate every overlay under the overlay roots; return the script's exit code.
 
     ``project_warnings`` — ``(file, code, message)`` — are what the caller found of the project
-    itself, its ``cortex.lock`` (ADR-010 §3.4): reported first, and counted as warnings."""
+    itself, its ``cortex.lock`` (ADR-010 §3.4): reported first, and counted as warnings.
+    ``team_folder`` is the workspace's layer directory, the team's folder (ADR-013 §3.6)."""
     c = colors
     report = Report(out, c)
     report.echo(f"{c.BOLD}{c.BLUE}Cortex overlay validator{c.NC}")
@@ -294,9 +315,11 @@ def validate(project_root: str, base_root: str, service: str, strict: bool, out:
             report.warning(rel_path, code, message)
         report.echo("")
 
-    roots = overlay_roots(project_root, base_root, service)
+    roots = overlay_roots(project_root, base_root, service, team_folder)
     if not roots:
-        report.echo(f"{c.YELLOW}ℹ{c.NC}  No overlay roots found (no agents/ directory at workspace or service level).")
+        where = "no agents/ directory at workspace or service level" if team_folder is None else \
+            f"no {strip_prefix(str(team_folder), f'{project_root}/')}/ directory at workspace level, no agents/ at service level"
+        report.echo(f"{c.YELLOW}ℹ{c.NC}  No overlay roots found ({where}).")
         report.echo("   Nothing to validate. This is expected if you haven't created overlays yet.")
         if report.warnings:   # the project's own: said in the summary, as an overlay's would be
             report.echo(SEPARATOR)
@@ -312,11 +335,11 @@ def validate(project_root: str, base_root: str, service: str, strict: bool, out:
         report.echo(f"{c.BOLD}── Scope: {shown(display(rel_root))} ──{c.NC}")
         found = 0
         for layer in LAYERS:
-            layer_dir = f"{root}/agents/{layer}"
+            layer_dir = f"{layer_directory(root, project_root, team_folder)}/{layer}"
             if not os.path.isdir(layer_dir):
                 continue
             for path in find(layer_dir, "*.md", regular_files=True, follow_links=True):
-                check_overlay(path, root, project_root, base_root, report)
+                check_overlay(path, root, project_root, base_root, report, team_folder)
                 found += 1
         if found == 0:
             report.echo("  (no overlay files)")
@@ -340,11 +363,12 @@ def _stream(stream: TextIO) -> TextIO:
 
 
 def main(argv: List[str], *, project_root: str, base_root: str, prog: str = "cortex validate",
-         project_warnings: Sequence[Tuple[str, str, str]] = ()) -> int:
+         project_warnings: Sequence[Tuple[str, str, str]] = (), team_folder: Optional[str] = None) -> int:
     """``cortex validate [--service PATH] [--strict] [-h|--help]``.
 
     The two roots are no options: the ``cortex`` command finds them from the project (ADR-008
-    §3.8). ``prog`` names the command in the help.
+    §3.8), and the team's folder from its ``cortex.toml`` (ADR-013 §3.6). ``prog`` names the command
+    in the help.
     """
     args = list(argv)
     # What the caller already wrote goes out first: the wrappers write under its buffers.
@@ -352,7 +376,7 @@ def main(argv: List[str], *, project_root: str, base_root: str, prog: str = "cor
     sys.stderr.flush()
     out, err = _stream(sys.stdout), _stream(sys.stderr)
     try:
-        return _main(args, project_root, base_root, out, err, prog, project_warnings)
+        return _main(args, project_root, base_root, out, err, prog, project_warnings, team_folder)
     finally:
         # The wrappers borrow the process's own streams: detached, returning leaves stdout and
         # stderr open for whatever runs next in this process.
@@ -361,7 +385,7 @@ def main(argv: List[str], *, project_root: str, base_root: str, prog: str = "cor
 
 
 def _main(args: List[str], project_root: str, base_root: str, out: TextIO, err: TextIO,
-          prog: str, project_warnings: Sequence[Tuple[str, str, str]] = ()) -> int:
+          prog: str, project_warnings: Sequence[Tuple[str, str, str]] = (), team_folder: Optional[str] = None) -> int:
     service, strict = "", False
     i = 0
     while i < len(args):
@@ -379,4 +403,5 @@ def _main(args: List[str], project_root: str, base_root: str, out: TextIO, err: 
             err.write(f"Unknown argument: {arg}\n")
             err.write(USAGE.format(prog=prog))
             return 2
-    return validate(project_root, base_root, service, strict, out, Colors(out.isatty()), project_warnings)
+    return validate(project_root, base_root, service, strict, out, Colors(out.isatty()), project_warnings,
+                    team_folder)
