@@ -349,6 +349,19 @@ class OptionTests(InitTestCase):
         self.assertEqual((self.project / ".gitignore").read_bytes(),
                          b"cortex.local.toml\n!cortex.local.toml\ncortex.local.toml\n")
 
+    def test_without_git_a_negation_of_what_a_killed_sync_leaves_has_its_line_written_again(self):
+        # `/.cortex-sync-*` stands for every path a sync killed half-way leaves: a negation below it of some of them —
+        # the real ones are `.cortex-sync-<pid>-<hex>` — takes them back, so the line is written again below it.
+        (self.project.parent / ".git").mkdir(parents=True, exist_ok=True)
+        self.project.mkdir(exist_ok=True)
+        for below in (b"!/.cortex-sync-[0-9]*\n", b"!.cortex-sync-1234-abcd\n"):
+            with self.subTest(below=below):
+                written = b"cortex.local.toml\n/cortex\n/.cortex-sync-*\n" + below
+                (self.project / ".gitignore").write_bytes(written)
+                proc = self.init("--link", "--force")
+                self.assertEqual(proc.returncode, 0, proc.err)
+                self.assertEqual((self.project / ".gitignore").read_bytes(), written + b"/.cortex-sync-*\n")
+
     def test_a_root_inside_a_repository_is_not_said_to_be_in_none(self):
         # The repository is a .git at the root or above it, git or not on the PATH — as cortex upgrade tells it.
         # Without git to ask, .gitignore's own lines say what is ignored, in a subdirectory too: it is written.
