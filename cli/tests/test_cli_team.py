@@ -57,6 +57,8 @@ TEAM_PIN = OWN if Version(OWN).pre else "1.8.0"
 # no release that prepares 1.8.0 — 1.8.0 and its candidates are newer than it (ADR-009 §9).
 TEAM_MOVES = not DEV_OWN or Version("{}.{}.{}".format(*Version(OWN).core)) > Version("1.8.0")
 GIT = shutil.which("git")
+# A version a team's file pins, which reads it, other than this cortex's: --team has something to move from it.
+OTHER_TEAM = "1.8.0-rc.1" if Version(OWN) == Version("1.8.0") else "1.8.0"
 NEEDS_GIT = unittest.skipIf(GIT is None or os.name == "nt", "needs git")
 GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
@@ -1546,7 +1548,7 @@ class CodeReviewTests(TeamTestCase):
                 self.assert_ok(self.cortex(root, "sync", "--locked"))
                 self.assertEqual(self.local(root)["synced"]["reads"], "9.9.8")
 
-    def team_repository(self, version="1.8.0"):
+    def team_repository(self, version=OTHER_TEAM):
         """A follower whose work tree holds its team's folder, pinned at ``version``, all committed."""
         env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
         root = self.project('theme = "h2g2"\n', team=f'version = "{version}"\n', committed=False)

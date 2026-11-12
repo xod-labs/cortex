@@ -116,9 +116,11 @@ class ThisRepositoryTests(unittest.TestCase):
         text = (HERE.parents[3] / "CHANGELOG.md").read_text(encoding="utf-8")
         released = [line for label, line in headings(text) if label != "Unreleased"]
         self.assertGreater(len(released), 10)
+        spent = " _(Not published)_"   # a version whose draft was never published (ADR-009 §3.3)
         for line in released[:12]:
             with self.subTest(line=line):
-                self.assertIsNotNone(re.fullmatch(DEFAULT_SECTION, line))
+                shaped = line[:-len(spent)] + " _(Released)_" if line.endswith(spent) else line
+                self.assertIsNotNone(re.fullmatch(DEFAULT_SECTION, shaped))
 
 
 if __name__ == "__main__":
