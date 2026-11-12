@@ -272,6 +272,29 @@ class SyncedTests(TeamTestCase):
         self.assert_ok(self.cortex(root, "sync"))
         self.assertLessEqual(set(self.local(root)), {"theme", "spec", "claude_access", "claude_entry"})
 
+    def test_a_committed_pin_before_1_8_0_beside_a_team_s_file_syncs_its_own_version_and_records_nothing(self):
+        # The state the bootstrap's rule without `synced` reads (ADR-013 §3.10): a committed cortex.toml before
+        # 1.8.0 is the team's version, its team's file not read — the sync reads 1.7.0 and records no `synced`,
+        # so the assistant, seeing `cortex.toml` committed and a spec of 1.7.0, runs nothing. Committed as git
+        # says, and where git refuses — a `.git` it cannot read — by the `.git` above.
+        cases = ["refusing"] + ([] if GIT is None or os.name == "nt" else ["tracked"])
+        for case in cases:
+            with self.subTest(case):
+                root = self.project('version = "1.7.0"\ntheme = "h2g2"\n', team='version = "1.8.0"\n',
+                                    committed=case == "refusing", name=case)
+                if case == "tracked":
+                    self.git(root, "init", "-q")
+                    self.git(root, "add", "cortex.toml")
+                    self.git(root, "commit", "-q", "-m", "pin")
+                git = {"PATH": os.path.dirname(GIT), **GIT_ENV} if case == "tracked" else {}
+                proc = self.cortex(root, "sync", **git)
+                self.assert_ok(proc)
+                self.assertIn(f"note: {TEAM} is not read: the team's version is 1.7.0, before 1.8.0", proc.err)
+                local = self.local(root)
+                self.assertNotIn("synced", local)
+                self.assertEqual(Path(local["spec"]).name, "1.7.0")
+                self.assertEqual(Path(local["spec"]).parent.name, "versions")
+
     @DOWNLOADS
     def test_a_move_below_1_8_0_removes_synced(self):
         root = self.project('version = "9.9.8"\ntheme = "h2g2"\n')
