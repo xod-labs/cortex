@@ -4,7 +4,7 @@
 a build of no release prepares, ``X.Y.Z-dev.N``. A source checkout has none: it reports the
 version it prepares, ``X.Y.Z-dev``, which the checkout's ``CHANGELOG.md`` gives (``devversion``,
 ADR-009 §9) — unless its tests name the version it stands for, with ``CORTEX_SOURCE_VERSION``. A
-build always has a stamp, and reads neither. A checkout whose changelog cannot be read, an
+build always has a stamp, and reads neither. A checkout whose changelog cannot be read — or holds a version too long to read as numbers —, an
 installed copy of the package, says ``0.0.0-dev``.
 
 The stamp also names the build's target, ``linux-x86_64`` say: the release asset ``cortex
@@ -22,7 +22,10 @@ def _prepared() -> str:
         return "0.0.0-dev"
     from .devversion import development
 
-    return development(text)
+    try:
+        return development(text)
+    except ValueError:          # a version of more digits than Python reads as a number: a changelog it cannot tell
+        return "0.0.0-dev"
 
 
 try:
