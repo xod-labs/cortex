@@ -825,14 +825,18 @@ class OptionTests(InitTestCase):
 
     def test_without_git_a_negation_of_another_path_adds_no_line(self):
         # !.gitkeep takes back .gitkeep, never cortex.local.toml: init, with no git on its PATH, adds no second line,
-        # and says nothing of git.
-        self.project.mkdir(parents=True, exist_ok=True)
-        (self.project / ".git").mkdir()
-        (self.project / ".gitignore").write_bytes(b"cortex.local.toml\nCLAUDE.md\n!.gitkeep\n")
-        proc = self.init("--tool", "claude")
-        self.assertEqual(proc.returncode, 0, proc.err)
-        self.assertEqual((self.project / ".gitignore").read_bytes(), b"cortex.local.toml\nCLAUDE.md\n!.gitkeep\n")
-        self.assertNotIn("Cortex cannot tell", proc.err)
+        # and says nothing of git. Nor does a glob, an escape, a `**/` of other paths, read as git reads them.
+        for n, negation in enumerate((b"!.gitkeep", b"!*.d.ts", b"!.vscode/*.json", b"!\\#file", b"!**/keep")):
+            with self.subTest(negation=negation):
+                self.project = self.tmp / "init" / f"negation-{n}"
+                self.project.mkdir(parents=True)
+                (self.project / ".git").mkdir()
+                ignore = b"cortex.local.toml\nCLAUDE.md\n" + negation + b"\n"
+                (self.project / ".gitignore").write_bytes(ignore)
+                proc = self.init("--tool", "claude")
+                self.assertEqual(proc.returncode, 0, proc.err)
+                self.assertEqual((self.project / ".gitignore").read_bytes(), ignore)
+                self.assertNotIn("Cortex cannot tell", proc.err)
 
     def test_force_with_workspace_says_nothing_of_a_layout_read_from_the_file(self):
         # The note is of the layout read from the file, without the option: with --workspace, the option chose it.
