@@ -3286,21 +3286,76 @@ class ThirdCodeReviewTests(TeamTestCase):
                 self.assertNotIn(f"no {TEAM}", proc.err)
                 self.assertIn("Nothing was changed", proc.err)
 
+    UNREAD = (("a directory", None, f"{TEAM}: cannot be read — not a file"),
+              ("garbled", 'version = 9.9.8"\n', f"{TEAM}: Expected newline or end of document"))
+
+    def unread_team(self, root, garbled):
+        (root / "agents").mkdir()
+        if garbled is None:
+            (root / TEAM).mkdir()
+        else:
+            (root / TEAM).write_text(garbled, encoding="utf-8")
+
     @SOURCE
     @harness.outside_a_repository
-    def test_a_try_too_new_beside_a_team_s_file_that_is_no_file_names_team_which_names_the_file(self):
-        # The team's file there, unread: the refusal of a try newer than this cortex names the move of the try, and
-        # --team, followed, says why the file does not read — never that there is none.
-        root = self.project('version = "9.9.8"\ntheme = "h2g2"\n', local='version = "9.9.10"\n', committed=False)
-        (root / "agents").mkdir()
-        (root / TEAM).mkdir()
-        proc = self.cortex(root, "upgrade")
-        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-        self.assertIn("this project reads Cortex 9.9.10, which its cortex.local.toml pins", proc.err)
-        self.assertIn("`cortex upgrade --local VERSION` moves the try", proc.err)
-        proc = self.cortex(root, "upgrade", "--team", "9.9.8")
-        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-        self.assertIn(f"{TEAM}: cannot be read — not a file", proc.err)
+    def test_a_version_too_new_beside_a_team_s_file_that_does_not_read_names_no_move(self):
+        # Bluspark's fourth pass: each move refuses that file first — the try dropped, a pin moved, a project moved
+        # down — so a refusal of a version newer than this cortex names none of them, only the file to fix.
+        for kind, garbled, error in self.UNREAD:
+            for case, toml, local, newer in (
+                    ("try", 'version = "9.9.8"\ntheme = "h2g2"\n', 'version = "9.9.10"\n', "cortex.local.toml"),
+                    ("cortex.toml", 'version = "9.9.10"\ntheme = "h2g2"\n', None, "cortex.toml"),
+                    ("dev", 'version = "9.9.8"\ntheme = "h2g2"\n', 'version = "9.9.10-dev.3"\n', "cortex.local.toml")):
+                with self.subTest(kind=kind, case=case):
+                    root = self.project(toml, local=local, committed=False, name=f"{case}-{kind}".replace(" ", "-"))
+                    self.unread_team(root, garbled)
+                    for args in (("upgrade",), ("sync",), ("validate",), ("init", "--tool", "claude"),
+                                 ("config", "version")):
+                        proc = self.cortex(root, *args)
+                        said = proc.out + proc.err
+                        self.assertEqual(proc.returncode, {"validate": 2, "config": 0}.get(args[0], 1), said)
+                        if args[0] != "config" or case == "dev":   # a release's version: config names its update alone
+                            self.assertIn("fix or restore the team's file: no command reads the project while it "
+                                          f"does not — {error}", said.replace("Fix or restore", "fix or restore"))
+                        if args[0] != "config":
+                            self.assertIn(f"which its {newer} pins", said)
+                        for move in ("--local", "--team", "cortex upgrade 9", "cortex upgrade VERSION"):
+                            self.assertNotIn(move, said)
+                    proc = self.cortex(root, "upgrade")
+                    self.assertIn(". Then run `cortex upgrade` again", proc.err)
+
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_a_try_too_new_beside_a_team_s_file_that_does_not_read_is_moved_once_it_reads(self):
+        # Each command named is followed: the move named before the fix fails on the file, the fix then the run named
+        # gives the moves — and each of those does what it says.
+        for kind, garbled, error in self.UNREAD:
+            with self.subTest(kind=kind):
+                root = self.project('version = "9.9.8"\ntheme = "h2g2"\n', local='version = "9.9.10"\n',
+                                    committed=False, name=kind.replace(" ", "-"))
+                self.unread_team(root, garbled)
+                for args in (("upgrade", "--local", "9.9.8"), ("upgrade", "--local", OWN), ("upgrade", "9.9.8")):
+                    proc = self.cortex(root, *args)                         # what used to be named: it never worked
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertIn(error, proc.err)
+                if garbled is None:
+                    (root / TEAM).rmdir()
+                (root / TEAM).write_text('version = "9.9.8"\n', encoding="utf-8")             # the fix, followed
+                proc = self.cortex(root, "upgrade")                                             # then the run named
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn("`cortex upgrade --local VERSION` moves the try — to the team's version or below, it "
+                              "drops it", proc.err)
+                self.assert_ok(self.cortex(root, "upgrade", "--local", OWN))                     # moves the try
+                self.assertEqual(self.local(root)["version"], OWN)
+                (root / "cortex.local.toml").write_text('version = "9.9.10"\n', encoding="utf-8")
+                proc = self.cortex(root, "sync")
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn("\nor drop the try: cortex upgrade --local 9.9.8", proc.err)
+                proc = self.cortex(root, "upgrade", "--local", "9.9.8")                           # drops it
+                self.assert_ok(proc)
+                self.assertNotIn("version", self.local(root))
+                self.assertEqual(self.value(root, "version"), "9.9.8")
 
 
 def newer_refused(pin):

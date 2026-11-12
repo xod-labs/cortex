@@ -1195,6 +1195,14 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
                            "a Cortex project")
     the_store = store.Store()
     pinned = config.loose_pin(root)
+    unread = config.unread_team(root) if wanted is None and pinned is not None and pinned[1] > the_store.own else None
+    if unread is not None:
+        fix = config.fix_team_file(unread)
+        # No move works while the team's file does not read: each refuses it first (ADR-013 §3.5) — the move is named
+        # by the run after the fix.
+        raise UpgradeError(f"this project reads Cortex {pinned[1]}, which its {pinned[0]} pins, newer than this cortex, "
+                           f"{the_store.own} — nothing was changed. {fix[:1].upper()}{fix[1:]}. Then run `cortex upgrade` "
+                           "again")
     if wanted is None and pinned is not None and pinned[1] > the_store.own and pinned[0] != config.PROJECT_FILE:
         # A try, or the team's pin, newer than this cortex: said with its own remedy (ADR-013 §3.8).
         name, newer = pinned
