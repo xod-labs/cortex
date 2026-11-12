@@ -1195,11 +1195,17 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
                            "a Cortex project")
     the_store = store.Store()
     pinned = config.loose_pin(root)
-    unread = config.unread_team(root) if wanted is None and pinned is not None and pinned[1] > the_store.own else None
-    if unread is not None:
-        fix = config.fix_team_file(unread)
-        # No move works while the team's file does not read: each refuses it first (ADR-013 §3.5) — the move is named
-        # by the run after the fix.
+    refusal = config.team_refusal(root) if wanted is None and pinned is not None and pinned[1] > the_store.own \
+        else None
+    if refusal is not None and refusal[1] and not store.development(pinned[1]):
+        # A key of the team's file this cortex does not know, a later release may: updating is the move (§3.8).
+        raise UpgradeError(f"this project reads Cortex {pinned[1]}, which its {pinned[0]} pins, newer than this cortex, "
+                           f"{the_store.own} — nothing was changed. Update this cortex to serve it:\n"
+                           f"    {store.update_command(pinned[1])}")
+    if refusal is not None:
+        fix = config.fix_team_file(refusal[0])
+        # No move works while the team's file does not read, or is refused: each refuses it first (ADR-013 §3.5) —
+        # the move is named by the run after the fix.
         raise UpgradeError(f"this project reads Cortex {pinned[1]}, which its {pinned[0]} pins, newer than this cortex, "
                            f"{the_store.own} — nothing was changed. {fix[:1].upper()}{fix[1:]}. Then run `cortex upgrade` "
                            "again")
@@ -1215,6 +1221,13 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
                                f"{the_store.own} — nothing was changed. "
                                + (pin[:1].upper() + pin[1:] if store.development(newer) else
                                   f"Update this cortex to serve it:\n    {store.update_command(newer)}"))
+        unmoved = config.try_unmoved(root) if name == config.LOCAL_FILE else None
+        if unmoved is not None:
+            # No --local moves the try: cortex.toml's agents refused, or a team's version before 1.8.0 (§3.8).
+            raise UpgradeError(f"this project reads Cortex {newer}, which its {name} pins, newer than this cortex, "
+                               f"{the_store.own} — nothing was changed: {unmoved[0]}"
+                               + (f". Update this cortex to serve it:\n    {store.update_command(newer)}"
+                                  if unmoved[1] == config.LATER else ""))
         # Each command named does what it says: the team's pin is moved by --team; a try, by --local, which drops it
         # at the team's version or below — a try below a team's pin too new for this cortex is never read.
         move = "`cortex upgrade --local VERSION` moves the try — to the team's version or below, it drops it" \
