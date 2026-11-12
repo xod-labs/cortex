@@ -547,6 +547,54 @@ class GitIgnoreTests(SyncTestCase):
             with self.subTest(name=name, below=below):
                 self.assertFalse(sync._named([name, below], {name}, name))
 
+    def test_without_git_a_bracket_or_a_double_star_never_says_ignored_where_git_does_not(self):
+        # Case never narrows a bracket — a negated one is compared as written, a range keeps both its ends —, and a
+        # `**` right after the literal head is whole: git compares the head first, then globs the rest. Each takes the
+        # path back, as git reads it; with git here, each answer is checked against it, a repository that ignores case
+        # and one that does not alike: Cortex says ignored only where git says so.
+        takes_back = (("cortex.local.toml", "![!A-Z]*"), ("cortex.local.toml", "![^A-Z]*"),
+                      ("cortex.local.toml", "!cortex.[T-z]ocal.toml"),
+                      (".claude/settings.local.json", "!.claude/[T-z]*"), (".claude/settings.local.json", "!/.claude**"),
+                      (".claude/settings.local.json", "!/.c**"), ("cortex", "!cortex**/**"), ("cortex", "!/cortex**/**"),
+                      (".claude/settings.local.json", "!.claude/settings.local.[^x]son"),
+                      (".claude/settings.local.json", "!.claude/settings.local.[i-k]son"),
+                      (".claude/settings.local.json", "!.claude/settings.local.[\\j]son"),
+                      (".claude/settings.local.json", "!.claude/settings.local.[]j]son"),
+                      (".claude/settings.local.json", "!.claude/settings.local.[]j]so[n]"),
+                      (".claude/settings.local.json", "!.claude/settings.local.[z-aj]son"))
+        # A bracket that cannot match it, as git reads it — an escaped `-` is no range —: the path stays ignored.
+        keeps = (("cortex.local.toml", "![!a-z]*"), (".claude/settings.local.json", "!.claude/settings.local.[i\\-k]son"),
+                 (".claude/settings.local.json", "!.claude/settings.local.[!j]son"), ("cortex", "!cortex**x"))
+        git = shutil.which("git")
+        for (name, below), expected in [*((case, False) for case in takes_back), *((case, True) for case in keeps)]:
+            line = "/cortex" if name == "cortex" else name
+            with self.subTest(name=name, below=below):
+                said = sync._named([line, below], {line}, name)
+                self.assertEqual(said, expected)
+                if git is None:
+                    continue
+                project = self.repository(f"{line}\n{below}\n", f"git-{len(list(self.tmp.iterdir()))}")
+                for ignorecase in ("false", "true"):
+                    answer = subprocess.run([git, "-C", str(project), "-c", f"core.ignorecase={ignorecase}",
+                                             "check-ignore", "--no-index", "-q", name]).returncode == 0
+                    self.assertTrue(answer or not said, f"git does not ignore {name} (ignorecase={ignorecase})")
+
+    def test_without_git_a_line_that_is_a_pattern_is_taken_back_by_any_negation_of_its_paths(self):
+        # `/.cortex-sync-*` is asked of a name that stands in for what a sync killed half-way leaves: a negation of
+        # some of those paths — a pattern, or a name of one — may take back a real one, so the line is written again.
+        line, probe = "/.cortex-sync-*", ".cortex-sync-x"
+        for below in ("!/.cortex-sync-[0-9]*", "!.cortex-sync-1234-abcd", "!/.cortex-sync-1234-abcd/", "!.cortex-sync-?*",
+                      "!*.d.ts"):
+            with self.subTest(below=below):
+                self.assertFalse(sync._named([line, below], {line}, probe, sync._stands_in(line)))
+        # A name of none of its paths keeps it, and a line that names one path is asked of that path alone.
+        for below in ("!.gitkeep", "!cortex-sync-1", "!/.cortex-sync"):
+            with self.subTest(below=below):
+                self.assertTrue(sync._named([line, below], {line}, probe, sync._stands_in(line)))
+        self.assertIsNone(sync._stands_in("cortex.local.toml"))
+        self.assertTrue(sync._named(["cortex.local.toml", "!*.d.ts"], {"cortex.local.toml"}, "cortex.local.toml",
+                                    sync._stands_in("cortex.local.toml")))
+
     @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
     def test_without_git_a_gitignore_that_is_a_link_is_not_read(self):
         # git reads no .gitignore that is a symbolic link: its lines ignore nothing — a note, never "ignored".
