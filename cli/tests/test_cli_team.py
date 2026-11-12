@@ -3357,6 +3357,21 @@ class ThirdCodeReviewTests(TeamTestCase):
                 self.assertNotIn("version", self.local(root))
                 self.assertEqual(self.value(root, "version"), "9.9.8")
 
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_a_try_removed_at_a_tie_with_this_developer_s_cortex_toml_says_the_team_s_version_is_read(self):
+        # cortex.toml, not committed, at the team's version: the try removed, the team's is read — on a tie the team's
+        # wins (ADR-013 §3.1), and the message says so.
+        root = self.project('version = "9.9.8"\ntheme = "h2g2"\n', team='version = "9.9.8"\n',
+                            local=f'version = "{OWN}"\n', committed=False)
+        for dry in (("--dry-run",), ()):
+            proc = self.cortex(root, "upgrade", "--local", "9.9.8", *dry)
+            self.assert_ok(proc)
+            self.assertIn(f"cortex.local.toml: version {OWN} {'would be' if dry else 'is'} removed — the team's 9.9.8 "
+                          f"({TEAM}) is read\n", proc.out)
+        self.assertNotIn("version", self.local(root))
+        self.assertEqual(self.value(root, "version"), "9.9.8")
 
 def newer_refused(pin):
     """What --team with no VERSION says of a team's pin newer than this cortex."""
