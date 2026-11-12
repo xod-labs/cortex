@@ -938,6 +938,25 @@ class OptionTests(InitTestCase):
         self.assertIn("ai.md.bak: the file --force replaces, as it was — git does not ignore it: carry over", proc.out)
 
     @unittest.skipUnless(HAS_GIT, "needs git")
+    def test_a_custom_file_s_backup_is_asked_of_its_own_repository_never_the_root_s(self):
+        # The root's repository and the file's answer differently, both ways: the line says what the file's says.
+        for n, (root_ignores, file_ignores) in enumerate(((b"*.bak\n", b""), (b"", b"*.bak\n"))):
+            with self.subTest(root=root_ignores, file=file_ignores):
+                self.project = self.tmp / "init" / f"project-{n}"
+                elsewhere = self.tmp / "init" / f"elsewhere-{n}"
+                for repository, ignore in ((self.project, root_ignores), (elsewhere, file_ignores)):
+                    repository.mkdir(parents=True)
+                    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+                    (repository / ".gitignore").write_bytes(ignore)
+                (elsewhere / "ai.md").write_bytes(b"# mine\n")
+                self.env = dict(self.env, PATH=os.pathsep.join([os.path.dirname(shutil.which("git")), self.env["PATH"]]))
+                proc = self.init("--tool", "custom", "--instructions-file", str(elsewhere / "ai.md"), "--force")
+                self.assertEqual(proc.returncode, 0, proc.err)
+                left = subprocess.run(["git", "-C", str(elsewhere), "check-ignore", "-q", "ai.md.bak"]).returncode != 0
+                self.assertEqual(left, not file_ignores)
+                self.assertEqual("git does not ignore it" in proc.out, left, proc.out)
+
+    @unittest.skipUnless(HAS_GIT, "needs git")
     def test_a_backup_git_ignores_is_not_said_to_be_left_to_it(self):
         # A team's .gitignore that holds *.bak: git ignores the backup, and the line asks git rather than saying so.
         self.project.mkdir(parents=True, exist_ok=True)
