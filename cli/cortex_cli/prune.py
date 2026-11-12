@@ -93,7 +93,7 @@ def _loosely(root: Path) -> Optional[config.Project]:
     a value it does not take. ``None`` when its version is not known."""
     def read(name: str) -> dict:
         try:
-            return tomllib.loads((root / name).read_text(encoding="utf-8-sig"))
+            return tomllib.loads(cascade.read_file(str(root / name)).decode("utf-8-sig"))    # a pipe: no wait
         except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
             return {}
 

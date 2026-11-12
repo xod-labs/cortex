@@ -2455,7 +2455,7 @@ class FourthCodeReviewTests(TeamTestCase):
             proc = subprocess.run(harness.command(*args), cwd=cwd, env={**self.env, "PWD": str(cwd), **env},
                                   stdin=subprocess.DEVNULL, capture_output=True, timeout=seconds)
         except subprocess.TimeoutExpired:
-            self.fail(f"cortex {' '.join(args)} did not end: it waits on what is at {TEAM}")
+            self.fail(f"cortex {' '.join(args)} did not end: it waits on a named pipe")
         proc.out, proc.err = proc.stdout.decode(), proc.stderr.decode()
         return proc
 
@@ -2534,6 +2534,28 @@ class FourthCodeReviewTests(TeamTestCase):
         proc = self.cortex(root, "sync")
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertIn(f"{TEAM}: cannot be read — ", proc.err)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipe here")
+    @harness.outside_a_repository
+    def test_a_named_pipe_at_cortex_local_toml_holds_no_command_of_the_machine(self):
+        # The registry's commands read a cortex.local.toml left without its cortex.toml, and prune one beside a
+        # project this cortex refuses: opened as a file, a named pipe there waited for a writer, and the command with
+        # it. Read without blocking, it is a file that cannot be read: the project is unreadable, never gone.
+        env = {"CORTEX_NO_REGISTER": ""}
+        left = self.project('version = "9.9.8"\ntheme = "h2g2"\n', name="left")
+        self.assert_ok(self.cortex_within(left, "project", "add", **env))
+        (left / "cortex.toml").unlink()                 # a branch without Cortex checked out
+        os.mkfifo(left / "cortex.local.toml")
+        for args in (("project", "list"), ("prune", "--dry-run"), ("upgrade", "--all", "--dry-run")):
+            with self.subTest(args=args):
+                proc = self.cortex_within(self.tmp, *args, **env)
+                self.assertNotIn("Traceback", proc.err)
+        listed = self.cortex_within(self.tmp, "project", "list", **env)
+        self.assertIn("unreadable", listed.out + listed.err)
+        refused = self.project('version = "9.9.8"\ntheme = "h2g2"\n', team="version = \n", name="refused")
+        os.mkfifo(refused / "cortex.local.toml")
+        proc = self.cortex_within(self.tmp, "prune", "--dry-run", str(refused), **env)
+        self.assertNotIn("Traceback", proc.err)
 
 
 def newer_refused(pin):
