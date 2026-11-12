@@ -852,6 +852,13 @@ def register(root: str, out: TextIO, err: TextIO) -> None:
         out.write(f"registered as {entry.name} — {registry.LISTS}\n")
 
 
+def commit_it(directory: str, version: store.Version, where: str = "") -> str:
+    """What follows a file written in ``directory`` for ``version``: `` — commit it``, then ``where`` — the
+    folder it is committed in. Nothing in no git repository, where it is committed nowhere (ADR-008 §9), nor
+    for a build of no release's version, which no teammate can download (ADR-009 §9)."""
+    return "" if in_no_repository(directory) or store.development(version) else " — commit it" + where
+
+
 def check_lock(root: str, version: store.Version, the_store: store.Store, out: TextIO,
                locked: bool = False, name: str = config.LOCK_FILE, writer: str = "`cortex sync`",
                folder: str = config.TEAM_FOLDER) -> Tuple[str, Optional[str]]:
@@ -884,7 +891,8 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
     if locked:
         why = (f"no {shown_name}" if lock is None else
                f"{shown_name} names Cortex {lock.version}, and {pins} pins {version}")
-        commit = "" if in_no_repository(root) else ", then commit it"     # committed nowhere (ADR-008 §9)
+        # Committed nowhere (ADR-008 §9); nor a build of no release's lock, which no teammate can use (ADR-009 §9).
+        commit = "" if in_no_repository(root) or store.development(version) else ", then commit it"
         raise SyncError(f"--locked: {why} — {writer} writes it{commit}. Nothing of the project was changed")
     return digest, ("written" if lock is None else f"Cortex {version}, where it named {lock.version}")
 
@@ -912,8 +920,11 @@ def version_notes(project: config.Project, locked: bool = False) -> List[str]:
         if mine > team and locked:
             said.append(f"{found.origin}'s version, {mine}, is not read: --locked checks the team's {team} ({origin})")
         elif mine > team:
+            # A build of no release is downloaded by no one: the store holds it from the build itself (ADR-009 §9).
             said.append(f"Cortex {mine} is read — {found.origin}'s, above the team's {team} ({origin})"
-                        + (": it is not locked, its release checked against its SHA256SUMS when downloaded"
+                        + ((": it is not locked, a build of no release, which no SHA256SUMS checks"
+                            if store.development(mine) else
+                            ": it is not locked, its release checked against its SHA256SUMS when downloaded")
                            if found.origin == config.LOCAL_FILE else ""))
         else:
             remedy = f"remove it: cortex upgrade --local {team}" if found.origin == config.LOCAL_FILE else \
@@ -1055,7 +1066,8 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         err.write(f"warning: the spec is the checkout at {display(str(spec_source))}, not Cortex {version}: "
                   "no version is checked (--from)\n")
     else:
-        how = the_store.ensure(version)
+        # This developer's cortex.toml, uncommitted beside the team's file: a pin no command writes.
+        how = the_store.ensure(version, origin=origin, by_hand=project.by_hand(origin))
         spec_source = the_store.path(version)
         said = {"stored": "in the store", "written": "written to the store, from this cortex",
                 "downloaded": "downloaded to the store, checked against its SHA256SUMS",
@@ -1157,11 +1169,8 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if source is not None:
         out.write(f"{config.LOCK_FILE}: neither read nor written — a checkout has no version (--from)\n")
     elif lock is not None:
-        name = where[2]
-        commit = " — commit it" + (team_lock_commit(Path(where[0]), project.team_folder) if where[1] == config.TEAM_LOCK_FILE
-                                   else "")
-        nowhere = in_no_repository(where[0])
-        out.write(f"{name}: {lock}{'' if nowhere else commit}\n")
+        team = team_lock_commit(Path(where[0]), project.team_folder) if where[1] == config.TEAM_LOCK_FILE else ""
+        out.write(f"{where[2]}: {lock}{commit_it(where[0], version, team)}\n")
     if notes:
         _notes(Path(root), mode, err)
     _claude(Path(root), project, None if mode == "copy" else spec_source, out, err)

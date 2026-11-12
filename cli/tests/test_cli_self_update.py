@@ -288,6 +288,14 @@ class SelfUpdateTests(ReleaseTestCase):
         self.assertIn("note: Cortex 1.3.2 has no self-update — the install script moves it again:", err)
         self.assertIn("install.ps1" if os.name == "nt" else "install.sh | sh\n", err)
 
+    def test_a_downgrade_to_a_pre_release_of_the_first_with_self_update_names_no_install_script(self):
+        FakeRelease.publish(self.release.root / "download" / "1.4.0-rc.1", "1.4.0-rc.1")
+        # A pre-release has its release's features: 1.4.0's self-update.
+        code, _, err = self.update("1.4.0-rc.1", own="9.9.9", run=lambda path: "cortex 1.4.0-rc.1")
+        self.assertEqual(code, 0)
+        self.assertIn("note: a downgrade — a project pinned to a version after 1.4.0-rc.1 is now refused", err)
+        self.assertNotIn("self-update", err)
+
     def test_on_windows_a_downgrade_to_a_binary_without_self_update_says_the_old_one_stays(self):
         FakeRelease.publish(self.release.root / "download" / "1.3.2", "1.3.2")
         old = self.bin / "cortex.old"

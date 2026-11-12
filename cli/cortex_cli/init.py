@@ -590,14 +590,16 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                             "templates/ and docs/")
         described = f"the checkout at {display(str(spec))}"
     else:
-        the_store.ensure(version)
+        # A refusal names the file that pins the version, and its command — as cortex sync names them.
+        origin = project.version_origin if project else config.TEAM_NAME if team_pins else None
+        the_store.ensure(version, origin=origin, by_hand=bool(project) and project.by_hand(origin))
         spec = the_store.path(version)
         described = f"Cortex {version}"
     # The bootstrap is committed: it follows the team's version, never a developer's try (ADR-013 §3.10).
     pinned = project.team_version if project else version
     templates_spec = spec
     if not options.source and pinned != version:
-        the_store.ensure(pinned)
+        the_store.ensure(pinned, origin=project.team_origin, by_hand=project.by_hand(project.team_origin))
         templates_spec = the_store.path(pinned)
     team_theme = team_data.get("theme") if team_data else None
     chosen = options.theme is not None or options.no_personality
@@ -654,6 +656,10 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         given = [key for key in ("version", "theme") if key not in values]
         out.write(f"✓ {config.PROJECT_FILE}: Cortex {version}, theme {theme}"
                   + (f" — {' and '.join(given)} from {config.TEAM_NAME}" if given else "") + "\n")
+        if "version" in values and store.development(version):
+            # This build's own version, pinned as any binary pins its own — said, not refused: CONTRIBUTING's loop
+            # makes throwaway projects from a checkout (ADR-009 §9, 2026-11-09).
+            err.write(f"warning: {store.no_release_pinned(version, config.PROJECT_FILE, config.developers_toml(str(root)))}\n")
     elif values:
         shown = ", ".join(f"{key} = {config.toml_value(value)}" for key, value in values.items())
         out.write(f"✓ {config.PROJECT_FILE}: {shown} — the rest kept, at Cortex {pinned}\n")

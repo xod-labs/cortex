@@ -1,6 +1,8 @@
 """tests/parallel.py, the runner that replays the suite through the binary in CI (#229), on small
 suites of its own: what passes, what fails, what a worker that dies leaves, and the heavy tests."""
 
+import contextlib
+import io
 import os
 import shutil
 import subprocess
@@ -8,7 +10,10 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from concurrent.futures import Future
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import parallel  # noqa: E402
@@ -99,6 +104,45 @@ class ParallelTests(unittest.TestCase):
         self.assertIn("--- written while test_a.A.test_dies ran\nlast words\n", out)
         self.assertIn("  not run: test_a.A.test_dies\n", out)
         self.assertIn("  not run: test_b.B.test_never_reached\n", out)
+
+    def test_a_worker_that_dies_while_the_tests_are_submitted_fails_the_run_and_says_what_did_not_run(self):
+        # The pool breaks before every test is submitted: the run says so, with no traceback.
+        class Probe(unittest.TestCase):
+            def test_one(self):
+                pass
+
+            def test_two(self):
+                pass
+
+        tests = [Probe("test_one"), Probe("test_two")]
+
+        class Pool:
+            submitted = 0
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def submit(self, function, test_id):
+                Pool.submitted += 1
+                if Pool.submitted > 1:
+                    raise BrokenProcessPool("a worker died")
+                future = Future()
+                future.set_exception(BrokenProcessPool("a worker died"))
+                return future
+
+        out = io.StringIO()
+        with mock.patch.object(parallel, "discover", return_value=tests), \
+                mock.patch.object(parallel, "ProcessPoolExecutor", Pool), contextlib.redirect_stdout(out):
+            code = parallel.main(["--heavy", tests[0].id(), "--workers", "1"])
+        self.assertEqual(code, 1, out.getvalue())
+        self.assertIn("A worker died, so the others were stopped.", out.getvalue())
+        self.assertIn(f"  not run: {tests[1].id()}\n", out.getvalue())
 
     def test_a_test_found_twice_runs_once(self):
         # A TestCase imported into another module is found there too, under the same id.

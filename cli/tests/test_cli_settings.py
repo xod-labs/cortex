@@ -23,6 +23,7 @@ sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).res
 
 import cli_harness as harness  # noqa: E402
 from cortex_cli import machine, store, sync, upgrade  # noqa: E402
+from cortex_cli.devversion import development  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
@@ -31,13 +32,11 @@ DOWNLOADS = unittest.skipIf(harness.BINARY, "a build of no release downloads no 
 GIT = shutil.which("git")
 NEEDS_GIT = unittest.skipIf(GIT is None, "needs git")
 POSIX = unittest.skipIf(os.name == "nt", "a git stand-in written as a shell script")
-# A development build — a dispatch of the binary workflow, 0.0.0-dev.N — passes the version gate, as a
-# source checkout does: what the gate refuses is tested from source, or with a release's build; that a
-# development build passes, from source with no CORTEX_SOURCE_VERSION, or with such a build.
-DEV_BUILD = re.compile(r"0\.0\.0-dev(\.[0-9]+)?")
-DEVELOPMENT = unittest.skipIf(harness.BINARY is not None and DEV_BUILD.fullmatch(harness.EXPECTED_VERSION or "0.0.0-dev"),
-                              "a development build passes the version gate")
-OWN_DEV = harness.EXPECTED_VERSION if harness.BINARY else "0.0.0-dev"
+# A build of no release — a source checkout, X.Y.Z-dev, or a CI build, X.Y.Z-dev.N — takes the version
+# its branch prepares (ADR-009 §9): from source with no CORTEX_SOURCE_VERSION, the changelog's.
+DEV_BUILD = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+-dev(\.[0-9]+)?")
+OWN_DEV = harness.EXPECTED_VERSION if harness.BINARY else \
+    development((harness.REPO / "CHANGELOG.md").read_text(encoding="utf-8"))
 RELEASE_BUILD = unittest.skipIf(harness.BINARY is not None and not DEV_BUILD.fullmatch(harness.EXPECTED_VERSION or ""),
                                 "a release's build, which is no development build")
 
@@ -255,7 +254,6 @@ class CommittedTests(SettingsTestCase):
             self.assertIs(self.settings(icase, PATH=path, GIT_ICASE_PATHSPECS="1")["committed"], False)
 
     @NEEDS_GIT
-    @DEVELOPMENT
     def test_a_project_too_new_says_whether_it_is_committed(self):
         repo = self.tmp / "repo"
         repo.mkdir()
@@ -354,7 +352,6 @@ class TooNewTests(SettingsTestCase):
 
     WHY = f"this project uses Cortex 99.0.0, which its cortex.toml pins, newer than this cortex, {OWN}"
 
-    @DEVELOPMENT
     def test_sync_init_and_validate_say_the_version_not_the_key(self):
         project = self.project("99.0.0", extra='agents = "team"\n')      # a key this cortex does not know
         for args, code in ((("sync",), 1), (("init", "--tool", "claude"), 1), (("validate",), 2)):
@@ -365,7 +362,6 @@ class TooNewTests(SettingsTestCase):
                 self.assertIn("cortex self-update 99.0.0", proc.err)
                 self.assertNotIn("unknown key", proc.err)
 
-    @DEVELOPMENT
     def test_validate_of_a_synced_project_or_of_a_spec_not_there_says_the_version(self):
         # Only a spec that names no version — a checkout's — passes the gate: the store's version does
         # not, nor a spec that is not there, nor one that is no checkout: an empty cortex/, a copy whose
@@ -399,7 +395,6 @@ class TooNewTests(SettingsTestCase):
                 self.assertIn(self.WHY, proc.err)
                 self.assertNotIn("unknown key", proc.err)
 
-    @DEVELOPMENT
     def test_validate_of_a_checkout_s_copy_checks_no_version(self):
         # A copy of a checkout — its marker says no version — passes the gate: the key is said, not the version.
         project = self.project("99.0.0", extra='endpoints = "team"\n')        # a key no version takes yet
@@ -413,14 +408,13 @@ class TooNewTests(SettingsTestCase):
         self.assertNotIn(self.WHY, proc.err)
 
     def test_upgrade_says_the_version_not_the_key(self):
-        # Never down to this cortex's version without naming it — a development build's too, as in 1.7.0.
+        # Never down to this cortex's version without naming it.
         proc = self.cortex(self.project("99.0.0", extra='agents = "team"\n'), "upgrade")
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn(self.WHY, proc.err)
         self.assertIn("cortex self-update 99.0.0", proc.err)
         self.assertNotIn("unknown key", proc.err)
 
-    @DEVELOPMENT
     def test_config_prints_the_version_and_says_so(self):
         known = self.project("99.0.0", name="known")                      # every key known to this cortex
         project = self.project("99.0.0", extra='agents = "team"\n')      # one it does not know
@@ -433,7 +427,6 @@ class TooNewTests(SettingsTestCase):
                               proc.out.splitlines()[0])
                 self.assertIn("register", proc.out)
 
-    @DEVELOPMENT
     @harness.outside_a_repository
     def test_a_known_key_of_a_project_too_new_says_the_version_and_an_unknown_one_is_unknown(self):
         project = self.project("99.0.0", extra='agents = "team"\n')
@@ -469,14 +462,22 @@ class TooNewTests(SettingsTestCase):
 
 @RELEASE_BUILD
 class DevelopmentBuildTests(SettingsTestCase):
-    """A source checkout, 0.0.0-dev, or a development build, 0.0.0-dev.N, passes the version gate — or it
-    would refuse what 1.7.0 accepted."""
+    """A source checkout, X.Y.Z-dev, or a CI build of no release, X.Y.Z-dev.N, is the version its branch
+    prepares (ADR-009 §9, 2026-11-09): the version gate compares it as any other — no exception — and a
+    plain upgrade never moves a project to it unnamed."""
+
+    PREPARED = "{}.{}.{}".format(*Version(OWN_DEV).core)      # the release it prepares: newer than it
 
     def setUp(self):
         super().setUp()
         del self.env["CORTEX_SOURCE_VERSION"]
 
-    def test_validate_from_a_development_build_checks_a_project_pinned_to_a_release(self):
+    def test_it_says_the_version_it_prepares(self):
+        proc = self.cortex(self.tmp, "--version")
+        self.assertEqual(proc.out, f"cortex {OWN_DEV}\n")
+        self.assertTrue(store.development(Version(OWN_DEV)), OWN_DEV)
+
+    def test_validate_from_a_development_build_checks_a_project_pinned_to_an_older_release(self):
         project = self.project("1.7.0")
         stored = self.home / "versions" / "1.7.0"
         for tree in ("agents", "templates", "docs"):
@@ -488,18 +489,234 @@ class DevelopmentBuildTests(SettingsTestCase):
         found = self.settings(project)
         self.assertIs(found["too_new"], False)
         self.assertEqual(found["cortex"], OWN_DEV)
-        proc = self.cortex(project, "upgrade")                            # never down to 0.0.0-dev, as 1.7.0
+        before = (project / "cortex.toml").read_bytes()
+        proc = self.cortex(project, "upgrade")                    # never up to a version no teammate downloads
         self.assertEqual(proc.returncode, 1, proc.err)
-        self.assertIn("move the project down to this cortex's version by naming it", proc.err)
+        self.assertIn(f", {OWN_DEV}, the version its branch prepares, which no teammate can download — name the "
+                      "version to move to: `cortex upgrade VERSION`. Nothing was changed", proc.err)
+        self.assertEqual((project / "cortex.toml").read_bytes(), before)
+
+    def test_the_release_it_prepares_is_too_new_for_it(self):
+        project = self.project(self.PREPARED)
+        why = f"this project uses Cortex {self.PREPARED}, which its cortex.toml pins, newer than this cortex, {OWN_DEV}"
+        proc = self.cortex(project, "validate")
+        self.assertEqual(proc.returncode, 2, proc.err)
+        self.assertIn(why, proc.err)
+        self.assertIs(self.settings(project)["too_new"], True)
+        proc = self.cortex(project, "upgrade")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn(why, proc.err)
+        self.assertNotIn("move the project down", proc.err)     # to a version no teammate downloads
+
+    def test_init_says_it_pins_its_own_version(self):
+        # Pinned as any binary pins its own — not refused: CONTRIBUTING's loop makes throwaway projects from a checkout.
+        project = self.tmp / "new"
+        project.mkdir()
+        proc = self.cortex(project, "init", "--tool", "claude")
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+        self.assertIn(f'version = "{OWN_DEV}"', (project / "cortex.toml").read_text(encoding="utf-8"))
+        self.assertIn(f"warning: cortex.toml pins Cortex {OWN_DEV}, a build of no release, which no teammate can download "
+                      "— pin a release: `cortex upgrade VERSION`\n", proc.err)
+        project = self.project("1.7.0")                                    # a pin of its own: kept, and not said
+        stored = self.home / "versions" / "1.7.0"
+        for tree in ("agents", "templates", "docs"):
+            shutil.copytree(harness.REPO / tree, stored / tree)
+        proc = self.cortex(project, "init", "--tool", "claude")
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+        self.assertNotIn("build of no release", proc.err)
+
+    @harness.outside_a_repository
+    def test_its_version_is_written_where_no_teammate_reads_it_only(self):
+        # The team's file and a committed cortex.toml are every teammate's: none can download this version.
+        project = self.project("1.7.0")
+        stored = self.home / "versions" / "1.7.0"
+        for tree in ("agents", "templates", "docs"):
+            shutil.copytree(harness.REPO / tree, stored / tree)
+        (project / ".git").mkdir()
+        before = (project / "cortex.toml").read_bytes()
+        proc = self.cortex(project, "upgrade", OWN_DEV)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"Cortex {OWN_DEV} is a build of no release, which no teammate can download, and every teammate "
+                      "reads its committed cortex.toml — nothing was changed. Pin a release there\n", proc.err)
+        self.assertEqual((project / "cortex.toml").read_bytes(), before)
+        (project / ".git").rmdir()                         # a throwaway project's: written, and said
+        proc = self.cortex(project, "upgrade", OWN_DEV)
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+        self.assertIn(f"warning: cortex.toml pins Cortex {OWN_DEV}, a build of no release", proc.err)
+        self.assertNotIn("/tag/", proc.out)
+        # The team's file, at a pre-release of the release this build prepares, held by the store: never moved to it.
+        pinned = "{}.{}.{}-alpha.1".format(*Version(OWN_DEV).core)
+        for tree in ("agents", "templates", "docs"):
+            shutil.copytree(harness.REPO / tree, self.home / "versions" / pinned / tree)
+        team = self.tmp / "team"
+        (team / "agents").mkdir(parents=True)
+        (team / ".git").mkdir()
+        (team / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")
+        (team / "agents" / "cortex.team.toml").write_text(f'version = "{pinned}"\n', encoding="utf-8")
+        before = (team / "agents" / "cortex.team.toml").read_bytes()
+        proc = self.cortex(team, "upgrade", "--team", OWN_DEV)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        # From a build that prepares 1.8.0, no release it serves is pinned there: this cortex is updated first.
+        pin = "Pin a release there" if not store.prepares_before_team(Version(OWN_DEV)) else \
+            ("Update this cortex to a release that reads the team's file — 1.8.0 or a candidate of it — then pin one: "
+             "`cortex self-update VERSION`, `cortex upgrade --team VERSION`")
+        self.assertIn(f"Cortex {OWN_DEV} is a build of no release, which no teammate can download, and every teammate "
+                      f"reads agents/cortex.team.toml — nothing was changed. {pin}; tried on this machine: "
+                      f"`cortex upgrade --local {OWN_DEV}`", proc.err)
+        self.assertEqual((team / "agents" / "cortex.team.toml").read_bytes(), before)
+        self.assertFalse((team / "agents" / "cortex.team.lock").exists())
+
+    @unittest.skipIf(harness.BINARY, "a binary's version is its own")
+    @harness.outside_a_repository
+    def test_a_build_that_prepares_1_8_0_names_no_team_pin_for_a_committed_cortex_toml(self):
+        # Bluspark's third pass: a committed cortex.toml is no team's file — from a build that prepares 1.8.0 or
+        # below, its pin is moved plainly, never with `cortex upgrade --team VERSION`, whatever the changelog says.
+        self.env["CORTEX_SOURCE_VERSION"] = "1.8.0-dev.5"
+        self.assertTrue(store.prepares_before_team(Version("1.8.0-dev.5")))
+        project = self.project("1.7.0")
+        stored = self.home / "versions" / "1.7.0"
+        for tree in ("agents", "templates", "docs"):
+            shutil.copytree(harness.REPO / tree, stored / tree)
+        (project / ".git").mkdir()
+        before = (project / "cortex.toml").read_bytes()
+        proc = self.cortex(project, "upgrade", "1.8.0-dev.5")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("Cortex 1.8.0-dev.5 is a build of no release, which no teammate can download, and every teammate "
+                      "reads its committed cortex.toml — nothing was changed. Pin a release there\n", proc.err)
+        self.assertNotIn("--team", proc.err)
+        self.assertEqual((project / "cortex.toml").read_bytes(), before)
+
+    def test_upgrade_all_names_the_version_once(self):
+        project = self.project("1.7.0")
+        (self.home / "projects.toml").write_text(f'format = 1\n\n[[project]]\nname = "app"\npath = "{display(project)}"\n',
+                                                 encoding="utf-8")
+        before = (project / "cortex.toml").read_bytes()
+        proc = self.cortex(self.tmp, "upgrade", "--all")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f", {OWN_DEV}, the version its branch prepares, which no teammate can download — name the "
+                      "version to move to: `cortex upgrade --all VERSION`. Nothing was changed", proc.err)
+        self.assertNotIn("Project:", proc.out)
+        self.assertEqual((project / "cortex.toml").read_bytes(), before)
+        (project / "cortex.toml").write_text(f'version = "{OWN_DEV}"\ntheme = "h2g2"\n', encoding="utf-8")
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--dry-run")        # none to move: each one resumes
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+        self.assertIn(f"already on {OWN_DEV}", proc.out)
 
     def test_what_a_development_build_is(self):
-        for text in ("0.0.0-dev", "0.0.0-dev.7"):
+        for text in ("0.0.0-dev", "1.8.0-dev", "1.8.0-dev.7", "2.0.0-dev.0", OWN_DEV):
             self.assertTrue(store.development(Version(text)), text)
-            self.assertFalse(store.too_old_for(Version("1.7.0"), Version(text)), text)
-        for text in ("0.0.0-dev.x", "0.0.0-dev.1.2", "0.0.1-dev", "1.0.0-dev", "0.0.0-rc.1"):
+        for text in ("1.8.0-dev.x", "1.8.0-dev.1.2", "1.8.0-devx", "1.8.0-rc.1", "1.8.0", "1.8.0-alpha.dev"):
             self.assertFalse(store.development(Version(text)), text)
-        self.assertTrue(store.too_old_for(Version("1.7.0"), Version("1.6.0")))
-        self.assertFalse(store.too_old_for(Version("1.7.0"), Version("1.7.0")))
+        for version, own in (("1.8.0", "1.8.0-dev.7"), ("1.8.0-dev.8", "1.8.0-dev.7"), ("1.7.0", "0.0.0-dev"),
+                             ("1.7.0", "1.6.0"), ("1.8.0-rc.1", "1.8.0-dev")):
+            self.assertTrue(store.too_old_for(Version(version), Version(own)), (version, own))
+        for version, own in (("1.7.0", "1.8.0-dev"), ("1.8.0-dev.7", "1.8.0-dev.7"), ("1.8.0", "1.8.1-dev.3"),
+                             ("1.7.0", "1.7.0")):
+            self.assertFalse(store.too_old_for(Version(version), Version(own)), (version, own))
+
+
+def team_remedy(block: bool) -> str:
+    """What a team's pin of no release is told: pin a release by --team — after a self-update, from a build that prepares
+    1.8.0 or below, whose every --team VERSION is refused (ADR-009 §9)."""
+    if store.prepares_before_team(Version(OWN)):
+        first = "update this cortex to a release that reads the team's file — 1.8.0 or a candidate of it — then pin one"
+        return (f"{first}:\n    cortex self-update VERSION\n    cortex upgrade --team VERSION" if block else
+                f"{first}: `cortex self-update VERSION`, `cortex upgrade --team VERSION`")
+    return "pin a release:\n    cortex upgrade --team VERSION" if block else "pin a release: `cortex upgrade --team VERSION`"
+
+
+class DevelopmentPinTests(SettingsTestCase):
+    """A project pinned to a build of no release's version — a CI artifact's, which `cortex init` pins —
+    is told to pin a release: no self-update installs that version, no release serves it (ADR-009 §9)."""
+
+    NEWER = "{}.{}.{}-dev.3".format(*Version(OWN).core[:2], Version(OWN).core[2] + 1)
+
+    def test_newer_than_this_cortex(self):
+        project = self.project(self.NEWER)
+        for args in (("sync",), ("upgrade",)):
+            with self.subTest(args=args):
+                proc = self.cortex(project, *args)
+                self.assertEqual(proc.returncode, 1, proc.err)
+                self.assertIn(f"this project uses Cortex {self.NEWER}, which its cortex.toml pins — a build of no "
+                              f"release, newer than this cortex, {OWN}", proc.err)
+                self.assertIn("pin a release", proc.err.lower())
+                self.assertIn("cortex upgrade VERSION", proc.err)
+                self.assertNotIn("self-update", proc.err)
+        proc = self.cortex(project, "config", "version")
+        self.assert_ok(proc)
+        self.assertIn(f"note: Cortex {self.NEWER} is a build of no release, newer than this cortex, {OWN} — pin a "
+                      "release:\n    cortex upgrade VERSION\n", proc.err)
+        proc = self.cortex(project, "config")
+        self.assert_ok(proc)
+        self.assertIn(f"cortex.toml — a build of no release, newer than this cortex, {OWN}: pin a release: "
+                      "`cortex upgrade VERSION`", proc.out)
+
+    def test_a_try_is_moved_by_local(self):
+        project = self.project(extra="")
+        (project / "cortex.local.toml").write_text(f'version = "{self.NEWER}"\n', encoding="utf-8")
+        proc = self.cortex(project, "sync")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn(f"which its cortex.local.toml pins — a build of no release, newer than this cortex, {OWN}: pin a "
+                      "release:\n    cortex upgrade --local VERSION", proc.err)
+
+    def test_the_team_s_pin_is_moved_by_team(self):
+        root = self.tmp / "team"
+        (root / "agents").mkdir(parents=True)
+        (root / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")         # it follows the team's file
+        (root / "agents" / "cortex.team.toml").write_text('version = "1.8.0-dev.3"\n', encoding="utf-8")
+        for args in (("sync",), ("upgrade",)):                              # a follower resumes the team's pin
+            with self.subTest(args=args):
+                proc = self.cortex(root, *args)
+                self.assertEqual(proc.returncode, 1, proc.err)
+                self.assertIn(f"Cortex 1.8.0-dev.3 is a build of no release, which no release serves — {team_remedy(False)}",
+                              proc.err)
+
+    def test_config_names_the_command_of_the_file_that_pins_it(self):
+        project = self.project(extra="")
+        (project / "cortex.local.toml").write_text(f'version = "{self.NEWER}"\n', encoding="utf-8")
+        team = self.tmp / "team"
+        (team / "agents").mkdir(parents=True)
+        (team / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")
+        (team / "agents" / "cortex.team.toml").write_text(f'version = "{self.NEWER}"\n', encoding="utf-8")
+        local = ("pin a release:\n    cortex upgrade --local VERSION", "pin a release: `cortex upgrade --local VERSION`")
+        for root, (block, inline) in ((project, local), (team, (team_remedy(True), team_remedy(False)))):
+            with self.subTest(command=inline):
+                proc = self.cortex(root, "config", "version")
+                self.assert_ok(proc)
+                self.assertIn(f"{block}\n", proc.err.replace("\r\n", "\n"))
+                proc = self.cortex(root, "config")
+                self.assert_ok(proc)
+                self.assertIn(f"newer than this cortex, {OWN}: {inline}", proc.out)
+
+    @harness.outside_a_repository
+    def test_named_to_upgrade(self):
+        project = self.project()
+        before = (project / "cortex.toml").read_bytes()
+        for held in (False, True):                                          # in the store too: newer all the same
+            if held:
+                for tree in ("agents", "templates", "docs"):
+                    (self.home / "versions" / self.NEWER / tree).mkdir(parents=True)
+            with self.subTest(held=held):
+                proc = self.cortex(project, "upgrade", self.NEWER)
+                self.assertEqual(proc.returncode, 1, proc.err)
+                self.assertIn(f"Cortex {self.NEWER} is a build of no release, which no release serves — pin a "
+                              "release: `cortex upgrade VERSION`", proc.err)
+                self.assertNotIn("self-update", proc.err)
+                self.assertEqual((project / "cortex.toml").read_bytes(), before)
+
+    def test_a_move_from_it_says_no_remedy_in_its_note(self):
+        project = self.project("1.7.1-dev.3")
+        proc = self.cortex(project, "upgrade", OWN, "--dry-run")
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+        self.assertIn("note: what changes is not said — Cortex 1.7.1-dev.3 is a build of no release\n", proc.err)
+
+    def test_older_than_this_cortex(self):
+        project = self.project("1.7.1-dev.3")
+        proc = self.cortex(project, "sync")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn("Cortex 1.7.1-dev.3 is a build of no release, which no release serves — pin a release: "
+                      "`cortex upgrade VERSION`", proc.err)
+        self.assertEqual(self.release.requested, [])                        # nothing asked of the releases
 
 
 class NoHomeTests(unittest.TestCase):
@@ -539,6 +756,7 @@ class NoHomeCommandTests(SettingsTestCase):
         os.chdir(project)
         environ = {key: value for key, value in os.environ.items() if key != "CORTEX_HOME"}
         with mock.patch.dict(os.environ, {**environ, "PWD": str(project)}, clear=True), \
+                mock.patch.object(store, "VERSION", OWN), \
                 mock.patch.object(Path, "home", side_effect=no_home), \
                 mock.patch("sys.stderr", io.TextIOWrapper(io.BytesIO(), encoding="utf-8")), \
                 mock.patch("sys.stdout", io.TextIOWrapper(io.BytesIO(), encoding="utf-8")):        # validate writes bytes

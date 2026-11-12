@@ -97,7 +97,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --quiet -r cli/requirements-build.txt
-          python cli/build.py --version "0.0.0-dev.$GITHUB_RUN_NUMBER" > /dev/null
+          python cli/build.py --version "$(python cli/build.py --development-version "$GITHUB_RUN_NUMBER")" > /dev/null
           release="$RUNNER_TEMP/release/latest/download"
           mkdir -p "$release"
           cp cli/build/dist/cortex-*.tar.gz cli/build/dist/cortex-*.zip "$release/" 2>/dev/null || true

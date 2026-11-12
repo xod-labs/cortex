@@ -2,14 +2,16 @@
 
 The command runs against a store of its own (``CORTEX_HOME``) and a release served from this
 machine (``release_fixture``). From source it stands for Cortex 9.9.9 (``CORTEX_SOURCE_VERSION``),
-so that it may download the fake releases 9.9.7 and 9.9.8. A built binary is a build of no
-release, 0.0.0-dev.N, and serves only its own version: the tests that download skip there.
+so that it may download the fake releases 9.9.7 and 9.9.8. A built binary — a release's, or a
+build of no release's, ``X.Y.Z-dev.N`` — is older than them, and serves only its own version: the
+tests that download skip there.
 """
 
 import errno
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -29,6 +31,9 @@ from cortex_cli.sync import link_target  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 
 OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
+# Nothing of a build of no release's version, X.Y.Z-dev.N, is said to commit, its lock included (ADR-009 §9): from a
+# release, a candidate or the source's 9.9.9, a lock to write in a repository is.
+THEN_COMMIT_IT = "" if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-dev(\.[0-9]+)?", OWN) else ", then commit it"
 DOWNLOADS = unittest.skipIf(harness.BINARY, "a build of no release downloads no version")
 AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
 TREES = ["agents", "docs", "templates"]
@@ -1156,7 +1161,7 @@ class CortexLockTests(SyncTestCase):
             self.assertNotIn("commit", proc.out.lower())
         (project / ".git").mkdir()                                  # a repository: the lock is to commit
         proc = self.validate(project)
-        self.assertIn(f"pins {OWN} — run `cortex sync`, then commit it", proc.out)
+        self.assertIn(f"pins {OWN} — run `cortex sync`{THEN_COMMIT_IT}\n", proc.out)
 
     @harness.outside_a_repository
     def test_a_repository_is_a_git_at_the_root_or_above_it_as_written_or_resolved(self):
@@ -1177,7 +1182,8 @@ class CortexLockTests(SyncTestCase):
         (project / ".git").mkdir()                                  # a repository, git or not on the PATH
         proc = self.sync(project)
         self.assert_ok(proc)
-        self.assertIn("cortex.lock: written — commit it", proc.out)
+        # A build of no release's lock is not to commit: no teammate can download its version (ADR-009 §9).
+        self.assertIn("cortex.lock: written\n" if "-dev" in OWN else "cortex.lock: written — commit it\n", proc.out)
         self.assertTrue(self.lock(project).endswith(f'format = 1\nversion = "{OWN}"\ndigest = "{digest(self.stored())}"\n'))
         before = self.lock(project)
         proc = self.sync(project)
@@ -1369,7 +1375,7 @@ class CortexLockTests(SyncTestCase):
         (project / ".git").mkdir()                                  # a repository, git or not on the PATH
         proc = self.sync(project, "--locked")
         self.assertEqual(proc.returncode, 1, proc.err)
-        self.assertIn("--locked: no cortex.lock — `cortex sync` writes it, then commit it. Nothing of the project "
+        self.assertIn(f"--locked: no cortex.lock — `cortex sync` writes it{THEN_COMMIT_IT}. Nothing of the project "
                       "was changed", proc.err)
         self.assertFalse((project / "cortex.lock").exists())
         self.assertFalse((project / "cortex.local.toml").exists())
@@ -1378,7 +1384,7 @@ class CortexLockTests(SyncTestCase):
         proc = self.sync(project, "--locked")
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn(f"--locked: cortex.lock names Cortex 9.9.8, and cortex.toml pins {OWN} — `cortex sync` writes "
-                      "it, then commit it", proc.err)
+                      f"it{THEN_COMMIT_IT}. Nothing", proc.err)
         self.assertEqual(self.lock(project), before)
         self.assertFalse((project / "cortex.local.toml").exists())
         self.write_lock(project)                    # the pin's version, not its files: as without --locked

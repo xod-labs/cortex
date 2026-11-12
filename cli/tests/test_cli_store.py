@@ -59,8 +59,48 @@ class EmbeddedTests(StoreTestCase):
                          (REPO / "agents" / "roles" / "prompt-manager.md").read_bytes())
 
     def test_a_dev_version_serves_itself(self):
-        the_store = store.Store(self.home, own_version="0.0.0-dev.7", checkout=REPO, fetch=self.no_network)
-        self.assertEqual(the_store.ensure(Version("0.0.0-dev.7")), "written")
+        for own in ("1.8.0-dev", "1.8.0-dev.7"):               # a source checkout's, a CI build's (ADR-009 §9)
+            with self.subTest(own=own):
+                the_store = store.Store(self.home, own_version=own, checkout=REPO, fetch=self.no_network)
+                self.assertEqual(the_store.ensure(Version(own)), "written")
+
+    def test_another_dev_version_is_served_from_the_store_only(self):
+        # No release serves a build of no release's version: the network is never asked for it (ADR-009 §9).
+        the_store = store.Store(self.home, own_version="1.8.1-dev.5", checkout=REPO, fetch=self.no_network)
+        for version in ("1.8.0-dev.3", "1.8.2-dev"):                     # older, and newer, than this cortex
+            with self.subTest(version=version):
+                with self.assertRaises(store.StoreError) as raised:
+                    the_store.ensure(Version(version))
+                self.assertEqual(str(raised.exception), f"Cortex {version} is a build of no release, which no "
+                                 "release serves — pin a release: `cortex upgrade VERSION`")
+        held = the_store.path(Version("1.8.0-dev.3"))                    # written by that build, still there
+        for tree in store.SPEC_TREES:
+            (held / tree).mkdir(parents=True)
+        self.assertEqual(the_store.ensure(Version("1.8.0-dev.3")), "stored")
+        newer = the_store.path(Version("1.8.2-dev.1"))                    # held, but newer than this cortex
+        for tree in store.SPEC_TREES:
+            (newer / tree).mkdir(parents=True)
+        with self.assertRaises(store.StoreError) as raised:
+            the_store.ensure(Version("1.8.2-dev.1"), origin="agents/cortex.team.toml")
+        self.assertEqual(str(raised.exception), "Cortex 1.8.2-dev.1 is a build of no release, which no release "
+                         "serves — pin a release: `cortex upgrade --team VERSION`")
+        # From a build that prepares 1.8.0, every release that reads the team's file is newer: a self-update first.
+        early = store.Store(self.home, own_version="1.8.0-dev.5", checkout=REPO, fetch=self.no_network)
+        with self.assertRaises(store.StoreError) as raised:
+            early.ensure(Version("1.8.0-dev.4"), origin="agents/cortex.team.toml")
+        self.assertEqual(str(raised.exception), "Cortex 1.8.0-dev.4 is a build of no release, which no release serves "
+                         "— update this cortex to a release that reads the team's file — 1.8.0 or a candidate of it — "
+                         "then pin one: `cortex self-update VERSION`, `cortex upgrade --team VERSION`")
+
+    def test_the_pin_is_moved_where_a_file_holds_it(self):
+        for origin, command in ((None, "cortex upgrade VERSION"), ("cortex.toml", "cortex upgrade VERSION"),
+                                ("agents/cortex.team.toml", "cortex upgrade --team VERSION"),
+                                ("team-agents/cortex.team.toml", "cortex upgrade --team VERSION"),
+                                ("team-agents\\cortex.team.toml", "cortex upgrade --team VERSION"),
+                                ("cortex.local.toml", "cortex upgrade --local VERSION")):
+            with self.subTest(origin=origin):
+                self.assertEqual(store.pin_command(origin), command)
+        self.assertEqual(store.update_command(Version("1.8.0-rc.1")), "cortex self-update 1.8.0-rc.1")
 
     @unittest.skipIf(AS_ROOT, "root writes any file")
     def test_it_is_read_only_once_written(self):

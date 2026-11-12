@@ -33,9 +33,10 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Dict, Iterator, Optional
+from typing import Callable, Dict, Iterator, Optional, Union
 
 from cortex_core.project import DEFAULT_RELEASES_URL  # noqa: F401 — part of this module's API
+from cortex_core.project import FIRST_TEAM_VERSION, LOCAL_FILE, PROJECT_FILE, TEAM_FILE
 
 from . import machine, net
 from .semver import FIRST_SPEC_ARCHIVE, Version
@@ -113,23 +114,88 @@ def own_version() -> Version:
 
 
 def development(version: Version) -> bool:
-    """A source checkout's version, ``0.0.0-dev``, or a development build's, ``0.0.0-dev.N`` — a
-    dispatch of the binary workflow builds one: no release, and no project pins it."""
-    return version.core == (0, 0, 0) and version.pre[:1] == ("dev",) and len(version.pre) <= 2 \
-        and all(part.isdigit() for part in version.pre[1:])
+    """A build of no release: a source checkout's ``X.Y.Z-dev``, or a CI build's ``X.Y.Z-dev.N`` —
+    the version its branch prepares (ADR-009 §9, 2026-11-09). No teammate can download it: a
+    project is moved to it only by naming it."""
+    return version.pre[:1] == ("dev",) and len(version.pre) <= 2 and all(part.isdigit() for part in version.pre[1:])
+
+
+def prepares_before_team(own: Optional[Version] = None) -> bool:
+    """Whether ``own`` — this cortex, by default — is a build of no release that prepares 1.8.0 or below: every
+    release that reads the team's file is newer than it, so no ``cortex upgrade --team VERSION`` it runs moves the
+    team's pin — this cortex is updated to such a release first (ADR-009 §9, ADR-013 §3.8 step 2)."""
+    own = own_version() if own is None else own
+    return development(own) and Version("{}.{}.{}".format(*own.core)) <= Version(FIRST_TEAM_VERSION)
 
 
 def too_old_for(version: Version, own: Version) -> bool:
     """Whether a binary of version ``own`` is too old for a project of ``version``, as the commands say
-    it before any key is checked (ADR-013 §3.8): ``version`` newer than ``own`` — but a source checkout
-    or a development build passes, its commands then going as 1.7.0's went: the store serves it what it
-    can, ``Store.check_served`` refusing the rest."""
-    return version > own and not development(own)
+    it before any key is checked (ADR-013 §3.8): ``version`` newer than ``own``. A build of no release
+    is no exception: ``1.8.0-dev`` is older than 1.8.0, and newer than 1.7.0."""
+    return version > own
 
 
-def update_command(version: Version) -> str:
-    """The command that moves this binary to ``version`` (ADR-010 §3.7)."""
+def update_command(version: Union[Version, str]) -> str:
+    """The command that moves this binary to ``version`` (ADR-010 §3.7) — a release's, or ``VERSION`` where none is
+    named: a build of no release has none, and its pin is moved to a release instead (``pin_command``, ADR-009 §9)."""
     return f"cortex self-update {version}"
+
+
+def update_first(command: str, block: bool = False) -> str:
+    """From a build that prepares 1.8.0 or below (``prepares_before_team``), where every ``--team VERSION`` it runs is
+    refused — newer than it, before the team's file, or its own, which no teammate can download: this cortex updated
+    first, to a release that reads the team's file, then ``command`` — on lines of their own, ``block``."""
+    update = update_command("VERSION")
+    lead = (f"update this cortex to a release that reads the team's file — {FIRST_TEAM_VERSION} or a candidate of it "
+            "— then pin one")
+    return f"{lead}:\n    {update}\n    {command}" if block else f"{lead}: `{update}`, `{command}`"
+
+
+def pin_command(origin: Optional[str] = None) -> str:
+    """The command that moves the pin the file ``origin`` holds (ADR-013 §3.11): the team's file's
+    with ``--team``, a try's with ``--local``, ``cortex.toml``'s — or a version named — plainly."""
+    if origin is not None and origin.replace("\\", "/").rsplit("/", 1)[-1] == TEAM_FILE:
+        return "cortex upgrade --team VERSION"
+    if origin == LOCAL_FILE:
+        return "cortex upgrade --local VERSION"
+    return "cortex upgrade VERSION"
+
+
+# ``by_hand`` of a ``cortex.toml`` beside a team's file that pins no version: removed, its version is read nowhere.
+TEAM_PINS_NONE = "the team's file pins none"
+
+
+def pin_remedy(origin: Optional[str] = None, by_hand: object = False, block: bool = False,
+               own: Optional[Version] = None) -> str:
+    """*Pin a release*, and how: the command that moves the pin the file ``origin`` holds — on a line
+    of its own, ``block`` — or, ``by_hand``, the edit of a ``cortex.toml`` whose version is this
+    developer's: uncommitted beside a team's file, at a 2.B root (ADR-013 §3.1), which no command
+    writes — a plain ``cortex upgrade`` resumes the team's version, and ``--local`` writes a try below it.
+    Removed, the version is the team's — unless ``by_hand`` is ``TEAM_PINS_NONE``: then none is read. From a build
+    that prepares 1.8.0 or below — ``own``, this cortex by default — the team's pin follows a self-update."""
+    if by_hand:
+        remove = "" if by_hand == TEAM_PINS_NONE else ", or remove it to read the team's"
+        return (f"pin a release by hand: set {PROJECT_FILE}'s version to one{remove} — "
+                "uncommitted beside the team's file, it is this developer's, which no command writes")
+    command = pin_command(origin)
+    if command == "cortex upgrade --team VERSION" and prepares_before_team(own):
+        return update_first(command, block)
+    return f"pin a release:\n    {command}" if block else f"pin a release: `{command}`"
+
+
+def no_release_pinned(version: Version, name: str, by_hand: object = False) -> str:
+    """What is said of a build of no release's version written in ``name``, a file only this machine
+    reads — an uncommitted ``cortex.toml``, a try: no teammate can download it (ADR-009 §9), and the
+    release to pin in its place is named (``pin_remedy``)."""
+    return (f"{name} pins Cortex {version}, a build of no release, which no teammate can download — "
+            f"{pin_remedy(name, by_hand)}")
+
+
+def no_release(version: Version, origin: Optional[str] = None, by_hand: object = False,
+               own: Optional[Version] = None) -> str:
+    """Why a build of no release's version, other than this cortex's own, is not served — and how a
+    release is pinned in its place, in the file ``origin`` that pins it (``pin_remedy``)."""
+    return f"Cortex {version} is a build of no release, which no release serves — {pin_remedy(origin, by_hand, own=own)}"
 
 
 # --------------------------------------------------------------------------- #
@@ -361,9 +427,13 @@ class Store:
             except OSError:
                 pass
 
-    def check_served(self, version: Version) -> None:
-        """Refuse a version this binary does not serve: newer than itself — the tool is newer than
-        the data it reads, never older — or older than the first spec archive."""
+    def check_served(self, version: Version, origin: Optional[str] = None, by_hand: object = False) -> None:
+        """Refuse a version this binary does not serve: a build of no release's, but its own or an
+        older one the store holds — no release serves it (ADR-009 §9), and ``origin``, the file that
+        pins it, names the command that pins a release (``pin_remedy``); newer than itself — the tool is newer than
+        the data it reads, never older; or older than the first spec archive."""
+        if development(version) and version != self.own and (version > self.own or not self.has(version)):
+            raise StoreError(no_release(version, origin, by_hand, own=self.own))
         if version > self.own:
             raise StoreError(f"this project uses Cortex {version}, newer than this cortex, {self.own} — update it:\n"
                              f"    {update_command(version)}")
@@ -371,11 +441,13 @@ class Store:
             raise StoreError(f"Cortex {version} has no spec archive: the first one is {FIRST_SPEC_ARCHIVE}, "
                              "the release that ships the cortex command — pin that version or a later one")
 
-    def ensure(self, version: Version, put_back: bool = True) -> str:
+    def ensure(self, version: Version, put_back: bool = True, origin: Optional[str] = None,
+               by_hand: object = False) -> str:
         """Make sure ``version`` is in the store; say how it got there — ``"stored"``,
         ``"written"`` from this binary, ``"downloaded"``, or ``"put back"``: it could not be
-        downloaded, and a ``replace`` cut short had left it aside."""
-        self.check_served(version)
+        downloaded, and a ``replace`` cut short had left it aside. ``origin`` is the file that pins
+        it, which a refusal names — edited by hand, ``by_hand`` (``pin_remedy``)."""
+        self.check_served(version, origin, by_hand)
         if self.has(version):
             try:
                 self._tidy(version)

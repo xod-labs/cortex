@@ -93,12 +93,14 @@ class TeamFileTests(unittest.TestCase):
                             "locked": ["claude_access", "theme"]})
         project.check_team({})                                       # none required
         project.check_team({"version": "2.0.0-rc.1"})
+        for version in ("1.8.0-rc.1", "1.8.0-dev.3"):                 # a pre-release has its release's features
+            project.check_team({"version": version})
 
     def test_what_it_refuses(self):
         for data, fragment in (
                 ({"spec": "/x"}, 'unknown key "spec"'),
                 ({"version": "1.7.0"}, 'version "1.7.0" is before 1.8.0'),
-                ({"version": "1.8.0-rc.1"}, 'before 1.8.0'),                 # a pre-release sorts below its release
+                ({"version": "1.7.1-dev"}, 'version "1.7.1-dev" is before 1.8.0'),     # one of 1.7.1
                 ({"theme": "a b"}, "is no theme name"),
                 ({"sync": "rsync"}, "is none of"),
                 ({"locked": "theme", "theme": "h2g2"}, '"locked" must be a list'),
@@ -115,11 +117,16 @@ class TeamFileTests(unittest.TestCase):
         order = ["1.7.0", "1.8.0-alpha", "1.8.0-alpha.1", "1.8.0-alpha.beta", "1.8.0-rc.1", "1.8.0-rc.10", "1.8.0",
                  "1.8.1", "1.10.0"]
         self.assertEqual(sorted(reversed(order), key=project.version_key), order)
-        self.assertTrue(project.before_team("1.8.0-rc.1"))
-        self.assertFalse(project.before_team("1.8.0"))
-        for development in ("0.0.0-dev", "0.0.0-dev.7"):           # a checkout's, a development build's
-            self.assertFalse(project.before_team(development))
-        self.assertTrue(project.before_team("0.0.0-devx"))
+
+    def test_a_pre_release_has_its_release_s_features(self):
+        # A release candidate, a checkout's, a development build's: 1.8.0's, which reads the team's file.
+        for text in ("1.8.0-rc.1", "1.8.0-alpha", "1.8.0-dev", "1.8.0-dev.7", "1.8.0", "1.8.1-dev", "1.9.0-dev.3",
+                     "2.0.0-dev", "10.0.0"):
+            with self.subTest(text=text):
+                self.assertFalse(project.before_team(text))
+        for text in ("1.7.0", "1.7.1-dev", "1.7.99-dev.4", "1.7.99", "0.0.0-dev", "0.0.0-dev.7", "0.9.0-rc.1"):
+            with self.subTest(text=text):
+                self.assertTrue(project.before_team(text))
 
 
 class LockTests(unittest.TestCase):

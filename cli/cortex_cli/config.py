@@ -111,6 +111,11 @@ class Project:
     def developer_version(self) -> Optional[cascade.Setting]:
         return self._settings().developer_version
 
+    def by_hand(self, origin: Optional[str]) -> object:
+        """Whether the version from ``origin`` is this developer's ``cortex.toml``'s, which no command
+        writes (``by_hand``)."""
+        return by_hand(self._settings(), origin)
+
     @property
     def team_file(self) -> bool:
         """The team's file is read: there, and the team's version 1.8.0 or later."""
@@ -403,6 +408,128 @@ def loose_team(root: str) -> Optional[Tuple[str, Version]]:
     return None if chosen is None else (chosen[0], Version(chosen[1]))
 
 
+def by_hand(found: Optional[cascade.Resolution], origin: Optional[str]) -> object:
+    """Whether the version from ``origin`` is this developer's ``cortex.toml``'s: not committed, beside a
+    team's file that is read — pinning a version or none, at a 2.B root (ADR-013 §3.1). No command writes
+    it: a plain ``cortex upgrade`` moves no project that follows the team's file, ``--local`` writes a try
+    and ``--team`` the team's file — a pin of no release there is moved by hand (``store.pin_remedy``).
+    ``store.TEAM_PINS_NONE`` when the team's file pins no version — or, read loosely, when that is not
+    known: the remedy then names no removal, which would leave no version to read."""
+    if found is None or origin != PROJECT_FILE or not found.team or found.committed:
+        return False
+    pins = found.team_version is not None and found.team_version.origin != PROJECT_FILE
+    return True if pins else store.TEAM_PINS_NONE
+
+
+def loose_team_file(root: str) -> bool:
+    """Whether the team's file is there, in the team's folder read loosely (ADR-013 §3.8, step 1) — read or not: a
+    directory, a link that leads nowhere, or in a folder this user cannot search is there too (§3.5). No caller tells
+    those from a file: each refuses a file there and unread first (``team_refusal``), or reads a version it does not
+    weigh (a try's, a committed pin's) — so ``os.path.isfile`` would answer the same on every path that reaches it."""
+    return cascade.team_file_there(root, loose_team_folder(root))
+
+
+def team_refusal(root: str) -> Optional[Tuple[str, bool]]:
+    """Why every command refuses the team's file, in the team's folder read loosely — it does not read, or its grammar
+    refuses it (ADR-013 §3.5) — and whether a later release may take it: a key this cortex does not know. ``None``
+    when it is not there, reads and checks, or is not read: a committed ``cortex.toml`` before 1.8.0 — or one not
+    committed beside a team's file that pins none — makes the team's version cortex.toml's, which reads nothing of it
+    (§3.8, step 3). A version too new is said before any key is checked (step 2), but no command moves a pin while
+    the file is refused: each refuses it first."""
+    folder = loose_team_folder(root)
+    found = cascade.read_team(root, folder)
+    if found is None:
+        return None
+    pin = cascade.loose_versions(root, folder).get("project")
+    pinless = isinstance(found, dict) and "version" not in found
+    if pin is not None and project.before_team(pin[1]) and (pinless or committed(root)):
+        return None
+    return _refused(found, folder)
+
+
+def team_file_refusal(root: str) -> Optional[Tuple[str, bool]]:
+    """``team_refusal`` as a version that reads the team's file says it — where the project's version, before 1.8.0,
+    reads nothing of it yet: what a move to 1.8.0 or later refuses first, with the remedy of that file (§3.5)."""
+    folder = loose_team_folder(root)
+    found = cascade.read_team(root, folder)
+    return None if found is None else _refused(found, folder)
+
+
+def _refused(found: object, folder: str) -> Optional[Tuple[str, bool]]:
+    """Why the team's file read as ``found`` is refused — it does not read, or its grammar refuses it — and whether a
+    later release may take it: a key this cortex does not know. ``None`` when it checks."""
+    if isinstance(found, cascade.Unreadable):
+        return found.error, False
+    later = any(key not in project.TEAM_KEYS for key in found) and "agents" not in found
+    try:
+        project.check_team(found, cascade.team_name(folder))
+    except project.ProjectFileError as error:
+        return str(error), later
+    return None
+
+
+# How a try no ``--local`` moves is moved (``try_unmoved``): by a later release, by a fix of cortex.toml, by hand.
+LATER, REFUSED, BY_HAND = "later", "refused", "by hand"
+
+
+def try_unmoved(root: str) -> Optional[Tuple[str, str]]:
+    """Why no ``cortex upgrade --local`` moves or drops the try of the project at ``root`` — what to do instead — and
+    how it is moved; ``None`` when ``--local`` does (ADR-013 §3.8). ``LATER``: the team's folder is one this cortex
+    does not take by its name, ``.team``, which a later release may. ``REFUSED``: ``cortex.toml``'s ``agents`` is
+    refused, every command refusing it first — its own remedy said. ``BY_HAND``: the team's version is before 1.8.0,
+    which reads no try, refused at every move; or newer than this cortex too, which ``--local`` reads once the try is
+    removed, and refuses; or none — the try is removed by hand, another way than updating."""
+    folder = loose_team_folder(root)
+    if not takes_folder(folder):            # .team: a later release may take it, which updating brings (§3.8, step 1)
+        return (f"no command of this cortex moves the try: it does not take the team's folder {folder}/, which a later "
+                "release may", LATER)
+    refused = _team_pin_refused(root, folder)
+    if refused is not None:
+        return f"no command moves the try while {PROJECT_FILE} is refused — {refused}", REFUSED
+    teams = loose_team(root)
+    if teams is None:
+        # A try is read above the team's version only: no file pins one, so no --local reads the project (§3.1).
+        return (f"drop the try by hand: remove `version` from {LOCAL_FILE}, and pin the team's version in "
+                f"{PROJECT_FILE} or {cascade.team_name(folder)} — neither pins one, and a try is read above it only",
+                BY_HAND)
+    if project.before_team(str(teams[1])):
+        return (f"drop the try by hand: remove `version` from {LOCAL_FILE} — the team's version, {teams[1]}, is "
+                f"before {project.FIRST_TEAM_VERSION}, which reads none", BY_HAND)
+    own = store.own_version()
+    # --local at or below the team's version removes the try, then reads the higher of the team's version and this
+    # developer's own cortex.toml (§3.1) — refused when too new, the removal put back: the try is removed by hand.
+    found = cascade.loose_versions(root, folder).get("project") if developers_toml(root) is True else None
+    mine = Version(found[1]) if found is not None else None
+    if mine is not None and mine > teams[1] and store.too_old_for(mine, own):
+        return (f"drop the try by hand: remove `version` from {LOCAL_FILE}, and {mine_by_hand(mine)}", BY_HAND)
+    if store.too_old_for(teams[1], own):
+        # The team's pin moved then, as the run after the edit says.
+        return (f"drop the try by hand: remove `version` from {LOCAL_FILE} — the team's version, {teams[1]}, is newer "
+                "than this cortex too, which `cortex upgrade --local` would read once the try is removed, and refuse",
+                BY_HAND)
+    return None
+
+
+def mine_by_hand(mine: object) -> str:
+    """The edit of this developer's own ``cortex.toml``, of version ``mine`` — newer than this cortex, read above the
+    team's once a try is removed (§3.1): uncommitted beside the team's file, no command writes it."""
+    return (f"set {PROJECT_FILE}'s version, {mine}, to one this cortex serves, or remove it to read the team's — "
+            "uncommitted beside the team's file, it is this developer's, which no command writes")
+
+
+def fix_team_file(unread: str) -> str:
+    """The remedy for the team's file that does not read, ``unread``: no command reads the project as it is."""
+    return f"fix or restore the team's file: no command reads the project while it does not — {unread}"
+
+
+def developers_toml(root: str, name: str = PROJECT_FILE) -> object:
+    """``by_hand``, read loosely — the files before any key is checked: ``name`` is ``cortex.toml``, not
+    committed, beside a team's file, which pins a version — or none, ``store.TEAM_PINS_NONE``."""
+    if name != PROJECT_FILE or not loose_team_file(root) or committed(root):
+        return False
+    return True if "team" in cascade.loose_versions(root, loose_team_folder(root)) else store.TEAM_PINS_NONE
+
+
 def too_new(root: str, own: Version) -> Optional[str]:
     """Why this cortex is too old for the project at ``root`` — or ``None`` — from the versions read
     before any other key (ADR-013 §3.8, steps 1–2): a key of a later version is then said as the
@@ -413,15 +540,92 @@ def too_new(root: str, own: Version) -> Optional[str]:
     if found is None or not store.too_old_for(found[1], own):
         return None
     name, version = found
+    refusal = team_refusal(root)
+    if store.development(version):          # no self-update installs it: the pin moves (ADR-009 §9)
+        return (f"this project uses Cortex {version}, which its {name} pins — a build of no release, newer than "
+                f"this cortex, {own}: {pin_a_release(root, name) if refusal is None else fix_team_file(refusal[0])}")
+    update = (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
+              f"    {store.update_command(version)}")
+    if refusal is not None:
+        # Every move refuses that file first: a try dropped, a pin moved — none is named before it reads (§3.5). A key
+        # this cortex does not know, a later release may: the update alone, which takes it.
+        return update if refusal[1] else f"{update}\nand {fix_team_file(refusal[0])}"
     teams = loose_team(root)
-    other = (f"\nor drop the try: cortex upgrade --local {teams[1] if teams else own}" if name == LOCAL_FILE else
-             f"\nor move the team's pin: cortex upgrade --team {own}"
-             if name.endswith(f"/{TEAM_FILE}") and _takes_folder(name[:-len(TEAM_FILE) - 1]) else "")
+    # A build of no release names no version of its own to move to: no teammate can download it (ADR-009 §9).
+    down = "VERSION" if store.development(own) else str(own)
+    folder = name[:-len(TEAM_FILE) - 1] if name.endswith(f"/{TEAM_FILE}") else None
+    unmoved = try_unmoved(root) if name == LOCAL_FILE else None
+    other = (f"\n{'or ' if unmoved[1] == BY_HAND else ''}{unmoved[0]}" if unmoved is not None else
+             f"\nor drop the try: cortex upgrade --local {teams[1]}" if name == LOCAL_FILE else
+             f"\nor move the team's pin: cortex upgrade --team {down}"
+             if folder is not None and moves_team_pin(root, folder, own) else
+             f"\nor {mine_by_hand(version)}" if developers_toml(root, name) is True else "")
     return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
             f"    {store.update_command(version)}{other}")
 
 
-def _takes_folder(folder: str) -> bool:
+def pin_a_release(root: str, name: str) -> str:
+    """How the pin of no release ``name`` holds is moved to a release, on a line of its own: by a command, or by
+    hand — a developer's ``cortex.toml`` (``developers_toml``), or a team's file in a folder this cortex does not
+    take, or one ``--team`` refuses for ``cortex.toml``'s ``agents`` (``release_remedy``)."""
+    unmoved = try_unmoved(root) if name == LOCAL_FILE else None
+    return (unmoved[0] if unmoved is not None else None) or _in_a_refused_folder(name, root) \
+        or store.pin_remedy(name, developers_toml(root, name), block=True)
+
+
+def release_remedy(found: Optional[cascade.Resolution], origin: str, block: bool = False,
+                   root: Optional[str] = None) -> str:
+    """``pin_a_release`` of the resolution ``found``: the pin of no release ``origin`` holds moved by a command
+    (``store.pin_remedy``), or by hand — a developer's ``cortex.toml`` (``by_hand``), or a team's file in a folder
+    this cortex does not take, ``.team``, read for its version alone: no ``--team`` of it moves the pin (§3.8) — nor,
+    ``root`` given, of one ``cortex.toml``'s ``agents`` makes ``--team`` refuse, as a resolution read loosely has."""
+    refusal = team_refusal(root) if root is not None else None
+    if refusal is not None:                 # no command moves the pin before that file reads (§3.5)
+        return fix_team_file(refusal[0])
+    unmoved = try_unmoved(root) if root is not None and origin == LOCAL_FILE else None
+    return (unmoved[0] if unmoved is not None else None) or _in_a_refused_folder(origin, root) \
+        or store.pin_remedy(origin, by_hand(found, origin), block)
+
+
+def _in_a_refused_folder(name: str, root: Optional[str] = None) -> Optional[str]:
+    """The edit that pins a release in ``name``, a team's file no ``--team`` of this cortex moves: in a folder it does
+    not take by its name, ``.team``, which only a later release may take — a release this cortex serves would be
+    refused there too — or, ``root`` given, in the folder the version gate read where ``cortex.toml``'s ``agents`` is
+    refused: inside a service, naming no folder inside the workspace, or not committed (§3.8, step 1)."""
+    folder = name[:-len(TEAM_FILE) - 1] if name.endswith(f"/{TEAM_FILE}") else None
+    if folder is None:
+        return None
+    if not takes_folder(folder):
+        return (f"pin a release by hand: set {name}'s version to a release newer than this cortex, one that takes the "
+                f"folder {folder}/ — this cortex does not take it, so no command of it moves the team's pin")
+    why = None if root is None else _team_pin_refused(root, folder)
+    if why is None:
+        return None
+    return f"pin a release by hand: set {name}'s version to one — no command of this cortex moves the team's pin: {why}"
+
+
+def _team_pin_refused(root: str, folder: str) -> Optional[str]:
+    """Why ``cortex upgrade --team`` refuses to move the pin of the team's file in ``folder``, which the version gate
+    read — ``None`` when it moves it: ``cortex.toml``'s ``agents`` refused. Taken, it names the folder the gate read:
+    both read the same ``agents``, committed or not (``loose_team_folder``)."""
+    try:
+        team_folder(root)
+    except ConfigError as error:
+        return str(error)
+    return None
+
+
+def moves_team_pin(root: str, folder: str, own: Version) -> bool:
+    """Whether ``cortex upgrade --team VERSION`` moves the pin of the team's file in ``folder`` — the one the version
+    gate read — to a version this cortex serves (ADR-013 §3.8, steps 1–2): ``--team`` takes that folder, none of
+    ``cortex.toml``'s ``agents`` refused, and a release that reads the team's file is this cortex's or below it — none
+    from a build of no release that prepares 1.8.0, below 1.8.0 and its candidates (ADR-009 §9)."""
+    if store.prepares_before_team(own):
+        return False
+    return takes_folder(folder) and _team_pin_refused(root, folder) is None
+
+
+def takes_folder(folder: str) -> bool:
     """Whether this cortex takes the team's folder by its name — a folder only a later version may take,
     ``.team``, read for its version alone (§3.8, step 1), it cannot move the team's pin in."""
     try:
