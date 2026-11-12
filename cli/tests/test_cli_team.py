@@ -185,7 +185,11 @@ class TooNewTests(TeamTestCase):
         proc = self.cortex(root, "sync")
         self.assertEqual(proc.returncode, 1)
         self.assertIn("Cortex 99.0.0, which its cortex.local.toml pins, newer than this cortex", proc.err)
-        self.assertIn("or drop the try: cortex upgrade --local 1.8.0", proc.err)          # the team's version
+        if Version(OWN) >= Version("1.8.0"):
+            self.assertIn("or drop the try: cortex upgrade --local 1.8.0", proc.err)      # the team's version
+        else:   # a candidate, 1.8.0-rc.N, precedes 1.8.0: the team's version is too new as well, --local would refuse
+            self.assertIn("or drop the try by hand: remove `version` from cortex.local.toml — the team's version, "
+                          "1.8.0, is newer than this cortex too", proc.err)
         root = self.project('theme = "h2g2"\n', team='version = "99.0.0"\n', name="team")
         proc = self.cortex(root, "sync")
         self.assertEqual(proc.returncode, 1)
