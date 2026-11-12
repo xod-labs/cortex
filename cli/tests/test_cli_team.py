@@ -3643,6 +3643,31 @@ class FourthCounterReviewTests(TeamTestCase):
         self.assertIn('agents ".team"', proc.err)
 
     @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_this_developer_s_cortex_toml_too_new_beside_the_team_s_file_is_moved_down_by_hand(self):
+        # cortex.toml, not committed, beside a team's file: this developer's, which no command writes — a plain
+        # upgrade VERSION follows the team's file and refuses. The move down named is by hand, and each edit,
+        # followed, syncs.
+        for number, (team, edit, read) in enumerate((
+                ('version = "9.9.8"\n', 'version = "9.9.7"\ntheme = "h2g2"\n', "9.9.8"),     # the higher is read
+                ('version = "9.9.8"\n', 'theme = "h2g2"\n', "9.9.8"),
+                ('theme = "h2g2"\n', 'version = "9.9.7"\ntheme = "h2g2"\n', "9.9.7"))):
+            with self.subTest(team=team, edit=edit):
+                root = self.project('version = "9.9.10"\ntheme = "h2g2"\n', team=team, committed=False,
+                                    name=f"mine-{number}")
+                proc = self.cortex(root, "upgrade")
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertNotIn("cortex upgrade 9", proc.err)
+                self.assertIn("or move it down by hand: set cortex.toml's version to one this cortex serves", proc.err)
+                self.assertEqual("version" in team, ", or remove it to read the team's" in proc.err)
+                proc = self.cortex(root, "upgrade", OWN)                                    # what used to be named
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                (root / "cortex.toml").write_text(edit, encoding="utf-8")                  # followed, by hand
+                self.assert_ok(self.cortex(root, "sync"))
+                self.assertEqual(self.value(root, "version"), read)
+
+    @SOURCE
     @harness.outside_a_repository
     def test_a_team_s_file_that_does_not_read_in_a_renamed_folder_is_named_there(self):
         # The team's folder renamed by a committed cortex.toml: the file to fix is named in it — read in agents/, the

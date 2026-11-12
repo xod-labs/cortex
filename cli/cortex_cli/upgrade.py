@@ -1244,7 +1244,12 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
             raise UpgradeError(f"this project uses Cortex {newer}, which its {name} pins — a build of no release, "
                                f"newer than this cortex, {the_store.own}: nothing was changed — "
                                f"{store.pin_remedy(name, config.developers_toml(root, name))}")
+        mine = config.developers_toml(root, name)
+        # This developer's cortex.toml, uncommitted beside a team's file, no command writes: moved by hand (§3.1).
+        remove = "" if mine == store.TEAM_PINS_NONE else ", or remove it to read the team's"
         down = "" if store.development(the_store.own) else \
+            f"\nor move it down by hand: set {name}'s version to one this cortex serves{remove} — uncommitted beside " \
+            "the team's file, it is this developer's, which no command writes" if mine else \
             f"\nor move the project down to this cortex's version by naming it: cortex upgrade {the_store.own}"
         raise UpgradeError(f"this project uses Cortex {newer}, which its {name} pins, newer than this cortex, "
                            f"{the_store.own} — nothing was changed. Update this cortex to serve it:\n"
