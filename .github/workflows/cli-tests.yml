@@ -38,7 +38,7 @@ jobs:
           base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           head: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
           # what the CLI's suite reads: the command, the core, the spec, the templates, the docs it quotes,
-          # the changelog a checkout's version comes from
+          # the changelog a checkout's version comes from; the action that says what changed
           paths: |
             cli/**
             core/**
@@ -50,6 +50,7 @@ jobs:
             README.md
             CHANGELOG.md
             .github/actions/lib/tests/semver-cases.json
+            .github/actions/changes/**
             .github/workflows/cli-tests.yml
 
   test:

@@ -419,6 +419,14 @@ class BumpTests(unittest.TestCase):
         self.assertEqual(prepared(changelog("### Changed\n> " + "- " * 5000 + "x\ntext\n-\n", "2.3.4")), "2.4.0")
         self.assertLess(time.monotonic() - start, 5)
 
+    def test_a_thematic_break_s_run_is_measured_once_a_line(self):
+        # Bluspark's fifth pass: where a break's character's run begins is measured once, at its first marker — read
+        # again at each of 20000 items, before a line that ends in 20000 more, it took seconds; once, milliseconds.
+        start = time.monotonic()
+        nested = "> " + "- " * 20000 + "x" + " -" * 20000
+        self.assertEqual(prepared(changelog(f"### Changed\n{nested}\ntext\n-\n", "2.3.4")), "2.4.0")
+        self.assertLess(time.monotonic() - start, 2)
+
     def test_an_html_block_other_than_a_comment_is_read_as_markdown(self):
         # A limit the reader states: CommonMark holds no Markdown in a <pre>, which is read here — its section too.
         text = changelog("### Fixed\n- a\n\n<pre>\n## [9.9.9]\n</pre>\n", "2.3.4")
@@ -561,6 +569,12 @@ class CheckoutTests(unittest.TestCase):
 
     def test_a_changelog_that_is_no_utf_8_is_none(self):
         (self.tmp / "CHANGELOG.md").write_bytes(b"## [Unreleased]\n\n### Added\n- caf\xe9\n\n## [1.2.3] - 2026-01-01\n")
+        self.assertEqual(self.version(), "cortex 0.0.0-dev")
+
+    def test_a_version_too_long_to_read_as_numbers_is_none(self):
+        # Bluspark's fifth pass: a section of 5000 digits raised ValueError at import — past Python's 4300-digit limit
+        # of a number read from text — and every command of the checkout failed.
+        (self.tmp / "CHANGELOG.md").write_text(changelog("### Added\n- a thing\n", "9" * 5000 + ".0.0"), encoding="utf-8")
         self.assertEqual(self.version(), "cortex 0.0.0-dev")
 
 

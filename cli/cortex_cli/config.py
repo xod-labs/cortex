@@ -423,7 +423,9 @@ def by_hand(found: Optional[cascade.Resolution], origin: Optional[str]) -> objec
 
 def loose_team_file(root: str) -> bool:
     """Whether the team's file is there, in the team's folder read loosely (ADR-013 §3.8, step 1) — read or not: a
-    directory, a link that leads nowhere, or in a folder this user cannot search is there too (§3.5)."""
+    directory, a link that leads nowhere, or in a folder this user cannot search is there too (§3.5). No caller tells
+    those from a file: each refuses a file there and unread first (``team_refusal``), or reads a version it does not
+    weigh (a try's, a committed pin's) — so ``os.path.isfile`` would answer the same on every path that reaches it."""
     return cascade.team_file_there(root, loose_team_folder(root))
 
 
@@ -442,6 +444,20 @@ def team_refusal(root: str) -> Optional[Tuple[str, bool]]:
     pinless = isinstance(found, dict) and "version" not in found
     if pin is not None and project.before_team(pin[1]) and (pinless or committed(root)):
         return None
+    return _refused(found, folder)
+
+
+def team_file_refusal(root: str) -> Optional[Tuple[str, bool]]:
+    """``team_refusal`` as a version that reads the team's file says it — where the project's version, before 1.8.0,
+    reads nothing of it yet: what a move to 1.8.0 or later refuses first, with the remedy of that file (§3.5)."""
+    folder = loose_team_folder(root)
+    found = cascade.read_team(root, folder)
+    return None if found is None else _refused(found, folder)
+
+
+def _refused(found: object, folder: str) -> Optional[Tuple[str, bool]]:
+    """Why the team's file read as ``found`` is refused — it does not read, or its grammar refuses it — and whether a
+    later release may take it: a key this cortex does not know. ``None`` when it checks."""
     if isinstance(found, cascade.Unreadable):
         return found.error, False
     later = any(key not in project.TEAM_KEYS for key in found) and "agents" not in found
@@ -461,7 +477,8 @@ def try_unmoved(root: str) -> Optional[Tuple[str, str]]:
     how it is moved; ``None`` when ``--local`` does (ADR-013 §3.8). ``LATER``: the team's folder is one this cortex
     does not take by its name, ``.team``, which a later release may. ``REFUSED``: ``cortex.toml``'s ``agents`` is
     refused, every command refusing it first — its own remedy said. ``BY_HAND``: the team's version is before 1.8.0,
-    which reads no try, refused at every move — the try is removed by hand, another way than updating."""
+    which reads no try, refused at every move; or newer than this cortex too, which ``--local`` reads once the try is
+    removed, and refuses; or none — the try is removed by hand, another way than updating."""
     folder = loose_team_folder(root)
     if not takes_folder(folder):            # .team: a later release may take it, which updating brings (§3.8, step 1)
         return (f"no command of this cortex moves the try: it does not take the team's folder {folder}/, which a later "
@@ -470,9 +487,20 @@ def try_unmoved(root: str) -> Optional[Tuple[str, str]]:
     if refused is not None:
         return f"no command moves the try while {PROJECT_FILE} is refused — {refused}", REFUSED
     teams = loose_team(root)
-    if teams is not None and project.before_team(str(teams[1])):
+    if teams is None:
+        # A try is read above the team's version only: no file pins one, so no --local reads the project (§3.1).
+        return (f"drop the try by hand: remove `version` from {LOCAL_FILE}, and pin the team's version in "
+                f"{PROJECT_FILE} or {cascade.team_name(folder)} — neither pins one, and a try is read above it only",
+                BY_HAND)
+    if project.before_team(str(teams[1])):
         return (f"drop the try by hand: remove `version` from {LOCAL_FILE} — the team's version, {teams[1]}, is "
                 f"before {project.FIRST_TEAM_VERSION}, which reads none", BY_HAND)
+    if store.too_old_for(teams[1], store.own_version()):
+        # --local at or below the team's version removes the try, then reads the team's — refused, the removal put
+        # back: the try is removed by hand, and the team's pin moved as the run after it says.
+        return (f"drop the try by hand: remove `version` from {LOCAL_FILE} — the team's version, {teams[1]}, is newer "
+                "than this cortex too, which `cortex upgrade --local` would read once the try is removed, and refuse",
+                BY_HAND)
     return None
 
 
@@ -515,7 +543,7 @@ def too_new(root: str, own: Version) -> Optional[str]:
     folder = name[:-len(TEAM_FILE) - 1] if name.endswith(f"/{TEAM_FILE}") else None
     unmoved = try_unmoved(root) if name == LOCAL_FILE else None
     other = (f"\n{'or ' if unmoved[1] == BY_HAND else ''}{unmoved[0]}" if unmoved is not None else
-             f"\nor drop the try: cortex upgrade --local {teams[1] if teams else down}" if name == LOCAL_FILE else
+             f"\nor drop the try: cortex upgrade --local {teams[1]}" if name == LOCAL_FILE else
              f"\nor move the team's pin: cortex upgrade --team {down}"
              if folder is not None and moves_team_pin(root, folder, own) else "")
     return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
