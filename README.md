@@ -134,7 +134,7 @@ cortex init --no-personality        # neutral professional agents (no theme)
 
 `cortex init` writes `cortex.toml` — the binary's own version and the team's theme — adds `cortex.local.toml` to `.gitignore`, and runs `cortex sync`, which puts the spec in the store, writes `cortex.lock`, and writes `spec` in `cortex.local.toml`. It then writes the bootstrap file, `project-overview.md` and `project-context.md`, each when it is missing. Fill those two in: they are what the agents know of your project.
 
-The bootstrap file is in two parts. **Cortex's block** runs from the top to the line `<!-- cortex:bootstrap end -->`: `cortex init --force` and `cortex upgrade` write it again, so keep its marker line as it is — `<!-- cortex:bootstrap layout=single format=2 digest=… -->` under the title, from which `cortex init` reads the layout and format, and `cortex upgrade`, by its digest, whether anyone changed the block. **Below the end marker, the file is yours**: write there what your tool must read first, and every later Cortex keeps it byte for byte ([ADR-012](docs/adr/ADR-012-bootstrap-block.md)). A rule of your own machine goes in your tool's user-level instructions (`~/.claude/CLAUDE.md`, …) or in your `project-context.md`; a team convention, in `project-context.md` — `agents/project-context.md` in a workspace.
+The bootstrap file is in two parts. **Cortex's block** runs from the top to the line `<!-- cortex:bootstrap end -->`: `cortex init --force` and `cortex upgrade` write it again, so keep its marker line as it is — `<!-- cortex:bootstrap layout=single format=3 digest=… -->` under the title, from which `cortex init` reads the layout and format, and `cortex upgrade`, by its digest, whether anyone changed the block. **Below the end marker, the file is yours**: write there what your tool must read first, and every later Cortex keeps it byte for byte ([ADR-012](docs/adr/ADR-012-bootstrap-block.md)). A rule of your own machine goes in your tool's user-level instructions (`~/.claude/CLAUDE.md`, …) or in your `project-context.md`; a team convention, in `project-context.md` — `agents/project-context.md` in a workspace.
 
 Then talk to the Prompt Manager in your AI tool — `@Oolon` with the H2G2 theme, `@prompt-manager` without one:
 
@@ -178,16 +178,47 @@ If no alias is mentioned, Cortex infers the service from the active file context
 
 | File | Committed | What it holds |
 |---|---|---|
-| `cortex.toml` | yes | `version`, the Cortex version the project pins; the team's `theme`; optionally `sync` and `claude_access` |
+| `cortex.toml` | yes | `version`, the Cortex version the project pins; the team's `theme`; optionally `sync`, `claude_access` and `agents`, the team's folder |
 | `cortex.lock` | yes | the pinned version and the digest of its spec — `cortex sync` writes it, nobody edits it |
 | the bootstrap file | yes | `CLAUDE.md`, `AGENTS.md`, … — what your AI tool reads first |
 | `project-overview.md`, `project-context.md` | yes | your project's vision and stack — per service, too, in a workspace |
-| `agents/` | yes | your overlays, if any |
-| `cortex.local.toml` | no — git-ignored | `spec`, where the spec is on this machine; your own `theme` and `claude_access`, which win over the team's |
+| `agents/` | yes | your overlays, if any — the team's folder, unless `cortex.toml` renames it ([the team's folder](#the-teams-folder)) |
+| `agents/cortex.team.toml`, `agents/cortex.team.lock` | yes, in the team's repository | the team's settings — its `version`, `theme`, `sync`, `claude_access` and the keys it locks — and the lock of its version ([the team's file](#the-teams-file)) |
+| `cortex.local.toml` | no — git-ignored | `spec`, where the spec is on this machine; your own `theme` and `claude_access`, which win over the team's; a `version` you try; `synced`, what `cortex sync` read |
 | `cortex/` | no — git-ignored | the link or the copy, in `link` or `copy` mode |
 | `.claude/settings.local.json` | no — git-ignored | where `cortex sync` lets Claude Code read the store, with `claude_access` |
 
-A workspace root that is no git repository — a folder holding the services' repositories — has nowhere to commit `cortex.toml`: each developer runs `cortex init --workspace` in their own root instead of `cortex sync`.
+A workspace root that is no git repository — a folder holding the services' repositories — has nowhere to commit `cortex.toml`: each developer runs `cortex init --workspace` in their own root instead of `cortex sync`, unless the team pins its version in its own `agents/` repository, with the team's file.
+
+### The team's file
+
+`agents/cortex.team.toml`, in the team's folder and committed in the team's repository, gives every project that reads the folder the team's settings ([ADR-013](docs/adr/ADR-013-configuration-cascade.md)) — read once the team's version is 1.8.0 or later:
+
+```toml
+version = "1.8.0"
+theme = "h2g2"
+claude_access = false
+locked = ["claude_access"]
+```
+
+- **The version.** At a root no repository holds, the team's file's `version` is the team's, and its lock, `agents/cortex.team.lock`, sits beside it; one commit there moves every teammate. A committed `cortex.toml` that pins a version keeps its own, behind the team's if it likes; one without `version` follows the team's file.
+- **A try.** A `version` in your `cortex.local.toml` — `cortex upgrade --local VERSION` writes it — is read when it is higher than the team's, never lower: a version to try before you propose it. It has no lock, and every `cortex sync` says you are ahead; at or below the team's, it changes nothing, and `cortex upgrade --local` with the team's version removes it. `cortex sync --locked`, in CI, checks the team's version and its lock, never a try.
+- **The other keys** are defaults: `cortex.toml`'s and yours win over them. A key the file lists in `locked` takes the team's value, with a warning at every sync, and `cortex validate --strict` fails; a flag against it is refused. `version` is never locked: moving it is the team's matter, and a developer may try a later one.
+- **`claude_access` locks to `false` only.** A team may forbid a permission, never grant one on a developer's machine: locked to `false`, Claude Code asks before it reads the spec, whatever you set; locked to `true`, it would read it without asking over a developer who declined — so that lock is refused.
+
+### The team's folder
+
+The team's folder is `agents/`, at the root: the workspace's overlays — roles, capabilities, themes, workflows — the team's `project-overview.md` and `project-context.md`, and the team's file and its lock. A committed `cortex.toml` may rename it, and that is all it can do ([ADR-013](docs/adr/ADR-013-configuration-cascade.md) §3.6):
+
+```toml
+agents = "team-agents"
+```
+
+- **Inside the workspace.** A relative path, with `/`: no `..`, no absolute path of any platform, no `\` nor `:`. Not the root, `cortex/` or what it holds, a service's `agents/` or any folder inside a service, a folder that is a service or holds one, a folder holding a project's `cortex.toml`, nor a folder whose name starts with `.`, or ends with `.` or a space, which Windows drops — names compared in any case, as file systems that ignore case fold the common names — `straße` is not `strasse`. The default, `agents/`, is never refused, even named `agents = "agents"`; `Agents` names a folder of its own, as written.
+- **In a committed `cortex.toml` only**, so that every developer reads the same folder. `cortex.local.toml` and the team's file refuse it — the team's file is in the folder; the machine's `config.toml` warns and reads nothing of it. In a `cortex.toml` git does not track — a workspace root that is no repository — it is refused, and the team's folder is `agents/`.
+- **Everything follows it**: the team's file and its lock, the overlays `cortex validate` checks, the team's context files, the project's own themes, what `cortex init` scaffolds there, the bootstrap — which reads the folder `cortex sync` records — and the runtime's reading. The service scan leaves it out. It may be a symbolic link leading outside the workspace — a team's repository checked out elsewhere: Cortex reads through it, and checks its path as written.
+- **Missing, or left behind.** A folder `agents` names that is not there is a warning at `cortex sync`, an error under `--locked`, and `TEAM_FOLDER_MISSING` in `cortex validate`. An `agents/` that still holds overlays, the team's context files, or a team's file and lock once the folder is renamed is said — `TEAM_FOLDER_LEFT_BEHIND` — and not read: move what it holds. An `agents/` inside the team's folder is said unread too — `TEAM_FOLDER_NESTED` — naming `agents = "<folder>/agents"`.
+- **From 1.8.0.** `agents` is read once the team's version is 1.8.0 or later; before it, it is refused naming 1.8.0, and `cortex upgrade` refuses to move below 1.8.0 a project that uses it. A version newer than this cortex, pinned by the team's file in a folder whose name this cortex refuses — `.team` — is said first, with `cortex self-update` alone: a later version may take the name.
 
 ### Coming from a git submodule or clone
 
@@ -197,7 +228,7 @@ A workspace root that is no git repository — a folder holding the services' re
 
 `cortex --help` lists the commands, and `cortex <command> --help` the options of one. `cortex --version` (`-V`) prints the version — with `--verbose`, the spec archives it knows the checksums of. A command that works on a project finds it from the current directory up: the nearest `cortex.toml`, the workspace root in workspace mode.
 
-> `cortex upgrade`, `cortex self-update`, `cortex prune` and `cortex.lock` are from 1.4.0. **1.5.0 adds the project registry**: `cortex project`, the registration by `cortex init` and `cortex sync`, `cortex prune` with no `DIR`, and `cortex upgrade --all`, `--branch` and `--commit`.
+> `cortex upgrade`, `cortex self-update`, `cortex prune` and `cortex.lock` are from 1.4.0. **1.5.0 adds the project registry**: `cortex project`, the registration by `cortex init` and `cortex sync`, `cortex prune` with no `DIR`, and `cortex upgrade --all`, `--branch` and `--commit`. **1.8.0 adds `cortex config`** and the machine's `config.toml` ([ADR-013](docs/adr/ADR-013-configuration-cascade.md)).
 
 ### `cortex init`
 
@@ -216,7 +247,7 @@ Makes a directory a Cortex project — see [A first project](#a-first-project).
 | `--instructions-file PATH` | the bootstrap file of `--tool custom` |
 | `--theme THEME` | the team's personality theme — `h2g2` by default, or the one `cortex.toml` names: one the pinned version ships, or one of your own in `agents/personalities/` |
 | `--no-personality` | no personality layer, `theme = "none"` — wins over `--theme` |
-| `--workspace` | workspace mode: several services under one root |
+| `--workspace` | workspace mode: several services under one root — without it, `--force` keeps the layout of the file it replaces |
 | `--service NAME` | a service of the workspace, a folder — repeatable; asked for on a terminal when omitted |
 | `--link`, `--copy` | the team's sync mode: `sync = "link"` or `sync = "copy"` in `cortex.toml`, with `/cortex` added to `.gitignore` |
 | `--claude-access` | let Claude Code read the spec without asking: `claude_access = true` in `cortex.toml` — asked on a terminal with `--tool claude` |
@@ -252,24 +283,30 @@ Puts the version `cortex.toml` pins in the store — from the binary itself when
 
 ```text
 cortex upgrade [VERSION] [--dry-run] [--force] [--instructions-file PATH] [--branch NAME] [--commit --message MESSAGE]
-cortex upgrade --all [VERSION] [--dry-run] [--force] [--branch NAME] [--commit --message MESSAGE]
+cortex upgrade --team [VERSION] [--dry-run] [--force] [--branch NAME] [--commit --message MESSAGE]
+cortex upgrade --local VERSION [--dry-run] [--force]
+cortex upgrade --all [--team] [VERSION] [--dry-run] [--force] [--branch NAME] [--commit --message MESSAGE]
 ```
 
-Moves the project to `VERSION`, or to the binary's own version — never down to it: a project pinned to a newer version moves down only when `VERSION` names it. It puts the target in the store, then says what changes — the roles, capabilities, personalities and workflows added, removed and changed, the templates, and where the release notes are — and checks the project's overlays against the target: an overlay that fails stops it, having changed nothing. Then it writes the bootstrap file again when nobody changed it and the target's template differs — one your team adapted is kept, and the command names `cortex init --force` — writes `version` in `cortex.toml`, and syncs, which rewrites `cortex.lock`. If anything fails, `cortex.toml`, `cortex.lock` and the bootstrap file are put back as they were. It ends with what to commit. Run on the version already pinned, it finishes what an upgrade cut short left.
+Moves the project to `VERSION`, or to the binary's own version — never down to it: a project pinned to a newer version moves down only when `VERSION` names it. It puts the target in the store, then says what changes — the roles, capabilities, personalities and workflows added, removed and changed, the templates, and where the release notes are — and checks the project's overlays against the target: an overlay that fails stops it, having changed nothing. Then it writes the bootstrap file again when nobody changed it and the target's template differs — one your team adapted is kept, and the command names `cortex init --force` — writes `version` in `cortex.toml`, and syncs, which rewrites `cortex.lock`. If anything fails, `cortex.toml`, `cortex.lock` and the bootstrap file are put back as they were. It ends with what to commit — at a root in no git repository, that its files are committed nowhere. Run on the version already pinned, it finishes what an upgrade cut short left.
 
-With no `VERSION`, it also says when a release newer than the binary is out — `CORTEX_NO_UPDATE_CHECK` turns that question off. It never moves the binary.
+With no `VERSION`, it also says when a release newer than the binary is out — `CORTEX_NO_UPDATE_CHECK`, or `update_check = false` in the machine's `config.toml`, turns that question off. It never moves the binary.
 
 | Option | What it does |
 |---|---|
-| `VERSION` | the version to move to, `X.Y.Z` — the binary's own by default |
+| `VERSION` | the version to move to, `X.Y.Z` — the binary's own by default; named, from a source checkout or a development build, whose own version no teammate can download |
 | `--dry-run` | say what would change and check the overlays, and change nothing in the project; it exits as the run would |
 | `--force` | move the project even if its overlays fail against the target |
 | `--instructions-file PATH` | the bootstrap file to write again, when it is no known tool's |
 | `--all` | every project of the registry, in name order, to the same target |
+| `--team` | move the team's file's version, and its lock, in `agents/` — with no `VERSION`, to this cortex's version, never below the team's pin — named, from a source checkout or a development build, and never to a development build's version, which no teammate can download — `--local` tries one; a file at one already keeps it, and its lock, nothing of it said to commit; the overlays of the projects that follow it checked before a move; at the pin, with its lock, nothing moves, and `--commit` commits what a run before left of the file and its lock — without it, the lock alone is written; `--branch` and `--commit` act in the team's repository, and `--commit` commits nothing where the file holds changes of yours besides its version, or is not committed yet and holds more, and says so; a project that follows the file is synced, and its untouched bootstrap written again, left for you to commit |
+| `--local` | try `VERSION` here, in `cortex.local.toml`: no committed file is written; at or below the team's version, the try is removed |
 | `--branch NAME` | create and switch to the branch `NAME` in each project that is a git work tree, once its checks pass and before its first write — none for a project with nothing to write, nor where git ignores every file written; a project already on `NAME` is written there, and one where `NAME` exists while it is on another branch is refused. Nothing is stashed |
 | `--commit --message MESSAGE` | commit, in each project the upgrade wrote files in — moved, or finished on its pinned version — those files and nothing else, with `MESSAGE` — required: your team's commit convention is its own. A project where `cortex.toml`, or a bootstrap file the upgrade wrote, held changes of yours before it — staged or not — gets no commit, and the command says so; the lock, written whole from the pin, does not count, and a file it wrote outside the work tree is left out, and named where it is, to commit there. Nothing is pushed |
 
-**`--all`** gives each registered project the upgrade above. A project that is not `ok` in `cortex project list` is skipped, and said; the release check asks once. A project that refuses — overlays that fail, a sync that refuses, a pin newer than the binary — does not stop the others. The command ends with one line per project — moved, already on the target, refused and why, skipped and why — and what each must commit, by path, and exits 1 if any project refused — one skipped does not. An empty registry moves nothing, and exits 0; a `VERSION` this cortex does not serve is refused once, before any project. Nothing is committed without `--commit`, and the command says so; with it, a project outside git, one whose `cortex.toml` git does not track, and one where git ignores a file the upgrade wrote are said, and nothing is committed there, while a commit git refuses — a hook, say — is that project's refusal, its upgrade done, and its files stay staged. Without git on `PATH`, `--branch` and `--commit` are refused before anything changes. `--dry-run` creates no branch, and `--force` is passed to each project. `--instructions-file` names one project's file, and is refused with `--all`. Interrupted — Ctrl-C — it still ends with its summary: the project cut short, which may be half written, its branch if one was made, and the projects not reached; it exits 130. The same command again finishes the project cut short, and names the files a run before it left to commit — `git status` there says what.
+**A project that follows the team's file** — its `cortex.toml` holds no committed `version`, an uncommitted one at a 2.B root included — is moved by `--team`, or tried with `--local`: a plain `cortex upgrade VERSION` there is refused, naming both, and with no `VERSION` it finishes what an upgrade cut short left. During a try, a plain upgrade writes `cortex.toml`, `cortex.lock` and the bootstrap from the version it moves, never from the try's, and `cortex init` writes the bootstrap from the team's version.
+
+**`--all`** gives each registered project the upgrade above — a project that follows its team's file is skipped, and said, exit 0; `--all --team` moves each project's team's file instead, skipping a project with none, or that pins its own version. A project that is not `ok` in `cortex project list` is skipped, and said; the release check asks once. A project that refuses — overlays that fail, a sync that refuses, a pin newer than the binary — does not stop the others. The command ends with one line per project — moved, already on the target, refused and why, skipped and why — and what each must commit, by path, and exits 1 if any project refused — one skipped does not. An empty registry moves nothing, and exits 0; a `VERSION` this cortex does not serve is refused once, before any project. Nothing is committed without `--commit`, and the command says so; with it, a project outside git, one whose `cortex.toml` git does not track, and one where git ignores a file the upgrade wrote are said, and nothing is committed there, while a commit git refuses — a hook, say — is that project's refusal, its upgrade done, and its files stay staged. Without git on `PATH`, `--branch` and `--commit` are refused before anything changes. `--dry-run` creates no branch, and `--force` is passed to each project. `--instructions-file` names one project's file, and is refused with `--all`. Interrupted — Ctrl-C — it still ends with its summary: the project cut short, which may be half written, its branch if one was made, and the projects not reached; it exits 130. The same command again finishes the project cut short, and names the files a run before it left to commit — `git status` there says what.
 
 ### `cortex self-update`
 
@@ -322,6 +359,32 @@ Manages the registry, `projects.toml` in the Cortex home — `~/.cortex/projects
 
 No registry is an empty list: `list` says so, and `check` exits 0. A project moved on disk is registered again at its new path, under a free name, by its next sync; its old entry is then `missing`, and the next `cortex prune` or `cortex project remove` drops it.
 
+### `cortex config`
+
+```text
+cortex config [KEY] [--locked] [--json]
+```
+
+Prints each setting of the project, its value and where it comes from — a file, as the project root names it, a variable, or `default` ([ADR-013](docs/adr/ADR-013-configuration-cascade.md) §3.9). It reads, and writes nothing:
+
+```text
+version        1.7.0                                          cortex.toml
+theme          none                                           cortex.local.toml
+sync           store                                          default
+claude_access  true                                           cortex.toml
+releases_url   https://github.com/xod-labs/cortex/releases    default
+update_check   false                                          CORTEX_NO_UPDATE_CHECK
+register       true                                           default
+```
+
+| Option | What it does |
+|---|---|
+| `KEY` | prints that setting's value alone — `cortex config version`, in a CI script. An unknown key exits 2 |
+| `--locked` | the team's resolution, without `cortex.local.toml`: the version and the lock `cortex sync --locked` checks, and what the runtime reads. `cortex sync --locked` still applies your own `theme` and `claude_access` to your machine |
+| `--json` | one JSON object, with a `format` field: each setting's value, its origin, the values it overrode — whether `cortex.toml` is committed, whether the project's version is newer than this cortex, and the warnings: the machine file's, and a `releases_url` a download would refuse |
+
+Outside a project, it knows the machine's keys only. A project pinned to a version newer than the binary is printed all the same, with the `cortex self-update` that serves it. A file it refuses exits 1, naming it.
+
 ### `cortex validate`
 
 ```text
@@ -347,7 +410,15 @@ It exits `0` when clean, `1` on errors — or on warnings under `--strict` — a
 | `CORTEX_NO_REGISTER` | `cortex init`, `cortex sync`, `cortex upgrade` | set to anything but an empty value, they neither read nor write the registry to register the project — for a CI runner, where `cortex sync --locked` registers as any sync does, or a throwaway project. `cortex project`, `cortex prune` with no `DIR` and `cortex upgrade --all` still read the registry: it is their work |
 | `CORTEX_NO_MODIFY_PATH` | `install.ps1` | `1` leaves your user `PATH` as it is, as `-NoModifyPath` does |
 | `SSL_CERT_FILE`, `SSL_CERT_DIR` | the binary | the certificates a download is checked with, as OpenSSL reads them. Unset, the binary looks where the common systems keep theirs |
-| `CORTEX_SOURCE_VERSION` | a source checkout | the version a checkout's tests stand for — for contributors; a built binary never reads it |
+| `CORTEX_SOURCE_VERSION` | a source checkout | the version a checkout's tests stand for, in place of the one its `CHANGELOG.md` prepares — for contributors; a built binary never reads it |
+
+**The machine's file.** `config.toml` in the Cortex home — `~/.cortex/config.toml` by default — holds the same three settings, for every project of this user ([ADR-013](docs/adr/ADR-013-configuration-cascade.md) §3.7): `releases_url`, `update_check` and `register`. Each variable goes over its key, as it always did — an empty `CORTEX_RELEASES_URL` counts as unset — and no variable turns a key back on. The file is optional, and no command writes it. It never stops one: an unknown key, a value of the wrong type, or a file that cannot be read is a warning, and the rest is read — `cortex self-update` above all. A `releases_url` that is no https address is refused as the variable is, naming the file — `cortex config` prints it, with a warning. `cortex config` says which one a setting comes from.
+
+```toml
+# ~/.cortex/config.toml
+releases_url = "https://mirror.example.com/cortex/releases"
+update_check = false
+```
 
 The runtime has its own — `CORTEX_BACKEND`, `CORTEX_DB`, `CORTEX_AUTH`… — in [runtime/README.md](runtime/README.md).
 
@@ -416,6 +487,20 @@ cortex validate --strict
 
 The PowerShell lines for a Windows runner are in [extending-layers.md](docs/extending-layers.md#-validating-your-overlays). On a runner that outlives its jobs, set `CORTEX_NO_REGISTER=1` so that its registry does not collect every checkout.
 
+**A project with a team's file** pins its version there, or in a committed `cortex.toml` that wins over it ([ADR-013](docs/adr/ADR-013-configuration-cascade.md) §3.13): the job installs the latest release, asks it the team's version — `cortex config version --locked` answers whatever the version — then installs that one. Check out a team's folder that is its own repository, a submodule, with the project:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/xod-labs/cortex/main/install.sh | sh                   # the latest release
+export PATH="$HOME/.cortex/bin:$PATH"
+version="$(cortex config version --locked)"                                                      # the team's version
+[ -n "$version" ] || exit 1                                                                      # none: the job stops
+curl -fsSL https://raw.githubusercontent.com/xod-labs/cortex/main/install.sh | sh -s -- "$version"
+cortex sync --locked
+cortex validate --strict
+```
+
+**The team's repository checked alone** is checked out at `agents/` — whatever the projects that read it call it — in a scratch project whose `cortex.toml` sets nothing the team's file gives — an empty file — and the same lines run there.
+
 ### Add an overlay
 
 Teach an agent your project's conventions without forking Cortex: mirror the base file's path under `agents/` — or `{service}/agents/` for one service — start the file with an `OVERLAY` header whose `Base:` names the base file, `cortex/agents/roles/engineering/lead-backend.md` say, tag its sections `(additive)`, and run `cortex validate`. [Getting Started](docs/getting-started.md#override-a-base-layer-for-your-project-the-cascade) has a short example; [Extending layers](docs/extending-layers.md) the header, the four layers, what cannot be overridden, and more examples; [Creating a theme](docs/creating-a-theme.md), a personality of your own.
@@ -429,7 +514,8 @@ The bootstrap file has the assistant keep the machine in step with the project b
 | no `cortex.local.toml`, or no `spec` in it | runs `cortex sync` at the project root — the workspace root in workspace mode |
 | a `spec` naming a directory that does not exist — `cortex prune` removed the version, or the store was emptied | runs `cortex sync`, which gets the version back |
 | a spec of another version than `cortex.toml`'s — a teammate moved it | runs `cortex sync`, and goes no further until it succeeded |
-| `cortex sync` saying this cortex is too old for the project — a newer pin, or a later lock format | runs the command the refusal names — `cortex self-update X.Y.Z`, or the install script's from a binary before 1.4.0 — then `cortex sync` again |
+| from 1.8.0, a file's `version` — `cortex.toml`'s, `cortex.local.toml`'s, the team's file's — or the spec's, other than what `cortex sync` recorded in `synced` | runs `cortex sync`, once: a plain comparison, nothing to run while they match ([ADR-013](docs/adr/ADR-013-configuration-cascade.md) §3.10) |
+| `cortex sync` saying this cortex is too old for the project — a newer pin, or a later lock format | runs the command the refusal names — `cortex self-update X.Y.Z`, or the install script's from a binary before 1.4.0 — then `cortex sync` again, once; still too old, it tells you and goes no further |
 | no `cortex` command, nor `cortex-ai`, on `PATH` or in `~/.cortex/bin` | tells you to install it, as [Installation](#-installation) says, and goes no further |
 
 - **Which command.** `cortex-ai` when there is one; otherwise `cortex`, once `cortex --version` printed `cortex` followed by a version — anything else is another program, whose `sync` it must not run. It looks in `~/.cortex/bin` (`%USERPROFILE%\.cortex\bin`) too when its tool's `PATH` has neither: an editor started before the install changed `PATH`.

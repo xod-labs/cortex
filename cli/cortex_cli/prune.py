@@ -33,7 +33,8 @@ from collections import deque
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, TextIO
 
-from cortex_core.project import is_version, shown
+from cortex_core import cascade
+from cortex_core.project import shown
 
 from . import config, registry, store, sync, validate
 from .paths import display, working_directory
@@ -92,15 +93,17 @@ def _loosely(root: Path) -> Optional[config.Project]:
     a value it does not take. ``None`` when its version is not known."""
     def read(name: str) -> dict:
         try:
-            return tomllib.loads((root / name).read_text(encoding="utf-8-sig"))
+            return tomllib.loads(cascade.read_file(str(root / name)).decode("utf-8-sig"))    # a pipe: no wait
         except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
             return {}
 
-    pinned, spec = read(config.PROJECT_FILE).get("version"), read(config.LOCAL_FILE).get("spec")
-    if not is_version(pinned):
+    found = config.loose_pin(str(root))
+    spec = read(config.LOCAL_FILE).get("spec")
+    if found is None:
         return None
-    return config.Project(root=str(root), version=Version(pinned), theme="none", sync=None, local_theme=None,
-                          spec=spec if isinstance(spec, str) else None)
+    # Its team's folder as the gate read it: the candidates are read there, a renamed one included.
+    return config.Project(root=str(root), version=found[1], theme="none", sync=None, local_theme=None,
+                          spec=spec if isinstance(spec, str) else None, team_folder=config.loose_team_folder(str(root)))
 
 
 def versions_of(root: Path, err: TextIO) -> List[str]:
@@ -118,10 +121,14 @@ def versions_of(root: Path, err: TextIO) -> List[str]:
     except OSError as error:
         err.write(f"note: {display(str(root))}: {sync.os_error(error)} — its version is not known, so none is kept for it\n")
         return []
-    used = [str(project.version)]
+    # Its candidate versions — the team's file's, cortex.toml's and a local try's (ADR-013 §3.11) — and
+    # the one it resolves: a version a teammate's bump or a try reads is kept as the pin is.
+    loose = cascade.loose_versions(str(root), project.team_folder)
+    used = list(dict.fromkeys([str(project.version), str(project.team_version),
+                               *(version for _, version in loose.values())]))
     spec = project.spec_directory()
     if spec is not None and os.path.isdir(spec):
-        synced = validate._synced_version(project, spec)
+        synced = validate._synced_version(project.root, project.spec, spec)
         if synced and synced not in used:
             used.append(synced)
     if refused is not None:

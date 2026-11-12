@@ -36,6 +36,8 @@ When the Prompt Manager loads `lead-backend`, it reads **base → workspace over
 
 `cortex/` in these paths — and in every `Base:` header — is the directory `spec` names in `cortex.local.toml`. By default that is the version `cortex.toml` pins, read in place from the store (`~/.cortex/versions/X.Y.Z`). When the project is synced with `cortex sync --link` or `--copy`, it is a `cortex/` directory of the project. Either way, overlays live in your project's own `agents/` tree, never under `cortex/`.
 
+`{workspace_root}/agents/` is the **team's folder**: `agents/`, unless the project's committed `cortex.toml` renames it — `agents = "team-agents"` ([ADR-013](adr/ADR-013-configuration-cascade.md) §3.6). The workspace level is then read from `team-agents/`, and so are the team's `project-overview.md` and `project-context.md`; `cortex validate` checks the overlays there, and says when an `agents/` left behind still holds some, which nothing reads. `{service}/agents/` stays each service's, whatever the team's folder is called.
+
 ### Where overlays go for each layer
 
 | Layer | Base | Overlay path |

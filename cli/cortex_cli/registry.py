@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator, List, Optional, TextIO, Tuple
 
-from cortex_core import project
+from cortex_core import cascade, project
 from cortex_core.project import LaterFormatError, ProjectFileError, shown
 
 from . import config, init, prune, store, sync, validate
@@ -71,15 +71,16 @@ class State:
     entry: Entry
     state: str                      # OK, MISSING, NO_PROJECT or UNREADABLE
     why: Optional[str] = None       # what cannot be read, when UNREADABLE
-    pinned: Optional[str] = None    # the version its cortex.toml pins
+    pinned: Optional[str] = None    # the team's version: its cortex.toml's, or its team's file's (ADR-013 §3.1)
     reads: Optional[str] = None     # the version this machine reads now: the spec of its cortex.local.toml
     layout: Optional[str] = None    # "single" or "workspace", by the marker of its bootstrap
+    pinned_origin: Optional[str] = None     # the file the team's version comes from
 
     def as_json(self) -> dict:
         """The object ``cortex project list --json`` gives for it — its keys only grow within
         ``LIST_FORMAT``."""
         return {"name": self.entry.name, "path": self.entry.path, "state": self.state, "pinned": self.pinned,
-                "reads": self.reads, "layout": self.layout, "why": self.why}
+                "pinned_origin": self.pinned_origin, "reads": self.reads, "layout": self.layout, "why": self.why}
 
 
 def registry_path() -> Path:
@@ -328,7 +329,7 @@ def _reads(read: config.Project) -> Optional[str]:
     try:
         if spec is None or not os.path.isdir(spec):
             return None
-        return validate._synced_version(read, spec) or None
+        return validate._synced_version(read.root, read.spec, spec) or None
     except OSError:
         return None
 
@@ -340,7 +341,8 @@ def _left_behind(root: Path) -> Optional[str]:
     ``OSError``, or ``ValueError``, when the file is there and cannot be read: what it reads is not
     known, which is no proof that the project is gone."""
     try:
-        spec = tomllib.loads((root / config.LOCAL_FILE).read_text(encoding="utf-8-sig")).get("spec")
+        # Read without blocking: a named pipe there would hold `cortex project list`, and `prune`, for good.
+        spec = tomllib.loads(cascade.read_file(str(root / config.LOCAL_FILE)).decode("utf-8-sig")).get("spec")
     except FileNotFoundError:
         return None
     if not isinstance(spec, str):
@@ -382,8 +384,13 @@ def state(entry: Entry) -> State:
         why, read = str(error), prune._loosely(root)
     except OSError as error:
         why, read = sync.os_error(error), prune._loosely(root)
-    return State(entry, OK if why is None else UNREADABLE, why, str(read.version) if read else None,
-                 _reads(read) if read else None, _layout(root))
+    # PINNED is the team's version; of a project this cortex cannot read whole, read loosely (ADR-013 §3.1).
+    team = (str(read.team_version), read.team_origin) if read is not None and why is None else None
+    if read is not None and why is not None:
+        loose = config.loose_team(str(root))
+        team = (str(loose[1]), loose[0]) if loose else None
+    return State(entry, OK if why is None else UNREADABLE, why, team[0] if team else None,
+                 _reads(read) if read else None, _layout(root), team[1] if team else None)
 
 
 # --------------------------------------------------------------------------- #

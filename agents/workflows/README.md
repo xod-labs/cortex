@@ -41,6 +41,8 @@ cortex/agents/workflows/                       ← priority 3 — Generic workfl
 {service}/agents/workflows/                    ← priority 1 — service-specific
 ```
 
+`{workspace_root}/agents/` is **the team's folder the bootstrap names** — `agents/` unless the project's `cortex.toml` renames it with `agents` ([ADR-013](../../docs/adr/ADR-013-configuration-cascade.md) §3.6).
+
 **Priority rule:** the most specific workflow with the same name **replaces** the generic one (semantic: `replacement`). This is the workflow-specific behavior; other layers (roles, capabilities, personalities) use **additive** overlays.
 
 For details on the cascade as it applies to all layers, see [docs/extending-layers.md](../../docs/extending-layers.md) and [ADR-001](../../docs/adr/ADR-001-layered-overrides.md).

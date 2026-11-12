@@ -522,14 +522,14 @@ class ListTests(StateTestCase):
         (odd / "cortex.toml").write_text('version = "1.4.0"\ntheme = "h2g2"\nlater = "x"\n', encoding="utf-8")
         why = 'cortex.toml: unknown key "later" — cortex.toml takes version, theme, sync and claude_access'
         self.assertEqual(self.listed(), [
-            {"name": "bare", "path": display(bare), "state": "no-project", "pinned": None, "reads": None,
-             "layout": None, "why": None},
-            {"name": "gone", "path": display(gone), "state": "missing", "pinned": None, "reads": None, "layout": None,
-             "why": None},
-            {"name": "odd", "path": display(odd), "state": "unreadable", "pinned": "1.4.0", "reads": None,
-             "layout": None, "why": why},
-            {"name": "zeta", "path": display(ok), "state": "ok", "pinned": OWN, "reads": OWN, "layout": None,
-             "why": None}])
+            {"name": "bare", "path": display(bare), "state": "no-project", "pinned": None, "pinned_origin": None,
+             "reads": None, "layout": None, "why": None},
+            {"name": "gone", "path": display(gone), "state": "missing", "pinned": None, "pinned_origin": None,
+             "reads": None, "layout": None, "why": None},
+            {"name": "odd", "path": display(odd), "state": "unreadable", "pinned": "1.4.0", "pinned_origin": "cortex.toml",
+             "reads": None, "layout": None, "why": why},
+            {"name": "zeta", "path": display(ok), "state": "ok", "pinned": OWN, "pinned_origin": "cortex.toml",
+             "reads": OWN, "layout": None, "why": None}])
         proc = self.run_cortex(self.tmp, "project", "list")
         self.assert_ok(proc)
         width, pinned = len("no-project"), max(len("PINNED"), len(OWN))       # OWN is a binary's version

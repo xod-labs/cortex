@@ -100,11 +100,21 @@ class ServiceBoundaryTests(unittest.TestCase):
                 self.assertEqual(run.system_prompt, resolve_run(RunRequest(workspace="host", role="lead-backend"), ROOT).system_prompt)
 
     def test_agents_is_no_service(self):
-        # The workspace's agents/ holds the cascade and ADR-006's team tier: never a service.
-        for service in ("agents", "agents/roles"):
+        # The workspace's agents/ holds the cascade and ADR-006's team tier: never a service — as written, as 1.7.0
+        # refused it, and as the disk opens it: Agents on macOS or Windows, a folder of its own on Linux (§9).
+        ignores_case = (ROOT / "AGENTS").exists()
+        for service in ("agents", "agents/roles", "./agents/"):
             with self.subTest(service=service):
                 with self.assertRaisesRegex(ValueError, "agents/"):
                     resolve_run(RunRequest(workspace="host", role="lead-backend", service=service), ROOT)
+        for service in ("Agents", "AGENTS/roles"):
+            with self.subTest(service=service):
+                request = RunRequest(workspace="host", role="lead-backend", service=service)
+                if ignores_case:
+                    with self.assertRaisesRegex(ValueError, "agents/"):
+                        resolve_run(request, ROOT)
+                else:
+                    resolve_run(request, ROOT)      # no such folder here: a service that reads nothing, as in 1.7.0
 
     def test_a_service_path_is_normalised(self):
         run = resolve_run(RunRequest(workspace="host", role="lead-backend", service="./svc-a/"), ROOT)

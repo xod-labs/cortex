@@ -181,3 +181,13 @@ These items are **dependent on this ADR** but tracked separately:
 - [cortex/agents/workflows/README.md](../../agents/workflows/README.md) — Pre-existing workflow cascade (the model for this generalization)
 - [cortex/docs/extending-layers.md](../extending-layers.md) — User-facing reference for the cascade
 - [cortex/CONTRIBUTING.md](../../CONTRIBUTING.md) — How to contribute, including overlay creation
+
+## 8. Amendments
+
+### 2026-11-07 — The services table, below the end marker
+
+- **Workspace mode** (§3.5). Since 1.7.0, a workspace declares its services table below the end marker of its bootstrap, where `cortex upgrade` and `cortex init --force` keep it — or not at all: the services are then the workspace's folders that hold a `project-overview.md` — `agents/` and `cortex/` aside — each with its `@alias` line ([ADR-012](ADR-012-bootstrap-block.md) §3.5 and §9). The Prompt Manager finds the table there, or none, and tells workspace mode by the workspace template; step 4.2 of that template lists the `@alias` values from the table, or from those folders. Carried by [#329](https://github.com/xod-labs/cortex/issues/329).
+
+### 2026-11-08 — ADR-013, the configuration cascade
+
+- **The workspace overlay is read from the team's folder** (§3.1). `"agents/" + layer + "/" + fileRelPath` reads the team's folder: `agents/`, unless the project's committed `cortex.toml` renames it with `agents` ([ADR-013](ADR-013-configuration-cascade.md) §3.6) — `agents = "team-agents"` reads `team-agents/roles/…`. The base's `cortex/agents/` and a service's `{service}/agents/` stay as they are, and so do the `Base:` headers. The bootstrap's steps name the team's folder where they said `agents/` (ADR-013 §3.10), as `agents/roles/prompt-manager.md` and `agents/workflows/README.md` now do; the services a workspace finds leave the team's folder out, as they left out `agents/`. Without `agents`, the resolution is unchanged. Carried by [#336](https://github.com/xod-labs/cortex/issues/336).

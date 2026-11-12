@@ -9,20 +9,31 @@ ADR extends, and a typo that silently does nothing is the failure they must not 
 
 ``cortex.lock``, next to ``cortex.toml`` and committed, is the spec the project resolved: its
 version and its digest (ADR-010 §3.2). ``cortex sync`` writes it whole; nobody edits it.
+
+What a project reads of each key — the local file's over ``cortex.toml``'s, over the team's
+``cortex.team.toml`` in its folder — is the core's resolution (``cortex_core.cascade``, ADR-013
+§3.1), the one the runtime reads with too. Its version is the higher of the team's and the
+developer's (§3.3); the lock of a version is beside the file it comes from (§3.4).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
+import shutil
+import subprocess
 import tomllib
+from pathlib import Path
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
-from cortex_core import project
-from cortex_core.project import LOCAL_FILE, LOCK_FILE, MODES, PROJECT_FILE  # noqa: F401 — part of this module's API
+from cortex_core import cascade, project, workspace
+from cortex_core.project import (LOCAL_FILE, LOCK_FILE, MODES, PROJECT_FILE, TEAM_FILE, TEAM_FOLDER,  # noqa: F401
+                                  TEAM_LOCK_FILE)
 
+from . import store
 from .semver import Version
 
 PROJECT_HEADER = "# Written by `cortex init`. Committed: the Cortex version this project uses, and the team's theme.\n"
@@ -35,26 +46,123 @@ class ConfigError(Exception):
     """A configuration file cortex refuses — the message names the file and the key."""
 
 
-@dataclass
+TEAM_NAME = cascade.TEAM_NAME
+TEAM_LOCK_NAME = f"{TEAM_FOLDER}/{TEAM_LOCK_FILE}"
+
+
+@dataclass(frozen=True)
 class Project:
     root: str                  # the directory holding cortex.toml, as the shell names it
-    version: Version
-    theme: str
+    version: Version           # what this machine reads: the higher of the team's version and the developer's
+    theme: Optional[str]       # cortex.toml's, when set — a team's file may give it instead
     sync: Optional[str]        # cortex.toml's sync, when set
     local_theme: Optional[str]
     spec: Optional[str]        # cortex.local.toml's spec, when synced
     claude_access: Optional[bool] = None        # cortex.toml's, when set
     local_claude_access: Optional[bool] = None  # cortex.local.toml's, which wins
     claude_entry: Optional[str] = None          # the entry sync keeps in Claude Code's settings
+    settings: Optional[cascade.Resolution] = None   # the project's keys, each with its origin, as load resolved them
+    team_settings: Optional[cascade.Resolution] = None  # the team's resolution: what the team commits follows
+    synced: Optional[Dict[str, str]] = None     # what `cortex sync` recorded (ADR-013 §3.1)
+    synced_unread: bool = False                 # a synced that does not read, which the sync rewrites
+    inputs: Optional[Tuple] = None              # what load resolved from: the files' data, and committed
+    team_folder: str = TEAM_FOLDER              # the team's folder, as cortex.toml's `agents` names it (ADR-013 §3.6)
+
+    @property
+    def team_dir(self) -> str:
+        """The team's folder, under the project root: where the team's file, its lock, the workspace's
+        overlays, the team's context files and the project's own themes are."""
+        return os.path.join(self.root, self.team_folder)
+
+    @property
+    def team_name(self) -> str:
+        """The team's file, as the project root names it."""
+        return cascade.team_name(self.team_folder)
+
+    @property
+    def team_lock_name(self) -> str:
+        return f"{self.team_folder}/{TEAM_LOCK_FILE}"
+
+    def _settings(self) -> cascade.Resolution:
+        """The resolution ``load`` made — or, of a project another reader built, the one its fields make."""
+        return self.settings if self.settings is not None else _resolved(self)
 
     @property
     def active_theme(self) -> str:
-        return self.local_theme or self.theme
+        return str(self._settings().value("theme"))
+
+    @property
+    def version_origin(self) -> str:
+        """The file the version this machine reads comes from."""
+        return self._settings()["version"].origin
+
+    @property
+    def team_version(self) -> Version:
+        """The team's version (ADR-013 §3.1): what the team commits follows, and what CI checks."""
+        found = self._settings().team_version
+        return Version(str(found.value)) if found is not None else self.version
+
+    @property
+    def team_origin(self) -> str:
+        found = self._settings().team_version
+        return found.origin if found is not None else PROJECT_FILE
+
+    @property
+    def developer_version(self) -> Optional[cascade.Setting]:
+        return self._settings().developer_version
+
+    def by_hand(self, origin: Optional[str]) -> object:
+        """Whether the version from ``origin`` is this developer's ``cortex.toml``'s, which no command
+        writes (``by_hand``)."""
+        return by_hand(self._settings(), origin)
+
+    @property
+    def team_file(self) -> bool:
+        """The team's file is read: there, and the team's version 1.8.0 or later."""
+        return self._settings().team
+
+    @property
+    def team_theme(self) -> str:
+        """The theme of the team's resolution: what a committed bootstrap's personality block follows."""
+        return str((self.team_settings or self._settings()).value("theme"))
+
+    @property
+    def pins_its_own(self) -> bool:
+        """``cortex.toml`` holds a committed ``version``: the project pins its own (decision 24)."""
+        found = self._settings()
+        return bool(found.committed) and "project" in found.candidates
+
+    @property
+    def follows(self) -> bool:
+        """The project follows the team's file (ADR-013 §3.1): there is one, and ``cortex.toml`` holds no
+        committed ``version`` — an uncommitted one, at a 2.B root, included."""
+        return self.team_file and not self.pins_its_own
+
+    def lock_dir(self, origin: Optional[str] = None) -> Optional[str]:
+        """Where the lock of the version from ``origin`` — the version read, by default — is
+        (ADR-013 §3.4): beside ``cortex.toml``, beside the team's file, or nowhere for a local try."""
+        origin = origin or self.version_origin
+        if origin == LOCAL_FILE:
+            return None
+        return self.team_dir if origin == self.team_name else self.root
 
     @property
     def active_claude_access(self) -> Optional[bool]:
         """``None`` while neither file sets it: Claude Code's settings are then left alone."""
-        return self.claude_access if self.local_claude_access is None else self.local_claude_access
+        return self._settings().value("claude_access")     # type: ignore[return-value]
+
+    def with_claude_access(self, value: bool) -> "Project":
+        """This project with this developer's ``claude_access`` — ``cortex sync --claude-access``, written
+        with ``spec`` — over ``cortex.toml``'s: resolved again from the files ``load`` read, the team's
+        file and its lock with them."""
+        if self.inputs is None:
+            changed = dataclasses.replace(self, local_claude_access=value, settings=None)
+            return dataclasses.replace(changed, settings=_resolved(changed))
+        data, local, team, known = self.inputs
+        local = {**local, "claude_access": value}
+        settings, team_settings = _resolve_both(data, local, team, known, self.team_folder)
+        return dataclasses.replace(self, local_claude_access=value, settings=settings, team_settings=team_settings,
+                                   inputs=(data, local, team, known))
 
     def spec_directory(self) -> Optional[str]:
         """The directory ``spec`` names: absolute as written, or relative to the project root."""
@@ -62,6 +170,15 @@ class Project:
             return None
         spec = self.spec
         return spec if os.path.isabs(spec) else f"{self.root}/{spec}"
+
+
+def _resolved(found: Project) -> cascade.Resolution:
+    data = {**({"version": str(found.version)} if found.version is not None else {}), "theme": found.theme or "none",
+            **({"sync": found.sync} if found.sync else {}),
+            **({"claude_access": found.claude_access} if found.claude_access is not None else {})}
+    local = {**({"theme": found.local_theme} if found.local_theme else {}),
+             **({"claude_access": found.local_claude_access} if found.local_claude_access is not None else {})}
+    return cascade.resolve(data, local, {}, {}, machine=False)
 
 
 @dataclass
@@ -82,34 +199,454 @@ def find_project(start: str) -> Optional[str]:
         current = parent
 
 
-def _read(path: str) -> Dict:
+def _read(path: str, name: Optional[str] = None) -> Dict:
+    """The TOML file at ``path``, named ``name`` — its file name, by default — in what it refuses."""
+    name = name or os.path.basename(path)
     try:
         with open(path, "rb") as fh:
             text = fh.read().decode("utf-8-sig")    # a byte order mark, as Notepad writes one
     except UnicodeDecodeError:
-        raise ConfigError(f"{os.path.basename(path)}: not UTF-8 text")
+        raise ConfigError(f"{name}: not UTF-8 text")
     try:
         return tomllib.loads(text)
     except tomllib.TOMLDecodeError as error:
-        raise ConfigError(f"{os.path.basename(path)}: {error}")
+        raise ConfigError(f"{name}: {error}")
 
 
-def load(root: str) -> Project:
-    """Read and validate both files of the project at ``root`` — with the core's grammar, which
-    the runtime reads them with too."""
-    data = _read(os.path.join(root, PROJECT_FILE))
-    local = {}
+# The variables that point git at one repository — a copy of what `git rev-parse --local-env-vars` lists (git
+# 2.43), which a hook exports — and those that change how a pathspec matches. Git asked about a project runs without
+# them, from the project's folder: a hook's GIT_DIR would make it answer of another repository. The configuration
+# given by GIT_CONFIG_COUNT and GIT_CONFIG_PARAMETERS stays, as git keeps it itself on its way to another repository
+# (prepare_other_repo_env): a CI's identity, its safe.directory. The others stay too — the author's name, the
+# transport.
+GIT_LOCAL = frozenset({
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG",
+    "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
+    "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS",
+})
+
+
+def git_environment() -> Dict[str, str]:
+    """The environment git runs in, asked about a project: this process's, without ``GIT_LOCAL``."""
+    return {key: value for key, value in os.environ.items() if key.upper() not in GIT_LOCAL}
+
+
+def in_no_repository(root) -> bool:
+    """No ``.git`` at ``root`` or above it — as written or resolved, git or not on this machine: what Cortex
+    writes there is committed nowhere, the root being no work tree (ADR-008 §9)."""
+    return not any(os.path.lexists(os.path.join(directory, ".git"))
+                   for start in {str(root), os.path.realpath(root)}
+                   for directory in (start, *map(str, Path(start).parents)))
+
+
+def committed(root) -> bool:
+    """Whether ``cortex.toml`` at ``root`` is committed (ADR-013 §3.1): git tracks it — ADR-011 §3.5's
+    test. Without git on ``PATH``, or with a git that refuses — a repository another user owns, say —
+    a ``.git`` at or above the root counts. A ``cortex.toml`` git does not track, in a repository, is
+    not committed: the developer's own. Git is asked of the root's own repository, without the variables
+    that point it at one (``GIT_LOCAL``) — a hook exports ``GIT_DIR``, which would make it another's —
+    and of the file's name as written, no pattern."""
+    git = shutil.which("git")
+    if git is not None:
+        try:
+            proc = subprocess.run([git, "-C", str(root), "ls-files", "--error-unmatch", "--",
+                                   f":(literal){PROJECT_FILE}"], capture_output=True, timeout=30,
+                                  env=git_environment())
+        except (OSError, subprocess.SubprocessError):
+            proc = None
+        if proc is not None and proc.returncode in (0, 1):
+            return proc.returncode == 0                     # 1: a pathspec git does not know — untracked
+    return not in_no_repository(root)
+
+
+def team_folder_state(root: str, folder: str = TEAM_FOLDER) -> Optional[str]:
+    """What is wrong with the team's folder ``folder`` — ``agents/`` by default — as a version-less
+    ``cortex.toml`` needs it, or a named one is read: ``None`` when nothing; missing, or an empty
+    directory, a submodule not checked out."""
+    path = os.path.join(root, folder)
+    if not os.path.isdir(path):
+        return f"{folder}/ is not there"
     try:
-        project.check_project(data)
-        if os.path.isfile(os.path.join(root, LOCAL_FILE)):
-            local = _read(os.path.join(root, LOCAL_FILE))
-            project.check_local(local)
+        if not os.listdir(path):
+            return f"{folder}/ is empty"
+    except OSError:
+        return None
+    return None
+
+
+def _missing_team_folder(root: str, folder: str = TEAM_FOLDER) -> None:
+    """Refuse a ``cortex.toml`` without ``version`` whose team's folder is missing or empty — a submodule
+    not checked out — naming the folder (ADR-013 §3.4), which the bootstrap's rule has the assistant say."""
+    try:
+        written = _read(os.path.join(root, PROJECT_FILE))
+    except (OSError, ConfigError):
+        return
+    if "version" in written or cascade.team_file_there(root, folder):
+        return
+    try:
+        project.check_project(written, ("version", "theme"))
+    except project.ProjectFileError:
+        return                          # another fault of the file, which its own error says
+    missing = team_folder_state(root, folder)
+    if missing is not None:
+        raise ConfigError(f'{PROJECT_FILE}: "version" is required, or in {cascade.team_name(folder)} — {missing}: '
+                          "check it out, a submodule with `git submodule update --init`")
+
+
+def team_folder(root: str, known: Optional[bool] = None) -> Tuple[str, Optional[bool]]:
+    """The team's folder of the project at ``root`` — ``agents`` unless ``cortex.toml`` renames it — and
+    whether ``cortex.toml`` is committed, when that was asked (ADR-013 §3.6, §3.8 step 1): ``agents`` is
+    read before any other key, its text checked, from a committed ``cortex.toml`` only — at a 2.B root,
+    where git tracks none, it would be one machine's. ``known`` is that answer, asked already. A
+    ``ConfigError`` for an ``agents`` refused: by its text, uncommitted, inside a service, or holding a
+    project's ``cortex.toml``."""
+    written = cascade.loose_agents(root)
+    if written is None:
+        return TEAM_FOLDER, known
+    try:
+        folder = project.check_agents(written)
     except project.ProjectFileError as error:
         raise ConfigError(str(error))
-    return Project(root=root, version=Version(data["version"]), theme=data["theme"], sync=data.get("sync"),
-                   local_theme=local.get("theme"), spec=local.get("spec"),
+    if folder == TEAM_FOLDER:
+        return folder, known                # the default, named: never refused (ADR-013 §3.6)
+    known = committed(root) if known is None else known
+    if not known:
+        # Uncommitted, the team's version is the team's file's, else cortex.toml's: before 1.8.0, that is what to
+        # move, before anything is committed (§3.8, step 3).
+        loose = cascade.loose_versions(root)
+        version = (loose.get("team") or loose.get("project") or (None, None))[1]
+        if version is not None and project.is_version(version) and project.before_team(version):
+            raise ConfigError(project.agents_before(version))
+        raise ConfigError(project.AGENTS_UNCOMMITTED)
+    try:
+        workspace.check_team_folder(root, folder)
+    except project.ProjectFileError as error:
+        raise ConfigError(str(error))
+    return folder, known
+
+
+def loose_team_folder(root: str) -> str:
+    """The team's folder read loosely — what a too-new version is said from, ``cortex prune`` and the
+    registry read: a committed ``cortex.toml``'s ``agents``, else ``agents``. Read before its text is
+    checked (ADR-013 §3.8, step 1): a folder this version refuses for its name — ``.team`` — a later
+    one may take, and its team's file may pin that version; only what names no folder inside the
+    workspace, nor one any version reads, leaves ``agents``. Never a refusal: ``load`` says it, once
+    the version passed the gate."""
+    written = cascade.loose_agents(root)
+    if written is None:
+        return TEAM_FOLDER
+    try:
+        folder = project.check_agents(written, loose=True)
+    except project.ProjectFileError:
+        return TEAM_FOLDER
+    return folder if committed(root) else TEAM_FOLDER
+
+
+def _resolve_both(data, local, team, known, folder: str = TEAM_FOLDER) -> Tuple[cascade.Resolution, cascade.Resolution]:
+    name = cascade.team_name(folder)
+    settings = cascade.resolve(data, local, {}, {}, machine=False, team_data=team, committed=known, team_name=name)
+    team_settings = cascade.resolve(data, local, {}, {}, machine=False, team_data=team, committed=known, locked=True,
+                                    team_name=name)
+    return settings, team_settings
+
+
+def load(root: str, lenient: bool = False) -> Project:
+    """Read and validate the files of the project at ``root`` — with the core's reader and grammar,
+    which the runtime reads them with too — and resolve its keys once, and the team's resolution.
+    Whether ``cortex.toml`` is committed is asked of git only where a team's file is there: without
+    one, the answer changes nothing (ADR-013 §3.1). ``lenient`` — the sync, which rewrites it — reads
+    a ``synced`` that does not check as none, instead of refusing it."""
+    folder, known = team_folder(root)
+    try:
+        try:
+            data, found = cascade.read_project(root, lenient=lenient, folder=folder)
+        except project.ProjectFileError:
+            _missing_team_folder(root, folder)
+            raise
+        team = cascade.read_team(root, folder)
+        if known is None and team is not None:
+            known = committed(root)
+        local = found or {}
+        settings, team_settings = _resolve_both(data, local, team, known, folder)
+    except project.ProjectFileError as error:
+        raise ConfigError(str(error))
+    synced = local.get("synced")
+    unread = synced is cascade.UNREADABLE_SYNCED
+    return Project(root=root, version=Version(str(settings.value("version"))), theme=data.get("theme"),
+                   sync=data.get("sync"), local_theme=local.get("theme"), spec=local.get("spec"),
                    claude_access=data.get("claude_access"), local_claude_access=local.get("claude_access"),
-                   claude_entry=local.get("claude_entry"))
+                   claude_entry=local.get("claude_entry"), settings=settings, team_settings=team_settings,
+                   synced=dict(synced) if synced is not None and not unread else None, synced_unread=unread,
+                   inputs=(data, local, team, known), team_folder=folder)
+
+
+def loose_pin(root: str) -> Optional[Tuple[str, Version]]:
+    """The file the version the project resolves comes from, and that version, read before any other
+    key is checked (ADR-013 §3.8, step 1) — ``None`` when none reads. The rules of §3.1 on the files'
+    versions alone: a committed ``cortex.toml``'s wins over the team's file, and the developer's over
+    the team's when it is higher. Git is asked only where a team's file is there, or ``agents``."""
+    found = cascade.loose_versions(root, loose_team_folder(root))
+    if not found:
+        return None
+    pin, team, local = found.get("project"), found.get("team"), found.get("local")
+    own = pin is not None and (team is None or committed(root))
+    chosen = pin if own else team or pin
+    for developer in (local, pin if not own and team is not None else None):
+        if developer is not None and (chosen is None or Version(developer[1]) > Version(chosen[1])):
+            chosen = developer
+    return None if chosen is None else (chosen[0], Version(chosen[1]))
+
+
+def loose_team(root: str) -> Optional[Tuple[str, Version]]:
+    """The team's version read loosely, with the file it comes from (ADR-013 §3.1): a committed
+    ``cortex.toml``'s, else the team's file's, else an uncommitted ``cortex.toml``'s — what
+    ``cortex project list`` gives as ``PINNED`` of a project it cannot read whole."""
+    found = cascade.loose_versions(root, loose_team_folder(root))
+    pin, team = found.get("project"), found.get("team")
+    chosen = pin if pin is not None and (team is None or committed(root)) else team or pin
+    return None if chosen is None else (chosen[0], Version(chosen[1]))
+
+
+def by_hand(found: Optional[cascade.Resolution], origin: Optional[str]) -> object:
+    """Whether the version from ``origin`` is this developer's ``cortex.toml``'s: not committed, beside a
+    team's file that is read — pinning a version or none, at a 2.B root (ADR-013 §3.1). No command writes
+    it: a plain ``cortex upgrade`` moves no project that follows the team's file, ``--local`` writes a try
+    and ``--team`` the team's file — a pin of no release there is moved by hand (``store.pin_remedy``).
+    ``store.TEAM_PINS_NONE`` when the team's file pins no version — or, read loosely, when that is not
+    known: the remedy then names no removal, which would leave no version to read."""
+    if found is None or origin != PROJECT_FILE or not found.team or found.committed:
+        return False
+    pins = found.team_version is not None and found.team_version.origin != PROJECT_FILE
+    return True if pins else store.TEAM_PINS_NONE
+
+
+def loose_team_file(root: str) -> bool:
+    """Whether the team's file is there, in the team's folder read loosely (ADR-013 §3.8, step 1) — read or not: a
+    directory, a link that leads nowhere, or in a folder this user cannot search is there too (§3.5). No caller tells
+    those from a file: each refuses a file there and unread first (``team_refusal``), or reads a version it does not
+    weigh (a try's, a committed pin's) — so ``os.path.isfile`` would answer the same on every path that reaches it."""
+    return cascade.team_file_there(root, loose_team_folder(root))
+
+
+def team_refusal(root: str) -> Optional[Tuple[str, bool]]:
+    """Why every command refuses the team's file, in the team's folder read loosely — it does not read, or its grammar
+    refuses it (ADR-013 §3.5) — and whether a later release may take it: a key this cortex does not know. ``None``
+    when it is not there, reads and checks, or is not read: a committed ``cortex.toml`` before 1.8.0 — or one not
+    committed beside a team's file that pins none — makes the team's version cortex.toml's, which reads nothing of it
+    (§3.8, step 3). A version too new is said before any key is checked (step 2), but no command moves a pin while
+    the file is refused: each refuses it first."""
+    folder = loose_team_folder(root)
+    found = cascade.read_team(root, folder)
+    if found is None:
+        return None
+    pin = cascade.loose_versions(root, folder).get("project")
+    pinless = isinstance(found, dict) and "version" not in found
+    if pin is not None and project.before_team(pin[1]) and (pinless or committed(root)):
+        return None
+    return _refused(found, folder)
+
+
+def team_file_refusal(root: str) -> Optional[Tuple[str, bool]]:
+    """``team_refusal`` as a version that reads the team's file says it — where the project's version, before 1.8.0,
+    reads nothing of it yet: what a move to 1.8.0 or later refuses first, with the remedy of that file (§3.5)."""
+    folder = loose_team_folder(root)
+    found = cascade.read_team(root, folder)
+    return None if found is None else _refused(found, folder)
+
+
+def _refused(found: object, folder: str) -> Optional[Tuple[str, bool]]:
+    """Why the team's file read as ``found`` is refused — it does not read, or its grammar refuses it — and whether a
+    later release may take it: a key this cortex does not know. ``None`` when it checks."""
+    if isinstance(found, cascade.Unreadable):
+        return found.error, False
+    later = any(key not in project.TEAM_KEYS for key in found) and "agents" not in found
+    try:
+        project.check_team(found, cascade.team_name(folder))
+    except project.ProjectFileError as error:
+        return str(error), later
+    return None
+
+
+# How a try no ``--local`` moves is moved (``try_unmoved``): by a later release, by a fix of cortex.toml, by hand.
+LATER, REFUSED, BY_HAND = "later", "refused", "by hand"
+
+
+def try_unmoved(root: str) -> Optional[Tuple[str, str]]:
+    """Why no ``cortex upgrade --local`` moves or drops the try of the project at ``root`` — what to do instead — and
+    how it is moved; ``None`` when ``--local`` does (ADR-013 §3.8). ``LATER``: the team's folder is one this cortex
+    does not take by its name, ``.team``, which a later release may. ``REFUSED``: ``cortex.toml``'s ``agents`` is
+    refused, every command refusing it first — its own remedy said. ``BY_HAND``: the team's version is before 1.8.0,
+    which reads no try, refused at every move; or newer than this cortex too, which ``--local`` reads once the try is
+    removed, and refuses; or none — the try is removed by hand, another way than updating."""
+    folder = loose_team_folder(root)
+    if not takes_folder(folder):            # .team: a later release may take it, which updating brings (§3.8, step 1)
+        return (f"no command of this cortex moves the try: it does not take the team's folder {folder}/, which a later "
+                "release may", LATER)
+    refused = _team_pin_refused(root, folder)
+    if refused is not None:
+        return f"no command moves the try while {PROJECT_FILE} is refused — {refused}", REFUSED
+    teams = loose_team(root)
+    if teams is None:
+        # A try is read above the team's version only: no file pins one, so no --local reads the project (§3.1).
+        return (f"drop the try by hand: remove `version` from {LOCAL_FILE}, and pin the team's version in "
+                f"{PROJECT_FILE} or {cascade.team_name(folder)} — neither pins one, and a try is read above it only",
+                BY_HAND)
+    if project.before_team(str(teams[1])):
+        return (f"drop the try by hand: remove `version` from {LOCAL_FILE} — the team's version, {teams[1]}, is "
+                f"before {project.FIRST_TEAM_VERSION}, which reads none", BY_HAND)
+    own = store.own_version()
+    # --local at or below the team's version removes the try, then reads the higher of the team's version and this
+    # developer's own cortex.toml (§3.1) — refused when too new, the removal put back: the try is removed by hand.
+    found = cascade.loose_versions(root, folder).get("project") if developers_toml(root) is True else None
+    mine = Version(found[1]) if found is not None else None
+    if mine is not None and mine > teams[1] and store.too_old_for(mine, own):
+        return (f"drop the try by hand: remove `version` from {LOCAL_FILE}, and {mine_by_hand(mine)}", BY_HAND)
+    if store.too_old_for(teams[1], own):
+        # The team's pin moved then, as the run after the edit says.
+        return (f"drop the try by hand: remove `version` from {LOCAL_FILE} — the team's version, {teams[1]}, is newer "
+                "than this cortex too, which `cortex upgrade --local` would read once the try is removed, and refuse",
+                BY_HAND)
+    return None
+
+
+def mine_by_hand(mine: object) -> str:
+    """The edit of this developer's own ``cortex.toml``, of version ``mine`` — newer than this cortex, read above the
+    team's once a try is removed (§3.1): uncommitted beside the team's file, no command writes it."""
+    return (f"set {PROJECT_FILE}'s version, {mine}, to one this cortex serves, or remove it to read the team's — "
+            "uncommitted beside the team's file, it is this developer's, which no command writes")
+
+
+def fix_team_file(unread: str) -> str:
+    """The remedy for the team's file that does not read, ``unread``: no command reads the project as it is."""
+    return f"fix or restore the team's file: no command reads the project while it does not — {unread}"
+
+
+def developers_toml(root: str, name: str = PROJECT_FILE) -> object:
+    """``by_hand``, read loosely — the files before any key is checked: ``name`` is ``cortex.toml``, not
+    committed, beside a team's file, which pins a version — or none, ``store.TEAM_PINS_NONE``."""
+    if name != PROJECT_FILE or not loose_team_file(root) or committed(root):
+        return False
+    return True if "team" in cascade.loose_versions(root, loose_team_folder(root)) else store.TEAM_PINS_NONE
+
+
+def too_new(root: str, own: Version) -> Optional[str]:
+    """Why this cortex is too old for the project at ``root`` — or ``None`` — from the versions read
+    before any other key (ADR-013 §3.8, steps 1–2): a key of a later version is then said as the
+    version it comes with, which ``cortex self-update`` brings, not as a key this cortex does not
+    know. Said as the store says it, which the bootstrap's rule acts on — and the file that holds the
+    version, with its other remedy: ``--local`` for a try, ``--team`` for the team's pin."""
+    found = loose_pin(root)
+    if found is None or not store.too_old_for(found[1], own):
+        return None
+    name, version = found
+    refusal = team_refusal(root)
+    if store.development(version):          # no self-update installs it: the pin moves (ADR-009 §9)
+        return (f"this project uses Cortex {version}, which its {name} pins — a build of no release, newer than "
+                f"this cortex, {own}: {pin_a_release(root, name) if refusal is None else fix_team_file(refusal[0])}")
+    update = (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
+              f"    {store.update_command(version)}")
+    if refusal is not None:
+        # Every move refuses that file first: a try dropped, a pin moved — none is named before it reads (§3.5). A key
+        # this cortex does not know, a later release may: the update alone, which takes it.
+        return update if refusal[1] else f"{update}\nand {fix_team_file(refusal[0])}"
+    teams = loose_team(root)
+    # A build of no release names no version of its own to move to: no teammate can download it (ADR-009 §9).
+    down = "VERSION" if store.development(own) else str(own)
+    folder = name[:-len(TEAM_FILE) - 1] if name.endswith(f"/{TEAM_FILE}") else None
+    unmoved = try_unmoved(root) if name == LOCAL_FILE else None
+    other = (f"\n{'or ' if unmoved[1] == BY_HAND else ''}{unmoved[0]}" if unmoved is not None else
+             f"\nor drop the try: cortex upgrade --local {teams[1]}" if name == LOCAL_FILE else
+             f"\nor move the team's pin: cortex upgrade --team {down}"
+             if folder is not None and moves_team_pin(root, folder, own) else
+             f"\nor {mine_by_hand(version)}" if developers_toml(root, name) is True else "")
+    return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
+            f"    {store.update_command(version)}{other}")
+
+
+def pin_a_release(root: str, name: str) -> str:
+    """How the pin of no release ``name`` holds is moved to a release, on a line of its own: by a command, or by
+    hand — a developer's ``cortex.toml`` (``developers_toml``), or a team's file in a folder this cortex does not
+    take, or one ``--team`` refuses for ``cortex.toml``'s ``agents`` (``release_remedy``)."""
+    unmoved = try_unmoved(root) if name == LOCAL_FILE else None
+    return (unmoved[0] if unmoved is not None else None) or _in_a_refused_folder(name, root) \
+        or store.pin_remedy(name, developers_toml(root, name), block=True)
+
+
+def release_remedy(found: Optional[cascade.Resolution], origin: str, block: bool = False,
+                   root: Optional[str] = None) -> str:
+    """``pin_a_release`` of the resolution ``found``: the pin of no release ``origin`` holds moved by a command
+    (``store.pin_remedy``), or by hand — a developer's ``cortex.toml`` (``by_hand``), or a team's file in a folder
+    this cortex does not take, ``.team``, read for its version alone: no ``--team`` of it moves the pin (§3.8) — nor,
+    ``root`` given, of one ``cortex.toml``'s ``agents`` makes ``--team`` refuse, as a resolution read loosely has."""
+    refusal = team_refusal(root) if root is not None else None
+    if refusal is not None:                 # no command moves the pin before that file reads (§3.5)
+        return fix_team_file(refusal[0])
+    unmoved = try_unmoved(root) if root is not None and origin == LOCAL_FILE else None
+    return (unmoved[0] if unmoved is not None else None) or _in_a_refused_folder(origin, root) \
+        or store.pin_remedy(origin, by_hand(found, origin), block)
+
+
+def _in_a_refused_folder(name: str, root: Optional[str] = None) -> Optional[str]:
+    """The edit that pins a release in ``name``, a team's file no ``--team`` of this cortex moves: in a folder it does
+    not take by its name, ``.team``, which only a later release may take — a release this cortex serves would be
+    refused there too — or, ``root`` given, in the folder the version gate read where ``cortex.toml``'s ``agents`` is
+    refused: inside a service, naming no folder inside the workspace, or not committed (§3.8, step 1)."""
+    folder = name[:-len(TEAM_FILE) - 1] if name.endswith(f"/{TEAM_FILE}") else None
+    if folder is None:
+        return None
+    if not takes_folder(folder):
+        return (f"pin a release by hand: set {name}'s version to a release newer than this cortex, one that takes the "
+                f"folder {folder}/ — this cortex does not take it, so no command of it moves the team's pin")
+    why = None if root is None else _team_pin_refused(root, folder)
+    if why is None:
+        return None
+    return f"pin a release by hand: set {name}'s version to one — no command of this cortex moves the team's pin: {why}"
+
+
+def _team_pin_refused(root: str, folder: str) -> Optional[str]:
+    """Why ``cortex upgrade --team`` refuses to move the pin of the team's file in ``folder``, which the version gate
+    read — ``None`` when it moves it: ``cortex.toml``'s ``agents`` refused. Taken, it names the folder the gate read:
+    both read the same ``agents``, committed or not (``loose_team_folder``)."""
+    try:
+        team_folder(root)
+    except ConfigError as error:
+        return str(error)
+    return None
+
+
+def moves_team_pin(root: str, folder: str, own: Version) -> bool:
+    """Whether ``cortex upgrade --team VERSION`` moves the pin of the team's file in ``folder`` — the one the version
+    gate read — to a version this cortex serves (ADR-013 §3.8, steps 1–2): ``--team`` takes that folder, none of
+    ``cortex.toml``'s ``agents`` refused, and a release that reads the team's file is this cortex's or below it — none
+    from a build of no release that prepares 1.8.0, below 1.8.0 and its candidates (ADR-009 §9)."""
+    if store.prepares_before_team(own):
+        return False
+    return takes_folder(folder) and _team_pin_refused(root, folder) is None
+
+
+def takes_folder(folder: str) -> bool:
+    """Whether this cortex takes the team's folder by its name — a folder only a later version may take,
+    ``.team``, read for its version alone (§3.8, step 1), it cannot move the team's pin in."""
+    try:
+        project.check_agents(folder)
+    except project.ProjectFileError:
+        return False
+    return True
+
+
+def local_spec(root: str) -> Optional[str]:
+    """The ``spec`` of ``cortex.local.toml`` at ``root``, read alone: a project whose ``cortex.toml``
+    is gone keeps it (#328). ``None`` when the file is not there, names none, or cannot be read."""
+    path = os.path.join(root, LOCAL_FILE)
+    if not os.path.isfile(path):
+        return None
+    try:
+        local = _read(path)
+        project.check_local(local)
+    except (OSError, ConfigError, project.ProjectFileError):
+        return None
+    return local.get("spec")
 
 
 def toml_string(value: str) -> str:
@@ -118,6 +655,10 @@ def toml_string(value: str) -> str:
 
 
 def toml_value(value) -> str:
+    if isinstance(value, dict):
+        return "{ " + ", ".join(f"{key} = {toml_value(item)}" for key, item in value.items()) + " }"
+    if isinstance(value, list):
+        return "[" + ", ".join(toml_value(item) for item in value) + "]"
     return ("true" if value else "false") if isinstance(value, bool) else toml_string(value)
 
 
@@ -199,17 +740,47 @@ def render_spec(root: str, spec: str) -> str:
                     {"spec": "written by `cortex sync`"})
 
 
-def render_local(root: str, values: Dict[str, object], comments: Optional[Dict[str, str]] = None) -> str:
-    """``cortex.local.toml`` with each key of ``values`` set, or removed — see ``set_keys``."""
-    return set_keys(_read_text(os.path.join(root, LOCAL_FILE)), values, LOCAL_FILE, LOCAL_HEADER, comments)
+def render_local(root: str, values: Dict[str, object], comments: Optional[Dict[str, str]] = None,
+                 drop_synced: bool = False) -> str:
+    """``cortex.local.toml`` with each key of ``values`` set, or removed — see ``set_keys``. ``drop_synced``,
+    a ``synced`` that does not read is taken out first — a line, or a ``[synced]`` table with what it
+    holds: the sync's own cache, which it writes again (ADR-013 §3.1)."""
+    text = _read_text(os.path.join(root, LOCAL_FILE))
+    if "synced" in values and text is not None:
+        text = _without_synced(text, line=drop_synced)
+    return set_keys(text, values, LOCAL_FILE, LOCAL_HEADER, comments)
+
+
+def _without_synced(text: str, line: bool = False) -> str:
+    """``text`` without the forms of ``synced`` a line cannot rewrite — a ``[synced]`` table and the keys
+    it holds, its comments kept, a dotted ``synced.x`` key — and, ``line``, without its line too: the
+    sync writes it again, in its one-line form, where ``set_keys`` keeps it in place from then on."""
+    kept, inside = [], False
+    for row in text.splitlines(keepends=True):
+        stripped = row.strip()
+        if re.match(r"""^\[\s*(?:synced|"synced"|'synced')\s*[.\]]""", stripped):
+            inside = True
+            continue
+        if inside and stripped.startswith("["):
+            inside = False
+        if inside and (not stripped or stripped.startswith("#")):
+            kept.append(row)
+            continue
+        if inside or re.match(r"""^(?:synced|"synced"|'synced')\s*\.""", stripped) \
+                or (line and re.match(r"""^(?:synced|"synced"|'synced')\s*=""", stripped)):
+            continue
+        kept.append(row)
+    return "".join(kept)
 
 
 def render_project(root: str, values: Dict[str, object]) -> str:
     """``cortex.toml`` with each key of ``values`` set — a new file when there is none — checked
-    against the grammar before anything is written."""
+    against the grammar before anything is written: each key it holds. Whether ``version`` and ``theme``
+    are there, or the team's file's, is the reader's to say (``load``) — every caller writes them, or
+    has read a project that holds them or a team's file that gives them."""
     text = set_keys(_read_text(os.path.join(root, PROJECT_FILE)), values, PROJECT_FILE, PROJECT_HEADER)
     try:
-        project.check_project(tomllib.loads(text.lstrip("\ufeff")))
+        project.check_project(tomllib.loads(text.lstrip("\ufeff")), project.PROJECT_REQUIRED)
     except project.ProjectFileError as error:
         raise ConfigError(str(error))
     return text
@@ -242,15 +813,20 @@ def write_spec(root: str, spec: str) -> None:
     write_local_text(root, render_spec(root, spec))
 
 
-def load_lock(root: str) -> Optional[Lock]:
-    """The project's ``cortex.lock``, checked with the core's grammar; ``None`` when there is none."""
-    path = os.path.join(root, LOCK_FILE)
+def load_lock(root: str, name: str = LOCK_FILE, shown: Optional[str] = None, *,
+              writer: str = "`cortex sync`") -> Optional[Lock]:
+    """The project's ``cortex.lock`` — or the lock ``name`` names under ``root``, the team's in its
+    folder, ``shown`` as the project root names it — checked with the core's grammar; ``None`` when
+    there is none. ``writer`` is the command a lock that is no lock is deleted for: the sync, or — the
+    lock a try leaves — `cortex upgrade`."""
+    path = os.path.join(root, name)
     if not os.path.isfile(path):
         return None
-    again = "delete it, and `cortex sync` writes it again"     # a merge left conflict markers in it, say
+    again = f"delete it, and {writer} writes it again"     # a merge left conflict markers in it, say
+    shown_name = shown or (TEAM_LOCK_NAME if name == TEAM_LOCK_FILE else name)
     try:
-        data = _read(path)
-        project.check_lock(data)
+        data = _read(path, shown_name)
+        project.check_lock(data, shown_name)
     except ConfigError as error:
         raise ConfigError(f"{error} — {again}")
     except project.LaterFormatError as error:
@@ -266,5 +842,28 @@ def render_lock(version: Version, digest: str) -> str:
             + f"digest = {toml_string(digest)}\n")
 
 
-def write_lock(root: str, version: Version, digest: str) -> None:
-    write_text(os.path.join(root, LOCK_FILE), render_lock(version, digest))
+def write_lock(root: str, version: Version, digest: str, name: str = LOCK_FILE) -> None:
+    write_text(os.path.join(root, name), render_lock(version, digest))
+
+
+def lock_of(found: Project, origin: Optional[str] = None) -> Optional[Tuple[str, str, str]]:
+    """The lock of the version from ``origin`` — the version read, by default: its directory, its
+    name there, and how the project root names it — ``None`` for a local try, which has none."""
+    directory = found.lock_dir(origin)
+    if directory is None:
+        return None
+    team = os.path.normpath(directory) != os.path.normpath(found.root)
+    return (directory, TEAM_LOCK_FILE, found.team_lock_name) if team else (directory, LOCK_FILE, LOCK_FILE)
+
+
+def render_team(root: str, values: Dict[str, object], folder: str = TEAM_FOLDER) -> str:
+    """The team's ``cortex.team.toml`` in the team's folder ``folder`` with each key of ``values`` set —
+    ``cortex upgrade --team`` — checked against the grammar before anything is written."""
+    path = os.path.join(root, folder, TEAM_FILE)
+    name = cascade.team_name(folder)
+    text = set_keys(_read_text(path), values, name, "")
+    try:
+        project.check_team(tomllib.loads(text.lstrip("\ufeff")), name)
+    except project.ProjectFileError as error:
+        raise ConfigError(str(error))
+    return text

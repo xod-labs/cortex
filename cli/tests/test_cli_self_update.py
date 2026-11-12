@@ -30,7 +30,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
-from cortex_cli import binary, net, self_update, store, version  # noqa: E402
+from cortex_cli import binary, machine, net, self_update, store, version  # noqa: E402
 from cortex_cli.paths import display  # noqa: E402
 from cortex_cli.self_update import SelfUpdateError  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
@@ -152,6 +152,43 @@ class SelfUpdateTests(ReleaseTestCase):
                 self.assertEqual(piped.read[0], self.ELSEWHERE)
         self.assertEqual(self.update("9.9.8")[2], "")       # nothing downloaded: nothing to say
 
+    def test_the_machine_s_file_names_the_host_and_its_other_keys_only_warn(self):
+        # ADR-013 §3.7: config.toml in the Cortex home, read through a key this cortex does not know.
+        machine_file = Path(os.environ["CORTEX_HOME"]) / "config.toml"
+        machine_file.parent.mkdir(parents=True, exist_ok=True)
+        machine_file.write_text(f'releases_url = "{self.release.url}"\nself_update_later = true\n', encoding="utf-8")
+        self.addCleanup(machine_file.unlink)
+        self.latest_is("9.9.9")
+        warned = io.StringIO()
+        with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": ""}), mock.patch("sys.stderr", warned):
+            code, out, err = self.update("9.9.9", dry_run=True)
+        self.assertEqual(code, 0, err)
+        self.assertIn(f"note: downloading from {self.release.url}, set by {display(str(machine_file))} — ", err)
+        self.assertIn('unknown key "self_update_later", not read', warned.getvalue())
+
+    def test_a_releases_url_that_does_not_read_warns_and_the_download_goes_to_github(self):
+        machine_file = Path(os.environ["CORTEX_HOME"]) / "config.toml"
+        machine_file.parent.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: machine_file.exists() and machine_file.unlink())
+        for text, said in (("releases_url = [\n", "is not read"), ("releases_url = 3\n", '"releases_url" must be a string')):
+            with self.subTest(text=text):
+                machine_file.write_text(text, encoding="utf-8")
+                asked = []
+
+                def fetch(url, *args, **kwargs):
+                    asked.append(url)
+                    raise net.DownloadError("offline, in this test")
+
+                warned = io.StringIO()
+                machine._warned.clear()
+                with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": ""}), mock.patch("sys.stderr", warned), \
+                        self.assertRaisesRegex(SelfUpdateError, "offline, in this test"):
+                    self_update.self_update("9.9.9", True, io.StringIO(), io.StringIO(), binary=self.binary,
+                                            own=Version("9.9.8"), fetch=fetch, run=answer_of, system="Linux",
+                                            machine="x86_64")
+                self.assertTrue(asked and asked[0].startswith(store.DEFAULT_RELEASES_URL + "/"), asked)
+                self.assertIn(said, warned.getvalue())
+
     def test_the_host_is_said_before_the_first_request_to_it(self):
         for wanted in ("9.9.9", None):
             with self.subTest(wanted=wanted):
@@ -250,6 +287,14 @@ class SelfUpdateTests(ReleaseTestCase):
         self.assertEqual(code, 0)
         self.assertIn("note: Cortex 1.3.2 has no self-update — the install script moves it again:", err)
         self.assertIn("install.ps1" if os.name == "nt" else "install.sh | sh\n", err)
+
+    def test_a_downgrade_to_a_pre_release_of_the_first_with_self_update_names_no_install_script(self):
+        FakeRelease.publish(self.release.root / "download" / "1.4.0-rc.1", "1.4.0-rc.1")
+        # A pre-release has its release's features: 1.4.0's self-update.
+        code, _, err = self.update("1.4.0-rc.1", own="9.9.9", run=lambda path: "cortex 1.4.0-rc.1")
+        self.assertEqual(code, 0)
+        self.assertIn("note: a downgrade — a project pinned to a version after 1.4.0-rc.1 is now refused", err)
+        self.assertNotIn("self-update", err)
 
     def test_on_windows_a_downgrade_to_a_binary_without_self_update_says_the_old_one_stays(self):
         FakeRelease.publish(self.release.root / "download" / "1.3.2", "1.3.2")
@@ -736,6 +781,29 @@ class BuiltBinaryTests(ReleaseTestCase):
         self.assertIn(f"Installed cortex {TARGET} as {display(str(self.binary))}", proc.out)
         self.assertEqual(self.run_copy("--version").out, f"cortex {TARGET}\n")
         self.assertEqual(sorted(p.name for p in self.bin.iterdir()), [self.binary.name])
+
+    @POSIX
+    def test_a_machine_file_that_does_not_read_warns_and_the_copy_updates_all_the_same(self):
+        # ADR-013 §3.7: `cortex self-update` runs whatever the machine's config.toml holds. The variable is read
+        # before the file: emptied, it is unset, and the file names the host.
+        home = self.tmp / "home"
+        home.mkdir(exist_ok=True)
+        machine_file = home / "config.toml"
+        machine_file.write_text(f'releases_url = "{self.release.url}"\nendpoints = "later"\nregister = 3\n',
+                                encoding="utf-8")
+        self.env["CORTEX_RELEASES_URL"] = ""
+        proc = self.run_copy("self-update", TARGET)
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+        self.assertIn(f"Installed cortex {TARGET} as {display(str(self.binary))}", proc.out)
+        self.assertIn(f"set by {display(str(machine_file))}", proc.err)
+        self.assertIn('unknown key "endpoints", not read', proc.err)
+        self.assertIn('"register" must be true or false', proc.err)
+        machine_file.write_text("releases_url = [\n", encoding="utf-8")   # a file that does not read: with the
+        self.env["CORTEX_RELEASES_URL"] = self.release.url                # variable set, it is not read at all
+        shutil.copy2(harness.BINARY, self.binary)                       # the copy again, replaced by the stand-in
+        proc = self.run_copy("self-update", TARGET)
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+        self.assertNotIn("warning", proc.err)
 
     @POSIX
     def test_through_a_link_the_file_it_names_is_replaced_and_the_link_kept(self):
