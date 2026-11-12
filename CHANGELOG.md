@@ -7,7 +7,7 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
-## [1.8.0] - 2026-11-08 — Life, the Universe and Everything _(Released)_
+## [1.8.0] - 2026-11-12 — Life, the Universe and Everything _(Released)_
 [Full notes](changelog/1.8.0.md)
 
 ### Added
