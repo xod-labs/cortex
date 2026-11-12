@@ -756,6 +756,60 @@ class OptionTests(InitTestCase):
         self.assertNotIn("below a line of text", proc.err)
         self.assertEqual(self.read("CLAUDE.md.bak"), old)
 
+    def test_an_older_bootstrap_whose_title_is_in_a_comment_says_its_layout_untold(self):
+        # A workspace's bootstrap of before the marker, its personality block in it, its title inside a comment opened
+        # above it: a title in a comment is none — Cortex's by its block, its layout cannot be told, with or without
+        # --force, and --force alone writes a single project's, said (#329); the command the note names writes a
+        # workspace's.
+        template = (harness.REPO / "templates" / "bootstrap-instructions-workspace.md").read_text(encoding="utf-8")
+        before_the_marker = "".join(line for line in template.splitlines(keepends=True)
+                                    if not line.startswith("<!-- cortex:bootstrap"))
+        old = "<!-- our notes, the comment closed nowhere above the title\n\n" + before_the_marker
+        self.assertLess(old.find("# Cortex AI Team"), old.find("-->"))
+        (self.project / "CLAUDE.md").write_bytes(old.encode("utf-8"))
+        proc = self.init("--tool", "claude")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        shown = proc.err.replace(display(self.project.resolve()) + "/", "").replace(display(self.project) + "/", "")
+        self.assertIn("note: CLAUDE.md is an older Cortex bootstrap, written before the bootstrap marker, with no title "
+                      "Cortex can read — in a comment, say —, so its layout cannot be told; a workspace's takes "
+                      "--workspace — cortex init --tool claude --force writes it again", shown)
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=single format=2 digest=", self.read("CLAUDE.md"))
+        self.assertIn("note: CLAUDE.md held Cortex's personality block, with no title Cortex can read, so its layout "
+                      "could not be told, and a single project's is written — `cortex init --tool claude --workspace "
+                      "--force` writes a workspace's; what you wrote is in CLAUDE.md.bak",
+                      proc.err.replace(display(self.project.resolve()) + "/", "").replace(display(self.project) + "/", ""))
+        self.assertEqual(self.read("CLAUDE.md.bak"), old)
+        proc = self.init("--tool", "claude", "--workspace", "--force")                      # the command the note names
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=workspace format=2 digest=", self.read("CLAUDE.md"))
+        self.assertNotIn("could not be told", proc.err)
+        self.assertEqual(self.read("CLAUDE.md.bak"), old)
+
+    def test_force_over_an_older_single_bootstrap_whose_title_reads_says_nothing_of_a_layout(self):
+        # A single project's bootstrap of before the marker, its personality block and its title as written: its title
+        # tells the layout, and --force writes a single project's again, saying nothing of a layout.
+        template = (harness.REPO / "templates" / "bootstrap-instructions.md").read_text(encoding="utf-8")
+        before_the_marker = "".join(line for line in template.splitlines(keepends=True)
+                                    if not line.startswith("<!-- cortex:bootstrap"))
+        self.assertIn("<!-- PERSONALITY:BEGIN -->", before_the_marker)
+        (self.project / "CLAUDE.md").write_bytes(before_the_marker.encode("utf-8"))
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertIn("<!-- cortex:bootstrap layout=single format=2 digest=", self.read("CLAUDE.md"))
+        self.assertNotIn("could not be told", proc.err)
+
+    def test_a_file_with_neither_title_nor_personality_block_is_replaced_saying_nothing_of_a_layout(self):
+        # A file of the developer's, Cortex's by nothing — its title in a comment of theirs —: no bootstrap, no layout
+        # to tell; --force writes the run's own, saying nothing of one.
+        mine = b"<!-- # Cortex AI Team \xe2\x80\x94 Workspace Mode -->\n\nOur notes.\n"
+        (self.project / "CLAUDE.md").write_bytes(mine)
+        proc = self.init("--tool", "claude", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertNotIn("could not be told", proc.err)
+        self.assertEqual((self.project / "CLAUDE.md.bak").read_bytes(), mine)
+
     def test_in_a_repository_without_git_the_backup_is_not_said_left_to_git(self):
         # Without git to ask, a team's *.bak line is git's to read: the backup line says nothing of git.
         (self.project / ".git").mkdir(parents=True, exist_ok=True)

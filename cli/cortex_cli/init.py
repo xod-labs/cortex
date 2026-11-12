@@ -371,8 +371,10 @@ def kept_bootstrap(kept: bytes, template: bytes) -> Optional[Kept]:
     if len(found) > 1:
         return Kept("holds several bootstrap markers, so none is read", "it holds several bootstrap markers, so none is read")
     if not found:
-        if title_below_text(kept):          # Cortex's by its personality block: its layout, not, by its title (#329)
-            return OLDER_TITLE_BELOW_TEXT
+        # Cortex's by its personality block, with no title it can read — below a line of text, or in a comment never
+        # closed: its layout, not, by its title (#329).
+        if title_line(kept) is None:
+            return OLDER_TITLE_BELOW_TEXT if title_below_text(kept) else OLDER_NO_TITLE
         return Kept("is an older Cortex bootstrap, written before the bootstrap marker",
                     "an older Cortex bootstrap, written before the bootstrap marker")
     (layout, has), (writes_layout, writes) = found[0], wanted[0]
@@ -397,6 +399,10 @@ OLDER_TITLE_BELOW_TEXT = Kept("is an older Cortex bootstrap, written before the 
                               "line of text, so its layout cannot be told; a workspace's takes --workspace",
                               "an older Cortex bootstrap, written before the bootstrap marker, its title below a line "
                               "of text, so its layout cannot be told")
+OLDER_NO_TITLE = Kept("is an older Cortex bootstrap, written before the bootstrap marker, with no title Cortex can read "
+                      "— in a comment, say —, so its layout cannot be told; a workspace's takes --workspace",
+                      "an older Cortex bootstrap, written before the bootstrap marker, with no title Cortex can read, so "
+                      "its layout cannot be told")
 
 
 def title_below_text(content: bytes) -> bool:
@@ -673,10 +679,14 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                           "again — to write a single project's, remove it and run "
                           f"`cortex init {tool_options(instructions_file, tool)}`, then copy the team's part back from "
                           f"{display(str(backup))}, below the end marker\n")
-            elif replaced and not options.workspace and not markers(current) and title_below_text(current):
-                # No marker, and a title below a line of text — its personality block in it or not: the layout cannot be
+            elif replaced and not options.workspace and not markers(current) and title_line(current) is None and (
+                    title_below_text(current) or PERSONALITY_BEGIN in without_bom(current)):
+                # No marker, and no title Cortex can read where a bootstrap of before the marker had one — below a line
+                # of text, its personality block in it or not, or Cortex's by that block alone: the layout cannot be
                 # told, and --force alone writes a single project's — said, as the run without --force says it (#329).
-                err.write(f"note: {display(str(instructions_file))} held Cortex's title below a line of text, so its "
+                held = ("held Cortex's title below a line of text" if title_below_text(current) else
+                        "held Cortex's personality block, with no title Cortex can read")
+                err.write(f"note: {display(str(instructions_file))} {held}, so its "
                           "layout could not be told, and a single project's is written — "
                           f"`cortex init {tool_options(instructions_file, tool)} --workspace --force` writes a "
                           f"workspace's; what you wrote is in {display(str(backup))}\n")
