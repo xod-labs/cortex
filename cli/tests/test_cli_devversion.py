@@ -398,6 +398,12 @@ class BumpTests(unittest.TestCase):
         for quoted in ("text", "- a", "> b", "#tag", "__", "* *x", ">    x"):
             with self.subTest(quoted=quoted):
                 self.assertEqual(prepared(changelog(f"### Changed\n> {quoted}\ntext\n-\n", "2.3.4")), "2.4.0")
+        # One space after the quote's mark is the mark's: four past it are code, three more a paragraph's text.
+        self.assertEqual(prepared(changelog("### Changed\n>    x\ntext\n-\n", "2.3.4")), "2.4.0")
+        self.assertEqual(prepared(changelog("### Changed\n>     x\ntext\n-\n", "2.3.4")), "2.3.5")
+        # An empty `#` is a heading, in an item too; `#tag` is a paragraph's text, which the line below continues.
+        self.assertEqual(prepared(changelog("### Fixed\n2. x\nlazy\n      #\ntext\n   - 💥 y\n", "2.3.4")), "3.0.0")
+        self.assertEqual(prepared(changelog("### Fixed\n2. x\nlazy\n      #tag\ntext\n   - 💥 y\n", "2.3.4")), "2.3.5")
 
     def test_a_quote_nested_thousands_of_times_is_read_in_one_pass(self):
         # The counter-review of the fourth pass: each quote or item nested in a quote's line was read again from its
@@ -433,6 +439,12 @@ class BumpTests(unittest.TestCase):
         self.assertEqual(prepared(changelog("### Changed\n-\n  💥 the flag's meaning\n", "2.3.4")), "3.0.0")
         self.assertEqual(devversion.unreleased(changelog("### Changed\n-\n  - 💥 b\n- c\n-\n")),
                          {"Changed": ["", "c", ""]})     # an item below, or nothing: no text
+        # Its text is its first line's only: what follows it, 💥 included, is the entry's — not the line read.
+        self.assertEqual(devversion.unreleased(changelog("### Changed\n-\n  the flag\n  💥 not first\n")),
+                         {"Changed": ["the flag"]})
+        self.assertEqual(prepared(changelog("### Changed\n-\n  the flag\n  💥 not first\n", "2.3.4")), "2.4.0")
+        # A comment below it is no text of it.
+        self.assertEqual(devversion.unreleased(changelog("### Changed\n-\n  <!-- c -->\n")), {"Changed": [""]})
         # Not indented as its content, the line below is no text of it: an empty item continues no paragraph.
         self.assertEqual(prepared(changelog("### Changed\n-\n💥 not its text\n", "2.3.4")), "2.4.0")
         # A line ending is CRLF's: no blank line between the marker and its text.
