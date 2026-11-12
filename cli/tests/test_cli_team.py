@@ -272,6 +272,7 @@ class SyncedTests(TeamTestCase):
         self.assert_ok(self.cortex(root, "sync"))
         self.assertLessEqual(set(self.local(root)), {"theme", "spec", "claude_access", "claude_entry"})
 
+    @DOWNLOADS
     def test_a_committed_pin_before_1_8_0_beside_a_team_s_file_syncs_its_own_version_and_records_nothing(self):
         # The state the bootstrap's rule without `synced` reads (ADR-013 §3.10): a committed cortex.toml before
         # 1.8.0 is the team's version, its team's file not read — the sync reads 1.7.0 and records no `synced`,
