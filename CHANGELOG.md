@@ -7,7 +7,13 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
-## [1.8.0] - 2026-11-12 — Life, the Universe and Everything _(Released)_
+## [1.8.1] - 2026-11-12 — Never Could Get the Hang of Thursdays _(Released)_
+[Full notes](changelog/1.8.1.md)
+
+### Fixed
+- **1.8.0's content, published.** 1.8.0's release run failed before its draft, so no release, tag or binary is named 1.8.0, and its number is spent (ADR-009 §3.3). Two tests that run only in a release's binary had a team's file pin 1.8.0, the binary's own version: the move to commit was no move at all. They now pin another version. Nothing else changed: 1.8.1 is 1.8.0 as its section below says, and a team pins `1.8.1`.
+
+## [1.8.0] - 2026-11-12 — Life, the Universe and Everything _(Not published)_
 [Full notes](changelog/1.8.0.md)
 
 ### Added

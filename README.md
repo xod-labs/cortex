@@ -195,7 +195,7 @@ A workspace root that is no git repository — a folder holding the services' re
 `agents/cortex.team.toml`, in the team's folder and committed in the team's repository, gives every project that reads the folder the team's settings ([ADR-013](docs/adr/ADR-013-configuration-cascade.md)) — read once the team's version is 1.8.0 or later:
 
 ```toml
-version = "1.8.0"
+version = "1.8.1"
 theme = "h2g2"
 claude_access = false
 locked = ["claude_access"]
