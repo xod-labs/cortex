@@ -378,6 +378,26 @@ class BumpTests(unittest.TestCase):
         # An empty item ends at a blank line below it: what follows, indented as its content, is no item of it.
         self.assertEqual(prepared(changelog("### Fixed\n-\n\n  - 💥 b\n", "2.3.4")), "3.0.0")
 
+    def test_a_heading_in_an_item_and_a_quote_s_heading_or_code_are_no_paragraph(self):
+        # Bluspark's fourth pass: indented past three spaces, as far as an item's content, a heading is the item's —
+        # the line below continues no paragraph, and the list ends there. CommonMark, as markdown-it reads it.
+        self.assertEqual(prepared(changelog("### Fixed\n2. x\nlazy\n      # h\ntext\n   - 💥 y\n", "2.3.4")), "3.0.0")
+        self.assertEqual(prepared(changelog("### Fixed\n2. x\nlazy\n      h\ntext\n   - 💥 y\n", "2.3.4")), "2.3.5")
+        # A quote holding a heading, a fence, a break or code holds no paragraph: the line below starts one, which a
+        # line of - makes a heading — no entry.
+        for quoted in ("# h", "```", "---", "    code", "- ```", "> # h"):
+            with self.subTest(quoted=quoted):
+                self.assertEqual(prepared(changelog(f"### Changed\n> {quoted}\ntext\n-\n", "2.3.4")), "2.3.5")
+        for quoted in ("text", "- a", "> b"):
+            with self.subTest(quoted=quoted):
+                self.assertEqual(prepared(changelog(f"### Changed\n> {quoted}\ntext\n-\n", "2.3.4")), "2.4.0")
+
+    def test_an_html_block_other_than_a_comment_is_read_as_markdown(self):
+        # A limit the reader states: CommonMark holds no Markdown in a <pre>, which is read here — its section too.
+        text = changelog("### Fixed\n- a\n\n<pre>\n## [9.9.9]\n</pre>\n", "2.3.4")
+        self.assertIn("9.9.9", [label for label, _ in markdown_lines.sections(text)])
+        self.assertEqual(prepared(text), "9.9.10")
+
     def test_unreleased_is_read_in_any_case(self):
         text = changelog("### Removed\n- a thing\n", "2.3.4").replace("[Unreleased]", "[unreleased]")
         self.assertEqual(prepared(text), "3.0.0")
@@ -386,7 +406,16 @@ class BumpTests(unittest.TestCase):
 
     def test_an_entry_whose_marker_line_is_empty_counts_for_its_kind(self):
         text = changelog("### Removed\n-\n  the old flag\n", "2.3.4")
-        self.assertEqual(devversion.unreleased(text), {"Removed": [""]})
+        self.assertEqual(devversion.unreleased(text), {"Removed": ["the old flag"]})
+        self.assertEqual(prepared(text), "3.0.0")
+        # Bluspark's fourth pass: its text is the line below — marked breaking there, the entry is (CommonMark).
+        self.assertEqual(prepared(changelog("### Changed\n-\n  💥 the flag's meaning\n", "2.3.4")), "3.0.0")
+        self.assertEqual(devversion.unreleased(changelog("### Changed\n-\n  - 💥 b\n- c\n-\n")),
+                         {"Changed": ["", "c", ""]})     # an item below, or nothing: no text
+        # Not indented as its content, the line below is no text of it: an empty item continues no paragraph.
+        self.assertEqual(prepared(changelog("### Changed\n-\n💥 not its text\n", "2.3.4")), "2.4.0")
+        # A line ending is CRLF's: no blank line between the marker and its text.
+        text = changelog("### Changed\n-\n  💥 the flag's meaning\n", "2.3.4").replace("\n", "\r\n")
         self.assertEqual(prepared(text), "3.0.0")
 
     def test_what_ends_a_list_and_what_does_not(self):
@@ -401,8 +430,19 @@ class BumpTests(unittest.TestCase):
         self.assertEqual(prepared(changelog("### Fixed\n- a\n\t- 💥 b\n", "2.3.4")), "2.3.5")
         # A comment opened after text on its line is none: what follows is read.
         self.assertEqual(prepared(changelog("### Fixed\n- a\n\ntext <!--\n### Removed\n- b\n-->\n", "2.3.4")), "3.0.0")
-        # Indented four spaces, a heading is none: in the entry, it keeps the list open.
+        # Indented four spaces, a heading is the entry's: it keeps the list open.
         self.assertEqual(prepared(changelog("### Fixed\n- a\n\n    ### x\n  - 💥 b\n", "2.3.4")), "2.3.5")
+        # A heading of one #, indented up to three spaces, ends the list: an item below starts the section's.
+        for heading in ("# Title", "  # Title", "   #"):
+            with self.subTest(heading=heading):
+                self.assertEqual(prepared(changelog(f"### Fixed\n- a\n{heading}\n  - 💥 b\n", "2.3.4")), "3.0.0")
+        # CRLF ends a line, not two: the line below an entry's continues it lazily.
+        text = changelog("### Fixed\n- a\nlazy\n  - 💥 b\n", "2.3.4")
+        self.assertEqual(prepared(text.replace("\n", "\r\n")), "2.3.5")
+        # A fenced block on an item's own line, closed: no paragraph, so the line below ends the list.
+        self.assertEqual(prepared(changelog("### Fixed\n- ```\n  x\n  ```\ntext\n  - 💥 b\n", "2.3.4")), "3.0.0")
+        # An empty item's content is one column past its marker: an item indented one is its sibling.
+        self.assertEqual(prepared(changelog("### Fixed\n-\n - 💥 b\n", "2.3.4")), "3.0.0")
         # A line of other white space than spaces and tabs is no blank line: it is a paragraph's.
         for space in (" ", "\x0c", "\x85"):
             with self.subTest(space=repr(space)):
@@ -414,10 +454,18 @@ class BumpTests(unittest.TestCase):
         # A block never closed leaves a shorter one below to be read: a fence as long or longer closes it.
         text = changelog("### Fixed\n- a\n\n````\n```\n### Removed\n- b\n```\n", "2.3.4")
         self.assertEqual(prepared(text), "2.3.5")
+        # A longer fence below a shorter one still closes it: what lies between is code.
+        text = changelog("### Fixed\n- a\n\n````\n### Removed\n- b\n```\n`````\n", "2.3.4")
+        self.assertEqual(prepared(text), "2.3.5")
         many = "".join(f"{opening}\n" for opening in ("<!--", "```", "~~~~") * 7000)
         start = time.monotonic()
         self.assertEqual(prepared(changelog("### Fixed\n- a\n\n" + many, "2.3.4")), "2.3.5")
         self.assertEqual(prepared(changelog("### Added" + " " * 100000 + "x\n- a\n", "2.3.4")), "2.4.0")
+        # Bluspark's fourth pass: fences of a length each shorter than the one above, none closed.
+        shorter = "".join("`" * length + "\n" for length in range(6003, 3, -1))
+        # Below them, what closes none: a fence indented as code, and one with an info string.
+        shorter += "    " + "`" * 7000 + "\n" + "`" * 7000 + "x\n"
+        self.assertEqual(prepared(changelog("### Fixed\n- a\n\n" + shorter, "2.3.4")), "2.3.5")
         self.assertLess(time.monotonic() - start, 5)
 
     def test_entries_and_their_kinds(self):

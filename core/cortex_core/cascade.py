@@ -16,6 +16,7 @@ may refuse. The caller says it — the command from git, the runtime not at all 
 
 from __future__ import annotations
 
+import errno
 import os
 import stat
 import tomllib
@@ -225,8 +226,21 @@ def resolve(project_data: Optional[Mapping], local_data: Optional[Mapping], mach
 
 
 def _toml(path: str) -> Dict:
-    with open(path, "rb") as fh:
-        return tomllib.loads(fh.read().decode("utf-8-sig"))    # a byte order mark, as Notepad writes one
+    return tomllib.loads(_read_file(path).decode("utf-8-sig"))    # a byte order mark, as Notepad writes one
+
+
+def _read_file(path: str) -> bytes:
+    """The bytes of the file at ``path`` — ``OSError`` for what is no file, as ``open`` raises it for a
+    directory. Opened without blocking, then checked: a named pipe at the path of a file Cortex reads,
+    opened as a file, would wait for a writer, and every command with it."""
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+    with os.fdopen(fd, "rb") as fh:
+        mode = os.fstat(fh.fileno()).st_mode
+        if stat.S_ISDIR(mode):
+            raise IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR), path)
+        if not stat.S_ISREG(mode):
+            raise OSError(errno.EINVAL, "not a file", path)
+        return fh.read()
 
 
 def _checked_toml(path: str, name: str) -> Dict:

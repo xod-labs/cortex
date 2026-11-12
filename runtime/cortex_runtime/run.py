@@ -97,7 +97,7 @@ def _service_inside(service: Optional[str], team_folder: Optional[str] = "agents
     if team_folder is None:
         return str(path)
     if team_folder == "agents" and _opens(root, path / "agents", "agents"):
-        # its agents/ the workspace's, a link to it or to the root: the same overlays, twice
+        # its agents/ the workspace's — a link to it, or the service a link to the root: the same overlays, twice
         raise ValueError(f"service must not be the folder whose agents/ is the team's folder, agents/, got {service!r}")
     if team_folder != "agents":         # a renamed team's folder, in any case (ADR-013 §3.6, §9)
         team = tuple(folded(part) for part in PurePosixPath(team_folder).parts)

@@ -488,6 +488,9 @@ class GitIgnoreTests(SyncTestCase):
         for n, ignore in enumerate(("cortex.local.toml\n!cortex.local.toml\n", "cortex.local.toml\n!*.toml\n",
                                     "cortex.local.toml\n!/cortex.local.toml\n", "cortex.local.toml\n!cortex.local.t?ml\n",
                                     "cortex.local.toml\n!cortex.local.[t]oml\n", "cortex.local.toml\n!cortex\\.local.toml\n",
+                                    # a glob that matches it, `**/` as no folder, a class only git reads
+                                    "cortex.local.toml\n!cortex.*\n", "cortex.local.toml\n!**/cortex.local.toml\n",
+                                    "cortex.local.toml\n![[:alpha:]]*\n",
                                     " cortex.local.toml\n", "cortex.local.toml\t\n", "# ours\n\ufeffcortex.local.toml\n",
                                     # git splits at a line feed only, dropping one carriage return before it
                                     "a\rcortex.local.toml\n", "x\x0ccortex.local.toml\n", "cortex.local.toml\r\r\n",
@@ -505,6 +508,9 @@ class GitIgnoreTests(SyncTestCase):
                                     "cortex.local.toml \r\n",
                                     # a negation that cannot match the path takes back another one, never this one
                                     "cortex.local.toml\nCLAUDE.md\n!.gitkeep\n", "cortex.local.toml\n!docs/README.md\n",
+                                    # a glob, an escape, `**/` that cannot match it, any more than git reads them so
+                                    "cortex.local.toml\nCLAUDE.md\n!*.d.ts\n", "cortex.local.toml\n!.vscode/*.json\n",
+                                    "cortex.local.toml\n!\\#file\n", "cortex.local.toml\n!**/keep\n",
                                     # the last line naming it is read, below the negation that took the first back
                                     "cortex.local.toml\n!cortex.local.toml\ncortex.local.toml\n")):
             with self.subTest(ignore=ignore):
@@ -521,9 +527,30 @@ class GitIgnoreTests(SyncTestCase):
                       "!.claude/settings.local.jso?", "!.claude/settings\\.local.json"):
             with self.subTest(below=below):
                 self.assertFalse(sync._named([name, below], {name}, name))
-        for below in ("!.gitkeep", "!.claude/", "!.claude", "!other.json", "# !settings.local.json"):
+        for below in ("!.gitkeep", "!.claude/", "!.claude", "!other.json", "# !settings.local.json", "/settings.local.json"):
             with self.subTest(below=below):
                 self.assertTrue(sync._named([name, below], {name}, name))
+        # A glob, read as git reads it: one that matches the path takes it back — `**/` as no folder too, a class or a
+        # bracket only git reads may —, one of other paths never does.
+        for below in ("!.claude/*", "!.claude/**", "!**/*.json", "!**/settings.local.json", "!.claude/**/settings.local.json",
+                      "!.claude/settings.local.[j]son", "!.claude/settings.local.[!x]son", "!.claude/[[:alpha:]]*",
+                      "!.claude/[abc", "!.claude/x\\"):
+            with self.subTest(below=below):
+                self.assertFalse(sync._named([name, below], {name}, name))
+        for below in ("!*.d.ts", "!.vscode/*.json", "!\\#file", "!**/keep", "!x/settings.local.json", "!*/settings.json",
+                      "!.claude/settings.local.[!j]son", "!settings.local.json?", "!.claude/*/settings.local.json",
+                      # `*` and `?` never match a `/`: without one, a pattern is of the last component
+                      "!.claude*.json", "!.claude?settings.local.json", "!/.claude*json"):
+            with self.subTest(below=below):
+                self.assertTrue(sync._named([name, below], {name}, name))
+        # A final `/` keeps a negation to folders: `cortex/` takes back the copy of the spec, a folder — not told
+        # from the link without the disk, it may.
+        self.assertFalse(sync._named(["/cortex", "!cortex/"], {"/cortex"}, "cortex"))
+        # A name and a negation written with an accent decomposed, as macOS writes them, are one: it takes it back.
+        for name, below in (("not\u00e9s.md", "!note\u0301s.md"), ("note\u0301s.md", "!not\u00e9s.md"),
+                            ("not\u00e9s.md", "!NOTE\u0301S.*")):
+            with self.subTest(name=name, below=below):
+                self.assertFalse(sync._named([name, below], {name}, name))
 
     @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
     def test_without_git_a_gitignore_that_is_a_link_is_not_read(self):

@@ -41,6 +41,12 @@ class ChangelogTests(unittest.TestCase):
         self.assertEqual((match.group("version"), match.group("date"), match.group("name")), ("1.4.0", "2026-11-03", "A Name"))
         self.assertIsNone(re.fullmatch(DEFAULT_SECTION, "## [1.4.0] - 2026-11-03 — A Name"))
 
+    def test_a_released_heading_is_read_without_its_trailing_white_space(self):
+        # Bluspark's fourth pass: a space at the end of the heading is no part of what the default shape reads.
+        heading = "## [1.4.0] - 2026-11-03 — A Name _(Released)_"
+        self.assertEqual(first_after_unreleased(f"## [Unreleased]\n\n{heading} \t\n"), heading)
+        self.assertIsNotNone(re.fullmatch(DEFAULT_SECTION, first_after_unreleased(f"{heading} \n")))
+
     def test_has_section(self):
         self.assertTrue(has_section(TEXT, "1.3.0"))
         self.assertFalse(has_section(TEXT, "1.3"))

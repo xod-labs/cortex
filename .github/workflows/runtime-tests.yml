@@ -32,12 +32,18 @@ jobs:
           base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           head: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
           # the runtime, the core it embeds, and its deployment — and the CLI, whose answers its tests
-          # check the runtime's 422s against (runtime/tests/test_base_root.py, cli())
+          # check the runtime's 422s against (runtime/tests/test_base_root.py, cli()), run from this
+          # checkout's source, whose spec is its three trees; the spec's Markdown the firewall test reads
+          # (runtime/tests/test_firewall.py); the action that says what changed
           paths: |
             runtime/**
             core/**
             deploy/**
             cli/**
+            agents/**
+            templates/**
+            docs/**
+            .github/actions/changes/**
             .github/workflows/runtime-tests.yml
 
   test:

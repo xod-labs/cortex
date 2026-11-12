@@ -422,8 +422,22 @@ def by_hand(found: Optional[cascade.Resolution], origin: Optional[str]) -> objec
 
 
 def loose_team_file(root: str) -> bool:
-    """Whether the team's file is there, in the team's folder read loosely (ADR-013 §3.8, step 1)."""
-    return os.path.isfile(os.path.join(root, loose_team_folder(root), TEAM_FILE))
+    """Whether the team's file is there, in the team's folder read loosely (ADR-013 §3.8, step 1) — read or not: a
+    directory, a link that leads nowhere, or in a folder this user cannot search is there too (§3.5)."""
+    return cascade.team_file_there(root, loose_team_folder(root))
+
+
+def unread_team(root: str) -> Optional[str]:
+    """Why the team's file, there in the team's folder read loosely, does not read — ``None`` when it reads or is not
+    there (ADR-013 §3.5). A version too new is said before any key is checked (§3.8, step 2), but no command moves a
+    pin while the file does not read: each refuses it first."""
+    found = cascade.read_team(root, loose_team_folder(root))
+    return found.error if isinstance(found, cascade.Unreadable) else None
+
+
+def fix_team_file(unread: str) -> str:
+    """The remedy for the team's file that does not read, ``unread``: no command reads the project as it is."""
+    return f"fix or restore the team's file: no command reads the project while it does not — {unread}"
 
 
 def developers_toml(root: str, name: str = PROJECT_FILE) -> object:
@@ -445,8 +459,14 @@ def too_new(root: str, own: Version) -> Optional[str]:
         return None
     name, version = found
     if store.development(version):          # no self-update installs it: the pin moves (ADR-009 §9)
+        unread = unread_team(root)
         return (f"this project uses Cortex {version}, which its {name} pins — a build of no release, newer than "
-                f"this cortex, {own}: {pin_a_release(root, name)}")
+                f"this cortex, {own}: {pin_a_release(root, name) if unread is None else fix_team_file(unread)}")
+    unread = unread_team(root)
+    if unread is not None:
+        # Every move refuses that file first: a try dropped, a pin moved — none is named before it reads (§3.5).
+        return (f"this project uses Cortex {version}, which its {name} pins, newer than this cortex, {own} — update it:\n"
+                f"    {store.update_command(version)}\nand {fix_team_file(unread)}")
     teams = loose_team(root)
     # A build of no release names no version of its own to move to: no teammate can download it (ADR-009 §9).
     down = "VERSION" if store.development(own) else str(own)
@@ -471,6 +491,9 @@ def release_remedy(found: Optional[cascade.Resolution], origin: str, block: bool
     (``store.pin_remedy``), or by hand — a developer's ``cortex.toml`` (``by_hand``), or a team's file in a folder
     this cortex does not take, ``.team``, read for its version alone: no ``--team`` of it moves the pin (§3.8) — nor,
     ``root`` given, of one ``cortex.toml``'s ``agents`` makes ``--team`` refuse, as a resolution read loosely has."""
+    unread = unread_team(root) if root is not None else None
+    if unread is not None:                  # no command moves the pin before that file reads (§3.5)
+        return fix_team_file(unread)
     return _in_a_refused_folder(origin, root) or store.pin_remedy(origin, by_hand(found, origin), block)
 
 
@@ -662,12 +685,12 @@ def _without_synced(text: str, line: bool = False) -> str:
 
 def render_project(root: str, values: Dict[str, object]) -> str:
     """``cortex.toml`` with each key of ``values`` set — a new file when there is none — checked
-    against the grammar before anything is written: beside a team's file, its ``version`` and
-    ``theme`` may be the file's."""
+    against the grammar before anything is written: each key it holds. Whether ``version`` and ``theme``
+    are there, or the team's file's, is the reader's to say (``load``) — every caller writes them, or
+    has read a project that holds them or a team's file that gives them."""
     text = set_keys(_read_text(os.path.join(root, PROJECT_FILE)), values, PROJECT_FILE, PROJECT_HEADER)
-    team = cascade.team_file_there(root, loose_team_folder(root))
     try:
-        project.check_project(tomllib.loads(text.lstrip("\ufeff")), project.PROJECT_REQUIRED if team else ())
+        project.check_project(tomllib.loads(text.lstrip("\ufeff")), project.PROJECT_REQUIRED)
     except project.ProjectFileError as error:
         raise ConfigError(str(error))
     return text
