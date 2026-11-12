@@ -3360,6 +3360,39 @@ class ThirdCodeReviewTests(TeamTestCase):
     @SOURCE
     @DOWNLOADS
     @harness.outside_a_repository
+    def test_a_build_of_no_release_pinned_by_hand_beside_a_team_s_file_that_is_no_file_is_moved_by_hand(self):
+        # Bluspark's fourth pass, of #338: this developer's cortex.toml, beside a team's file that is a directory or a
+        # link that leads nowhere — there, so the pin is this developer's, moved by hand. Fixed first, the file reads,
+        # and the remedy named by hand, followed, syncs.
+        HAND = ("pin a release by hand: set cortex.toml's version to one, or remove it to read the team's — "
+                "uncommitted beside the team's file, it is this developer's, which no command writes")
+        for kind, follow in (("a directory", 'version = "9.9.8"\ntheme = "h2g2"\n'), ("a link", 'theme = "h2g2"\n')):
+            with self.subTest(kind=kind):
+                root = self.project('version = "9.9.10-dev.3"\ntheme = "h2g2"\n', committed=False,
+                                    name=kind.replace(" ", "-"))
+                (root / "agents").mkdir()
+                if kind == "a directory":
+                    (root / TEAM).mkdir()
+                else:
+                    (root / TEAM).symlink_to(self.tmp / "gone.toml")
+                for args in (("sync",), ("upgrade",)):
+                    proc = self.cortex(root, *args)
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertIn("fix or restore the team's file", proc.err.replace("Fix", "fix"))
+                    self.assertNotIn("cortex upgrade VERSION", proc.err)
+                (root / TEAM).rmdir() if kind == "a directory" else (root / TEAM).unlink()
+                (root / TEAM).write_text('version = "9.9.8"\n', encoding="utf-8")        # fixed
+                for args in (("sync",), ("upgrade",)):
+                    proc = self.cortex(root, *args)
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertIn(HAND, proc.err)
+                (root / "cortex.toml").write_text(follow, encoding="utf-8")              # followed, by hand
+                self.assert_ok(self.cortex(root, "sync"))
+                self.assertEqual(self.value(root, "version"), "9.9.8")
+
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
     def test_a_try_removed_at_a_tie_with_this_developer_s_cortex_toml_says_the_team_s_version_is_read(self):
         # cortex.toml, not committed, at the team's version: the try removed, the team's is read — on a tie the team's
         # wins (ADR-013 §3.1), and the message says so.

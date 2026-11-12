@@ -422,8 +422,9 @@ def by_hand(found: Optional[cascade.Resolution], origin: Optional[str]) -> objec
 
 
 def loose_team_file(root: str) -> bool:
-    """Whether the team's file is there, in the team's folder read loosely (ADR-013 §3.8, step 1)."""
-    return os.path.isfile(os.path.join(root, loose_team_folder(root), TEAM_FILE))
+    """Whether the team's file is there, in the team's folder read loosely (ADR-013 §3.8, step 1) — read or not: a
+    directory, a link that leads nowhere, or in a folder this user cannot search is there too (§3.5)."""
+    return cascade.team_file_there(root, loose_team_folder(root))
 
 
 def unread_team(root: str) -> Optional[str]:
