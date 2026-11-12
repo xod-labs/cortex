@@ -3361,10 +3361,11 @@ class ThirdCodeReviewTests(TeamTestCase):
     @SOURCE
     @DOWNLOADS
     @harness.outside_a_repository
-    def test_a_build_of_no_release_pinned_by_hand_beside_a_team_s_file_that_is_no_file_is_moved_by_hand(self):
+    def test_a_build_of_no_release_pinned_beside_a_team_s_file_that_is_no_file_names_its_fix_then_the_hand(self):
         # Bluspark's fourth pass, of #338: this developer's cortex.toml, beside a team's file that is a directory or a
-        # link that leads nowhere — there, so the pin is this developer's, moved by hand. Fixed first, the file reads,
-        # and the remedy named by hand, followed, syncs.
+        # link that leads nowhere — the fix of that file is named first; fixed, the file reads, and the remedy named
+        # by hand, followed, syncs. What it does not pin: loose_team_file's team_file_there over isfile — every caller
+        # asks team_refusal first, so a file there and unread never reaches it (an equivalent mutant).
         HAND = ("pin a release by hand: set cortex.toml's version to one, or remove it to read the team's — "
                 "uncommitted beside the team's file, it is this developer's, which no command writes")
         for kind, follow in (("a directory", 'version = "9.9.8"\ntheme = "h2g2"\n'), ("a link", 'theme = "h2g2"\n')):
