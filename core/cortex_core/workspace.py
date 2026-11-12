@@ -157,6 +157,16 @@ def _refused(root: Path, folder: str, team: Path) -> bool:
     return False
 
 
+def listed_services(project_root: str, base_root: Optional[str] = None, team_folder: Optional[str] = None) -> List[str]:
+    """``services``, less each the runtime refuses (``_refused``): the services an agent is shown, and the overlay
+    roots ``cortex validate`` checks — a service whose ``agents/`` is the team's folder holds the team's overlays,
+    which the workspace's tier reads already (ADR-013 §3.6)."""
+    root = Path(project_root)
+    team = Path(team_folder) if team_folder is not None else root / "agents"
+    return [s for s in services(str(project_root), base_root, team_folder)
+            if not _refused(root, Path(s).relative_to(root).as_posix(), team)]
+
+
 def service_index(project_root, base_root=None, active: Optional[str] = None, team_folder: Optional[str] = None) -> str:
     """The workspace's services as an agent is shown them — one line each, by folder:
     ``- `@alias` — `folder/` — title``, the alias from the overview's ``<!-- @alias: … -->``
@@ -164,11 +174,8 @@ def service_index(project_root, base_root=None, active: Optional[str] = None, te
     service of the run — is marked. Empty when the workspace has no service.
     """
     root = Path(project_root)
-    team = Path(team_folder) if team_folder is not None else root / "agents"
     lines = []
-    for folder in sorted(Path(s).relative_to(root).as_posix() for s in services(str(root), base_root, team_folder)):
-        if _refused(root, folder, team):
-            continue
+    for folder in sorted(Path(s).relative_to(root).as_posix() for s in listed_services(str(root), base_root, team_folder)):
         text = (root / folder / "project-overview.md").read_text(encoding="utf-8", errors="replace")
         alias = _ALIAS.search(text)
         title = next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), "")
