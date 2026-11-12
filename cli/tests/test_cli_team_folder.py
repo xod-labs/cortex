@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_cli_format3 import FORMAT_2, OURS, TEMPLATE, written  # noqa: E402
 from test_cli_team import (AS_ROOT, COMMIT_IT, DEV_OWN, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, SOURCE, TEAM_MOVES,  # noqa: E402
-                           TEAM_RELEASE, TeamTestCase, harness_path)
+                           OTHER_TEAM, TEAM_RELEASE, TeamTestCase, harness_path)
 
 import cli_harness as harness  # noqa: E402
 from cortex_cli import config, store, upgrade, validate  # noqa: E402
@@ -653,7 +653,7 @@ class CodeReviewFolderTests(FolderTestCase):
     @TEAM_RELEASE
     def test_team_commit_names_the_folder_of_the_developer_s_own_change(self):
         env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
-        root = self.named(team='version = "1.8.0"\n', committed=False)
+        root = self.named(team=f'version = "{OTHER_TEAM}"\n', committed=False)
         (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
         self.git(root, "init", "-q")
         self.git(root, "add", "-A")
