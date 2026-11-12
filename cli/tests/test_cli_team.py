@@ -2445,6 +2445,46 @@ class ThirdCodeReviewTests(TeamTestCase):
         self.assertIn(f"{TEAM}: cannot be read — not a file", proc.err)
 
 
+class FourthCodeReviewTests(TeamTestCase):
+    """What the fourth counter-review of the 1.8.0 stack's code found (2026-11-12)."""
+
+    def cortex_within(self, cwd, *args, seconds=30, **env):
+        """``cortex ARGS``, failed — never waited on — when it does not end within ``seconds``."""
+        try:
+            proc = subprocess.run(harness.command(*args), cwd=cwd, env={**self.env, "PWD": str(cwd), **env},
+                                  stdin=subprocess.DEVNULL, capture_output=True, timeout=seconds)
+        except subprocess.TimeoutExpired:
+            self.fail(f"cortex {' '.join(args)} did not end: it waits on what is at {TEAM}")
+        proc.out, proc.err = proc.stdout.decode(), proc.stderr.decode()
+        return proc
+
+    @SOURCE
+    @DOWNLOADS
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipe here")
+    @harness.outside_a_repository
+    def test_a_named_pipe_at_the_team_s_file_is_refused_never_waited_on(self):
+        # A named pipe where the team's file goes: what reads the versions first — the gate — opened it as a file,
+        # and waited for a writer, every command with it. Refused as no file, as a directory is; beside a committed
+        # pin before 1.8.0, which leaves the team's file unread, the project is served as 1.7.0 served it.
+        root = self.project('version = "1.7.0"\ntheme = "h2g2"\n', committed=False, name="read")
+        (root / "agents").mkdir()
+        os.mkfifo(root / TEAM)
+        for args in ThirdCodeReviewTests.REFUSED + (("upgrade", "9.9.8"),):
+            with self.subTest(args=args):
+                proc = self.cortex_within(root, *args)
+                self.assertNotEqual(proc.returncode, 0, proc.out + proc.err)
+                self.assertIn(f"{TEAM}: cannot be read — not a file", proc.err)
+        root = self.project('version = "1.7.0"\ntheme = "h2g2"\n', name="unread")
+        (root / "agents").mkdir()
+        os.mkfifo(root / TEAM)
+        proc = self.cortex_within(root, "sync")
+        self.assert_ok(proc)
+        self.assertIn(f"{TEAM} is not read: the team's version is 1.7.0, before 1.8.0", proc.err)
+        self.assertEqual(self.cortex_within(root, "config", "version").out.strip(), "1.7.0")
+
+
+
+
 def newer_refused(pin):
     """What --team with no VERSION says of a team's pin newer than this cortex."""
     return (f"this cortex is a development build, {OWN}, which serves no release" if DEV_OWN else
