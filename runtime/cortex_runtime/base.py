@@ -169,9 +169,9 @@ def _gives_what_it_lacks(root: Path, data: Mapping[str, Any]) -> bool:
 
 def _local(root: Path) -> Mapping[str, Any]:
     """Of ``cortex.local.toml``, ``version`` and ``synced`` — what a 1.7.0 runtime never read, so a file that
-    does not read is none, as it was."""
+    does not read is none, as it was — a named pipe there included, read without waiting on it."""
     try:
-        data = tomllib.loads((root / project.LOCAL_FILE).read_bytes().decode("utf-8-sig"))
+        data = tomllib.loads(cascade.read_file(str(root / project.LOCAL_FILE)).decode("utf-8-sig"))
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return {}
     return {key: data[key] for key in ("version", "synced") if key in data}
