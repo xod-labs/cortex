@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a p
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 from cortex_cli import init, self_update, store, sync, upgrade  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
+import cli_harness as harness  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
 from test_cli_upgrade import DOWNLOADS, MARKED, OLD_BOOTSTRAP, OVERLAY, OWN, UpgradeTestCase, snapshot  # noqa: E402
 
@@ -46,9 +47,13 @@ class AllTestCase(UpgradeTestCase):
         self.env["CORTEX_NO_REGISTER"] = "1"      # the registry is the test's: no sync adds to it
         self.code = self.tmp / "code"
 
-    def make(self, name, version="9.9.8", synced=True, bootstrap=False):
+    def make(self, name, version="9.9.8", synced=True, bootstrap=False, tree=False):
+        """A project of ``version``; ``tree``, with a ``.git`` that makes it a work tree to a command that only
+        looks for one, git or not on its PATH: its files are to commit."""
         root = self.code / name
         root.mkdir(parents=True)
+        if tree:
+            (root / ".git").mkdir()
         (root / "cortex.toml").write_text(f'version = "{version}"\ntheme = "h2g2"\n', encoding="utf-8")
         if bootstrap:
             (root / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))   # 9.9.8's, nobody changed it
@@ -81,7 +86,7 @@ class AllTestCase(UpgradeTestCase):
 @DOWNLOADS
 class AllTests(AllTestCase):
     def test_a_project_that_refuses_stops_none_of_the_others_and_it_exits_1(self):
-        alpha, beta, gamma = self.make("alpha", bootstrap=True), self.make("beta"), self.make("gamma")
+        alpha, beta, gamma = self.make("alpha", bootstrap=True, tree=True), self.make("beta"), self.make("gamma", tree=True)
         self.break_overlays(beta)
         self.register(gamma, beta, alpha)
         before = snapshot(beta)
@@ -177,8 +182,46 @@ class AllTests(AllTestCase):
         self.assertEqual(proc.out, "")
         self.assertEqual(snapshot(self.code), before)
 
+    @harness.outside_a_repository
+    def test_projects_in_no_work_tree_have_nothing_to_commit(self):
+        # 2.B workspaces: their files are committed nowhere, as cortex init says of them (ADR-008 §9).
+        alpha, beta = self.make("alpha"), self.make("beta", tree=True)
+        self.register(alpha, beta)
+        proc = self.upgrade_all()
+        self.assert_ok(proc)
+        self.assertTrue(proc.out.endswith(f"\nWhat each project must commit:\n"
+                                          f"  alpha  {display(alpha)}: nothing — in no git work tree\n"
+                                          f"  beta   {display(beta)}: cortex.toml and cortex.lock\n" + NOT_COMMITTED),
+                        proc.out)
+        shutil.rmtree(beta / ".git")
+        (alpha / "cortex.toml").write_text(self.pinned(alpha).replace(f'"{OWN}"', '"9.9.8"'), encoding="utf-8")
+        (beta / "cortex.toml").write_text(self.pinned(beta).replace(f'"{OWN}"', '"9.9.8"'), encoding="utf-8")
+        proc = self.upgrade_all()
+        self.assert_ok(proc)
+        self.assertTrue(proc.out.endswith(f"\nNothing to commit, in any project.\n"
+                                          f"  alpha  {display(alpha)}: in no git work tree\n"
+                                          f"  beta   {display(beta)}: in no git work tree\n"), proc.out)
+
+    @unittest.skipIf(os.name == "nt", "a link to a file needs a privilege on Windows")
+    @harness.outside_a_repository
+    def test_a_project_in_no_work_tree_still_says_the_file_linked_into_a_repository(self):
+        # Its own files are committed nowhere, and the team's bootstrap is to commit where it is: the project has
+        # something to commit, said with that file — never "nothing".
+        alpha = self.make("alpha")
+        team = self.tmp / "team"
+        (team / ".git").mkdir(parents=True)
+        (team / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True))   # 9.9.8's, nobody changed it
+        (alpha / "CLAUDE.md").symlink_to(team / "CLAUDE.md")
+        self.register(alpha)
+        proc = self.upgrade_all()
+        self.assert_ok(proc)
+        where = os.path.realpath(team / "CLAUDE.md").replace(os.sep, "/")
+        self.assertIn(f"  alpha  {display(alpha)}: cortex.toml and cortex.lock committed nowhere — in no git work tree; "
+                      f"{where} — outside its git work tree: commit it where it is\n", proc.out)
+        self.assertNotIn("nothing — in no git work tree", proc.out)
+
     def test_dry_run_changes_nothing_in_any_project_and_exits_as_the_run_would(self):
-        alpha, beta = self.make("alpha", bootstrap=True), self.make("beta")
+        alpha, beta = self.make("alpha", bootstrap=True, tree=True), self.make("beta")
         self.break_overlays(beta)
         self.register(alpha, beta)
         before = snapshot(self.code)
@@ -196,7 +239,7 @@ class AllTests(AllTestCase):
         self.assertEqual(snapshot(self.code), before)
 
     def test_on_the_pinned_version_what_an_upgrade_left_is_finished_and_said_to_commit(self):
-        alpha = self.make("alpha")
+        alpha = self.make("alpha", tree=True)
         (alpha / "cortex.toml").write_text(self.pinned(alpha).replace('"9.9.8"', f'"{OWN}"'), encoding="utf-8")
         self.register(alpha)
         proc = self.upgrade_all("--dry-run")
@@ -313,7 +356,7 @@ class AllInProcessTests(AllTestCase):
         self.assertFalse([t for t in threading.enumerate() if isinstance(t, upgrade._NewerRelease)])
 
     def test_an_interrupted_run_says_what_each_project_did_and_exits_130(self):
-        roots = [self.make(name, synced=False) for name in ("alpha", "beta", "gamma")]
+        roots = [self.make(name, synced=False, tree=True) for name in ("alpha", "beta", "gamma")]
         self.register(*roots)
 
         def one(cwd, *args, **kwargs):
@@ -428,6 +471,7 @@ class GitCommandLineTests(GitTestCase):
 @DOWNLOADS
 @NEEDS_GIT
 class BranchTests(GitTestCase):
+    @harness.outside_a_repository
     def test_the_branch_is_made_in_each_git_project_and_refused_where_it_exists(self):
         alpha, beta, gamma = self.make("alpha"), self.make("beta"), self.make("gamma")
         first = self.repository(alpha)
@@ -637,6 +681,7 @@ class CommitTests(GitTestCase):
                       f"CLAUDE.md — committed on {self.branch(alpha)}, {commit}\n"
                       "Nothing was pushed. Teammates run `cortex sync` after they pull.\n", proc.out)
 
+    @harness.outside_a_repository
     def test_a_project_outside_git_is_said_and_nothing_is_committed_there(self):
         alpha, gamma = self.make("alpha"), self.make("gamma")
         self.repository(alpha)
@@ -647,8 +692,7 @@ class CommitTests(GitTestCase):
         self.assert_moved(gamma)
         self.assertFalse((gamma / ".git").exists())
         self.assertIn(f"note: {display(gamma)} is in no git work tree — nothing is committed there\n", proc.err)
-        self.assertIn(f"  gamma  {display(gamma)}: cortex.toml and cortex.lock — not committed: in no git work tree\n",
-                      proc.out)
+        self.assertIn(f"  gamma  {display(gamma)}: nothing — in no git work tree\n", proc.out)
 
     def test_where_git_does_not_track_the_pin_or_ignores_a_file_nothing_is_committed(self):
         # A workspace whose cortex.toml is not committed: the pin is the developer's own (ADR-010 §3.8).
@@ -1113,6 +1157,18 @@ class CommitTests(GitTestCase):
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertEqual(self.git(alpha, "log", "-1", "--format=%s"), self.MESSAGE)
         self.assertIn("  beta   refused: git rev-parse failed — fatal: ", proc.out)
+        self.assertEqual(worktree(beta), before)
+
+    def test_a_repository_git_refuses_above_the_project_is_its_refusal_too(self):
+        # The project in a subdirectory of the work tree: the .git git refuses is above its root, not at it — no
+        # root in no work tree, whose files would be written and said committed nowhere.
+        beta = self.make("outer/beta")
+        (self.code / "outer" / ".git").write_text("gitdir: ../nowhere\n", encoding="utf-8")
+        before = worktree(beta)
+        proc = self.upgrade(beta, "--commit", "--message", self.MESSAGE)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn("git rev-parse failed — fatal: ", proc.err)
+        self.assertNotIn("in no git work tree", proc.out + proc.err)
         self.assertEqual(worktree(beta), before)
 
     @unittest.skipIf(os.name == "nt", "a link to a file needs a privilege on Windows")

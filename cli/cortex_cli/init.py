@@ -55,6 +55,7 @@ TOOLS = {
 }
 ALIAS_PLACEHOLDER = b"<!-- @alias: my-project -->"
 PERSONALITY_BEGIN = b"<!-- PERSONALITY:BEGIN -->"
+TITLE = b"# Cortex AI Team"             # how the templates' heading begins, either layout's
 PERSONALITY_END = b"<!-- PERSONALITY:END -->"
 # What some editors put before the first line of a UTF-8 file: no part of what it says.
 BOM = b"\xef\xbb\xbf"
@@ -206,8 +207,34 @@ def applies_always(content: bytes) -> bool:
 
 
 def bootstrap_of_cortex(content: bytes) -> bool:
-    """A file the templates wrote: their heading, or their personality block."""
-    return without_frontmatter(content).startswith(b"# Cortex AI Team") or PERSONALITY_BEGIN in content
+    """A file the templates wrote: their heading — below blank lines and comments a team wrote above it too — or
+    their personality block."""
+    return title_line(content) is not None or PERSONALITY_BEGIN in content
+
+
+def title_line(content: bytes) -> Optional[bytes]:
+    """The templates' heading in a bootstrap: the first line of Cortex's block, once a frontmatter is set aside, or
+    one below blank lines and comments a team wrote above it; ``None`` in a file without it — or with it below a
+    line of text, an example in a team's notes, say. One reading for every caller: whether a file is Cortex's, and
+    the layout it was written for (ADR-010 §3.1)."""
+    comment = False
+    for line in without_frontmatter(parts(normalised(content))[0]).split(b"\n"):
+        if not comment and line.startswith(TITLE):
+            return line
+        rest = line
+        while True:
+            if comment:
+                end = rest.find(b"-->")
+                if end < 0:
+                    break
+                rest, comment = rest[end + 3:], False
+            rest = rest.strip()
+            if not rest:
+                break
+            if not rest.startswith(b"<!--"):
+                return None
+            rest, comment = rest[4:], True
+    return None
 
 
 def reads_the_local_file(content: bytes) -> bool:
@@ -232,6 +259,35 @@ def markers(content: bytes) -> List[Tuple[str, int]]:
     """The bootstrap markers of a file, ``(layout, format)`` each: one in a bootstrap. Those of the team's
     part are its text."""
     return [(m.group(1).decode(), int(m.group(2))) for m in BOOTSTRAP_MARKER.finditer(parts(without_bom(content))[0])]
+
+
+def written_for_workspace(content: bytes) -> bool:
+    """Whether a bootstrap was written for a workspace: by its markers when they agree, or, written before the
+    marker or with markers that disagree, by its title (ADR-010 §3.1) — the templates' heading, the first line once
+    a frontmatter is set aside, or one below blank lines and comments a team wrote above it, never one below a
+    line of text (``title_line``). A file without that heading or the markers was written for none."""
+    content = normalised(content)
+    layouts = {layout for layout, _ in markers(content)}
+    if len(layouts) == 1:
+        return layouts == {"workspace"}
+    return b"Workspace Mode" in (title_line(content) or b"")
+
+
+def tool_options(path: Path, tool: Optional[str] = None) -> str:
+    """The options that name the instructions file at ``path`` to ``cortex init``, run from its project's root:
+    ``--tool X``, or ``--tool custom --instructions-file PATH`` for a file of no known tool's. A note names them, so
+    that the command it names writes that file — without them, ``--force`` is refused where several instructions
+    files are, and a project left with none writes Copilot's. ``tool`` is the run's own, when it knows it."""
+    if tool is None:
+        for name, rel in TOOLS.items():
+            depth = len(PurePosixPath(rel).parts)
+            if len(path.parts) > depth and path.parents[depth - 1] / rel == path and \
+                    (path.parents[depth - 1] / config.PROJECT_FILE).is_file():
+                tool = name
+                break
+    if tool is None or tool == "custom":
+        return f"--tool custom --instructions-file {sync.quote(display(str(path)))}"
+    return f"--tool {tool}"
 
 
 def normalised(content: bytes) -> bytes:
@@ -292,6 +348,7 @@ class Kept(NamedTuple):
     sentence: str
     phrase: str
     force: bool = True
+    layout: bool = False    # written for the other layout, which --force without --workspace keeps (#329)
 
 
 def kept_bootstrap(kept: bytes, template: bytes) -> Optional[Kept]:
@@ -301,17 +358,23 @@ def kept_bootstrap(kept: bytes, template: bytes) -> Optional[Kept]:
     kept = without_bom(kept)
     wanted, found = markers(template), markers(kept)
     if not bootstrap_of_cortex(kept) and not found:
-        return NO_BOOTSTRAP
+        return TITLE_BELOW_TEXT if title_below_text(kept) else NO_BOOTSTRAP
     if not wanted:
         if not reads_the_local_file(kept):
             return Kept(f"is an older Cortex bootstrap: it does not read {config.LOCAL_FILE}, which names the spec now",
                         f"an older Cortex bootstrap, which does not read {config.LOCAL_FILE}")
-        if without_frontmatter(kept).split(b"\n", 1)[0] != template.split(b"\n", 1)[0]:
-            return _other_layout("workspace" if b"Workspace Mode" in template.split(b"\n", 1)[0] else "single")
+        # The layout its title says — below blank lines and comments too — as cortex init --force reads it.
+        writes_workspace = written_for_workspace(template)
+        if written_for_workspace(kept) != writes_workspace:
+            return _other_layout("workspace" if writes_workspace else "single")
         return None
     if len(found) > 1:
         return Kept("holds several bootstrap markers, so none is read", "it holds several bootstrap markers, so none is read")
     if not found:
+        # Cortex's by its personality block, with no title it can read — below a line of text, or in a comment never
+        # closed: its layout, not, by its title (#329).
+        if title_line(kept) is None:
+            return OLDER_TITLE_BELOW_TEXT if title_below_text(kept) else OLDER_NO_TITLE
         return Kept("is an older Cortex bootstrap, written before the bootstrap marker",
                     "an older Cortex bootstrap, written before the bootstrap marker")
     (layout, has), (writes_layout, writes) = found[0], wanted[0]
@@ -327,11 +390,60 @@ def kept_bootstrap(kept: bytes, template: bytes) -> Optional[Kept]:
 
 
 NO_BOOTSTRAP = Kept("holds no Cortex bootstrap: the tool will not find Cortex", "it holds no Cortex bootstrap")
+# The templates' heading below a line of text: a team's notes quoting it, or a bootstrap of before the marker a team
+# wrote a line above — which, Cortex cannot tell, nor the layout: --force writes the run's own.
+TITLE_BELOW_TEXT = Kept("holds Cortex's title below a line of text, so Cortex cannot tell it for its bootstrap, nor "
+                        "its layout; a workspace's takes --workspace",
+                        "Cortex's title below a line of text, so neither its bootstrap nor its layout can be told")
+OLDER_TITLE_BELOW_TEXT = Kept("is an older Cortex bootstrap, written before the bootstrap marker, its title below a "
+                              "line of text, so its layout cannot be told; a workspace's takes --workspace",
+                              "an older Cortex bootstrap, written before the bootstrap marker, its title below a line "
+                              "of text, so its layout cannot be told")
+OLDER_NO_TITLE = Kept("is an older Cortex bootstrap, written before the bootstrap marker, with no title Cortex can read "
+                      "— in a comment, say —, so its layout cannot be told; a workspace's takes --workspace",
+                      "an older Cortex bootstrap, written before the bootstrap marker, with no title Cortex can read, so "
+                      "its layout cannot be told")
+
+
+def title_below_text(content: bytes) -> bool:
+    """The templates' heading in Cortex's block of ``content``, below a line of text — no title (``title_line``). A
+    heading inside a comment is none: the file holds no bootstrap, as ``title_line`` reads comments."""
+    if title_line(content) is not None:
+        return False
+    comment = False
+    for line in without_frontmatter(parts(normalised(content))[0]).split(b"\n"):
+        if not comment and line.startswith(TITLE):
+            return True
+        comment = _in_a_comment(line, comment)
+    return False
+
+
+def _in_a_comment(line: bytes, comment: bool) -> bool:
+    """Whether the end of ``line`` is inside an HTML comment, its start being inside one when ``comment``."""
+    at = 0
+    while True:
+        if comment:
+            end = line.find(b"-->", at)
+            if end < 0:
+                return True
+            at, comment = end + 3, False
+        else:
+            begin = line.find(b"<!--", at)
+            if begin < 0:
+                return False
+            at, comment = begin + 4, True
+
+
+def forced(path: Path, template: bytes, personality: bool, current: Optional[bytes]) -> bytes:
+    """What ``cortex init --force`` writes at ``path`` from ``template`` over ``current``, the file there or
+    ``None``: the team's part stays (ADR-012 §3.3)."""
+    wanted = stamped(for_tool(path, instructions(template, personality)))
+    return wanted if current is None else with_team_part(wanted, current)
 
 
 def _other_layout(wanted: str) -> Kept:
     other = "a workspace" if wanted == "single" else "a single project"
-    return Kept(f"was written for {other}", f"a bootstrap written for {other}")
+    return Kept(f"was written for {other}", f"a bootstrap written for {other}", layout=True)
 
 
 def _refuse_a_file_on_the_way(path: Path, what: str) -> None:
@@ -342,16 +454,16 @@ def _refuse_a_file_on_the_way(path: Path, what: str) -> None:
             raise InitError(f"{what}: {display(str(directory))} is a file, not a folder")
 
 
-def _backup_of(path: Path, content: bytes) -> Optional[Path]:
+def _backup_of(path: Path, content: bytes) -> Tuple[Path, bool]:
     """Where ``--force`` keeps the file it replaces — ``FILE.bak``, or ``FILE.bak.N`` when a
-    ``.bak`` of other content is there already: none is ever overwritten. ``None`` when a backup
-    of this content exists."""
+    ``.bak`` of other content is there already: none is ever overwritten — and whether it is to be
+    written, not when a backup of this content is there already."""
     for n in range(1000):
         backup = path.with_name(path.name + (".bak" if n == 0 else f".bak.{n}"))
         if not backup.exists():
-            return backup
+            return backup, True
         if backup.is_file() and backup.read_bytes() == content:
-            return None
+            return backup, False
     raise InitError(f"--force: {display(str(path))} has a thousand backups — remove some")
 
 
@@ -425,7 +537,8 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                         "start over")
     # As the sync's own check (#310, #325): a link sync from a checkout replaces a link that leads nowhere.
     links = (mode or (project.sync if project else None)) == "link"
-    sync.existing_entry(root / sync.LINK, the_store, project or _blank(root), replaces=options.source is not None and links)
+    sync.existing_entry(root / sync.LINK, the_store, project or _blank(root), replaces=options.source is not None and links,
+                        pinned=project is not None)
     # A project keeps the version it pins — never another, older or newer; a new one takes this
     # binary's. A version newer than this binary is refused here.
     version = project.version if project else the_store.own
@@ -502,7 +615,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     ignored = sync.add_to_gitignore(root, entries)
     if ignored:
         out.write(f"✓ .gitignore: {', '.join(ignored)}\n")
-    if sync.ignored(root, config.LOCAL_FILE) is None:
+    if sync.in_no_repository(root):
         gitignore = ("its .gitignore keeps nothing out of a commit" if (root / ".gitignore").is_file()
                      else "no .gitignore is written")
         err.write(f"note: {display(str(root))} is in no git repository: {config.PROJECT_FILE} is committed nowhere, "
@@ -512,7 +625,11 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         sync._notes(root, spec_mode, err)
 
     templates = spec / "templates"
-    workspace = options.workspace
+    # Without --workspace, a workspace's instructions file stays a workspace's (#329): no option names the other
+    # layout, and the marker says the one the file was written for, as `cortex upgrade` reads it.
+    kept_workspace = not options.workspace and instructions_file is not None and instructions_file.is_file() \
+        and written_for_workspace(instructions_file.read_bytes())
+    workspace = options.workspace or kept_workspace
     bootstrap = templates / ("bootstrap-instructions-workspace.md" if workspace else "bootstrap-instructions.md")
     template = bootstrap.read_bytes()
     if instructions_file is None:
@@ -520,8 +637,12 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     elif instructions_file.exists() and not options.force:
         out.write(f"✓ {display(str(instructions_file))} kept — --force replaces it\n")
         kept = instructions_file.read_bytes()
-        again = "cortex init --force writes it again, and keeps it as .bak"
         found = kept_bootstrap(kept, template)
+        # A workspace's, the option chose this run's: --force alone keeps the file's layout (#329) — by its markers,
+        # or its title before the marker — and would write a single project's again, so the command names the option.
+        option = " --workspace" if options.workspace and not written_for_workspace(kept) else ""
+        again = f"cortex init {tool_options(instructions_file, tool)}{option} --force writes it again, and keeps " \
+            "it as .bak"
         if found is not None:
             err.write(f"note: {display(str(instructions_file))} {found.sentence} — "
                       f"{again if found.force else 'it is kept as it is'}\n")
@@ -532,36 +653,71 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             err.write(f"note: {display(str(instructions_file))} has no `alwaysApply: true` line in a frontmatter, "
                       f"as Cursor's documentation writes it: Cursor may not apply it in every conversation — {again}\n")
     else:
-        wanted = stamped(for_tool(instructions_file, instructions(template, personality)))
         replaced = instructions_file.exists()
         current = instructions_file.read_bytes() if replaced else None
-        if current is not None:
-            wanted = with_team_part(wanted, current)    # ADR-012 §3.3: the team's part stays
+        wanted = forced(instructions_file, template, personality, current)
         if current == wanted:
             out.write(f"✓ {display(str(instructions_file))} is what --force would write: left as it is\n")
         else:
             instructions_file.parent.mkdir(parents=True, exist_ok=True)
             if replaced:
-                backup = _backup_of(instructions_file, current)
-                if backup is None:
+                backup, to_write = _backup_of(instructions_file, current)
+                if not to_write:
                     out.write(f"✓ {display(str(instructions_file))}: a backup of it is there already\n")
                 else:
                     os.replace(instructions_file, backup)
-                    out.write(f"✓ {display(str(backup))}: the file --force replaces, as it was — git does not ignore "
-                              "it: carry over what you wrote in it, then delete it\n")
+                    # Said when git says so: a team's .gitignore may hold *.bak, and a root in no repository has no git.
+                    # Asked where the backup is: a --tool custom file may be outside the root, on another drive even.
+                    left = sync.git_ignores(backup.parent, backup.name) is False
+                    out.write(f"✓ {display(str(backup))}: the file --force replaces, as it was — "
+                              f"{'git does not ignore it: ' if left else ''}carry over what you wrote in it, "
+                              "then delete it\n")
             instructions_file.write_bytes(wanted)
             out.write(f"✓ {display(str(instructions_file))} {'replaced' if replaced else 'written'}\n")
+            if kept_workspace:
+                err.write(f"note: {display(str(instructions_file))} was written for a workspace, and is written for one "
+                          "again — to write a single project's, remove it and run "
+                          f"`cortex init {tool_options(instructions_file, tool)}`, then copy the team's part back from "
+                          f"{display(str(backup))}, below the end marker\n")
+            elif replaced and not options.workspace and not markers(current) and title_line(current) is None and (
+                    title_below_text(current) or PERSONALITY_BEGIN in without_bom(current)):
+                # No marker, and no title Cortex can read where a bootstrap of before the marker had one — below a line
+                # of text, its personality block in it or not, or Cortex's by that block alone: the layout cannot be
+                # told, and --force alone writes a single project's — said, as the run without --force says it (#329).
+                held = ("held Cortex's title below a line of text" if title_below_text(current) else
+                        "held Cortex's personality block, with no title Cortex can read")
+                err.write(f"note: {display(str(instructions_file))} {held}, so its "
+                          "layout could not be told, and a single project's is written — "
+                          f"`cortex init {tool_options(instructions_file, tool)} --workspace --force` writes a "
+                          f"workspace's; what you wrote is in {display(str(backup))}\n")
     if not tool_named:
         # Found, not written: a file of another tool's, which a new project's default leaves alone.
         for name, rel in TOOLS.items():
             other = root / rel
             if other == instructions_file or not other.is_file():
                 continue
-            found = kept_bootstrap(other.read_bytes(), template)
+            content = other.read_bytes()
+            found = kept_bootstrap(content, template)
             if found is None:
                 continue
-            err.write(f"note: {rel} is there and was kept: {found.phrase} — " + (
-                f"cortex init --tool {name} --force replaces it, and keeps it as .bak\n" if found.force else "kept as it is\n"))
+            if not found.force:
+                again = "kept as it is"
+            elif found.layout and not workspace and content == forced(
+                    other, (templates / "bootstrap-instructions-workspace.md").read_bytes(), personality, content):
+                # A workspace's file as --force, which keeps its layout (#329), would write it: no command to name.
+                err.write(f"note: {rel} is there and was kept: {found.phrase}, up to date as one\n")
+                continue
+            elif found.layout:
+                # Never "remove it": at a root in no repository, its team's part would be lost with it (#329).
+                again = f"cortex init --tool {name} --workspace --force writes a workspace's" if workspace else \
+                    f"cortex init --tool {name} --force writes it again, a workspace's as it was written"
+                again += ", and keeps it as .bak"
+            else:
+                # No marker to tell the layout: --force alone keeps the one its title says, a single project's when it
+                # says none — a workspace's run names its option then, as for the run's own file.
+                option = " --workspace" if workspace and not written_for_workspace(content) else ""
+                again = f"cortex init --tool {name}{option} --force replaces it, and keeps it as .bak"
+            err.write(f"note: {rel} is there and was kept: {found.phrase} — {again}\n")
         if project is not None and not known_before and instructions_file is not None:
             err.write(f"note: no instructions file of a known tool was here, and {TOOLS['copilot']} is written: "
                       "a project of --tool custom names it again, with --instructions-file\n")
@@ -573,7 +729,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             (root / name).write_bytes(content)
             out.write(f"✓ {name} written — fill it in\n")
 
-    if workspace:
+    if options.workspace:                   # the services and the team's pair: the option's, never the file's
         for name in services:
             folder = root / name
             folder.mkdir(parents=True, exist_ok=True)
@@ -597,9 +753,10 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
 
 
 def _blank(root: Path) -> config.Project:
-    """A project not initialised yet: nothing sync made can be at cortex/."""
+    """A project without its ``cortex.toml``: what sync made at cortex/ is judged by the ``spec`` its
+    ``cortex.local.toml`` still names, as `cortex sync` judges it (#328) — nothing, when it names none."""
     return config.Project(root=str(root), version=store.Store().own, theme="none", sync=None,
-                          local_theme=None, spec=None)
+                          local_theme=None, spec=config.local_spec(str(root)))
 
 
 def run(args: List[str]) -> int:

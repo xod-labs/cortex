@@ -23,7 +23,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
-from cortex_cli import store  # noqa: E402
+from cortex_cli import store, sync  # noqa: E402
 from cortex_cli.store import digest  # noqa: E402
 from cortex_cli.sync import link_target  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
@@ -425,22 +425,36 @@ class LinkAndCopyTests(SyncTestCase):
 class GitIgnoreTests(SyncTestCase):
     """What git ignores, asked of git: a link is a file to git, which `cortex/` does not match."""
 
-    def repository(self, ignore):
-        project = self.project()
+    def repository(self, ignore, name="app"):
+        project = self.project(name)
         subprocess.run(["git", "init", "-q", str(project)], check=True)
-        (project / ".gitignore").write_text(ignore, encoding="utf-8")
+        (project / ".gitignore").write_bytes(ignore.encode("utf-8"))     # as written: no newline turned into CRLF
         return project
 
     def check_ignore(self, project, name):
         return subprocess.run(["git", "-C", str(project), "check-ignore", "-q", name]).returncode == 0
 
+    def with_git(self):
+        """The command's environment with git on its PATH, to answer what it ignores."""
+        if shutil.which("git") is None:
+            self.skipTest("needs git")
+        self.env = dict(self.env, PATH=os.pathsep.join([os.path.dirname(shutil.which("git")), self.env["PATH"]]))
+
     @unittest.skipIf(os.name == "nt", "a junction is a directory to git on Windows")
     def test_a_link_is_not_ignored_by_a_trailing_slash(self):
-        project = self.repository("cortex.local.toml\n/cortex/\n")
-        proc = self.sync(project, "--link")
-        self.assert_ok(proc)
-        self.assertFalse(self.check_ignore(project, "cortex"))
-        self.assertIn("add a `/cortex` line to .gitignore, without the final slash", proc.err)
+        # Without git to ask, the note says no more than .gitignore tells; with git, git's answer.
+        for git, said in ((False, "git could not be asked whether it ignores cortex/, and Cortex cannot tell from "
+                                  ".gitignore that it does"), (True, "git does not ignore cortex/")):
+            with self.subTest(git=git):
+                if git:
+                    self.with_git()
+                project = self.repository("cortex.local.toml\n/cortex/\n")
+                shutil.move(str(project), str(self.tmp / f"repo-{git}"))
+                project = self.tmp / f"repo-{git}"
+                proc = self.sync(project, "--link")
+                self.assert_ok(proc)
+                self.assertFalse(self.check_ignore(project, "cortex"))
+                self.assertIn(f"note: {said} — add a `/cortex` line to .gitignore, without the final slash", proc.err)
 
     def test_without_the_slash_a_link_and_a_copy_are_ignored(self):
         for mode in ("--link", "--copy"):
@@ -456,7 +470,177 @@ class GitIgnoreTests(SyncTestCase):
     def test_cortex_local_toml_not_ignored_is_said(self):
         project = self.repository("")
         proc = self.sync(project)
-        self.assertIn("git does not ignore cortex.local.toml", proc.err)
+        self.assertIn("note: git could not be asked whether it ignores cortex.local.toml, which holds this machine's "
+                      "paths, and Cortex cannot tell from .gitignore that it does — add it to .gitignore\n", proc.err)
+        self.with_git()
+        proc = self.sync(project)
+        self.assertIn("note: git does not ignore cortex.local.toml, which holds this machine's paths — add it to "
+                      ".gitignore\n", proc.err)
+
+    def test_without_git_only_a_line_git_reads_as_it_is_says_ignored(self):
+        # git would not ignore cortex.local.toml for any of these: a negation below the line, a leading space, a
+        # tab, a byte order mark not at the start of the file — each a note, never "ignored".
+        for n, ignore in enumerate(("cortex.local.toml\n!cortex.local.toml\n", "cortex.local.toml\n!*.toml\n",
+                                    "cortex.local.toml\n!/cortex.local.toml\n", "cortex.local.toml\n!cortex.local.t?ml\n",
+                                    "cortex.local.toml\n!cortex.local.[t]oml\n", "cortex.local.toml\n!cortex\\.local.toml\n",
+                                    # a glob that matches it, `**/` as no folder, a class only git reads
+                                    "cortex.local.toml\n!cortex.*\n", "cortex.local.toml\n!**/cortex.local.toml\n",
+                                    "cortex.local.toml\n![[:alpha:]]*\n",
+                                    " cortex.local.toml\n", "cortex.local.toml\t\n", "# ours\n\ufeffcortex.local.toml\n",
+                                    # git splits at a line feed only, dropping one carriage return before it
+                                    "a\rcortex.local.toml\n", "x\x0ccortex.local.toml\n", "cortex.local.toml\r\r\n",
+                                    # git skips one byte order mark at the start: a second is text of the line
+                                    "\ufeff\ufeffcortex.local.toml\n")):
+            with self.subTest(ignore=ignore):
+                project = self.repository(ignore, f"not-{n}")
+                proc = self.sync(project)
+                self.assertFalse(self.check_ignore(project, "cortex.local.toml"))
+                self.assertIn("note: git could not be asked whether it ignores cortex.local.toml", proc.err)
+        # What git strips, Cortex strips too: the byte order mark at the start, trailing spaces; a negation above the
+        # line is taken back by it.
+        for n, ignore in enumerate(("\ufeffcortex.local.toml\n", "cortex.local.toml  \n",
+                                    "!cortex.local.toml\ncortex.local.toml\n", "cortex.local.toml\r\n",
+                                    "cortex.local.toml \r\n",
+                                    # a negation that cannot match the path takes back another one, never this one
+                                    "cortex.local.toml\nCLAUDE.md\n!.gitkeep\n", "cortex.local.toml\n!docs/README.md\n",
+                                    # a glob, an escape, `**/` that cannot match it, any more than git reads them so
+                                    "cortex.local.toml\nCLAUDE.md\n!*.d.ts\n", "cortex.local.toml\n!.vscode/*.json\n",
+                                    "cortex.local.toml\n!\\#file\n", "cortex.local.toml\n!**/keep\n",
+                                    # the last line naming it is read, below the negation that took the first back
+                                    "cortex.local.toml\n!cortex.local.toml\ncortex.local.toml\n")):
+            with self.subTest(ignore=ignore):
+                project = self.repository(ignore, f"is-{n}")
+                proc = self.sync(project)
+                self.assertTrue(self.check_ignore(project, "cortex.local.toml"))
+                self.assertNotIn("cortex.local.toml", proc.err)
+
+    def test_without_git_only_a_negation_that_can_match_the_path_takes_it_back(self):
+        # Its last component the path's — as a repository that ignores case reads it —, a glob or an escape: it may.
+        # A negation of another name, of the folder above, never does: the line still says the path is ignored.
+        name = ".claude/settings.local.json"
+        for below in ("!settings.local.json", "!/.claude/settings.local.json", "!SETTINGS.LOCAL.JSON", "!*.json",
+                      "!.claude/settings.local.jso?", "!.claude/settings\\.local.json"):
+            with self.subTest(below=below):
+                self.assertFalse(sync._named([name, below], {name}, name))
+        for below in ("!.gitkeep", "!.claude/", "!.claude", "!other.json", "# !settings.local.json", "/settings.local.json"):
+            with self.subTest(below=below):
+                self.assertTrue(sync._named([name, below], {name}, name))
+        # A glob, read as git reads it: one that matches the path takes it back — `**/` as no folder too, a class or a
+        # bracket only git reads may —, one of other paths never does.
+        for below in ("!.claude/*", "!.claude/**", "!**/*.json", "!**/settings.local.json", "!.claude/**/settings.local.json",
+                      "!.claude/settings.local.[j]son", "!.claude/settings.local.[!x]son", "!.claude/[[:alpha:]]*",
+                      "!.claude/[abc", "!.claude/x\\"):
+            with self.subTest(below=below):
+                self.assertFalse(sync._named([name, below], {name}, name))
+        for below in ("!*.d.ts", "!.vscode/*.json", "!\\#file", "!**/keep", "!x/settings.local.json", "!*/settings.json",
+                      "!.claude/settings.local.[!j]son", "!settings.local.json?", "!.claude/*/settings.local.json",
+                      # `*` and `?` never match a `/`: without one, a pattern is of the last component
+                      "!.claude*.json", "!.claude?settings.local.json", "!/.claude*json"):
+            with self.subTest(below=below):
+                self.assertTrue(sync._named([name, below], {name}, name))
+        # A final `/` keeps a negation to folders: `cortex/` takes back the copy of the spec, a folder — not told
+        # from the link without the disk, it may.
+        self.assertFalse(sync._named(["/cortex", "!cortex/"], {"/cortex"}, "cortex"))
+        # A name and a negation written with an accent decomposed, as macOS writes them, are one: it takes it back.
+        for name, below in (("not\u00e9s.md", "!note\u0301s.md"), ("note\u0301s.md", "!not\u00e9s.md"),
+                            ("not\u00e9s.md", "!NOTE\u0301S.*")):
+            with self.subTest(name=name, below=below):
+                self.assertFalse(sync._named([name, below], {name}, name))
+
+    def test_without_git_a_bracket_or_a_double_star_never_says_ignored_where_git_does_not(self):
+        # Case never narrows a bracket — a negated one is compared as written, a range keeps both its ends —, and a
+        # `**` right after the literal head is whole: git compares the head first, then globs the rest. Each takes the
+        # path back, as git reads it; with git here, each answer is checked against it, a repository that ignores case
+        # and one that does not alike: Cortex says ignored only where git says so.
+        takes_back = (("cortex.local.toml", "![!A-Z]*"), ("cortex.local.toml", "![^A-Z]*"),
+                      ("cortex.local.toml", "!cortex.[T-z]ocal.toml"),
+                      (".claude/settings.local.json", "!.claude/[T-z]*"), (".claude/settings.local.json", "!/.claude**"),
+                      (".claude/settings.local.json", "!/.c**"), ("cortex", "!cortex**/**"), ("cortex", "!/cortex**/**"),
+                      (".claude/settings.local.json", "!.claude/settings.local.[^x]son"),
+                      (".claude/settings.local.json", "!.claude/settings.local.[i-k]son"),
+                      (".claude/settings.local.json", "!.claude/settings.local.[\\j]son"),
+                      (".claude/settings.local.json", "!.claude/settings.local.[]j]son"),
+                      (".claude/settings.local.json", "!.claude/settings.local.[]j]so[n]"),
+                      (".claude/settings.local.json", "!.claude/settings.local.[z-aj]son"),
+                      # A name as written, not only folded: `[!a-z]` takes back `N`, which folding would hide, and `?`
+                      # matches the one `ß` folding turns into two letters.
+                      ("Notes.md", "![!a-z]otes.md"), ("Straße.md", "!Stra?e.md"))
+        # A bracket that cannot match it, as git reads it — an escaped `-` is no range —: the path stays ignored.
+        keeps = (("cortex.local.toml", "![!a-z]*"), (".claude/settings.local.json", "!.claude/settings.local.[i\\-k]son"),
+                 (".claude/settings.local.json", "!.claude/settings.local.[!j]son"), ("cortex", "!cortex**x"))
+        git = shutil.which("git")
+        for (name, below), expected in [*((case, False) for case in takes_back), *((case, True) for case in keeps)]:
+            line = "/cortex" if name == "cortex" else name
+            with self.subTest(name=name, below=below):
+                said = sync._named([line, below], {line}, name)
+                self.assertEqual(said, expected)
+                if git is None:
+                    continue
+                project = self.repository(f"{line}\n{below}\n", f"git-{len(list(self.tmp.iterdir()))}")
+                for ignorecase in ("false", "true"):
+                    answer = subprocess.run([git, "-C", str(project), "-c", f"core.ignorecase={ignorecase}",
+                                             "check-ignore", "--no-index", "-q", name]).returncode == 0
+                    self.assertTrue(answer or not said, f"git does not ignore {name} (ignorecase={ignorecase})")
+
+    def test_without_git_a_line_that_is_a_pattern_is_taken_back_by_any_negation_of_its_paths(self):
+        # `/.cortex-sync-*` is asked of a name that stands in for what a sync killed half-way leaves: a negation of
+        # some of those paths — a pattern, or a name of one — may take back a real one, so the line is written again.
+        line, probe = "/.cortex-sync-*", ".cortex-sync-x"
+        for below in ("!/.cortex-sync-[0-9]*", "!.cortex-sync-1234-abcd", "!/.cortex-sync-1234-abcd/", "!.cortex-sync-?*",
+                      "!*.d.ts"):
+            with self.subTest(below=below):
+                self.assertFalse(sync._named([line, below], {line}, probe, sync._stands_in(line)))
+        # A name of none of its paths keeps it, and a line that names one path is asked of that path alone.
+        for below in ("!.gitkeep", "!cortex-sync-1", "!/.cortex-sync"):
+            with self.subTest(below=below):
+                self.assertTrue(sync._named([line, below], {line}, probe, sync._stands_in(line)))
+        self.assertIsNone(sync._stands_in("cortex.local.toml"))
+        self.assertTrue(sync._named(["cortex.local.toml", "!*.d.ts"], {"cortex.local.toml"}, "cortex.local.toml",
+                                    sync._stands_in("cortex.local.toml")))
+
+    @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
+    def test_without_git_a_gitignore_that_is_a_link_is_not_read(self):
+        # git reads no .gitignore that is a symbolic link: its lines ignore nothing — a note, never "ignored".
+        project = self.repository("")
+        (project / ".gitignore").unlink()
+        (self.tmp / "shared-ignore").write_bytes(b"cortex.local.toml\n")
+        try:
+            (project / ".gitignore").symlink_to(self.tmp / "shared-ignore")
+        except OSError:
+            self.skipTest("no symbolic link here")
+        self.assertFalse(self.check_ignore(project, "cortex.local.toml"))
+        proc = self.sync(project)
+        self.assertIn("note: git could not be asked whether it ignores cortex.local.toml", proc.err)
+        # A link of the spec's, and Claude Code's settings: nothing written through the link, and each note names it.
+        proc = self.sync(project, "--link", "--claude-access")
+        self.assert_ok(proc)
+        self.assertEqual((self.tmp / "shared-ignore").read_bytes(), b"cortex.local.toml\n")
+        self.assertNotIn(".gitignore:", proc.out)
+        self.assertIn("— .gitignore is a symbolic link, which git does not read: make it a file, with a `/cortex` line, "
+                      "without the final slash: a link is a file to git\n", proc.err)
+        self.assertIn("paths, and Cortex cannot tell from .gitignore that it does — .gitignore is a symbolic link, which "
+                      "git does not read: make it a file, with a line for it\n", proc.err)
+
+    def test_without_git_a_pattern_is_not_said_not_ignored(self):
+        # A glob, `**`: git ignores the file, which Cortex cannot tell without git — it does not say git does not.
+        for n, ignore in enumerate(("*.local.toml\n", "**/cortex.local.toml\n")):
+            with self.subTest(ignore=ignore):
+                project = self.repository(ignore, f"glob-{n}")
+                proc = self.sync(project)
+                self.assertTrue(self.check_ignore(project, "cortex.local.toml"))
+                self.assertNotIn("git does not ignore", proc.err)
+                self.assertIn("Cortex cannot tell from .gitignore that it does", proc.err)
+
+    def test_a_refusing_git_is_not_taken_for_a_no(self):
+        # git refusing the repository — a worktree whose repository is gone — answers nothing: .gitignore's line says
+        # it is ignored, and no note says otherwise.
+        self.with_git()
+        project = self.project()
+        (project / ".git").write_text("gitdir: ../nowhere\n", encoding="utf-8")
+        (project / ".gitignore").write_text("cortex.local.toml\n", encoding="utf-8")
+        proc = self.sync(project)
+        self.assert_ok(proc)
+        self.assertNotIn("ignore", proc.err)
 
 
 class HousekeepingTests(SyncTestCase):
@@ -937,8 +1121,52 @@ class CortexLockTests(SyncTestCase):
         (project / "cortex.lock").write_text(f'format = 1\nversion = "{version}"\ndigest = "{digest_ or self.OTHER}"\n{extra}',
                                              encoding="utf-8")
 
+    @harness.outside_a_repository
+    def test_in_no_repository_the_lock_is_not_said_to_commit(self):
+        # A 2.B workspace root: cortex init says cortex.toml is committed nowhere, and so is the lock — nor does
+        # `sync --locked` or `validate` say to commit it.
+        project = self.project()
+        proc = self.sync(project, "--locked")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn("--locked: no cortex.lock — `cortex sync` writes it. Nothing of the project was changed", proc.err)
+        proc = self.sync(project)
+        self.assert_ok(proc)
+        self.assertIn("cortex.lock: written\n", proc.out)
+        self.assertNotIn("commit", proc.out.lower())
+        good = self.lock(project)
+        self.write_lock(project, version="9.9.8", digest_=digest(self.stored()))
+        proc = self.sync(project, "--locked")
+        self.assertEqual(proc.returncode, 1, proc.err)
+        self.assertIn(f"cortex.toml pins {OWN} — `cortex sync` writes it. Nothing", proc.err)
+        for change, said in ((lambda: (project / "cortex.lock").unlink(), "no cortex.lock — run `cortex sync`\n"),
+                             (lambda: self.write_lock(project, version="9.9.8", digest_=digest(self.stored())),
+                              f"pins {OWN} — run `cortex sync`\n")):
+            (project / "cortex.lock").write_text(good, encoding="utf-8")
+            change()
+            proc = self.validate(project)
+            self.assertIn(said, proc.out)
+            self.assertNotIn("commit", proc.out.lower())
+        (project / ".git").mkdir()                                  # a repository: the lock is to commit
+        proc = self.validate(project)
+        self.assertIn(f"pins {OWN} — run `cortex sync`, then commit it", proc.out)
+
+    @harness.outside_a_repository
+    def test_a_repository_is_a_git_at_the_root_or_above_it_as_written_or_resolved(self):
+        repo = self.tmp / "repo"
+        (repo / ".git").mkdir(parents=True)
+        (repo / "ws").mkdir()
+        (self.tmp / "alone").mkdir()
+        self.assertFalse(sync.in_no_repository(repo / "ws"))
+        self.assertTrue(sync.in_no_repository(self.tmp / "alone"))
+        if os.name != "nt":                                         # a link to a directory needs a privilege there
+            (self.tmp / "ws-link").symlink_to(repo / "ws", target_is_directory=True)
+            self.assertFalse(sync.in_no_repository(self.tmp / "ws-link"))   # resolved: inside repo/
+        (self.tmp / "alone" / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")   # a worktree's, or a submodule's
+        self.assertFalse(sync.in_no_repository(self.tmp / "alone"))
+
     def test_sync_writes_the_lock_of_the_pinned_version_then_leaves_it(self):
         project = self.project()
+        (project / ".git").mkdir()                                  # a repository, git or not on the PATH
         proc = self.sync(project)
         self.assert_ok(proc)
         self.assertIn("cortex.lock: written — commit it", proc.out)
@@ -976,6 +1204,7 @@ class CortexLockTests(SyncTestCase):
     def test_a_lock_of_another_version_is_written_again(self):
         project = self.project()
         self.write_lock(project, version="9.9.8")
+        (project / ".git").mkdir()
         proc = self.sync(project)
         self.assert_ok(proc)
         self.assertIn(f"cortex.lock: Cortex {OWN}, where it named 9.9.8 — commit it", proc.out)
@@ -1129,6 +1358,7 @@ class CortexLockTests(SyncTestCase):
     def test_locked_never_writes_the_lock(self):
         # A project's CI: `cortex sync --locked && cortex validate --strict`.
         project = self.project()
+        (project / ".git").mkdir()                                  # a repository, git or not on the PATH
         proc = self.sync(project, "--locked")
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn("--locked: no cortex.lock — `cortex sync` writes it, then commit it. Nothing of the project "
@@ -1224,6 +1454,7 @@ class RegisterTests(SyncTestCase):
                 self.assertNotIn("registered", proc.out + proc.err)
                 self.assertEqual(self.written(), before)
 
+    @harness.outside_a_repository
     def test_a_listed_project_waits_for_no_other_write_of_the_registry(self):
         sync, version = in_process()
         from cortex_cli import registry
@@ -1339,6 +1570,7 @@ class RegisterTests(SyncTestCase):
         self.assertTrue((project / "cortex.lock").is_file())
         self.assertEqual(self.registry.read_bytes(), before)
 
+    @harness.outside_a_repository
     def test_cortex_no_register_set_neither_reads_nor_writes_the_registry_and_empty_counts_as_unset(self):
         project = self.project("acme")
         for value in ("1", "yes"):

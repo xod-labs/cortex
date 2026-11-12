@@ -35,8 +35,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
-from typing import Dict, List, Optional, TextIO, Tuple
+from typing import Dict, List, Optional, Pattern, Set, TextIO, Tuple
 
 from cortex_core.validate import shown
 
@@ -438,11 +439,12 @@ def leaving(path: Path) -> str:
 
 
 def existing_entry(target: Path, the_store: store.Store, project: config.Project,
-                   replaces: bool = False) -> Optional[str]:
+                   replaces: bool = False, pinned: bool = True) -> Optional[str]:
     """What sync made at ``cortex/`` — ``"link"``, ``"copy"`` — or ``None`` when nothing is there.
     Anything else there is refused, and so is a copy holding a file sync did not write: removing
     it would lose that file. ``replaces`` — a link sync from a checkout, ``--link --from`` — a link
-    the project reads that leads nowhere is ``"gone"``: the sync names where it should lead (#310)."""
+    the project reads that leads nowhere is ``"gone"``: the sync names where it should lead (#310). ``pinned``
+    off — `cortex init` in a project without its ``cortex.toml`` (#328) — the advice is init's: no sync runs there."""
     if not os.path.lexists(target):
         return None
     if is_link(target):
@@ -454,10 +456,12 @@ def existing_entry(target: Path, the_store: store.Store, project: config.Project
             # deleted since, or into a store moved since — CORTEX_HOME changed. One message says both (#312).
             if replaces:
                 return "gone"
+            again = f"`cortex sync --link --from` the checkout it should follow, which replaces it, or remove it, then " \
+                f"`cortex sync` for the version {config.PROJECT_FILE} pins" if pinned else \
+                "`cortex init --link --from` the checkout it should follow, which replaces it, or remove it, then run " \
+                "the command again"
             raise SyncError(f"{LINK}/ is a link to {shown(display(pointed))}, which leads nowhere — a checkout or a "
-                            f"store moved or deleted since it was linked. `cortex sync --link --from` the checkout it "
-                            f"should follow, which replaces it, or remove it, then `cortex sync` for the version "
-                            f"{config.PROJECT_FILE} pins.")
+                            f"store moved or deleted since it was linked. {again}.")
         raise SyncError(f"{LINK}/ is a link to {shown(display(pointed))}, which Cortex did not make. Move or remove it, "
                         "then run the command again.")
     if target.is_dir() and not (target / ".git").exists() and (target / MARKER).is_file():
@@ -785,7 +789,8 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
     if locked:
         why = (f"no {config.LOCK_FILE}" if lock is None else
                f"{config.LOCK_FILE} names Cortex {lock.version}, and {config.PROJECT_FILE} pins {version}")
-        raise SyncError(f"--locked: {why} — `cortex sync` writes it, then commit it. Nothing of the project was changed")
+        commit = "" if in_no_repository(root) else ", then commit it"     # committed nowhere (ADR-008 §9)
+        raise SyncError(f"--locked: {why} — `cortex sync` writes it{commit}. Nothing of the project was changed")
     return digest, ("written" if lock is None else f"Cortex {version}, where it named {lock.version}")
 
 
@@ -877,7 +882,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if source is not None:
         out.write(f"{config.LOCK_FILE}: neither read nor written — a checkout has no version (--from)\n")
     elif lock is not None:
-        out.write(f"{config.LOCK_FILE}: {lock} — commit it\n")
+        out.write(f"{config.LOCK_FILE}: {lock}{'' if in_no_repository(root) else ' — commit it'}\n")
     if notes:
         _notes(Path(root), mode, err)
     _claude(Path(root), project, None if mode == "copy" else spec_source, out, err)
@@ -922,19 +927,26 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
     """Add to ``.gitignore`` each line of ``entries`` whose path — its value — git does not ignore
     yet, and return them. The file keeps its bytes: its encoding, its byte order mark, its line
     endings. Without a repository to ask, a line is added unless it, or one that means the same,
-    is there — and no .gitignore is created: it would keep nothing out of any commit."""
+    is there with no negation below it — and no .gitignore is created: it would keep nothing out of any commit. A
+    .gitignore that is a symbolic link is never written through — git does not read it, and its target may be outside
+    the project, or none yet: the note names the link (``_notes``)."""
     path = root / ".gitignore"
+    if is_link(path):
+        return []
     if not path.is_file() and ignored(root, config.LOCAL_FILE) is None:
         return []
     data = path.read_bytes() if path.is_file() else b""
-    present = {line.strip().lstrip("\ufeff") for line in data.decode("utf-8", errors="replace").splitlines()}
+    lines = gitignore_lines(data.decode("utf-8", errors="replace"))
     missing = []
     for line, probe in entries.items():
         state = ignored(root, probe)
         if state is None:                       # no repository to ask
             name = probe.rstrip("/")
-            state = bool(present & ({name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if probe.endswith("/") else set())))
-        if not state and line not in present:
+            state = _named(lines, {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if probe.endswith("/") else set()),
+                           name)
+        # A line that is a pattern is asked of a name standing in for the paths it matches: a negation below it that
+        # is a pattern too, or names one of them, may take back another — `!/.cortex-sync-[0-9]*` the real ones.
+        if not state and not _named(lines, {line}, probe, _stands_in(line)):  # there, with no negation below: kept
             missing.append(line)
     if missing:
         newline = b"\r\n" if b"\r\n" in data else b"\n"
@@ -944,39 +956,218 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
     return missing
 
 
+def gitignore_lines(text: str) -> List[str]:
+    """``.gitignore``'s lines as git reads them, in their order: split at a line feed only — a lone carriage return,
+    a form feed, a line separator are text to git — one carriage return before it left out, the byte order mark an
+    editor may put at the start of the file left out, and each line's trailing spaces — not one a backslash escapes,
+    nor a tab: what git leaves out of a pattern, and nothing more. One reading, to tell what is ignored and what to
+    add alike."""
+    text = text[1:] if text.startswith("\ufeff") else text            # one, as git skips: a second is text
+    lines = [line[:-1] if line.endswith("\r") else line for line in text.split("\n")]
+    return [re.sub(r"(?<!\\) +$", "", line) for line in lines]
+
+
+_GLOB = re.compile(r"[*?\[\\]")
+
+
+def _stands_in(line: str) -> Optional[Pattern[str]]:
+    """The paths ``line`` of .gitignore matches, when it is a pattern — one Cortex cannot read matching any —, for
+    which a name only stands in (``_negations``); ``None`` for a line that names one path."""
+    if _GLOB.search(line) is None:
+        return None
+    return _pattern(line) or re.compile(".*", re.DOTALL)
+
+
+def _negations(lines: List[str], name: str, glob: Optional[Pattern[str]] = None) -> bool:
+    """Whether a line of ``lines`` is a negation that can match ``name``, read as git reads a pattern of the root's
+    .gitignore (``_pattern``): one with a ``/`` but at its end against the path from the root, any other against its
+    last component too — and against both, over-matching being the safe side —, the name as written and case folded,
+    as a repository that does not ignore case and one that does compare it, and a name written decomposed as the same
+    name composed (macOS writes them so). A negation Cortex cannot read is one that may: only git can tell; and so is
+    any pattern, or any name ``glob`` matches, when ``name`` stands in for the paths of the pattern ``glob``. Any
+    other — ``!.gitkeep``, ``!*.d.ts`` — takes back another path, never this one."""
+    paths = {unicodedata.normalize("NFC", name.rstrip("/")), _folded(name.rstrip("/"))}
+    paths |= {path.rsplit("/", 1)[-1] for path in paths}
+    for line in lines:
+        if not line.startswith("!"):
+            continue
+        pattern = _pattern(line[1:])
+        if pattern is None or any(pattern.fullmatch(path) for path in paths) or (
+                glob is not None and (_GLOB.search(line[1:]) is not None
+                                      or glob.fullmatch(unicodedata.normalize("NFC", line[1:].strip("/"))))):
+            return True
+    return False
+
+
+def _folded(text: str) -> str:
+    """``text`` as a repository that ignores case compares it, composed: a letter with its accent and the letter
+    followed by a combining accent are one."""
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", text).casefold())
+
+
+def _pattern(text: str) -> Optional[Pattern[str]]:
+    """A .gitignore pattern, its ``!`` left out, as git's wildmatch reads it, composed, and blind to case but in a
+    negated bracket, whose members are compared as written — over-matching in a repository that ignores case and one
+    that does not: ``*`` and ``?`` within one component, ``**`` as a whole component across any number of them —
+    one right after the literal head too, which git compares before it globs the rest —, a bracket expression, a
+    backslash that makes the next character a literal — one of the root's .gitignore, its leading ``/`` and a final
+    ``/`` set aside: a final ``/`` keeps it to directories, and over-matching is the safe side. ``None`` for what only
+    git reads: a character class such as ``[:alpha:]``, a bracket never closed, a backslash at the end."""
+    text = unicodedata.normalize("NFC", text)       # case: re.IGNORECASE, a negated bracket aside
+    if text.endswith("/"):
+        text = text[:-1]
+    if text.startswith("/"):
+        text = text[1:]
+    head = next((index for index, char in enumerate(text) if char in "*?[\\"), len(text))
+    out, at = [], 0
+    while at < len(text):
+        char = text[at]
+        if char == "\\":
+            if at + 1 == len(text):
+                return None
+            out.append(re.escape(text[at + 1]))
+            at += 2
+        elif char == "*":
+            end = at
+            while end < len(text) and text[end] == "*":
+                end += 1
+            # git compares the literal head before the first wildcard, then globs the rest: a `**` right after the
+            # head is at the start of what it globs — whole, as one after a `/` is (dir.c, match_pathname).
+            whole = end - at >= 2 and (at == head or text[at - 1] == "/") and (end == len(text) or text[end] == "/")
+            if whole and end < len(text):
+                out.append("(?:.*/)?")          # `**/`: any number of folders, none included
+                end += 1
+            else:
+                out.append(".*" if whole else "[^/]*")
+            at = end
+        elif char == "?":
+            out.append("[^/]")
+            at += 1
+        elif char == "[":
+            found = _bracket(text, at + 1)
+            if found is None:
+                return None
+            out.append(found[0])
+            at = found[1]
+        else:
+            out.append(re.escape(char))
+            at += 1
+    try:
+        return re.compile("".join(out), re.DOTALL | re.IGNORECASE)
+    except re.error:                            # a range backwards, say: git's to read
+        return None
+
+
+def _bracket(text: str, at: int) -> Optional[Tuple[str, int]]:
+    """The bracket expression of ``text`` that starts at ``at``, past its ``[``, as a regular expression that never
+    matches ``/``, and where it ends; ``None`` for a class such as ``[:alpha:]``, or one never closed."""
+    negated = at < len(text) and text[at] in "!^"
+    at += negated
+    members, first = [], True
+    while at < len(text):
+        char = text[at]
+        if char == "]" and not first:
+            if negated:                         # never narrowed by case: git compares its members as written
+                return f"(?-i:(?!/)[^{''.join(members)}])", at + 1
+            return f"(?!/)[{''.join(members)}]", at + 1
+        if char == "[" and text.startswith("[:", at):
+            return None
+        if char == "\\":
+            if at + 1 == len(text):
+                return None
+            char, at = text[at + 1], at + 1
+        if at + 2 < len(text) and text[at + 1] == "-" and text[at + 2] != "]":
+            high = text[at + 2]
+            if high == "\\":
+                if at + 3 == len(text):
+                    return None
+                high, at = text[at + 3], at + 1
+            members.append(f"{re.escape(char)}-{re.escape(high)}")
+            at += 3
+        else:
+            members.append(re.escape(char))
+            at += 1
+        first = False
+    return None
+
+
+def _named(lines: List[str], wanted: Set[str], name: str, glob: Optional[Pattern[str]] = None) -> bool:
+    """Whether a line of ``lines`` names the path ``name`` as one of ``wanted`` writes it, with no negation below the
+    last such line that could take it back: what Cortex can tell without git. A pattern, another .gitignore,
+    info/exclude or core.excludesFile is git's to read: not that Cortex can tell. ``glob``: the paths of the line of
+    ``wanted``, a pattern, ``name`` stands in for (``_stands_in``)."""
+    found = [index for index, line in enumerate(lines) if line in wanted]
+    return bool(found) and not _negations(lines[found[-1] + 1:], name, glob)
+
+
+def in_no_repository(root) -> bool:
+    """No ``.git`` at ``root`` or above it — as written or resolved, git or not on this machine: what Cortex
+    writes there is committed nowhere, the root being no work tree (ADR-008 §9)."""
+    return not any(os.path.lexists(os.path.join(directory, ".git"))
+                   for start in {str(root), os.path.realpath(root)}
+                   for directory in (start, *map(str, Path(start).parents)))
+
+
+def git_ignores(root: Path, name: str) -> Optional[bool]:
+    """git's own answer, whether it ignores ``name`` in the project: ``None`` when there is no git to ask, or it
+    refuses the repository — its owner, say — or there is none."""
+    git = shutil.which("git")
+    if git is None:
+        return None
+    try:
+        proc = subprocess.run([git, "-C", str(root), "check-ignore", "-q", "--", name],
+                              capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.returncode == 0 if proc.returncode in (0, 1) else None
+
+
 def ignored(root: Path, name: str) -> Optional[bool]:
     """Whether git ignores ``name`` in the project: asked of git when the project is a repository
-    of it; ``None`` when there is no repository to ask about."""
-    git = shutil.which("git")
-    if git is not None:
-        try:
-            proc = subprocess.run([git, "-C", str(root), "check-ignore", "-q", "--", name],
-                                  capture_output=True, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            proc = None
-        if proc is not None and proc.returncode in (0, 1):
-            return proc.returncode == 0
-        if proc is not None:
-            return None                                    # no repository here
-    if not (root / ".git").exists():
+    of it; ``None`` when there is no repository to ask about — no ``.git`` at the root or above it.
+    Without git's answer, ``True`` only for what Cortex can tell from the project's own .gitignore."""
+    answer = git_ignores(root, name)
+    if answer is not None:
+        return answer
+    if in_no_repository(root):
         return None
-    # No git to ask: .gitignore's own lines. A link is a file to git — `cortex/` does not match it.
+    # No git to ask, or git refusing the repository: the project's own .gitignore, at the root of the repository or
+    # in a subdirectory of it, read for a line that names the path as Cortex writes it — no pattern, no negation
+    # below it, no .gitignore of a folder above, which git would read too. A link is a file to git — `cortex/` does
+    # not match it. A .gitignore that is a link git does not read, nor does Cortex.
+    if is_link(root / ".gitignore"):
+        return False
     directory = (root / name).is_dir() and not is_link(root / name)
     wanted = {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if directory else set())
     try:
-        lines = (root / ".gitignore").read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = gitignore_lines((root / ".gitignore").read_bytes().decode("utf-8", errors="replace"))   # as written
     except OSError:
         return False
-    return any(line.strip() in wanted for line in lines)
+    return _named(lines, wanted, name)
+
+
+def _not_ignored(root: Path, name: str, shown: str) -> Optional[str]:
+    """What a note says of ``name``, which git must ignore: that git does not, or — without git's answer — that
+    Cortex cannot tell it does; ``None`` when it is ignored, or the root is in no repository."""
+    answer = git_ignores(root, name)
+    if answer is not None:
+        return None if answer else f"git does not ignore {shown}"
+    if ignored(root, name) is not False:        # in no repository, or a line of .gitignore names it
+        return None
+    return f"git could not be asked whether it ignores {shown}, and Cortex cannot tell from .gitignore that it does"
 
 
 def _notes(root: Path, mode: str, err: TextIO) -> None:
-    if mode != "store" and ignored(root, LINK) is False:
-        err.write(f"note: git does not ignore {LINK}/ — add a `/{LINK}` line to .gitignore, without the final slash: "
-                  "a link is a file to git\n")
-    if ignored(root, config.LOCAL_FILE) is False:
-        err.write(f"note: git does not ignore {config.LOCAL_FILE}, which holds this machine's paths — add it to "
-                  ".gitignore\n")
+    # A .gitignore that is a symbolic link, which git does not read: no line added to it would count (#329).
+    linked = ".gitignore is a symbolic link, which git does not read: make it a file, with " \
+        if is_link(root / ".gitignore") else None
+    said = _not_ignored(root, LINK, f"{LINK}/") if mode != "store" else None
+    if said is not None:
+        line = f"a `/{LINK}` line" + ("" if linked else " to .gitignore")
+        err.write(f"note: {said} — {linked or 'add '}{line}, without the final slash: a link is a file to git\n")
+    said = _not_ignored(root, config.LOCAL_FILE, f"{config.LOCAL_FILE}, which holds this machine's paths")
+    if said is not None:
+        err.write(f"note: {said} — {linked + 'a line for it' if linked else 'add it to .gitignore'}\n")
 
 
 def run(args: List[str]) -> int:
