@@ -1444,7 +1444,8 @@ def git_ignores(root: Path, name: str) -> Optional[bool]:
 def ignored(root: Path, name: str) -> Optional[bool]:
     """Whether git ignores ``name`` in the project: asked of git when the project is a repository
     of it; ``None`` when there is no repository to ask about — no ``.git`` at the root or above it.
-    Without git's answer, ``True`` only for what Cortex can tell from the project's own .gitignore."""
+    Without git's answer, ``True`` only for what Cortex can tell from the project's own .gitignore, and those of
+    the folders between it and the path."""
     answer = git_ignores(root, name)
     if answer is not None:
         return answer
@@ -1452,17 +1453,27 @@ def ignored(root: Path, name: str) -> Optional[bool]:
         return None
     # No git to ask, or git refusing the repository: the project's own .gitignore, at the root of the repository or
     # in a subdirectory of it, read for a line that names the path as Cortex writes it — no pattern, no negation
-    # below it, no .gitignore of a folder above, which git would read too. A link is a file to git — `cortex/` does
+    # below it, no .gitignore of a folder above, which git would read too —, then the .gitignore of each folder
+    # between it and the path, whose lines outrank the root's, as git reads them: `!settings.local.json` in
+    # .claude/.gitignore takes back the root's `.claude/settings.local.json`. A link is a file to git — `cortex/` does
     # not match it. A .gitignore that is a link git does not read, nor does Cortex.
-    if is_link(root / ".gitignore"):
-        return False
     directory = (root / name).is_dir() and not is_link(root / name)
-    wanted = {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if directory else set())
-    try:
-        lines = gitignore_lines(cascade.read_file(str(root / ".gitignore")).decode("utf-8", errors="replace"))
-    except OSError:
-        return False
-    return _named(lines, wanted, name)
+    said = False
+    parts = name.split("/")
+    for depth in range(len(parts)):
+        gitignore = root.joinpath(*parts[:depth], ".gitignore")
+        if is_link(gitignore):                  # git does not read it
+            continue
+        try:
+            lines = gitignore_lines(cascade.read_file(str(gitignore)).decode("utf-8", errors="replace"))
+        except OSError:                         # none there, or no file: nothing to read
+            continue
+        rest = "/".join(parts[depth:])
+        if _named(lines, {rest, f"/{rest}"} | ({f"{rest}/", f"/{rest}/"} if directory else set()), rest):
+            said = True
+        elif _negations(lines, rest):
+            said = False
+    return said
 
 
 def _not_ignored(root: Path, name: str, shown: str) -> Optional[str]:
