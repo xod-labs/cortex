@@ -1222,6 +1222,48 @@ class SecondReviewTests(TeamTestCase):
                     (root / "agents").symlink_to(team)
                 self.assert_ok(self.cortex(root, "sync"))
 
+    @unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")
+    def test_a_version_less_cortex_toml_names_a_file_where_its_team_s_folder_is(self):
+        # #350, #375: a link to a file, or a file — never "is not there … `git submodule update --init`", which leaves
+        # either as it is. What it is is named; each remedy, followed, lets the sync run.
+        for case in ("link, lead to the team's folder", "link, remove it", "file"):
+            with self.subTest(case=case):
+                root = self.project('theme = "h2g2"\n', name=f"app-{len(case)}")
+                aside = self.tmp / f"notes-{len(case)}.txt"
+                aside.write_bytes(b"notes\n")
+                if case == "file":
+                    (root / "agents").write_bytes(b"notes\n")
+                    said = ("agents is a file, not the team's folder: remove it and check the team's folder out in its "
+                            "place\n")
+                else:
+                    (root / "agents").symlink_to(aside)
+                    said = (f'agents/ is a link to "{harness_path(aside)}", a file: make it lead to the team\'s folder, '
+                            "or remove it and check that folder out in its place\n")
+                for command in (("sync",), ("init", "--tool", "claude")):
+                    proc = self.cortex(root, *command)
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertIn(f'cortex.toml: "version" is required, or in {TEAM} — {said}', proc.err)
+                    self.assertNotIn("git submodule update", proc.err)
+                    self.assertNotIn("is not there", proc.err)
+                (root / "agents").unlink()
+                if case.endswith("lead to the team's folder"):
+                    team = self.tmp / f"team-{len(case)}"              # where the team's folder is
+                    team.mkdir()
+                    (team / "cortex.team.toml").write_text(f'version = "{OWN}"\n', encoding="utf-8")
+                    (root / "agents").symlink_to(team)
+                else:
+                    (root / "agents").mkdir()                           # the team's folder, checked out in its place
+                    (root / TEAM).write_text(f'version = "{OWN}"\n', encoding="utf-8")
+                self.assert_ok(self.cortex(root, "sync"))
+        # A link to an empty folder is a folder: said empty, as a submodule not checked out.
+        root = self.project('theme = "h2g2"\n', name="app-empty")
+        (self.tmp / "empty").mkdir()
+        (root / "agents").symlink_to(self.tmp / "empty")
+        proc = self.cortex(root, "sync")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f'"version" is required, or in {TEAM} — agents/ is empty: check it out', proc.err)
+        self.assertNotIn("is a link to", proc.err)
+
     @SOURCE
     @DOWNLOADS
     def test_init_during_a_try_writes_the_bootstrap_from_the_team_s_version(self):
@@ -2221,6 +2263,24 @@ class CodeReviewSecondFixTests(TeamTestCase):
         self.assertNotIn("LOCK_", proc.out)
         self.assertEqual(self.local(root)["version"], OWN)                          # the try kept
 
+    @SOURCE
+    def test_validate_names_the_plain_sync_that_puts_the_team_s_spec_back_outside_a_try(self):
+        # #346, #375: no try — the plain sync reads the team's version, and is the remedy, never --locked.
+        root, _ = self.stale(local=None)
+        self.assert_ok(self.cortex(root, "sync"))
+        changed = next(p for p in sorted((self.home / "versions" / "9.9.8" / "agents").rglob("*")) if p.is_file())
+        os.chmod(changed, 0o644)
+        changed.write_bytes(b"# altered\n")
+        proc = self.cortex(root, "validate")
+        self.assertIn("LOCK_DIGEST", proc.out)
+        self.assertIn("and agents/cortex.team.lock names sha256:", proc.out)
+        self.assertIn(" — run `cortex sync`, which puts it in the store again", proc.out)
+        self.assertNotIn("--locked", proc.out)
+        self.assert_ok(self.cortex(root, "sync"))                                   # the command it names
+        proc = self.cortex(root, "validate", "--strict")
+        self.assert_ok(proc)
+        self.assertNotIn("LOCK_", proc.out)
+
     @TEAM_RELEASE
     @AS_ROOT
     def test_team_puts_back_what_it_could_not_write(self):
@@ -3203,6 +3263,41 @@ class ThirdCodeReviewTests(TeamTestCase):
                 self.assertFalse((root / "cortex.toml").exists())
                 subprocess.run(["chmod", "u+rwx", "agents"], cwd=root, check=True)
                 self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+
+    @SOURCE
+    @AS_ROOT
+    @harness.outside_a_repository
+    def test_init_dir_beside_a_team_s_folder_that_cannot_be_searched_names_it_from_where_it_runs(self):
+        # #350, #375: `cortex init DIR` from elsewhere — the chmod names DIR/agents, which runs from there.
+        root = self.tmp / "nested" / "fresh"
+        (root / "agents").mkdir(parents=True)
+        (root / TEAM).write_text(f'version = "{OWN}"\n', encoding="utf-8")
+        os.chmod(root / "agents", 0o600)
+        self.addCleanup(os.chmod, root / "agents", 0o755)
+        proc = self.cortex(self.tmp, "init", "nested/fresh", "--tool", "claude")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"cortex init reads {TEAM}, and agents/ is a folder this user cannot search: give its owner read, "
+                      "write and search on it — chmod u+rwx nested/fresh/agents — then run cortex init again\n", proc.err)
+        self.assertFalse((root / "cortex.toml").exists())
+        subprocess.run(["chmod", "u+rwx", "nested/fresh/agents"], cwd=self.tmp, check=True)
+        self.assert_ok(self.cortex(self.tmp, "init", "nested/fresh", "--tool", "claude"))
+        self.assertTrue((root / "cortex.toml").is_file())
+
+    @SOURCE
+    @AS_ROOT
+    @harness.outside_a_repository
+    def test_init_dir_of_a_project_beside_a_team_s_folder_that_cannot_be_searched_names_it_from_where_it_runs(self):
+        # #375 pass 1: the same, for a project whose cortex.toml is there — its own call names DIR/agents too.
+        root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n', committed=False, name="nested/fresh")
+        os.chmod(root / "agents", 0o600)
+        self.addCleanup(os.chmod, root / "agents", 0o755)
+        proc = self.cortex(self.tmp, "init", "nested/fresh", "--tool", "claude")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"cortex init reads {TEAM}, and agents/ is a folder this user cannot search: give its owner read, "
+                      "write and search on it — chmod u+rwx nested/fresh/agents — then run cortex init again\n", proc.err)
+        self.assertEqual((root / "cortex.toml").read_text(encoding="utf-8"), 'theme = "h2g2"\n')
+        subprocess.run(["chmod", "u+rwx", "nested/fresh/agents"], cwd=self.tmp, check=True)
+        self.assert_ok(self.cortex(self.tmp, "init", "nested/fresh", "--tool", "claude"))
 
     @SOURCE
     @AS_ROOT
@@ -4206,6 +4301,32 @@ class DeferredFixTests(TeamTestCase):
             self.assertEqual((root / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(NEW, True)), root.name)
 
     @DOWNLOADS
+    def test_all_team_downloads_the_older_version_a_follower_read(self):
+        # #348, #375: the first project has no bootstrap, and never needs 9.9.7 — the follower's, 9.9.7's file, is
+        # compared with 9.9.7's template, downloaded for it, and written again from 9.9.8's.
+        self.release.replace_spec("9.9.7", {"templates/bootstrap-instructions.md": OLD})
+        self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": NEW})
+        team = self.tmp / "team"
+        team.mkdir()
+        (team / "cortex.team.toml").write_text('version = "9.9.7"\n', encoding="utf-8")
+        roots = []
+        for name in ("alpha", "beta"):
+            root = self.project('theme = "h2g2"\n', name=name)
+            (root / "agents").symlink_to(team, target_is_directory=True)
+            roots.append(root)
+        alpha, beta = roots
+        (beta / "CLAUDE.md").write_bytes(init.instructions(OLD, True))
+        (self.home / "projects.toml").write_text("format = 1\n" + "".join(
+            f'\n[[project]]\nname = "{root.name}"\npath = "{harness_path(root)}"\n' for root in roots), encoding="utf-8")
+        self.assertFalse((self.home / "versions" / "9.9.7").exists())
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team", "9.9.8")
+        self.assert_ok(proc)
+        self.assertNotIn("a bootstrap without the marker", proc.err)
+        self.assertFalse((alpha / "CLAUDE.md").exists())
+        self.assertEqual((beta / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(NEW, True)))
+        self.assertTrue((self.home / "versions" / "9.9.7" / "templates").is_dir())
+
+    @DOWNLOADS
     @harness.outside_a_repository
     def test_team_names_nothing_to_commit_of_a_linked_folder_in_no_repository(self):
         # #351: agents/ a link to a folder in no repository, the project in one — git commits neither file there; the
@@ -4315,6 +4436,64 @@ class DeferredFixTests(TeamTestCase):
         self.assertNotIn("then commit it", proc.out + proc.err)
         self.assert_ok(self.cortex(root, "sync"))
         self.assert_ok(self.cortex(root, "validate", "--strict"))
+
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_sync_says_nothing_to_commit_of_a_team_s_lock_beyond_a_link_in_no_repository(self):
+        # #351, #375: the project in no repository either — nothing is said of the lock, as of any file it writes.
+        root, outside = self.linked_out()
+        shutil.rmtree(root / ".git")
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        self.assertIn("\nagents/cortex.team.lock: written\n", proc.out)
+        self.assertNotIn("committed nowhere", proc.out)
+
+    @SOURCE
+    @harness.outside_a_repository
+    def test_sync_says_nothing_to_commit_of_a_build_of_no_release_s_team_lock_beyond_a_link(self):
+        # #351, #375: a build of no release's lock is to commit nowhere, wherever it is — nothing is said of it.
+        root, outside = self.linked_out()
+        (outside / "cortex.team.toml").write_text(f'version = "{DEV_SOURCE}"\n', encoding="utf-8")
+        proc = self.cortex(root, "sync", CORTEX_SOURCE_VERSION=DEV_SOURCE)
+        self.assert_ok(proc)
+        self.assertEqual(str(config.load_lock(str(outside), config.TEAM_LOCK_FILE).version), DEV_SOURCE)
+        self.assertIn("\nagents/cortex.team.lock: written\n", proc.out)
+        self.assertNotIn("committed nowhere", proc.out)
+
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_a_resume_in_no_repository_says_a_lock_beyond_a_link_written_as_any_file(self):
+        # #351, #375: the project in no repository, agents/ a link to a folder in none — the lock the resume writes is
+        # one of the files written in no work tree, as any other (ADR-008 §9), not set apart beyond a link.
+        root, outside = self.linked_out(lock="9.9.7")
+        shutil.rmtree(root / ".git")
+        proc = self.cortex(root, "upgrade")
+        self.assert_ok(proc)
+        self.assertEqual(str(config.load_lock(str(outside), config.TEAM_LOCK_FILE).version), "9.9.8")
+        self.assertIn("\nWritten: agents/cortex.team.lock — in no git work tree, so committed nowhere: each developer "
+                      "moves their own (ADR-008 §9).\n", proc.out)
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    @harness.outside_a_repository
+    def test_a_resume_s_commit_names_no_lock_in_no_repository_to_commit_where_it_is(self):
+        # #351, #375: --commit, the project a work tree, agents/ a link to a folder in none — the team's lock the resume
+        # writes is said committed nowhere, never "outside the git work tree … commit it where it is".
+        root, outside = self.linked_out(lock="9.9.7")
+        shutil.rmtree(root / ".git")
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        self.git(root, "init", "-q", "-b", "main")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "init")
+        proc = self.cortex(root, "upgrade", "--commit", "--message", "m", **env)
+        self.assert_ok(proc)
+        self.assertEqual(str(config.load_lock(str(outside), config.TEAM_LOCK_FILE).version), "9.9.8")
+        self.assertNotIn("outside the git work tree", proc.out + proc.err)
+        self.assertIn("\nagents/cortex.team.lock — in no git work tree, so committed nowhere.\n", proc.out)
 
     @DOWNLOADS
     @NEEDS_GIT

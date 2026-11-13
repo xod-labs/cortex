@@ -1304,7 +1304,16 @@ class CortexLockTests(SyncTestCase):
                 self.assertIn("holds no docs/ — no whole spec to take the digest of", proc.out)
                 self.assertNotIn("Traceback", proc.out + proc.err)
                 self.assertEqual(self.validate(project, "--strict").returncode, 1)
-                store.remove_tree(self.stored())        # the next sync writes it whole
+                # #369: the removal first, then the sync — a sync alone is refused by the store, which holds it so.
+                self.assertIn(f'— remove "{display(self.stored())}", then run `cortex sync`', proc.out)
+                refused = self.sync(project)
+                self.assertEqual(refused.returncode, 1, refused.out + refused.err)
+                self.assertIn("holds no complete spec — remove it", refused.err)
+                shutil.rmtree(self.stored())                # the commands it names, in their order
+                self.assert_ok(self.sync(project))
+                proc = self.validate(project, "--strict")
+                self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+                self.assertNotIn("LOCK_", proc.out)
 
     @DOWNLOADS
     def test_offline_a_stored_spec_the_lock_refuses_is_said_so(self):
