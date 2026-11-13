@@ -601,9 +601,59 @@ class TeamVersionTests(SyncedProjectTestCase):
                                                         r"refuses this file too$"):
                     pin()
 
-    def test_a_cortex_local_toml_that_does_not_read_is_none_as_in_1_7_0(self):
-        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local="spec = [\n")
-        self.assertEqual(pin().version, "9.9.9")
+    def test_a_cortex_local_toml_that_does_not_parse_is_refused_as_the_cli_refuses_it(self):
+        # A conflict a pull left, a file not UTF-8 (#344): the CLI refuses everything until it is fixed, and the
+        # runtime would serve the team's version meanwhile, no signal reaching the assistant. Its 422 is the CLI's
+        # own message — written as bytes: the line the parser names is the file's own.
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n')
+        for raw, said in ((b"spec = [\n<<<<<<< HEAD\n", "cortex.local.toml: Invalid value (at line 2, column 1)"),
+                          (b'spec = "caf\xe9"\n', "cortex.local.toml: not UTF-8 text")):
+            with self.subTest(raw=raw):
+                (self.project / "cortex.local.toml").write_bytes(raw)
+                with self.assertRaises(ValueError) as caught:
+                    pin()
+                self.assertEqual(str(caught.exception), f"{said} — cortex sync refuses this file too")
+                for command in () if os.name == "nt" else ("config", "sync"):   # run with an empty environment
+                    host = self.cli(command)
+                    self.assertEqual(host.returncode, 1, host.stdout + host.stderr)
+                    self.assertEqual(host.stderr.decode(), f"cortex {command}: {said}\n")
+
+    def test_cortex_toml_is_read_before_cortex_local_toml_as_the_cli_reads_them(self):
+        # Both files broken (#344): the CLI reads cortex.toml first and names its error, so the runtime names
+        # cortex.toml's — the one to fix first — never cortex.local.toml's. Each error is at a line of its own.
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n<<<<<<< HEAD\n', local="spec = [\n<<<<<<< HEAD\n")
+        said = "Invalid statement (at line 3, column 1)"
+        with self.assertRaises(ValueError) as caught:
+            pin()
+        self.assertEqual(str(caught.exception), f"cortex.toml of this workspace cannot be read: {said}")
+        for command in () if os.name == "nt" else ("config", "sync"):   # run with an empty environment
+            host = self.cli(command)
+            self.assertEqual(host.returncode, 1, host.stdout + host.stderr)
+            self.assertEqual(host.stderr.decode(), f"cortex {command}: cortex.toml: {said}\n")
+
+    def test_a_cortex_local_toml_the_runtime_cannot_open_is_none_as_in_1_7_0_and_logged(self):
+        # A container's mount, another user's file: a deployment that works today keeps working (#344), said in the
+        # runtime's log. A directory stands for it everywhere; a file this user may not read, where it cannot.
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n')
+        local = self.project / "cortex.local.toml"
+        local.mkdir()
+        with self.assertLogs("cortex_runtime.base", "WARNING") as logged:
+            self.assertEqual(pin().version, "9.9.9")
+        self.assertIn("cortex.local.toml cannot be read, and is not: ", logged.output[0])
+        local.rmdir()
+        if os.name == "posix" and os.geteuid() != 0:                    # root reads any file
+            local.write_bytes(b"spec = [\n")
+            local.chmod(0)
+            try:
+                with self.assertLogs("cortex_runtime.base", "WARNING") as logged:
+                    self.assertEqual(pin().version, "9.9.9")
+            finally:
+                local.chmod(0o600)
+            self.assertIn("Permission denied", logged.output[0])
+            local.unlink()
+        with mock.patch("cortex_runtime.base.logger") as logger:       # no file at all: nothing to say
+            self.assertEqual(pin().version, "9.9.9")
+        logger.warning.assert_not_called()
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipes here")
     def test_a_named_pipe_at_cortex_local_toml_is_none_never_waited_on(self):
@@ -680,6 +730,30 @@ class ApiTests(SyncedProjectTestCase):
                     r = client.post(path, json={"workspace": "host", "role": "lead-backend", "subject": "ACME-8"})
                     self.assertEqual(r.status_code, 422, r.text)
                     self.assertIn("Cortex 9.9.8", r.json()["detail"])
+
+    def test_a_cortex_local_toml_that_does_not_parse_is_a_422_naming_it(self):
+        (self.project / "cortex.local.toml").write_bytes(b"spec = [\n<<<<<<< HEAD\n")
+        for queue in (False, True):
+            with self.subTest(asynchronous=queue):
+                client = self.client(queue)
+                for path in ("/run", "/resolve"):
+                    r = client.post(path, json={"workspace": "host", "role": "lead-backend", "subject": "ACME-9"})
+                    self.assertEqual(r.status_code, 422, r.text)
+                    self.assertEqual(r.json()["detail"], "cortex.local.toml: Invalid value (at line 2, column 1) — "
+                                                          "cortex sync refuses this file too")
+
+    def test_both_files_broken_is_a_422_naming_cortex_toml_s_error(self):
+        # cortex.toml is read first, as the CLI reads it (#344): its error is the one the assistant relays.
+        (self.project / "cortex.toml").write_bytes(b'version = "9.9.9"\ntheme = "h2g2"\n<<<<<<< HEAD\n')
+        (self.project / "cortex.local.toml").write_bytes(b"spec = [\n<<<<<<< HEAD\n")
+        for queue in (False, True):
+            with self.subTest(asynchronous=queue):
+                client = self.client(queue)
+                for path in ("/run", "/resolve"):
+                    r = client.post(path, json={"workspace": "host", "role": "lead-backend", "subject": "ACME-11"})
+                    self.assertEqual(r.status_code, 422, r.text)
+                    self.assertEqual(r.json()["detail"], "cortex.toml of this workspace cannot be read: "
+                                                          "Invalid statement (at line 3, column 1)")
 
 
 if __name__ == "__main__":
