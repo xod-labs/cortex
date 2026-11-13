@@ -1262,14 +1262,18 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
     lines = gitignore_lines(data.decode("utf-8", errors="replace"))
     missing = []
     for line, probe in entries.items():
+        glob = _stands_in(line)
         state = ignored(root, probe)
         if state is None:                       # no repository to ask
             name = probe.rstrip("/")
             state = _named(lines, {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if probe.endswith("/") else set()),
                            name)
-        # A line that is a pattern is asked of a name standing in for the paths it matches: a negation below it that
-        # is a pattern too, or names one of them, may take back another — `!/.cortex-sync-[0-9]*` the real ones.
-        if not state and not _named(lines, {line}, probe, _stands_in(line)):  # there, with no negation below: kept
+        # A line that is a pattern is asked of a name standing in for the paths it matches: a negation that is a
+        # pattern too, or names one of them, may take back another — `!/.cortex-sync-[0-9]*` the real ones, which
+        # git's answer for the name does not tell. The line, then, counts only there with no such negation below it.
+        elif state and glob is not None and _negations(lines, probe, glob):
+            state = False
+        if not state and not _named(lines, {line}, probe, glob):  # there, with no negation below: kept
             missing.append(line)
     if missing:
         newline = b"\r\n" if b"\r\n" in data else b"\n"
