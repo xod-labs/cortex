@@ -9,6 +9,7 @@ release note under [`changelog/`](changelog/).
 
 ### Fixed
 - **`cortex sync` puts a stored version that holds no complete spec in the store again** ([#384](https://github.com/xod-labs/cortex/issues/384)). A version of the store missing one of its trees, `docs/` say, was refused by every command that puts a version in the store — `cortex sync`, `cortex upgrade`, `cortex init` — naming its removal, which fails for a user who is not root: the store is read-only. On Windows, read-only files refuse a plain delete as well. The store now removes such a version as `cortex prune` does, writable first, and writes it again. It does so only for a folder of the store: a link a user made at its name, or a file, is refused, naming its removal, and what a link leads to is never changed.
+- **`cortex validate` names the sync alone for a stored version left incomplete** ([#384](https://github.com/xod-labs/cortex/issues/384), after [#369](https://github.com/xod-labs/cortex/issues/369)). Its warning (`LOCK_DIGEST`) named the removal of the version's folder, then `cortex sync` — `cortex sync --locked` during a try. That removal fails for a user who is not root, on a read-only store, and it was named even when the version had already left the store, removed by a `cortex prune` while `cortex validate` read it. The warning now names that sync alone, which puts the version in the store again.
 
 ## [1.8.4] - 2026-11-13 — Reality Is Frequently Inaccurate _(Released)_
 [Full notes](changelog/1.8.4.md)

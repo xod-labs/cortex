@@ -2264,6 +2264,28 @@ class CodeReviewSecondFixTests(TeamTestCase):
         self.assertEqual(self.local(root)["version"], OWN)                          # the try kept
 
     @SOURCE
+    def test_validate_names_the_locked_sync_that_writes_a_try_s_incomplete_team_spec_again(self):
+        # #384: the team's version, synced with --locked beside a try, missing a tree and read-only, as the store
+        # holds it: the remedy validate gives, alone, puts it in the store again — the try kept.
+        root, _ = self.stale()
+        self.assert_ok(self.cortex(root, "upgrade", "9.9.8"))
+        self.assert_ok(self.cortex(root, "sync", "--locked"))
+        stored = self.home / "versions" / "9.9.8"
+        store.make_writable(stored)
+        shutil.rmtree(stored / "docs")
+        store.make_read_only(stored)
+        proc = self.cortex(root, "validate")
+        self.assertIn("LOCK_DIGEST", proc.out)
+        self.assertIn("holds no docs/ — no whole spec to take the digest of — run `cortex sync --locked`, which puts "
+                      "it in the store again", proc.out)
+        self.assertNotIn("remove", proc.out)
+        self.assert_ok(self.cortex(root, "sync", "--locked"))                       # the command it names
+        proc = self.cortex(root, "validate", "--strict")
+        self.assert_ok(proc)
+        self.assertNotIn("LOCK_", proc.out)
+        self.assertEqual(self.local(root)["version"], OWN)                          # the try kept
+
+    @SOURCE
     def test_validate_names_the_plain_sync_that_puts_the_team_s_spec_back_outside_a_try(self):
         # #346, #375: no try — the plain sync reads the team's version, and is the remedy, never --locked.
         root, _ = self.stale(local=None)

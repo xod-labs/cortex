@@ -317,12 +317,13 @@ def digest(directory: Path) -> str:
     version removed meanwhile — has no digest: the empty set's would be locked."""
     missing = [f"{tree}/" for tree in SPEC_TREES if not (directory / tree).is_dir()]
     if missing:
-        raise StoreError(f"{directory} holds no {', '.join(missing)} — no whole spec to take the digest of")
+        raise StoreError(f"{display(str(directory))} holds no {', '.join(missing)} — no whole spec to take the "
+                         "digest of")
     try:
         return digest_of(hashes(directory))
     except FileNotFoundError as error:
-        raise StoreError(f"{directory} lost {error.filename} while its digest was taken — no whole spec to take the "
-                         "digest of")
+        raise StoreError(f"{display(str(directory))} lost {display(str(error.filename))} while its digest was "
+                         "taken — no whole spec to take the digest of")
 
 
 def _files(directory: Path) -> Iterator[Path]:

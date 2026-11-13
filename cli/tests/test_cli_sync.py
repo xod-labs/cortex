@@ -1305,12 +1305,32 @@ class CortexLockTests(SyncTestCase):
                 self.assertIn("holds no docs/ — no whole spec to take the digest of", proc.out)
                 self.assertNotIn("Traceback", proc.out + proc.err)
                 self.assertEqual(self.validate(project, "--strict").returncode, 1)
-                self.assertIn(f'— remove "{display(self.stored())}", then run `cortex sync`', proc.out)
-                # #384: the sync puts it in the store again by itself — for a user who is not root too.
-                self.assert_ok(self.sync(project))
+                # #384: the sync alone, which puts it in the store again — a removal by hand fails, read-only.
+                spec = self.stored() if mode == "--store" else project / "cortex"
+                self.assertIn(f"{display(spec)} holds no docs/ — no whole spec to take the digest of — run "
+                              "`cortex sync`, which puts it in the store again", proc.out)
+                self.assertNotIn("remove", proc.out)
+                self.assert_ok(self.sync(project))                  # the command it names, as a user runs it
                 proc = self.validate(project, "--strict")
                 self.assertEqual(proc.returncode, 0, proc.out + proc.err)
                 self.assertNotIn("LOCK_", proc.out)
+
+    def test_validate_names_no_removal_of_a_stored_version_gone_meanwhile(self):
+        # #384: pruned while validate read it — the path is gone, and only the sync is named, which runs.
+        from cortex_cli import config, validate
+        project = self.project()
+        self.assert_ok(self.sync(project))
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}):
+            loaded = config.load(str(project))
+            store.Store(self.home).remove(store.Version(OWN))
+            warnings = validate.lock_warnings(loaded, str(self.stored()), version=store.Version(OWN))
+        self.assertFalse(os.path.lexists(self.stored()))
+        self.assertEqual(warnings, [("cortex.lock", "LOCK_DIGEST", f"{display(self.stored())} holds no agents/, templates/, "
+                                     "docs/ — no whole spec to take the digest of — run `cortex sync`, which puts it "
+                                     "in the store again")])
+        self.assert_ok(self.sync(project))                          # the command it names
+        proc = self.validate(project, "--strict")
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
 
     def test_a_link_a_user_made_at_a_stored_version_is_refused(self):
         # #384: the store repairs a folder of its own, never what a link a user made leads to.

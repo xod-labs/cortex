@@ -111,9 +111,8 @@ def lock_warnings(project: config.Project, base: str, files: Optional[Dict[str, 
     try:
         actual = store.digest_of(files) if files is not None else store.digest(Path(base))
     except store.StoreError as error:      # a version removed from the store meanwhile, or left incomplete
-        # The store refuses to sync a version it holds incomplete: it is removed first, as its refusal says (#369).
-        stored = shown(display(os.path.realpath(base)))
-        return [(shown_name, "LOCK_DIGEST", f"{error} — remove {stored}, then run {resync}")]
+        # The sync puts either in the store again (#384): a removal by hand fails on a read-only store.
+        return [(shown_name, "LOCK_DIGEST", f"{error} — run {resync}, which puts it in the store again")]
     if actual != lock.digest:
         return [(shown_name, "LOCK_DIGEST", f"the spec synced is {actual}, and {shown_name} names {lock.digest} — "
                  f"run {resync}, which puts it in the store again")]
