@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import stat
 import threading
 import tomllib
 from dataclasses import dataclass
@@ -180,8 +181,8 @@ def _local(root: Path) -> Mapping[str, Any]:
     pull left, a typo — is refused as ``cortex sync`` refuses it, a ``LocalUnreadable`` (#344): the command
     refuses everything until it is fixed. What is no file — a directory, a named pipe, never waited on — is none,
     and said nowhere, as ``cortex config`` reads none there (#375). A file the runtime cannot open — a container's
-    mount, another user's — is none, as a 1.7.0 runtime, which never read it, served it: said in the log, once per
-    error."""
+    mount, another user's — or what it cannot tell is a file — a loop of links, a folder it cannot search (#358) —
+    is none, as a 1.7.0 runtime, which never read it, served it: said in the log, once per error."""
     path = root / project.LOCAL_FILE
     try:
         raw = cascade.read_file(str(path))
@@ -189,7 +190,15 @@ def _local(root: Path) -> Mapping[str, Any]:
         _unread(path, None)
         return {}
     except OSError as error:
-        if not os.path.isfile(path):        # the CLI's own test: no file there, which it reads as none (read_project)
+        try:
+            regular = stat.S_ISREG(os.stat(path).st_mode)
+        except (FileNotFoundError, NotADirectoryError):
+            regular = False                 # gone since, or a link that leads nowhere
+        except OSError:
+            # What cannot be told — a loop of links, a folder this user cannot search: read as none, as the CLI reads
+            # it, and said in the log, as a mount that fails is (#358).
+            regular = True
+        if not regular:                     # the CLI's own test: no file there, which it reads as none (read_project)
             _unread(path, None)
             return {}
         if _unread(path, (error.errno, error.strerror or str(error))):
