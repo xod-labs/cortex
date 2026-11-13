@@ -502,16 +502,17 @@ def _services(options: argparse.Namespace, root: Path, out: TextIO, err: TextIO)
     return [service_path(name) for name in names]
 
 
-def _team_s_error(error: Exception, root: Path, folder: str = config.TEAM_FOLDER) -> str:
+def _team_s_error(error: Exception, root: Path, folder: str = config.TEAM_FOLDER, given: Optional[str] = None) -> str:
     """The team's file's own error — it does not parse, cannot be read, or its grammar refuses it — and its remedy:
     removing cortex.toml, the developer's own at a 2.B root, loses it and changes nothing of this. ``folder`` is the
     team's folder of the project at ``root``. A file that cannot be read — not a file, a link that leads nowhere, a
     folder this user cannot search — holds no conflict to fix; in a folder this user cannot search, the folder's mode is
-    the fix, not the file (#350)."""
+    the fix, not the file (#350), its path named from where the command runs: in ``given``, the ``DIR`` it names."""
     name = cascade.team_name(folder)
     if ": cannot be read — " in str(error) and _unsearchable(root / folder):
+        here = display(os.path.join(given, folder)) if given else folder
         return (f"{error}\ncortex init reads {name}, and {folder}/ is a folder this user cannot search: give its owner "
-                f"read, write and search on it — chmod u+rwx {shlex.quote(folder)} — then run cortex init again")
+                f"read, write and search on it — chmod u+rwx {shlex.quote(here)} — then run cortex init again")
     how = "make it a file you can read" if ": cannot be read — " in str(error) else "a conflict a pull left in it, say"
     return f"{error}\ncortex init reads {name}: fix it — {how} — then run cortex init again"
 
@@ -561,7 +562,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     except config.ConfigError as error:
         folder = config.loose_team_folder(str(root))
         if str(error).startswith(f"{cascade.team_name(folder)}:"):       # the team's file's own error
-            raise InitError(_team_s_error(error, root, folder))
+            raise InitError(_team_s_error(error, root, folder, options.dir))
         raise InitError(f"{error}\ncortex init keeps an existing {config.PROJECT_FILE}: fix it, or remove it to "
                         "start over")
     # As the sync's own check (#310, #325): a link sync from a checkout replaces a link that leads nowhere.
@@ -580,7 +581,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             if team_data is not None:
                 grammar.check_team(team_data, config.TEAM_NAME)
         except grammar.ProjectFileError as error:
-            raise InitError(_team_s_error(error, root))
+            raise InitError(_team_s_error(error, root, given=options.dir))
     locks = {key: team_data[key] for key in team_data.get("locked", ())} if team_data else \
         {key: setting.value for key, setting in project.settings.settings.items() if setting.locked} if project else {}
     flags = {"theme": theme if options.theme is not None or options.no_personality else None, "sync": mode,
