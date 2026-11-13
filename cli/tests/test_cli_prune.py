@@ -589,6 +589,44 @@ class RegistryTests(RegistryTestCase):
                         self.assertNotIn("its version is not known", proc.err)
                 self.assertEqual(self.in_store(), ["9.9.5", "9.9.6", "9.9.7"])
 
+    def test_an_unreadable_entry_keeps_its_candidate_versions_and_what_it_read_now(self):
+        # #349 pass 1: a registered project this cortex refuses — PINNED its cortex.toml's, committed — keeps the team's
+        # file's version and a local try's, read loosely, and the versions synced records; a synced value that is no
+        # version is no version of the store, and refuses nothing.
+        self.put("9.9.1", "9.9.2", "9.9.3", "9.9.4", "9.9.5", "9.9.6")
+        root = self.project("app", "9.9.6")
+        (root / ".git").mkdir()
+        with open(root / "cortex.toml", "a", encoding="utf-8") as toml:
+            toml.write('later = "x"\n')                                     # a key of a later cortex
+        (root / "agents").mkdir()
+        (root / "agents" / "cortex.team.toml").write_text('version = "9.9.5"\n', encoding="utf-8")
+        (root / "cortex.local.toml").write_text(
+            'version = "9.9.4"\nsynced = { pinned = "9.9.3", reads = "not-a-version" }\n', encoding="utf-8")
+        self.register(app=root)
+        proc = self.run_cortex(self.tmp, "prune", "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn("— it stays in the registry, and only its versions are read: 9.9.6, 9.9.5, 9.9.4, 9.9.3\n",
+                      proc.err)
+        for version in ("9.9.3", "9.9.4", "9.9.5", "9.9.6"):
+            self.assertIn(f"  kept     {version} — used by app\n", proc.out)
+        self.assertIn("  would remove  9.9.1\n", proc.out)
+        self.assertIn("  would remove  9.9.2\n", proc.out)
+
+    def test_a_project_under_a_directory_it_refuses_keeps_what_it_read_now(self):
+        # #349 pass 1: under a DIR, a project this cortex refuses whose pin reads keeps the versions synced records too —
+        # never one that is no version.
+        self.put("9.9.4", "9.9.5", "9.9.6")
+        root = self.project("app", "9.9.6")
+        with open(root / "cortex.toml", "a", encoding="utf-8") as toml:
+            toml.write('later = "x"\n')
+        (root / "cortex.local.toml").write_text('synced = { pinned = "9.9.5", reads = "not-a-version" }\n',
+                                                encoding="utf-8")
+        proc = self.run_cortex(self.tmp, "prune", "--dry-run", display(self.code))
+        self.assert_ok(proc)
+        self.assertIn("— only its versions are read: 9.9.6, 9.9.5\n", proc.err)
+        self.assertIn("  kept     9.9.5 — used by ", proc.out)
+        self.assertIn("  would remove  9.9.4\n", proc.out)
+
     @PERMISSIONS
     def test_a_project_that_cannot_be_reached_is_unreadable_never_gone(self):
         # A directory that cannot be searched is no proof that the project is gone.

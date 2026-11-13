@@ -627,6 +627,22 @@ class ListTests(StateTestCase):
                 found = self.one(root)
                 self.assertEqual((found["pinned"], found["pinned_origin"]), ("9.9.8", "cortex.toml"))
 
+    @harness.outside_a_repository
+    def test_beside_a_team_s_file_whose_version_reads_pinned_is_the_team_s(self):
+        # #349 pass 1: a project this cortex refuses, its cortex.toml not committed — a team's file whose version reads
+        # loosely, though the file is refused, gives PINNED: the team's version is known.
+        for kind, team in (("read", 'version = "9.9.6"\n'), ("refused", 'version = "9.9.6"\nlater = "x"\n')):
+            with self.subTest(team=kind):
+                root = self.project(f"acme-{kind}", version="9.9.8")
+                with open(root / "cortex.toml", "a", encoding="utf-8") as toml:
+                    toml.write('later = "x"\n')                             # a key of a later cortex
+                (root / "agents").mkdir()
+                (root / "agents" / "cortex.team.toml").write_text(team, encoding="utf-8")
+                self.write_registry(("acme", root))
+                found = self.one(root)
+                self.assertEqual((found["state"], found["pinned"], found["pinned_origin"]),
+                                 ("unreadable", "9.9.6", "agents/cortex.team.toml"), found)
+
     @PERMISSIONS
     def test_a_project_file_that_cannot_be_read_is_unreadable(self):
         root = self.register(self.project("acme"))
