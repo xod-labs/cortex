@@ -6,6 +6,7 @@ said not to be a file, never waited on.
 """
 
 import os
+import socket
 import subprocess
 import sys
 import unittest
@@ -14,11 +15,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import cli_harness as harness  # noqa: E402
-from test_cli_team import GIT, GIT_ENV, OWN, TeamTestCase  # noqa: E402
+from test_cli_team import GIT, GIT_ENV, OWN, TeamTestCase, harness_path  # noqa: E402
 
 from cortex_cli.paths import display  # noqa: E402
 
 PIPES = unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipe here")
+LINKS = unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")
+# What is no file and no folder, as a test makes it here: a named pipe, a socket.
+SPECIALS = (("pipe",) if hasattr(os, "mkfifo") else ()) + (("socket",) if hasattr(socket, "AF_UNIX") else ())
 
 
 class SpecialFileTestCase(TeamTestCase):
@@ -31,6 +35,16 @@ class SpecialFileTestCase(TeamTestCase):
             self.fail(f"cortex {' '.join(args)} did not end: it waits on a named pipe")
         proc.out, proc.err = proc.stdout.decode(), proc.stderr.decode()
         return proc
+
+    def make(self, path, kind):
+        """At ``path``: a file, a named pipe or a socket."""
+        if kind == "file":
+            path.write_bytes(b"notes\n")
+        elif kind == "pipe":
+            os.mkfifo(path)
+        else:
+            with socket.socket(socket.AF_UNIX) as bound:
+                bound.bind(str(path))
 
 
 class GitmodulesTests(SpecialFileTestCase):
@@ -214,6 +228,57 @@ class LocalFileTests(SpecialFileTestCase):
                     (root / "cortex.local.toml").unlink()
                 self.assert_ok(self.within(root, "sync"))
                 self.assertTrue((root / "cortex.local.toml").is_file())
+
+
+class RenamedTeamFolderTests(SpecialFileTestCase):
+    """A team's folder ``cortex.toml`` renames, where something that is no folder is (``TEAM_FOLDER_MISSING``)."""
+
+    FOLDER = "team-agents"
+
+    @LINKS
+    def test_what_is_no_folder_at_a_renamed_team_s_folder_is_named_with_its_remedies(self):
+        # #350, #375: a file, a named pipe, a socket, or a link to one, was said not to be there — check it out
+        # there, which no checkout does over it. Named as the default agents/ is, each remedy, followed, ends it.
+        folder = self.FOLDER
+        cases = [("file", "remove it")] + [(kind, "remove it") for kind in SPECIALS] + \
+            [(f"link to {kind}", remedy) for kind in ("file",) + SPECIALS
+             for remedy in ("lead to the team's folder", "remove it")]
+        for n, (case, remedy) in enumerate(cases):
+            with self.subTest(case=case, remedy=remedy):
+                root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\nagents = "{folder}"\n', name=f"app-{n}")
+                kind = case.rpartition(" ")[2]
+                if case.startswith("link"):
+                    aside = self.tmp / f"aside-{n}"
+                    self.make(aside, kind)
+                    (root / folder).symlink_to(aside)
+                    what = "a file" if kind == "file" else "which is no folder"
+                    said = (f'{folder}/ is a link to "{harness_path(aside)}", {what}: make it lead to the team\'s '
+                            "folder, or remove it and check that folder out in its place")
+                else:
+                    self.make(root / folder, kind)
+                    what = "a file, not the team's folder" if kind == "file" else "no folder"
+                    said = f"{folder} is {what}: remove it and check the team's folder out in its place"
+                for args in (("sync",), ("init", "--tool", "claude")):
+                    proc = self.within(root, *args)
+                    self.assert_ok(proc)
+                    self.assertIn(f"warning: {said}\n", proc.err)
+                    self.assertNotIn("is not there", proc.err)
+                proc = self.within(root, "sync", "--locked")
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"--locked: {said}. Nothing of the project was changed", proc.err)
+                proc = self.within(root, "validate")
+                self.assertIn(f"TEAM_FOLDER_MISSING — {said}\n", proc.out)
+                (root / folder).unlink()
+                if remedy == "remove it":
+                    (root / folder).mkdir()                             # the team's folder, checked out in its place
+                else:
+                    team = self.tmp / f"team-{n}"                       # where the team's folder is
+                    team.mkdir()
+                    (root / folder).symlink_to(team, target_is_directory=True)
+                proc = self.within(root, "sync")
+                self.assert_ok(proc)
+                self.assertNotIn(f"{folder}", proc.err)
+                self.assertNotIn("TEAM_FOLDER_MISSING", self.within(root, "validate").out)
 
 
 if __name__ == "__main__":
