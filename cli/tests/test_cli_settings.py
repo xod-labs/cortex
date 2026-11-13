@@ -674,6 +674,29 @@ class DevelopmentBuildTests(SettingsTestCase):
                 self.assert_ok(self.from_checkout(tree, project, "sync", CORTEX_RELEASES_URL=release.url))
                 self.assertEqual(config.load(str(project)).synced["reads"], pinned)
 
+    @unittest.skipIf(harness.BINARY, "a source checkout's remedy")
+    @NEEDS_GIT
+    @harness.outside_a_repository
+    def test_a_checkout_whose_path_holds_a_space_is_told_to_update_itself_quoted(self):
+        # #374: the checkout's path is quoted, so that a shell takes it whole — on a branch, then on a detached HEAD.
+        pinned = "1.8.0"
+        checkout = self.checkout(behind={"CHANGELOG.md": self.BEHIND},
+                                 ahead={"CHANGELOG.md": (harness.REPO / "CHANGELOG.md").read_bytes()},
+                                 name="my checkout")
+        release = FakeRelease((pinned,))
+        self.addCleanup(release.close)
+        project = self.project(pinned)
+        for pull in ("pull", "pull origin HEAD"):
+            with self.subTest(pull=pull):
+                proc = self.from_checkout(checkout, project, "sync", CORTEX_RELEASES_URL=release.url)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f'— update it:\n    git -C "{display(checkout)}" {pull}\n', proc.err)
+                self.run_update(proc.err, checkout)                                         # the command it names
+                self.assert_ok(self.from_checkout(checkout, project, "sync", CORTEX_RELEASES_URL=release.url))
+                # Behind again, its HEAD detached there: a tag of a release before, say.
+                subprocess.run([*self.GIT_ARGS, "-C", str(checkout), "checkout", "-q", "--detach", "HEAD~1"],
+                               check=True, capture_output=True)
+
     def a_later_format(self, constant):
         """``core``'s ``project.py`` with ``constant`` — a format — at 2: a later Cortex's, which reads format 2."""
         source = (harness.REPO / "core" / "cortex_core" / "project.py").read_bytes()
