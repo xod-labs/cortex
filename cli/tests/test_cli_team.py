@@ -1222,6 +1222,48 @@ class SecondReviewTests(TeamTestCase):
                     (root / "agents").symlink_to(team)
                 self.assert_ok(self.cortex(root, "sync"))
 
+    @unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")
+    def test_a_version_less_cortex_toml_names_a_file_where_its_team_s_folder_is(self):
+        # #350, #375: a link to a file, or a file — never "is not there … `git submodule update --init`", which leaves
+        # either as it is. What it is is named; each remedy, followed, lets the sync run.
+        for case in ("link, lead to the team's folder", "link, remove it", "file"):
+            with self.subTest(case=case):
+                root = self.project('theme = "h2g2"\n', name=f"app-{len(case)}")
+                aside = self.tmp / f"notes-{len(case)}.txt"
+                aside.write_bytes(b"notes\n")
+                if case == "file":
+                    (root / "agents").write_bytes(b"notes\n")
+                    said = ("agents is a file, not the team's folder: remove it and check the team's folder out in its "
+                            "place\n")
+                else:
+                    (root / "agents").symlink_to(aside)
+                    said = (f'agents/ is a link to "{harness_path(aside)}", a file: make it lead to the team\'s folder, '
+                            "or remove it and check that folder out in its place\n")
+                for command in (("sync",), ("init", "--tool", "claude")):
+                    proc = self.cortex(root, *command)
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertIn(f'cortex.toml: "version" is required, or in {TEAM} — {said}', proc.err)
+                    self.assertNotIn("git submodule update", proc.err)
+                    self.assertNotIn("is not there", proc.err)
+                (root / "agents").unlink()
+                if case.endswith("lead to the team's folder"):
+                    team = self.tmp / f"team-{len(case)}"              # where the team's folder is
+                    team.mkdir()
+                    (team / "cortex.team.toml").write_text(f'version = "{OWN}"\n', encoding="utf-8")
+                    (root / "agents").symlink_to(team)
+                else:
+                    (root / "agents").mkdir()                           # the team's folder, checked out in its place
+                    (root / TEAM).write_text(f'version = "{OWN}"\n', encoding="utf-8")
+                self.assert_ok(self.cortex(root, "sync"))
+        # A link to an empty folder is a folder: said empty, as a submodule not checked out.
+        root = self.project('theme = "h2g2"\n', name="app-empty")
+        (self.tmp / "empty").mkdir()
+        (root / "agents").symlink_to(self.tmp / "empty")
+        proc = self.cortex(root, "sync")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f'"version" is required, or in {TEAM} — agents/ is empty: check it out', proc.err)
+        self.assertNotIn("is a link to", proc.err)
+
     @SOURCE
     @DOWNLOADS
     def test_init_during_a_try_writes_the_bootstrap_from_the_team_s_version(self):
