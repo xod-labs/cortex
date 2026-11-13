@@ -2174,6 +2174,25 @@ class CodeReviewSecondFixTests(TeamTestCase):
         self.assert_ok(self.cortex(root, "sync", "--locked"))
         self.assertNotIn("LOCK_", self.cortex(root, "validate").out)
 
+    @SOURCE
+    def test_validate_names_the_locked_sync_that_puts_a_try_s_team_spec_back(self):
+        # #346: synced with --locked beside a try, the team's spec altered in the store: a plain `cortex sync` reads
+        # the try, and leaves it so. The remedy validate gives, run, puts it back — the try kept.
+        root, _ = self.stale()
+        self.assert_ok(self.cortex(root, "upgrade", "9.9.8"))
+        self.assert_ok(self.cortex(root, "sync", "--locked"))
+        changed = next(p for p in sorted((self.home / "versions" / "9.9.8" / "agents").rglob("*")) if p.is_file())
+        os.chmod(changed, 0o644)
+        changed.write_bytes(b"# altered\n")
+        proc = self.cortex(root, "validate")
+        self.assertIn("LOCK_DIGEST", proc.out)
+        self.assertIn("run `cortex sync --locked`, which puts it in the store again", proc.out)
+        self.assert_ok(self.cortex(root, "sync", "--locked"))                       # the command it names
+        proc = self.cortex(root, "validate", "--strict")
+        self.assert_ok(proc)
+        self.assertNotIn("LOCK_", proc.out)
+        self.assertEqual(self.local(root)["version"], OWN)                          # the try kept
+
     @TEAM_RELEASE
     @AS_ROOT
     def test_team_puts_back_what_it_could_not_write(self):
