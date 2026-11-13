@@ -3972,6 +3972,58 @@ class FifthCounterReviewTests(TeamTestCase):
         self.assert_ok(self.cortex(self.tmp, "upgrade", "--all", "9.9.8"))               # the run named, again
         self.assertEqual(self.value(root, "version"), "9.9.8")
 
+
+class DeferredFixTests(TeamTestCase):
+    """What the 1.8.0 reviews deferred (ADR-013 §9): #347, #348, #351."""
+
+    stale = CodeReviewFixTests.stale_team_lock
+
+    @SOURCE
+    @NEEDS_GIT
+    def test_a_resume_branches_the_team_s_own_repository_for_its_lock_alone(self):
+        # #347: the resume writes the team's lock only, in agents/, a repository of its own — the branch is made
+        # there, never in the project, whose HEAD stays where it was.
+        root, lock = self.stale()
+        shutil.rmtree(root / ".git")
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        self.assert_ok(self.cortex(root, "sync", **env))
+        for where in (root / "agents", root):
+            self.git(where, "init", "-q", "-b", "main")
+            self.git(where, "add", "-A")
+            self.git(where, "commit", "-q", "-m", "init")
+        proc = self.cortex(root, "upgrade", "--branch", "fix", **env)
+        self.assert_ok(proc)
+        self.assertEqual(str(config.load_lock(str(root / "agents"), config.TEAM_LOCK_FILE).version), "9.9.8")
+        self.assertIn("git: on a new branch in agents/, fix\n", proc.out)
+        self.assertEqual(self.git(root / "agents", "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "fix")
+        self.assertEqual(self.git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "main")
+        self.assertEqual(self.git(root, "branch", "--list", "fix").stdout, "")
+
+    @SOURCE
+    @NEEDS_GIT
+    @harness.outside_a_repository
+    def test_a_resume_makes_no_branch_for_a_lock_in_no_work_tree(self):
+        # #347: agents/ a link to a folder in no repository — the lock, the one file written, is in no work tree.
+        root, lock = self.stale()
+        shutil.rmtree(root / ".git")
+        outside = self.tmp / "outside"
+        shutil.move(str(root / "agents"), str(outside))
+        (root / "agents").symlink_to(outside, target_is_directory=True)
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        self.assert_ok(self.cortex(root, "sync", **env))
+        self.git(root, "init", "-q", "-b", "main")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "init")
+        proc = self.cortex(root, "upgrade", "--branch", "fix", **env)
+        self.assert_ok(proc)
+        self.assertEqual(str(config.load_lock(str(outside), config.TEAM_LOCK_FILE).version), "9.9.8")
+        self.assertIn(f"git: no branch fix is made — nothing is written in {harness_path(root)}\n", proc.out)
+        self.assertEqual(self.git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "main")
+        self.assertEqual(self.git(root, "branch", "--list", "fix").stdout, "")
+
+
 def newer_refused(pin):
     """What --team with no VERSION says of a team's pin newer than this cortex."""
     return (f"this cortex is a development build, {OWN}, the version its branch prepares" if DEV_OWN else

@@ -1926,32 +1926,53 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
 
     def branch(files: List[Path]) -> None:
         asked.append(True)
+        # Made where the files are written (#347): none in the project's work tree — the team's lock alone, in a team's
+        # folder that is its own repository — the branch is the team's folder's, and no other work tree's.
+        if not any(_inside(top, path) and not _other_tree(top, root, path) for path in files):
+            folder = config.loose_team_folder(root)
+            agents = os.path.join(root, folder)
+            ours = {Path(os.path.abspath(agents), name) for name in (config.TEAM_FILE, config.TEAM_LOCK_FILE)}
+            try:
+                tree = _work_tree(os.path.realpath(agents)) \
+                    if all(Path(os.path.abspath(path)) in ours for path in files) else None
+            except UpgradeError:
+                tree = None
+            if tree is None:
+                if not options.dry_run:
+                    out.write(f"git: no branch {options.branch} is made — nothing is written in {display(top)}\n")
+                return
+            make(agents, tree, f" in {folder}/")
+            return
         ignored = _ignored(root, files)
         if len(ignored) == len(files):
             if not options.dry_run:
                 out.write(f"git: no branch {options.branch} is made — git ignores {_and(ignored)}\n")
             return
-        if _on_branch(root) == options.branch:
+        make(root, top, "")
+
+    def make(where: str, tree: str, said: str) -> None:
+        """The branch, made in the work tree ``tree`` of ``where`` — ``said`` naming it, when it is not the project's."""
+        if _on_branch(where) == options.branch:
             if not options.dry_run:
-                out.write(f"git: on the branch {options.branch} already\n")
+                out.write(f"git: on the branch {options.branch} already{said}\n")
             return
-        key, repository = _real(top), _repository(root)
-        if made.get(repository, (key, top))[0] != key:
+        key, repository = _real(tree), _repository(where)
+        if made.get(repository, (key, tree))[0] != key:
             dry = options.dry_run
             raise UpgradeError(f"the branch {options.branch} {'would be' if dry else 'is'} checked out in "
                                f"{display(made[repository][1])}, where this run {'would make' if dry else 'made'} it, "
                                "and git checks a branch out in one work tree at a time — nothing was changed. "
                                f"`cortex upgrade --branch NAME` in {display(root)} moves it on another branch")
-        if _branch_exists(root, options.branch):
-            raise UpgradeError(f"the branch {options.branch} exists already in {display(top)} — nothing was changed. "
+        if _branch_exists(where, options.branch):
+            raise UpgradeError(f"the branch {options.branch} exists already in {display(tree)} — nothing was changed. "
                                "Name another one with --branch")
         if options.dry_run:
-            made[repository] = (key, top)       # as the run would: a project of another work tree is refused
+            made[repository] = (key, tree)      # as the run would: a project of another work tree is refused
             return
-        _git_ok(root, "checkout", "-q", "-b", options.branch)
-        made[repository] = (key, top)
-        branched.append(top)
-        out.write(f"git: on a new branch, {options.branch}\n")
+        _git_ok(where, "checkout", "-q", "-b", options.branch)
+        made[repository] = (key, tree)
+        branched.append(tree)
+        out.write(f"git: on a new branch{said}, {options.branch}\n")
 
     try:
         outcome = _upgrade(cwd, options.wanted, options.dry_run, options.force, options.named, out, err, announce,

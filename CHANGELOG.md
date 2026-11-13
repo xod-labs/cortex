@@ -13,6 +13,7 @@ release note under [`changelog/`](changelog/).
 ### Fixed
 - **A source checkout too old for a project names its own update** ([#345](https://github.com/xod-labs/cortex/issues/345)): a cortex run from a checkout, older than the version a project pins, named `cortex self-update VERSION`, which a checkout refuses. It now names `git -C CHECKOUT pull`, which updates the checkout — or, from a copy of the package with no checkout, the install script's command. A checkout whose tests name the version it stands for, with `CORTEX_SOURCE_VERSION`, still names the self-update a binary of that version would.
 - **`cortex validate` names the sync that puts a try's team spec back** ([#346](https://github.com/xod-labs/cortex/issues/346)): synced with `--locked` beside a try, a spec in the store that is not what the team's lock names (`LOCK_DIGEST`) named `cortex sync`, which reads the try and leaves that spec as it is. It now names `cortex sync --locked`, which puts it in the store again and keeps the try.
+- **`cortex upgrade --branch` during a resume makes the branch where the files are written** ([#347](https://github.com/xod-labs/cortex/issues/347)). Writing the team's lock alone, in an `agents/` that is its own repository, it made the branch in the project's repository and switched its HEAD there, with nothing written in it. The branch is now made in `agents/`; a lock in no work tree, `agents/` a link to a folder in none, makes no branch, and the run says so.
 
 ## [1.8.2] - 2026-11-13 — The Whooshing Sound _(Released)_
 [Full notes](changelog/1.8.2.md)
