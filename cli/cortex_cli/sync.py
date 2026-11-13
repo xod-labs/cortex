@@ -83,6 +83,12 @@ def not_a_file(path: Path) -> bool:
     return not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode) or is_link(path))
 
 
+def no_gitignore_file(path: Path) -> bool:
+    """Whether the .gitignore at ``path`` is no file a line can be written to, nor a link: what ``not_a_file`` says,
+    or a directory."""
+    return not_a_file(path) or (os.path.isdir(path) and not is_link(path))
+
+
 def link_target(path: Path) -> str:
     target = os.readlink(path)
     if target.startswith("\\\\?\\"):                        # how Windows spells a junction's target
@@ -1252,9 +1258,10 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
     endings. Without a repository to ask, a line is added unless it, or one that means the same,
     is there with no negation below it — and no .gitignore is created: it would keep nothing out of any commit. A
     .gitignore that is a symbolic link is never written through — git does not read it, and its target may be outside
-    the project, or none yet: the note names the link (``_notes``)."""
+    the project, or none yet: the note names the link (``_notes``) — nor is one that is no file: a named pipe, a
+    directory."""
     path = root / ".gitignore"
-    if is_link(path) or not_a_file(path):        # never written through, nor waited on: the note names it
+    if is_link(path) or no_gitignore_file(path):  # never written through, nor waited on: the note names it
         return []
     if not path.is_file() and ignored(root, config.LOCAL_FILE) is None:
         return []
@@ -1530,7 +1537,7 @@ def _notes(root: Path, mode: str, err: TextIO) -> None:
     # A .gitignore that is a symbolic link, which git does not read: no line added to it would count (#329).
     linked = ".gitignore is a symbolic link, which git does not read: make it a file, with " \
         if is_link(root / ".gitignore") else ".gitignore is not a file, which git cannot read: make it a file, with " \
-        if not_a_file(root / ".gitignore") else None
+        if no_gitignore_file(root / ".gitignore") else None
     said = _not_ignored(root, LINK, f"{LINK}/") if mode != "store" else None
     if said is not None:
         line = f"a `/{LINK}` line" + ("" if linked else " to .gitignore")
