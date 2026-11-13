@@ -82,6 +82,10 @@ collapses one level at a time without manual edits.
 - **A phase does not wait for its own review to unblock the next one.** Start phase N+1 on the
   tip as soon as phase N is code-complete; review comments land as new commits and the restack
   carries them up.
+- **No merge inside a stack but the pull requests' own.** A fix made on a lower branch reaches
+  the branches above it by `git rebase --update-refs`, never by merging the lower branch into a
+  higher one. 1.8.0 made 131 merge commits, most of them carrying each review round up its stack
+  ([§10.6](#106-the-commit-budget)).
 
 ## 3. Issue model — four levels
 
@@ -358,8 +362,40 @@ contributor decides is how it gets fixed and reviewed.
 
 ### 10.5 What was spent, at closing
 
-The final pull request records the size, the budget, and what was spent — passes, and rounds per
-pass — and the ADR's `Size` section gets the same line when its status becomes `Implemented`.
+The final pull request records the size, the budget, and what was spent — passes, rounds per
+pass, and commits ([§10.6](#106-the-commit-budget)) — and the ADR's `Size` section gets the same line when its status becomes `Implemented`.
 The accepted margin is **one pass, or one class**. When two records in a row land outside it, the
 same way, the thresholds are revisited, in a pull request on this document. The criteria evolve
 the same way, as experience shows them wrong.
+
+### 10.6 The commit budget
+
+1.8.0 made 511 commits: 380 that are not merges, 183 of them `fix` against 15 `feat`, and 131
+merges. The ADR's text took 78 commits after it was accepted, and `CHANGELOG.md` 55. The 16,000
+lines added were not the problem; the churn was — commits that undo or redo other commits. 1.6.0
+and 1.7.0 had taken 60 and 46 commits that are not merges, 1.4.0 and 1.5.0 104 and 91.
+
+| Size | Commits, merges left out |
+|---|---|
+| S | 30 |
+| M | 60 |
+| L | 100 |
+
+The count is the release's, from `main` to its integration branch:
+
+```bash
+git rev-list --no-merges --count main..release/X.Y.Z
+```
+
+- **One commit per review finding**, its pass in the subject — `🐛 fix(cli): #345 pass 1, …`.
+  The touch-ups of one finding are folded into it with `git commit --fixup` and
+  `git rebase --autosquash` before the push. Once a commit has been reviewed, its content is never
+  rewritten: a later change is a new commit. A restack (§2) replays commits unchanged, and is not
+  a rewrite.
+- **No merge inside a stack** but the pull requests' own (§2).
+- **An accepted ADR's text is frozen.** What changes after acceptance goes into its `Amendments`
+  section, in one commit per review pass.
+
+When the budget is reached, it is reached as a review cap is: work stops, and the contributor who
+carries the change decides what follows (§10.3). The commits spent are recorded at closing
+(§10.5).
