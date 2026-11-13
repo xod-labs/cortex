@@ -603,6 +603,38 @@ class GitIgnoreTests(SyncTestCase):
         self.assertTrue(sync._named(["cortex.local.toml", "!*.d.ts"], {"cortex.local.toml"}, "cortex.local.toml",
                                     sync._stands_in("cortex.local.toml")))
 
+    @unittest.skipUnless(hasattr(os, "mkfifo") and shutil.which("git"), "needs git and a named pipe")
+    @harness.outside_a_repository
+    def test_git_waiting_on_an_ignore_file_above_is_asked_once_per_repository(self):
+        # A named pipe git reads as an ignore file above the project — the .gitignore of a folder above it, or
+        # info/exclude —: each check-ignore waited its whole timeout. The first that does not answer in time is the
+        # last asked of that repository, from any of its folders: .gitignore's own lines answer, as without git.
+        # Another repository is asked.
+        for where in (".gitignore", ".git/info/exclude"):
+            with self.subTest(where=where):
+                top = self.tmp / f"top-{where.replace('/', '-')}"
+                top.mkdir()
+                subprocess.run(["git", "init", "-q", str(top)], check=True)
+                (top / where).unlink(missing_ok=True)
+                os.mkfifo(top / where)
+                app = top / "app"
+                app.mkdir()
+                (app / ".gitignore").write_bytes(b"/cortex\n")
+                other = self.repository("*.local.toml\n", f"other-{where.replace('/', '-')}")
+                run = subprocess.run
+                with mock.patch.object(sync, "GIT_TIMEOUT", 0.5), mock.patch.object(sync, "_TIMED_OUT", set()), \
+                        mock.patch.object(sync.subprocess, "run", side_effect=run) as asked:
+                    self.assertFalse(sync.ignored(app, "cortex.local.toml"))
+                    self.assertTrue(sync.ignored(app, "cortex"))
+                    self.assertEqual(sync.add_to_gitignore(app, {"cortex.local.toml": "cortex.local.toml",
+                                                                 "/cortex": "cortex"}), ["cortex.local.toml"])
+                    (top / "lib").mkdir()                   # another folder of the same repository: not asked
+                    self.assertFalse(sync.ignored(top / "lib", "cortex.local.toml"))
+                    self.assertEqual(asked.call_count, 1)
+                    self.assertTrue(sync.ignored(other, "cortex.local.toml"))     # a pattern: git's answer
+                    self.assertEqual(asked.call_count, 2)
+                self.assertEqual((app / ".gitignore").read_bytes(), b"/cortex\ncortex.local.toml\n")
+
     def nested(self, root_lines, nested_lines, name):
         """A repository git refuses — a worktree whose repository is gone —, with .gitignore holding ``root_lines``
         and .claude/.gitignore ``nested_lines``; and one git takes, with the same files, when git is here."""

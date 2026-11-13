@@ -1431,15 +1431,38 @@ def _named(lines: List[str], wanted: Set[str], name: str, glob: Optional[Pattern
     return bool(found) and not _negations(lines[found[-1] + 1:], name, glob)
 
 
+# How long git is given to say what it ignores, and the repositories where it did not say it in time: it waits on an
+# ignore file Cortex does not check — a named pipe as the .gitignore of a folder above the project, as info/exclude
+# or core.excludesFile. Asked again, it would wait again: one wait per repository and command, then .gitignore's own
+# lines, as without git.
+GIT_TIMEOUT = 30
+_TIMED_OUT: Set[str] = set()
+
+
+def _repository_of(root: Path) -> str:
+    """The folder that holds the ``.git`` at ``root`` or above it, as written — ``root`` when there is none."""
+    for folder in (root, *root.parents):
+        if os.path.lexists(folder / ".git"):
+            return str(folder)
+    return str(root)
+
+
 def git_ignores(root: Path, name: str) -> Optional[bool]:
     """git's own answer, whether it ignores ``name`` in the project: ``None`` when there is no git to ask, or it
-    refuses the repository — its owner, say — or there is none, or it would wait on a .gitignore that is no file."""
+    refuses the repository — its owner, say — or there is none, or it would wait on a .gitignore that is no file, or
+    it did not answer in time, in this repository, once already."""
     git = shutil.which("git")
     if git is None or not_a_file(root / ".gitignore"):     # a named pipe there: git would wait on it
         return None
+    repository = _repository_of(Path(os.path.abspath(root)))
+    if repository in _TIMED_OUT:
+        return None
     try:
         proc = subprocess.run([git, "-C", str(root), "check-ignore", "-q", "--", name],
-                              capture_output=True, timeout=30, env=git_environment())
+                              capture_output=True, timeout=GIT_TIMEOUT, env=git_environment())
+    except subprocess.TimeoutExpired:
+        _TIMED_OUT.add(repository)
+        return None
     except (OSError, subprocess.SubprocessError):
         return None
     return proc.returncode == 0 if proc.returncode in (0, 1) else None
