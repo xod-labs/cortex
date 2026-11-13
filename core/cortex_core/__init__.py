@@ -23,11 +23,13 @@ from .resolver import (
     resolve_layer,
     semantic_for,
 )
+from .workspace import Refusal, refusal
 
 __all__ = [
     "ADDITIVE_SEPARATOR",
     "LAYER_SEPARATOR",
     "MergeSemantic",
+    "Refusal",
     "build_system_prompt",
     "capability_catalog",
     "capability_dirs",
@@ -37,6 +39,7 @@ __all__ = [
     "find_workflow_relpath",
     "layers_for",
     "read_resolved",
+    "refusal",
     "resolve_layer",
     "semantic_for",
 ]

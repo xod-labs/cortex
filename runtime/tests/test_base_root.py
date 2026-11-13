@@ -618,6 +618,21 @@ class TeamVersionTests(SyncedProjectTestCase):
                     self.assertEqual(host.returncode, 1, host.stdout + host.stderr)
                     self.assertEqual(host.stderr.decode(), f"cortex {command}: {said}\n")
 
+    def test_a_cortex_local_toml_with_a_byte_order_mark_is_read_as_the_cli_reads_it(self):
+        # Notepad writes one (#375): the file is read, not refused as one that does not parse — its try is named.
+        import json
+
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n')
+        (self.project / "cortex.local.toml").write_bytes(b'\xef\xbb\xbfversion = "10.0.0"\n')
+        with self.assertRaisesRegex(ValueError, r"^this machine's cortex reads Cortex 10\.0\.0, "
+                                                r"cortex\.local\.toml's version — a try"):
+            pin()
+        if os.name != "nt":                                             # run with an empty environment
+            host = self.cli("config", "--json")
+            self.assertEqual(host.returncode, 0, host.stdout + host.stderr)
+            version = json.loads(host.stdout)["settings"]["version"]
+            self.assertEqual((version["value"], version["origin"]), ("10.0.0", "cortex.local.toml"))
+
     def test_cortex_toml_is_read_before_cortex_local_toml_as_the_cli_reads_them(self):
         # Both files broken (#344): the CLI reads cortex.toml first and names its error, so the runtime names
         # cortex.toml's — the one to fix first — never cortex.local.toml's. Each error is at a line of its own.
@@ -633,27 +648,107 @@ class TeamVersionTests(SyncedProjectTestCase):
 
     def test_a_cortex_local_toml_the_runtime_cannot_open_is_none_as_in_1_7_0_and_logged(self):
         # A container's mount, another user's file: a deployment that works today keeps working (#344), said in the
-        # runtime's log. A directory stands for it everywhere; a file this user may not read, where it cannot.
+        # runtime's log, which names the error as the system says it (#375). A mount that fails stands for it
+        # everywhere; a file this user may not read, where it cannot.
+        import errno
+
+        from cortex_runtime import base
+
         pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n')
         local = self.project / "cortex.local.toml"
-        local.mkdir()
-        with self.assertLogs("cortex_runtime.base", "WARNING") as logged:
+        local.write_bytes(b"spec = [\n")
+        read_file = base.cascade.read_file
+
+        def failing(path):
+            if Path(path) == local:
+                raise OSError(errno.EIO, os.strerror(errno.EIO), path)
+            return read_file(path)
+
+        with mock.patch.object(base.cascade, "read_file", failing), \
+                self.assertLogs("cortex_runtime.base", "WARNING") as logged:
             self.assertEqual(pin().version, "9.9.9")
-        self.assertIn("cortex.local.toml cannot be read, and is not: ", logged.output[0])
-        local.rmdir()
+        self.assertEqual(logged.records[0].getMessage(),
+                         f"{local} cannot be read, and is not: {os.strerror(errno.EIO)}")
         if os.name == "posix" and os.geteuid() != 0:                    # root reads any file
-            local.write_bytes(b"spec = [\n")
             local.chmod(0)
             try:
                 with self.assertLogs("cortex_runtime.base", "WARNING") as logged:
                     self.assertEqual(pin().version, "9.9.9")
             finally:
                 local.chmod(0o600)
-            self.assertIn("Permission denied", logged.output[0])
-            local.unlink()
+            self.assertEqual(logged.records[0].getMessage(), f"{local} cannot be read, and is not: Permission denied")
+        local.unlink()
         with mock.patch("cortex_runtime.base.logger") as logger:       # no file at all: nothing to say
             self.assertEqual(pin().version, "9.9.9")
         logger.warning.assert_not_called()
+
+    def test_a_cortex_local_toml_the_runtime_cannot_open_is_logged_once_per_error(self):
+        # Read at every request (#375): a mount that keeps failing is said once, not at each — again once its error
+        # changes, or once it was read, or gone, in between and fails anew.
+        import errno
+
+        from cortex_runtime import base
+
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local='spec = "cortex"\n')
+        local = self.project / "cortex.local.toml"
+        read_file = base.cascade.read_file
+        failure = []
+
+        def failing(path):
+            if Path(path) == local and failure:
+                raise OSError(failure[0], os.strerror(failure[0]), path)
+            return read_file(path)
+
+        said = []
+        with mock.patch.object(base.cascade, "read_file", failing), \
+                self.assertLogs("cortex_runtime.base", "WARNING") as logged:
+            for error in (errno.EIO, errno.EIO, errno.EIO, errno.EACCES, errno.EACCES, None, errno.EACCES,
+                          errno.ENOENT, errno.EACCES, errno.EIO):           # None: read; ENOENT: gone
+                failure[:] = [error] if error else []
+                self.assertEqual(pin().version, "9.9.9")
+                said.append(len(logged.records))
+        self.assertEqual(said, [1, 1, 1, 2, 2, 2, 3, 3, 4, 5])
+        self.assertEqual([record.getMessage() for record in logged.records],
+                         [f"{local} cannot be read, and is not: {os.strerror(error)}"
+                          for error in (errno.EIO, errno.EACCES, errno.EACCES, errno.EACCES, errno.EIO)])
+
+    def test_a_directory_at_cortex_local_toml_is_none_said_nowhere_as_cortex_config_reads_it(self):
+        # No file there (#375): `cortex config` reads none, and says nothing — nor does the runtime.
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n')
+        (self.project / "cortex.local.toml").mkdir()
+        with mock.patch("cortex_runtime.base.logger") as logger:
+            self.assertEqual(pin().version, "9.9.9")
+        logger.warning.assert_not_called()
+        if os.name != "nt":                                             # run with an empty environment
+            host = self.cli("config")
+            self.assertEqual((host.returncode, host.stderr), (0, b""), host.stdout + host.stderr)
+            self.assertRegex(host.stdout.decode(), r"(?m)^version +9\.9\.9 +cortex\.toml$")
+
+    def test_a_directory_between_two_failures_of_a_mount_is_its_file_gone(self):
+        # A mount that fails, a directory in its place, the mount failing again: said twice, as a file gone between.
+        import errno
+
+        from cortex_runtime import base
+
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local='spec = "cortex"\n')
+        local = self.project / "cortex.local.toml"
+        read_file = base.cascade.read_file
+
+        def failing(path):
+            if Path(path) == local and not local.is_dir():
+                raise OSError(errno.EIO, os.strerror(errno.EIO), path)
+            return read_file(path)
+
+        with mock.patch.object(base.cascade, "read_file", failing), \
+                self.assertLogs("cortex_runtime.base", "WARNING") as logged:
+            pin()
+            local.unlink()
+            local.mkdir()
+            pin()
+            local.rmdir()
+            local.write_text('spec = "cortex"\n', encoding="utf-8")
+            pin()
+        self.assertEqual(len(logged.records), 2, logged.output)
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipes here")
     def test_a_named_pipe_at_cortex_local_toml_is_none_never_waited_on(self):
@@ -663,8 +758,10 @@ class TeamVersionTests(SyncedProjectTestCase):
         os.mkfifo(self.project / "cortex.local.toml")
         read = []
         reader = threading.Thread(target=lambda: read.append(pin()), daemon=True)
-        reader.start()
-        reader.join(30)
+        with mock.patch("cortex_runtime.base.logger") as logger:      # no file there: said nowhere, as the CLI
+            reader.start()
+            reader.join(30)
+        logger.warning.assert_not_called()
         if reader.is_alive():
             # Free the reader blocked on the pipe, so the suite ends: a writer that opens it and closes.
             os.close(os.open(self.project / "cortex.local.toml", os.O_WRONLY | os.O_NONBLOCK))

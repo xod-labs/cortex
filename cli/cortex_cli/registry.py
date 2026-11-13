@@ -104,7 +104,7 @@ def _read(path: Path) -> List[Entry]:
         raise RegistryError(f"{display(str(path))}: {error}")
     except LaterFormatError as error:
         raise RegistryError(f"{error}: this cortex is older than the one that wrote it — update it:\n"
-                            "    cortex self-update")
+                            f"    {store.update_command()}")
     except ProjectFileError as error:
         raise RegistryError(str(error))
     return sorted((Entry(entry["name"], entry["path"]) for entry in data.get("project", [])),

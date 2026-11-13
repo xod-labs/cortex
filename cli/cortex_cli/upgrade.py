@@ -623,8 +623,12 @@ class _NewerRelease(threading.Thread):
     def say(self, out: TextIO, every: bool = False) -> None:
         self.join(self_update.NOTICE_TIMEOUT)
         if self.found is not None:
-            moves = "`cortex upgrade --all`, moves the projects" if every else "`cortex upgrade`, moves the project"
-            out.write(f"\nCortex {self.found} is out, and this cortex is {self.own}: `cortex self-update`, then "
+            # A source checkout, updated, is still a build of no release: no plain upgrade from it moves a project to
+            # a release (ADR-009 §9) — the release is named.
+            named = f" {self.found}" if store.development(self.own) and store.embedded_archive() is None else ""
+            moves = f"`cortex upgrade --all{named}`, moves the projects" if every else \
+                f"`cortex upgrade{named}`, moves the project"
+            out.write(f"\nCortex {self.found} is out, and this cortex is {self.own}: `{store.update_command()}`, then "
                       f"{moves} to it.\n")
 
 

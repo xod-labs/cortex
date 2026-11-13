@@ -293,11 +293,18 @@ def _missing_team_folder(root: str, folder: str = TEAM_FOLDER) -> None:
         return
     required = f'{PROJECT_FILE}: "version" is required, or in {cascade.team_name(folder)}'
     path = os.path.join(root, folder)
-    if os.path.islink(path) and not os.path.exists(path):
-        # A link that leads nowhere: no checkout makes it lead somewhere — a submodule's update leaves it (#350).
+    if os.path.islink(path) and not os.path.isdir(path):
+        # A link that leads nowhere, or to a file: no checkout makes it lead to a folder — a submodule's update leaves
+        # it (#350).
         target = project.shown(os.readlink(path).replace(os.sep, "/"))
-        raise ConfigError(f"{required} — {folder}/ is a link to {target}, which leads nowhere: make it lead to the "
-                          "team's folder, or remove it and check that folder out in its place")
+        what = "which leads nowhere" if not os.path.exists(path) else "a file" if os.path.isfile(path) else \
+            "which is no folder"
+        raise ConfigError(f"{required} — {folder}/ is a link to {target}, {what}: make it lead to the team's folder, "
+                          "or remove it and check that folder out in its place")
+    if os.path.lexists(path) and not os.path.isdir(path):
+        # A file where the team's folder is: no checkout writes over it (#350).
+        what = "a file, not the team's folder" if os.path.isfile(path) else "no folder"
+        raise ConfigError(f"{required} — {folder} is {what}: remove it and check the team's folder out in its place")
     raise ConfigError(f"{required} — {missing}: check it out, a submodule with `git submodule update --init`")
 
 
@@ -838,7 +845,8 @@ def load_lock(root: str, name: str = LOCK_FILE, shown: Optional[str] = None, *,
         raise ConfigError(f"{error} — {again}")
     except project.LaterFormatError as error:
         # Said as `cortex sync` says a version too new: the bootstrap has the assistant act on it.
-        raise ConfigError(f"{error}: this cortex is older than the project's — update it:\n    cortex self-update")
+        raise ConfigError(f"{error}: this cortex is older than the project's — update it:\n"
+                          f"    {store.update_command()}")
     except project.ProjectFileError as error:
         raise ConfigError(f"{error} — {again}")
     return Lock(version=Version(data["version"]), digest=data["digest"])
