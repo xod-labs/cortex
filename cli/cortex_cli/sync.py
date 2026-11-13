@@ -1541,7 +1541,9 @@ def _notes(root: Path, mode: str, err: TextIO) -> None:
     said = _not_ignored(root, LINK, f"{LINK}/") if mode != "store" else None
     if said is not None:
         line = f"a `/{LINK}` line" + ("" if linked else " to .gitignore")
-        err.write(f"note: {said} — {linked or 'add '}{line}, without the final slash: a link is a file to git\n")
+        # The final slash is a link's matter: a copy is a directory, which a `/cortex/` line ignores too.
+        slash = "" if mode == "copy" else ", without the final slash: a link is a file to git"
+        err.write(f"note: {said} — {linked or 'add '}{line}{slash}\n")
     said = _not_ignored(root, config.LOCAL_FILE, f"{config.LOCAL_FILE}, which holds this machine's paths")
     if said is not None:
         err.write(f"note: {said} — {linked + 'a line for it' if linked else 'add it to .gitignore'}\n")

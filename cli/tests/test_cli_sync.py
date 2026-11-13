@@ -635,6 +635,32 @@ class GitIgnoreTests(SyncTestCase):
                     self.assertEqual(asked.call_count, 2)
                 self.assertEqual((app / ".gitignore").read_bytes(), b"/cortex\ncortex.local.toml\n")
 
+    def test_a_copy_is_not_given_the_link_s_advice_about_the_final_slash(self):
+        # A copy is a directory, which `/cortex/` ignores too: the note names the `/cortex` line, without the link's
+        # reason. A .gitignore that is no file — a directory, a named pipe — or one without the line alike.
+        kinds = ["directory", "file"] + (["pipe"] if hasattr(os, "mkfifo") else [])
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                project = self.project(f"copy-{kind}")
+                (project / ".git").write_text("gitdir: ../nowhere\n", encoding="utf-8")     # git refuses it
+                if kind == "directory":
+                    (project / ".gitignore").mkdir()
+                elif kind == "pipe":
+                    os.mkfifo(project / ".gitignore")
+                else:
+                    (project / ".gitignore").write_bytes(b"cortex.local.toml\n")
+                advice = "add a `/cortex` line to .gitignore" if kind == "file" else \
+                    ".gitignore is not a file, which git cannot read: make it a file, with a `/cortex` line"
+                said = "note: git could not be asked whether it ignores cortex/, and Cortex cannot tell from .gitignore " \
+                    "that it does — "
+                proc = self.sync(project, "--copy")
+                self.assert_ok(proc)
+                self.assertIn(f"{said}{advice}\n", proc.err)
+                self.assertNotIn("final slash", proc.err)
+                proc = self.sync(project, "--link")
+                self.assert_ok(proc)
+                self.assertIn(f"{said}{advice}, without the final slash: a link is a file to git\n", proc.err)
+
     def nested(self, root_lines, nested_lines, name):
         """A repository git refuses — a worktree whose repository is gone —, with .gitignore holding ``root_lines``
         and .claude/.gitignore ``nested_lines``; and one git takes, with the same files, when git is here."""
