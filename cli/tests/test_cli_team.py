@@ -3205,6 +3205,27 @@ class ThirdCodeReviewTests(TeamTestCase):
                 self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
 
     @SOURCE
+    @AS_ROOT
+    @harness.outside_a_repository
+    def test_a_fresh_init_beside_a_team_s_file_that_cannot_be_read_says_to_make_it_one_you_can(self):
+        # #350 pass 1: the folder can be searched, the file cannot be read — the file is the fix, not the folder's mode.
+        # Made a file this user can read, init runs.
+        root = self.tmp / "fresh"
+        (root / "agents").mkdir(parents=True)
+        (root / TEAM).write_text(f'version = "{OWN}"\n', encoding="utf-8")
+        os.chmod(root / TEAM, 0)
+        self.addCleanup(os.chmod, root / TEAM, 0o644)
+        proc = self.cortex(root, "init", "--tool", "claude")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"{TEAM}: cannot be read — Permission denied\ncortex init reads {TEAM}: fix it — make it a file "
+                      "you can read — then run cortex init again\n", proc.err)
+        self.assertNotIn("chmod", proc.err)
+        self.assertNotIn("cannot search", proc.err)
+        self.assertFalse((root / "cortex.toml").exists())
+        os.chmod(root / TEAM, 0o644)
+        self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+
+    @SOURCE
     @unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")
     @harness.outside_a_repository
     def test_a_team_s_file_that_is_no_file_is_refused_never_read_as_none(self):
