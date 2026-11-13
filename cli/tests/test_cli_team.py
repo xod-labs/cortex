@@ -2221,6 +2221,24 @@ class CodeReviewSecondFixTests(TeamTestCase):
         self.assertNotIn("LOCK_", proc.out)
         self.assertEqual(self.local(root)["version"], OWN)                          # the try kept
 
+    @SOURCE
+    def test_validate_names_the_plain_sync_that_puts_the_team_s_spec_back_outside_a_try(self):
+        # #346, #375: no try — the plain sync reads the team's version, and is the remedy, never --locked.
+        root, _ = self.stale(local=None)
+        self.assert_ok(self.cortex(root, "sync"))
+        changed = next(p for p in sorted((self.home / "versions" / "9.9.8" / "agents").rglob("*")) if p.is_file())
+        os.chmod(changed, 0o644)
+        changed.write_bytes(b"# altered\n")
+        proc = self.cortex(root, "validate")
+        self.assertIn("LOCK_DIGEST", proc.out)
+        self.assertIn("and agents/cortex.team.lock names sha256:", proc.out)
+        self.assertIn(" — run `cortex sync`, which puts it in the store again", proc.out)
+        self.assertNotIn("--locked", proc.out)
+        self.assert_ok(self.cortex(root, "sync"))                                   # the command it names
+        proc = self.cortex(root, "validate", "--strict")
+        self.assert_ok(proc)
+        self.assertNotIn("LOCK_", proc.out)
+
     @TEAM_RELEASE
     @AS_ROOT
     def test_team_puts_back_what_it_could_not_write(self):
