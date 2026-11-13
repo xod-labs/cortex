@@ -4360,6 +4360,64 @@ class DeferredFixTests(TeamTestCase):
         self.assert_ok(self.cortex(root, "sync"))
         self.assert_ok(self.cortex(root, "validate", "--strict"))
 
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_sync_says_nothing_to_commit_of_a_team_s_lock_beyond_a_link_in_no_repository(self):
+        # #351, #375: the project in no repository either — nothing is said of the lock, as of any file it writes.
+        root, outside = self.linked_out()
+        shutil.rmtree(root / ".git")
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        self.assertIn("\nagents/cortex.team.lock: written\n", proc.out)
+        self.assertNotIn("committed nowhere", proc.out)
+
+    @SOURCE
+    @harness.outside_a_repository
+    def test_sync_says_nothing_to_commit_of_a_build_of_no_release_s_team_lock_beyond_a_link(self):
+        # #351, #375: a build of no release's lock is to commit nowhere, wherever it is — nothing is said of it.
+        root, outside = self.linked_out()
+        (outside / "cortex.team.toml").write_text(f'version = "{DEV_SOURCE}"\n', encoding="utf-8")
+        proc = self.cortex(root, "sync", CORTEX_SOURCE_VERSION=DEV_SOURCE)
+        self.assert_ok(proc)
+        self.assertEqual(str(config.load_lock(str(outside), config.TEAM_LOCK_FILE).version), DEV_SOURCE)
+        self.assertIn("\nagents/cortex.team.lock: written\n", proc.out)
+        self.assertNotIn("committed nowhere", proc.out)
+
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_a_resume_in_no_repository_says_a_lock_beyond_a_link_written_as_any_file(self):
+        # #351, #375: the project in no repository, agents/ a link to a folder in none — the lock the resume writes is
+        # one of the files written in no work tree, as any other (ADR-008 §9), not set apart beyond a link.
+        root, outside = self.linked_out(lock="9.9.7")
+        shutil.rmtree(root / ".git")
+        proc = self.cortex(root, "upgrade")
+        self.assert_ok(proc)
+        self.assertEqual(str(config.load_lock(str(outside), config.TEAM_LOCK_FILE).version), "9.9.8")
+        self.assertIn("\nWritten: agents/cortex.team.lock — in no git work tree, so committed nowhere: each developer "
+                      "moves their own (ADR-008 §9).\n", proc.out)
+
+    @SOURCE
+    @DOWNLOADS
+    @NEEDS_GIT
+    @harness.outside_a_repository
+    def test_a_resume_s_commit_names_no_lock_in_no_repository_to_commit_where_it_is(self):
+        # #351, #375: --commit, the project a work tree, agents/ a link to a folder in none — the team's lock the resume
+        # writes is said committed nowhere, never "outside the git work tree … commit it where it is".
+        root, outside = self.linked_out(lock="9.9.7")
+        shutil.rmtree(root / ".git")
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        self.git(root, "init", "-q", "-b", "main")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "init")
+        proc = self.cortex(root, "upgrade", "--commit", "--message", "m", **env)
+        self.assert_ok(proc)
+        self.assertEqual(str(config.load_lock(str(outside), config.TEAM_LOCK_FILE).version), "9.9.8")
+        self.assertNotIn("outside the git work tree", proc.out + proc.err)
+        self.assertIn("\nagents/cortex.team.lock — in no git work tree, so committed nowhere.\n", proc.out)
+
     @DOWNLOADS
     @NEEDS_GIT
     @harness.outside_a_repository
