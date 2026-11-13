@@ -11,7 +11,7 @@ import fnmatch
 import os
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, NamedTuple, Optional, Tuple
 
 from .project import PROJECT_FILE, ProjectFileError, folded, shown
 
@@ -141,30 +141,40 @@ def check_team_folder(project_root: str, folder: str, base_root: Optional[str] =
                                    f"{shown('/'.join(rel))} — the team's folder is the workspace's, no service's")
 
 
-def _refused(root: Path, folder: str, team: Path) -> bool:
-    """Whether the runtime refuses the service ``folder`` as the disk opens it (ADR-013 §3.6): it, or a folder
-    above it, is ``agents/`` or the team's folder — ``Agents`` where names ignore case — or its own ``agents/``
-    is the team's folder, a link to it, whose overlays would be read twice. The scan compares names as written."""
+class Refusal(NamedTuple):
+    """Why the runtime refuses a service (ADR-013 §3.6): ``path``, the service or a folder above it, is the team's
+    folder — ``kind`` ``"team"`` — or ``agents/``, the team's folder renamed — ``"agents"``; or ``path`` is the
+    service's own ``agents/``, the team's folder, a link to it — ``"own agents"`` —, whose overlays would be read
+    twice."""
+    kind: str
+    path: Path
+
+
+def refusal(root: Path, folder: str, team: Path) -> Optional[Refusal]:
+    """Why the runtime refuses the service ``folder``, below ``root``, as the disk opens it (``Refusal``) — ``None``
+    when it serves it. ``team`` is the team's folder; ``agents`` where names ignore case. The folders above it are
+    asked first, the nearest the root first. The scan compares names as written."""
     parts = Path(folder).parts
     above = [root.joinpath(*parts[:depth]) for depth in range(1, len(parts) + 1)]
-    for path, folders in [(path, (root / "agents", team)) for path in above] + [(root / folder / "agents", (team,))]:
-        for other in folders:
+    for path, folders in [(path, ((team, "team"), (root / "agents", "agents"))) for path in above] + \
+            [(root / folder / "agents", ((team, "own agents"),))]:
+        for other, kind in folders:
             try:
                 if os.path.samefile(path, other):
-                    return True
+                    return Refusal(kind, path)
             except OSError:       # not there: the scan found the service, by a name the disk takes
                 pass
-    return False
+    return None
 
 
 def listed_services(project_root: str, base_root: Optional[str] = None, team_folder: Optional[str] = None) -> List[str]:
-    """``services``, less each the runtime refuses (``_refused``): the services an agent is shown, and the overlay
+    """``services``, less each the runtime refuses (``refusal``): the services an agent is shown, and the overlay
     roots ``cortex validate`` checks — a service whose ``agents/`` is the team's folder holds the team's overlays,
     which the workspace's tier reads already (ADR-013 §3.6)."""
     root = Path(project_root)
     team = Path(team_folder) if team_folder is not None else root / "agents"
     return [s for s in services(str(project_root), base_root, team_folder)
-            if not _refused(root, Path(s).relative_to(root).as_posix(), team)]
+            if refusal(root, Path(s).relative_to(root).as_posix(), team) is None]
 
 
 def service_index(project_root, base_root=None, active: Optional[str] = None, team_folder: Optional[str] = None) -> str:

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence, TextIO, Tuple
 
 from . import catalog, resolver
-from .workspace import _refused, find, listed_services, same_directory, services  # noqa: F401 — find, services: this module's API
+from .workspace import find, listed_services, refusal, same_directory, services  # noqa: F401 — find, services: this module's API
 
 LAYERS = ("roles", "capabilities", "personalities", "workflows")
 
@@ -307,25 +307,16 @@ def refused_service(project_root: str, service: str, team_folder: Optional[str] 
         return None
     if folder == os.curdir or folder.split(os.sep)[0] == os.pardir:
         return None
-    folder = Path(folder).as_posix()
-    if not _refused(root, folder, team):
+    found = refusal(root, Path(folder).as_posix(), team)
+    if found is None:
         return None
     name = strip_prefix(team.as_posix(), f"{root.as_posix()}/")
     team_s = f"the team's folder, {name}/, whose overlays `cortex validate` checks as the workspace's"
-    parts = Path(folder).parts
-    for path in (root.joinpath(*parts[:depth]) for depth in range(1, len(parts) + 1)):
-        if _same_file(path, team):
-            return f"the runtime serves no service in {team_s} — run it without --service"
-        if _same_file(path, root / "agents"):           # a team's folder renamed: agents/ is no service's either
-            return f"the runtime serves no service in {path.relative_to(root).as_posix()}/, nor reads it"
+    if found.kind == "team":
+        return f"the runtime serves no service in {team_s} — run it without --service"
+    if found.kind == "agents":                          # a team's folder renamed: agents/ is no service's either
+        return f"the runtime serves no service in {found.path.relative_to(root).as_posix()}/, nor reads it"
     return f"its agents/ is {team_s} — run it without --service"
-
-
-def _same_file(a: Path, b: Path) -> bool:
-    try:
-        return os.path.samefile(a, b)
-    except OSError:
-        return False
 
 
 # --------------------------------------------------------------------------- #
