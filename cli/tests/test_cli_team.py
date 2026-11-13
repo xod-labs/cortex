@@ -4159,6 +4159,38 @@ class DeferredFixTests(TeamTestCase):
         self.assertNotIn("Commit agents/", proc.out)
         self.assertIn("\nagents/cortex.team.lock — in no git work tree, so committed nowhere.\n", proc.out)
 
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_sync_locked_says_a_team_s_lock_beyond_a_link_is_committed_nowhere(self):
+        # #351 pass 1: --locked refusing a team's lock beyond a link to a folder in no repository — never "then commit
+        # it". The sync it names writes the lock, and --locked then passes.
+        root, outside = self.linked_out()
+        proc = self.cortex(root, "sync", "--locked")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("--locked: no agents/cortex.team.lock — `cortex sync` writes it; it is in no git work tree, so "
+                      "committed nowhere. Nothing of the project was changed", proc.err)
+        self.assertNotIn("then commit it", proc.err)
+        self.assert_ok(self.cortex(root, "sync"))
+        self.assert_ok(self.cortex(root, "sync", "--locked"))
+
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_validate_says_a_team_s_lock_beyond_a_link_is_committed_nowhere(self):
+        # #351 pass 1: validate's remedy for the team's lock beyond a link to a folder in no repository — never "then
+        # commit it". The sync it names writes the lock, and validate --strict then passes.
+        root, outside = self.linked_out()
+        self.assert_ok(self.cortex(root, "sync"))
+        (outside / "cortex.team.lock").unlink()
+        proc = self.cortex(root, "validate", "--strict")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("no agents/cortex.team.lock — run `cortex sync`; it is in no git work tree, so committed nowhere",
+                      proc.out + proc.err)
+        self.assertNotIn("then commit it", proc.out + proc.err)
+        self.assert_ok(self.cortex(root, "sync"))
+        self.assert_ok(self.cortex(root, "validate", "--strict"))
+
     @DOWNLOADS
     @NEEDS_GIT
     @harness.outside_a_repository

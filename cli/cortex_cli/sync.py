@@ -862,6 +862,16 @@ def commit_it(directory: str, version: store.Version, where: str = "") -> str:
 NOWHERE = " — in no git work tree, so committed nowhere"     # a file beyond a link, in no repository (#351)
 
 
+def then_commit(directory: str, version: store.Version) -> str:
+    """What follows a remedy that writes a lock in ``directory`` for ``version``: ``, then commit it``. Nothing in
+    no git repository, nor for a build of no release's version, as ``commit_it`` says; a link out of the project's
+    repository to a folder in none — git does not follow it — is said committed nowhere (#351)."""
+    if in_no_repository(directory) or store.development(version):
+        return ""
+    return "; it is in no git work tree, so committed nowhere" if in_no_repository(os.path.realpath(directory)) \
+        else ", then commit it"
+
+
 def team_lock_note(folder: str, version: store.Version, shown: str = config.TEAM_FOLDER) -> str:
     """What follows the team's lock written in ``folder`` — ``shown``, as the root names it: ``commit_it``, asked
     where the folder is. A link out of the project's repository to a folder in none — git does not follow it — is
@@ -904,9 +914,8 @@ def check_lock(root: str, version: store.Version, the_store: store.Store, out: T
     if locked:
         why = (f"no {shown_name}" if lock is None else
                f"{shown_name} names Cortex {lock.version}, and {pins} pins {version}")
-        # Committed nowhere (ADR-008 §9); nor a build of no release's lock, which no teammate can use (ADR-009 §9).
-        commit = "" if in_no_repository(root) or store.development(version) else ", then commit it"
-        raise SyncError(f"--locked: {why} — {writer} writes it{commit}. Nothing of the project was changed")
+        raise SyncError(f"--locked: {why} — {writer} writes it{then_commit(root, version)}. Nothing of the project "
+                        "was changed")
     return digest, ("written" if lock is None else f"Cortex {version}, where it named {lock.version}")
 
 
