@@ -281,5 +281,47 @@ class RenamedTeamFolderTests(SpecialFileTestCase):
                 self.assertNotIn("TEAM_FOLDER_MISSING", self.within(root, "validate").out)
 
 
+class DefaultTeamFolderTests(SpecialFileTestCase):
+    """The default ``agents``, beside a ``cortex.toml`` without ``version``: what is no folder there (#375)."""
+
+    @LINKS
+    @unittest.skipUnless(SPECIALS, "no named pipe, nor socket, here")
+    def test_a_named_pipe_or_a_socket_at_agents_or_a_link_to_one_is_named_no_folder(self):
+        # 1.8.4's branches for what is neither a file nor a folder, untested: never "is not there", with
+        # `git submodule update --init`, which leaves it. Each remedy, followed, lets the sync run.
+        cases = [(kind, "remove it") for kind in SPECIALS] + \
+            [(f"link to {kind}", remedy) for kind in SPECIALS for remedy in ("lead to the team's folder", "remove it")]
+        for n, (case, remedy) in enumerate(cases):
+            with self.subTest(case=case, remedy=remedy):
+                root = self.project('theme = "h2g2"\n', name=f"default-{n}")
+                kind = case.rpartition(" ")[2]
+                if case.startswith("link"):
+                    aside = self.tmp / f"aside-{n}"
+                    self.make(aside, kind)
+                    (root / "agents").symlink_to(aside)
+                    said = (f'agents/ is a link to "{harness_path(aside)}", which is no folder: make it lead to the '
+                            "team's folder, or remove it and check that folder out in its place\n")
+                else:
+                    self.make(root / "agents", kind)
+                    said = "agents is no folder: remove it and check the team's folder out in its place\n"
+                for args in (("sync",), ("init", "--tool", "claude")):
+                    proc = self.within(root, *args)
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertIn(f'cortex.toml: "version" is required, or in agents/cortex.team.toml — {said}',
+                                  proc.err)
+                    self.assertNotIn("git submodule update", proc.err)
+                    self.assertNotIn("is not there", proc.err)
+                (root / "agents").unlink()
+                if remedy == "remove it":
+                    (root / "agents").mkdir()                           # the team's folder, checked out in its place
+                    team = root / "agents"
+                else:
+                    team = self.tmp / f"team-{n}"                       # where the team's folder is
+                    team.mkdir()
+                    (root / "agents").symlink_to(team, target_is_directory=True)
+                (team / "cortex.team.toml").write_text(f'version = "{OWN}"\n', encoding="utf-8")
+                self.assert_ok(self.within(root, "sync"))
+
+
 if __name__ == "__main__":
     unittest.main()
