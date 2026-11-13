@@ -7,8 +7,11 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+## [1.8.3] - 2026-11-13 — Anything That Happens, Happens _(Released)_
+[Full notes](changelog/1.8.3.md)
+
 ### Documentation
-- **A commit budget per release, set by its size** ([docs/process/adr-implementation.md §10.6](docs/process/adr-implementation.md#106-the-commit-budget), [#367](https://github.com/xod-labs/cortex/issues/367)): at most 30 commits that are not merges for an S release, 60 for an M, 100 for an L. One commit per review finding, its touch-ups folded in before the push; no merge inside a stack but the pull requests' own, a fix travelling up by `git rebase --update-refs`; an accepted ADR's text frozen, its changes in `Amendments`. Reaching the budget stops the work until the contributor who carries the change decides, as a review cap does. 1.8.0 had made 380 such commits, and 131 merges.
+- **A commit budget per release, set by its size** ([docs/process/adr-implementation.md §10.6](docs/process/adr-implementation.md#106-the-commit-budget), [#367](https://github.com/xod-labs/cortex/issues/367)): at most 30 commits that are not merges for an S release, 60 for an M, 100 for an L. One commit per review finding, its touch-ups folded in before the push; no merge inside a stack but the pull requests' own, a fix travelling up by `git rebase --update-refs`; an accepted ADR's text frozen, its changes in `Amendments`. Reaching the budget stops the work until the contributor who carries the change decides, as a review cap does. 1.8.0 and 1.8.1 had made 380 such commits, and 131 merges.
 - **The README says what the assistant does without `synced`** ([What the assistant does on its own](README.md#what-the-assistant-does-on-its-own), [#356](https://github.com/xod-labs/cortex/issues/356)): a `cortex.toml` before 1.8.0 and a spec of that version run nothing — no `version` in `cortex.local.toml`, and no team's file that sets one, or `git ls-files` naming `cortex.toml` committed, its pin the team's; a link to a checkout runs nothing, a link to `…/versions/X.Y.Z` names X.Y.Z; any other case runs a sync, then `cortex --version` and a self-update below 1.8.0. The row for a spec of another version than `cortex.toml`'s says it is a bootstrap's before 1.8.0.
 
 ### Fixed

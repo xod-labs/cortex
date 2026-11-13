@@ -84,7 +84,7 @@ collapses one level at a time without manual edits.
   carries them up.
 - **No merge inside a stack but the pull requests' own.** A fix made on a lower branch reaches
   the branches above it by `git rebase --update-refs`, never by merging the lower branch into a
-  higher one. 1.8.0 made 131 merge commits, most of them carrying each review round up its stack
+  higher one. 1.8.0 and 1.8.1 made 131 merge commits, most of them carrying each review round up the stack
   ([§10.6](#106-the-commit-budget)).
 
 ## 3. Issue model — four levels
@@ -370,7 +370,7 @@ the same way, as experience shows them wrong.
 
 ### 10.6 The commit budget
 
-1.8.0 made 511 commits: 380 that are not merges, 183 of them `fix` against 15 `feat`, and 131
+1.8.0 and 1.8.1, which published it, made 511 commits: 380 that are not merges, 183 of them `fix` against 15 `feat`, and 131
 merges. The ADR's text took 78 commits after it was accepted, and `CHANGELOG.md` 55. The 16,000
 lines added were not the problem; the churn was — commits that undo or redo other commits. 1.6.0
 and 1.7.0 had taken 60 and 46 commits that are not merges, 1.4.0 and 1.5.0 104 and 91.
