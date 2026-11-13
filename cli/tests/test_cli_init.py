@@ -7,6 +7,7 @@ three.
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -748,8 +749,12 @@ class OptionTests(InitTestCase):
         # A marker tells the layout, whatever is above the title: nothing to say either.
         (self.project / "CLAUDE.md").unlink()
         self.assertEqual(self.init("--tool", "claude").returncode, 0)                       # a single project's
-        (self.project / "CLAUDE.md").write_bytes(("Ours.\n\n" + self.read("CLAUDE.md").replace("format=2", "format=1", 1))
-                                                 .encode("utf-8"))
+        # Of an older format: the template's own, whatever it is, made format 1 — a replace that names one
+        # format did nothing once the template moved to the next (#356).
+        older, replaced = re.subn(r"(<!-- cortex:bootstrap layout=single )format=\d+", r"\1format=1",
+                                  self.read("CLAUDE.md"), count=1)
+        self.assertEqual(replaced, 1)
+        (self.project / "CLAUDE.md").write_bytes(("Ours.\n\n" + older).encode("utf-8"))
         proc = self.init("--tool", "claude", "--force")
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertNotIn("below a line of text", proc.err)
