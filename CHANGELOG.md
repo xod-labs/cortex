@@ -7,6 +7,9 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+### Documentation
+- **A commit budget per release, set by its size** ([docs/process/adr-implementation.md §10.6](docs/process/adr-implementation.md#106-the-commit-budget), [#367](https://github.com/xod-labs/cortex/issues/367)): at most 30 commits that are not merges for an S release, 60 for an M, 100 for an L. One commit per review finding, its touch-ups folded in before the push; no merge inside a stack but the pull requests' own, a fix travelling up by `git rebase --update-refs`; an accepted ADR's text frozen, its changes in `Amendments`. Reaching the budget stops the work until the contributor who carries the change decides, as a review cap does. 1.8.0 had made 380 such commits, and 131 merges.
+
 ## [1.8.2] - 2026-11-13 — The Whooshing Sound _(Released)_
 [Full notes](changelog/1.8.2.md)
 
