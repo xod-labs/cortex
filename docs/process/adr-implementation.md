@@ -232,7 +232,7 @@ Every phase goes through the same eight steps. The checklists belong to
 8. **Pull request** — opened once steps 4 to 7 have signed off, targeting the parent branch.
 
 Reviews then run within the record's budget ([§10.2](#102-the-review-budget)): passes after the
-first read the delta only, and a cap reached stops the stack until the maintainer decides.
+first read the delta only, and a cap reached stops the stack until its contributor decides.
 
 A step that finds a defect sends the phase back to step 3; it does not open a follow-up issue on
 a later phase, because the stack would carry the defect upward.
@@ -336,15 +336,16 @@ or the rounds are spent. There is no fixed duration: the caps bound the release.
 - **An approved phase merges** into the release branch at once. A later pass does not reopen it:
   what it would change goes into a later phase, or an issue.
 
-### 10.3 A cap reached is the maintainer's call
+### 10.3 A cap reached is the contributor's call
 
-When a pass or a round would go past its cap, work on the stack stops, and the maintainer decides
-what follows: one more pass or round, the remaining findings as issues on the next patch, or a
-split of the record. The same goes for splitting a record at any point. **Nobody exceeds a cap or
-splits a record without that decision**, written in the stack's final pull request.
+When a pass or a round would go past its cap, work on the stack stops, and the contributor who
+carries the change decides what follows — a person, never an agent: one more pass or round, the
+remaining findings as issues on the next patch, or a split of the record. The same goes for
+splitting a record at any point. **Nobody exceeds a cap or splits a record without that
+decision**, written in the stack's final pull request.
 
 A 🔴 found at the cap still blocks the merge — it is never deferred to an issue. What the
-maintainer decides is how it gets fixed and reviewed.
+contributor decides is how it gets fixed and reviewed.
 
 ### 10.4 Two lessons of 1.8.0
 

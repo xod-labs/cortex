@@ -157,7 +157,7 @@ See [docs/extending-layers.md](docs/extending-layers.md). Overlays don't go in c
 If your change affects the framework's structure, contracts, or core behavior (new cascade level, new merge semantic, breaking rename, new layer…), you must:
 
 1. **Open an issue first** describing the problem and the alternatives you've considered
-2. **Write an ADR** in `docs/adr/` following the [convention](docs/adr/README.md), its `Size` section first: the size sets how many review passes the record gets, and going past that budget, or splitting the record, is the maintainer's decision ([the process](docs/process/adr-implementation.md#10-size-and-review-budget))
+2. **Write an ADR** in `docs/adr/` following the [convention](docs/adr/README.md), its `Size` section first: the size sets how many review passes the record gets, and going past that budget, or splitting the record, is the decision of the contributor who carries it — a person, never an agent ([the process](docs/process/adr-implementation.md#10-size-and-review-budget))
 3. **Submit the ADR PR separately** from the code PR — discussion happens in the ADR review
 4. **Once the ADR is `Accepted`**, open the implementation PR linking back to the ADR
 

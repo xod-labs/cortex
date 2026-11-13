@@ -82,7 +82,7 @@ An ADR delivered in several steps adds:
 
 1. Copy the latest ADR as a starting structure
 2. Increment the number
-3. Fill in its `Size` section first: the size sets the review budget, and a cap reached or a split is the maintainer's call ([§10](../process/adr-implementation.md#10-size-and-review-budget))
+3. Fill in its `Size` section first: the size sets the review budget, and a cap reached or a split is the call of the contributor who carries it — a person, never an agent ([§10](../process/adr-implementation.md#10-size-and-review-budget))
 4. Open a PR — the discussion happens in the PR review, not in the ADR text
 5. Once accepted, change `Status: Proposed` → `Status: Accepted` + commit
 6. Update the index above
