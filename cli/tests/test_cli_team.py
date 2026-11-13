@@ -3286,6 +3286,22 @@ class ThirdCodeReviewTests(TeamTestCase):
     @SOURCE
     @AS_ROOT
     @harness.outside_a_repository
+    def test_init_dir_of_a_project_beside_a_team_s_folder_that_cannot_be_searched_names_it_from_where_it_runs(self):
+        # #375 pass 1: the same, for a project whose cortex.toml is there — its own call names DIR/agents too.
+        root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n', committed=False, name="nested/fresh")
+        os.chmod(root / "agents", 0o600)
+        self.addCleanup(os.chmod, root / "agents", 0o755)
+        proc = self.cortex(self.tmp, "init", "nested/fresh", "--tool", "claude")
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"cortex init reads {TEAM}, and agents/ is a folder this user cannot search: give its owner read, "
+                      "write and search on it — chmod u+rwx nested/fresh/agents — then run cortex init again\n", proc.err)
+        self.assertEqual((root / "cortex.toml").read_text(encoding="utf-8"), 'theme = "h2g2"\n')
+        subprocess.run(["chmod", "u+rwx", "nested/fresh/agents"], cwd=self.tmp, check=True)
+        self.assert_ok(self.cortex(self.tmp, "init", "nested/fresh", "--tool", "claude"))
+
+    @SOURCE
+    @AS_ROOT
+    @harness.outside_a_repository
     def test_a_fresh_init_beside_a_team_s_file_that_cannot_be_read_says_to_make_it_one_you_can(self):
         # #350 pass 1: the folder can be searched, the file cannot be read — the file is the fix, not the folder's mode.
         # Made a file this user can read, init runs.
