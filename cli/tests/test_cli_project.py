@@ -339,7 +339,7 @@ class WarnTests(ProjectTestCase):
     def test_a_registry_it_refuses_is_a_warning_too(self):
         self.write_registry(top="format = 2\n")
         err = io.StringIO()
-        with self.in_process():
+        with self.in_process(), mock.patch.dict(os.environ, {"CORTEX_SOURCE_VERSION": "9.9.9"}):     # a binary's
             self.assertEqual(registry.add(str(self.project("acme")), warn=err), (None, False))
         self.assertIn("format 2 is written by a later Cortex", err.getvalue())
         self.assertIn("cortex self-update", err.getvalue())

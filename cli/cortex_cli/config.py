@@ -838,7 +838,8 @@ def load_lock(root: str, name: str = LOCK_FILE, shown: Optional[str] = None, *,
         raise ConfigError(f"{error} — {again}")
     except project.LaterFormatError as error:
         # Said as `cortex sync` says a version too new: the bootstrap has the assistant act on it.
-        raise ConfigError(f"{error}: this cortex is older than the project's — update it:\n    cortex self-update")
+        raise ConfigError(f"{error}: this cortex is older than the project's — update it:\n"
+                          f"    {store.update_command()}")
     except project.ProjectFileError as error:
         raise ConfigError(f"{error} — {again}")
     return Lock(version=Version(data["version"]), digest=data["digest"])

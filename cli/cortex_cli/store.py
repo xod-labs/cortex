@@ -136,9 +136,10 @@ def too_old_for(version: Version, own: Version) -> bool:
     return version > own
 
 
-def update_command(version: Union[Version, str]) -> str:
+def update_command(version: Union[Version, str, None] = None) -> str:
     """The command that moves this binary to ``version`` (ADR-010 §3.7) — a release's, or ``VERSION`` where none is
     named: a build of no release has none, and its pin is moved to a release instead (``pin_command``, ADR-009 §9).
+    With no ``version``, the latest release's: what reads a format newer than this cortex's, say.
     From a source checkout that says its own version — no ``CORTEX_SOURCE_VERSION`` naming the one its tests stand
     for —, which no self-update replaces: the checkout updated, or, with none to name, the release installed."""
     if embedded_archive() is None and not os.environ.get("CORTEX_SOURCE_VERSION"):
@@ -148,7 +149,7 @@ def update_command(version: Union[Version, str]) -> str:
         shown = display(str(checkout))
         quoted = f'"{shown}"' if any(c.isspace() for c in shown) else shown
         return f"git -C {quoted} pull"
-    return f"cortex self-update {version}"
+    return "cortex self-update" if version is None else f"cortex self-update {version}"
 
 
 def update_first(command: str, block: bool = False) -> str:

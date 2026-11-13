@@ -7,6 +7,9 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+### Fixed
+- **Every update a source checkout names is its own** ([#374](https://github.com/xod-labs/cortex/issues/374)). 1.8.3 named `git -C CHECKOUT pull` for a project too new for a checkout; three other messages still named `cortex self-update`, which a checkout refuses: a `cortex.lock` of a newer format, a `projects.toml` of a newer format, and the notice of a newer release after `cortex upgrade`. They now name the checkout's update too — or, from a copy of the package with no checkout, the install script's command. From a checkout, the notice also names the release to upgrade to, `cortex upgrade VERSION`: a checkout is still a build of no release once updated, and a plain `cortex upgrade` moves no project from it to a release.
+
 ## [1.8.3] - 2026-11-13 — Anything That Happens, Happens _(Released)_
 [Full notes](changelog/1.8.3.md)
 

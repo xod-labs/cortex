@@ -109,6 +109,7 @@ class EmbeddedTests(StoreTestCase):
                 self.assertEqual(store.pin_command(origin), command)
         with mock.patch.dict(os.environ, {"CORTEX_SOURCE_VERSION": "1.8.0-rc.1"}):       # a binary, stood for
             self.assertEqual(store.update_command(Version("1.8.0-rc.1")), "cortex self-update 1.8.0-rc.1")
+            self.assertEqual(store.update_command(), "cortex self-update")                  # #374: the latest's
         # #345: a source checkout that says its own version, which no self-update replaces, is updated itself — or,
         # with none, the release installed.
         with mock.patch.dict(os.environ):
@@ -118,6 +119,7 @@ class EmbeddedTests(StoreTestCase):
             with mock.patch.object(store, "source_checkout", return_value=None):
                 self.assertEqual(store.update_command(Version("1.8.0-rc.1")),
                                  store.install_command(Version("1.8.0-rc.1")))
+                self.assertEqual(store.update_command(), store.install_command())
 
     @unittest.skipIf(AS_ROOT, "root writes any file")
     def test_it_is_read_only_once_written(self):
