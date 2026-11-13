@@ -507,6 +507,8 @@ class PathTests(unittest.TestCase):
                         self.assertIn(f"⚠ {display(service)}\n  SERVICE_REFUSED — a service the runtime refuses — "
                                       f"{said}\n", out.getvalue())
                         self.assertNotIn("our-own-role.md", out.getvalue())
+                        self.assertNotIn("Nothing to validate", out.getvalue())     # refused, not empty (#375)
+                        self.assertNotIn("No overlay roots found", out.getvalue())
                         self.assertIn("Warnings: 1", out.getvalue())
             out, err = io.StringIO(), io.StringIO()
             code = _main([], str(project), str(project / "cortex"), out, err, "cortex validate", (), team)
