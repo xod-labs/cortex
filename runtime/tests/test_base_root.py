@@ -648,24 +648,41 @@ class TeamVersionTests(SyncedProjectTestCase):
 
     def test_a_cortex_local_toml_the_runtime_cannot_open_is_none_as_in_1_7_0_and_logged(self):
         # A container's mount, another user's file: a deployment that works today keeps working (#344), said in the
-        # runtime's log. A directory stands for it everywhere; a file this user may not read, where it cannot.
+        # runtime's log, which names the error as the system says it (#375). A directory stands for it everywhere,
+        # a mount that fails too; a file this user may not read, where it cannot.
+        import errno
+
+        from cortex_runtime import base
+
         pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n')
         local = self.project / "cortex.local.toml"
         local.mkdir()
         with self.assertLogs("cortex_runtime.base", "WARNING") as logged:
             self.assertEqual(pin().version, "9.9.9")
-        self.assertIn("cortex.local.toml cannot be read, and is not: ", logged.output[0])
+        self.assertEqual(logged.records[0].getMessage(), f"{local} cannot be read, and is not: Is a directory")
         local.rmdir()
+        local.write_bytes(b"spec = [\n")
+        read_file = base.cascade.read_file
+
+        def failing(path):
+            if Path(path) == local:
+                raise OSError(errno.EIO, os.strerror(errno.EIO), path)
+            return read_file(path)
+
+        with mock.patch.object(base.cascade, "read_file", failing), \
+                self.assertLogs("cortex_runtime.base", "WARNING") as logged:
+            self.assertEqual(pin().version, "9.9.9")
+        self.assertEqual(logged.records[0].getMessage(),
+                         f"{local} cannot be read, and is not: {os.strerror(errno.EIO)}")
         if os.name == "posix" and os.geteuid() != 0:                    # root reads any file
-            local.write_bytes(b"spec = [\n")
             local.chmod(0)
             try:
                 with self.assertLogs("cortex_runtime.base", "WARNING") as logged:
                     self.assertEqual(pin().version, "9.9.9")
             finally:
                 local.chmod(0o600)
-            self.assertIn("Permission denied", logged.output[0])
-            local.unlink()
+            self.assertEqual(logged.records[0].getMessage(), f"{local} cannot be read, and is not: Permission denied")
+        local.unlink()
         with mock.patch("cortex_runtime.base.logger") as logger:       # no file at all: nothing to say
             self.assertEqual(pin().version, "9.9.9")
         logger.warning.assert_not_called()
