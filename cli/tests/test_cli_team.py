@@ -4046,6 +4046,101 @@ class DeferredFixTests(TeamTestCase):
         for root in roots:
             self.assertEqual((root / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(NEW, True)), root.name)
 
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_team_names_nothing_to_commit_of_a_linked_folder_in_no_repository(self):
+        # #351: agents/ a link to a folder in no repository, the project in one — git commits neither file there; the
+        # project's bootstrap, written again, is committed in the project.
+        self.release.replace_spec("9.9.7", {"templates/bootstrap-instructions.md": OLD})
+        self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": NEW})
+        outside = self.tmp / "outside"
+        for bootstrap in (False, True):
+            with self.subTest(bootstrap=bootstrap):
+                shutil.rmtree(outside, ignore_errors=True)
+                shutil.rmtree(self.tmp / "app", ignore_errors=True)
+                outside.mkdir()
+                (outside / "cortex.team.toml").write_text('version = "9.9.7"\n', encoding="utf-8")
+                root = self.project('theme = "h2g2"\n')
+                (root / "agents").symlink_to(outside, target_is_directory=True)
+                if bootstrap:
+                    (root / "CLAUDE.md").write_bytes(init.instructions(OLD, True))
+                proc = self.cortex(root, "upgrade", "--team", "9.9.8")
+                self.assert_ok(proc)
+                self.assertEqual(str(config.load_lock(str(outside), config.TEAM_LOCK_FILE).version), "9.9.8")
+                self.assertNotIn("Commit agents/", proc.out)
+                ours = "; commit CLAUDE.md in the project" if bootstrap else ""
+                self.assertIn("\nWritten: agents/cortex.team.toml and agents/cortex.team.lock — in no git work tree, "
+                              f"so committed nowhere{ours}.\n", proc.out)
+
+    def linked_out(self, lock=None, local=None):
+        """A project in a repository whose agents/ links to a folder in none, the team's file pinning 9.9.8 — beside a
+        lock naming ``lock``, when it is given."""
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        (outside / "cortex.team.toml").write_text('version = "9.9.8"\n', encoding="utf-8")
+        if lock is not None:
+            (outside / "cortex.team.lock").write_text(config.render_lock(store.Version(lock), "sha256:" + "0" * 64),
+                                                      encoding="utf-8")
+        root = self.project('theme = "h2g2"\n', local=local)
+        (root / "agents").symlink_to(outside, target_is_directory=True)
+        return root, outside
+
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_sync_says_a_team_s_lock_beyond_a_link_is_committed_nowhere(self):
+        # #351: the sync's lock note, asked where agents/ leads — never "commit it in agents/".
+        root, outside = self.linked_out()
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        self.assertEqual(str(config.load_lock(str(outside), config.TEAM_LOCK_FILE).version), "9.9.8")
+        self.assertIn("\nagents/cortex.team.lock: written — in no git work tree, so committed nowhere\n", proc.out)
+
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_a_resume_during_a_try_says_a_team_s_lock_beyond_a_link_is_committed_nowhere(self):
+        # #351: the lock a try leaves, written by the resume (_write_try_lock), and the run's ending.
+        root, outside = self.linked_out(local=f'version = "{OWN}"\n')
+        self.assert_ok(self.cortex(root, "sync"))
+        (outside / "cortex.team.lock").write_text(config.render_lock(store.Version("9.9.7"), "sha256:" + "0" * 64),
+                                                  encoding="utf-8")
+        proc = self.cortex(root, "upgrade")
+        self.assert_ok(proc)
+        self.assertEqual(str(config.load_lock(str(outside), config.TEAM_LOCK_FILE).version), "9.9.8")
+        self.assertIn("agents/cortex.team.lock: Cortex 9.9.8, where it named 9.9.7 — in no git work tree, so committed "
+                      "nowhere\n", proc.out)
+        self.assertNotIn("Commit agents/", proc.out)
+        self.assertIn("\nagents/cortex.team.lock — in no git work tree, so committed nowhere.\n", proc.out)
+
+    @SOURCE
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_a_plain_resume_says_a_team_s_lock_beyond_a_link_is_committed_nowhere(self):
+        # #351: no try — the resume syncs, the sync writes the lock, and the run's ending names it committed nowhere.
+        root, outside = self.linked_out(lock="9.9.7")
+        proc = self.cortex(root, "upgrade")
+        self.assert_ok(proc)
+        self.assertEqual(str(config.load_lock(str(outside), config.TEAM_LOCK_FILE).version), "9.9.8")
+        self.assertNotIn("Commit agents/", proc.out)
+        self.assertIn("\nagents/cortex.team.lock — in no git work tree, so committed nowhere.\n", proc.out)
+
+    @DOWNLOADS
+    @NEEDS_GIT
+    @harness.outside_a_repository
+    def test_team_branch_in_no_work_tree_says_no_branch_is_made(self):
+        # #351: --branch alone, the team's folder in no work tree — no branch is made; nothing was to commit.
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.7"\n', committed=False)
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        for args, said in ((("--branch", "b"), "no branch is made"),
+                           (("--commit", "--message", "m"), "nothing is committed"),
+                           (("--branch", "b", "--commit", "--message", "m"), "no branch is made and nothing is committed")):
+            with self.subTest(args=args):
+                (root / TEAM).write_text('version = "9.9.7"\n', encoding="utf-8")
+                proc = self.cortex(root, "upgrade", "--team", "9.9.8", *args, **env)
+                self.assert_ok(proc)
+                self.assertIn(f"note: agents/ is in no git work tree — {said} there\n", proc.err)
+
 
 def newer_refused(pin):
     """What --team with no VERSION says of a team's pin newer than this cortex."""

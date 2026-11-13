@@ -859,6 +859,19 @@ def commit_it(directory: str, version: store.Version, where: str = "") -> str:
     return "" if in_no_repository(directory) or store.development(version) else " — commit it" + where
 
 
+NOWHERE = " — in no git work tree, so committed nowhere"     # a file beyond a link, in no repository (#351)
+
+
+def team_lock_note(folder: str, version: store.Version, shown: str = config.TEAM_FOLDER) -> str:
+    """What follows the team's lock written in ``folder`` — ``shown``, as the root names it: ``commit_it``, asked
+    where the folder is. A link out of the project's repository to a folder in none — git does not follow it — is
+    said committed nowhere (#351); in no repository as written either, nothing is said, as ``commit_it`` says."""
+    real = os.path.realpath(folder)
+    if in_no_repository(real) and not in_no_repository(folder) and not store.development(version):
+        return NOWHERE
+    return commit_it(real, version, team_lock_commit(Path(folder), shown))
+
+
 def check_lock(root: str, version: store.Version, the_store: store.Store, out: TextIO,
                locked: bool = False, name: str = config.LOCK_FILE, writer: str = "`cortex sync`",
                folder: str = config.TEAM_FOLDER) -> Tuple[str, Optional[str]]:
@@ -1169,8 +1182,9 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if source is not None:
         out.write(f"{config.LOCK_FILE}: neither read nor written — a checkout has no version (--from)\n")
     elif lock is not None:
-        team = team_lock_commit(Path(where[0]), project.team_folder) if where[1] == config.TEAM_LOCK_FILE else ""
-        out.write(f"{where[2]}: {lock}{commit_it(where[0], version, team)}\n")
+        said = team_lock_note(where[0], version, project.team_folder) if where[1] == config.TEAM_LOCK_FILE \
+            else commit_it(where[0], version)
+        out.write(f"{where[2]}: {lock}{said}\n")
     if notes:
         _notes(Path(root), mode, err)
     _claude(Path(root), project, None if mode == "copy" else spec_source, out, err)

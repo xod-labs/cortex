@@ -84,18 +84,33 @@ class Outcome:
     team_files: List[Path] = field(default_factory=list)  # --team: the team's files, which --commit commits there
     development: bool = False   # a build of no release's version: nothing written is to commit (ADR-009 §9)
 
+    def lost(self) -> List[Path]:
+        """The team's file and lock, written in no git work tree, the project being in one — an ``agents/`` linked to
+        a folder in no repository, beyond a link git does not follow: committed nowhere (#351). Any other file
+        outside is said to commit where it is, as before."""
+        if self.nowhere or sync.in_no_repository(self.root):
+            return []
+        folder = Path(os.path.abspath(self.root), config.loose_team_folder(self.root))
+        ours = (folder / config.TEAM_FILE, folder / config.TEAM_LOCK_FILE)
+        return [path for path in self.files if Path(os.path.abspath(path)) in ours
+                and sync.in_no_repository(os.path.realpath(folder))]
+
     def names(self) -> List[str]:
         """The files to commit in the project — those outside its git work tree, ``elsewhere``."""
-        return [_shown_path(path, self.root) for path in self.files if path not in self.outside]
+        lost = self.lost()
+        return [_shown_path(path, self.root) for path in self.files if path not in self.outside and path not in lost]
 
     def elsewhere(self) -> str:
         """The files written outside the project's git work tree, where they are, and what to do — ``""``
         when there are none."""
-        if not self.outside:
-            return ""
-        them = "them where they are" if len(self.outside) > 1 else "it where it is"
-        where = _and([display(os.path.realpath(path)) for path in self.outside])
-        return f"{where} — outside its git work tree: commit {them}"
+        lost = self.lost()
+        outside = [path for path in self.outside if path not in lost]
+        nowhere = f"{_and([_shown_path(path, self.root) for path in lost])}{sync.NOWHERE}" if lost else ""
+        if not outside:
+            return nowhere
+        them = "them where they are" if len(outside) > 1 else "it where it is"
+        where = _and([display(os.path.realpath(path)) for path in outside])
+        return "; ".join(part for part in (f"{where} — outside its git work tree: commit {them}", nowhere) if part)
 
 
 # --------------------------------------------------------------------------- #
@@ -564,8 +579,8 @@ def _write_try_lock(where: Tuple[str, str, str], version: Version, the_store: st
             return
     else:
         config.write_lock(directory, version, digest, name)
-    team = sync.team_lock_commit(Path(directory), folder) if team else ""
-    out.write(f"{shown_name}: {said}{sync.commit_it(directory, version, team)}\n")
+    note = sync.team_lock_note(directory, version, folder) if team else sync.commit_it(directory, version)
+    out.write(f"{shown_name}: {said}{note}\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -658,10 +673,16 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
             mine = [_shown_path(path, outcome.root) for path in own if path not in there]
             leads = _and([_shown_path(path, outcome.root) for path in there]) if there else ""
             lead = "they lead" if len(there) > 1 else "it leads"
-            if outcome.committed is None and sync.in_no_repository(outcome.team):
-                # The team's folder in no work tree — nor the project, which holds it: nothing commits them.
-                out.write(f"\nWritten: {_and([_shown_path(path, outcome.root) for path in outcome.files])} — in no git "
-                          "work tree, so committed nowhere.\n")
+            if outcome.committed is None and sync.in_no_repository(os.path.realpath(outcome.team)):
+                # The team's folder in no work tree, where it is — a link out of the project's repository included,
+                # which git does not follow (#351): nothing commits its files. The project's own, in a repository, are
+                # committed there.
+                rest = [_shown_path(path, outcome.root) for path in outcome.files
+                        if not sync.in_no_repository(os.path.dirname(os.path.realpath(path)))]
+                nowhere = [_shown_path(path, outcome.root) for path in outcome.files
+                           if _shown_path(path, outcome.root) not in rest]
+                ours = f"; commit {_and(rest)} in the project" if rest else ""
+                out.write(f"\nWritten: {_and(nowhere)} — in no git work tree, so committed nowhere{ours}.\n")
             elif outcome.committed is None:
                 also = f", and {leads} there too, where {lead}" if there else ""
                 ours = f"; {_and(mine)} in the project" if mine else ""
@@ -849,13 +870,15 @@ def _local_then_sync(root: str, values: Dict[str, object], out: TextIO, err: Tex
 
 
 def _team_git(agents: str, branch: Optional[str], out: TextIO, err: TextIO,
-              folder: str = config.TEAM_FOLDER) -> Optional[str]:
-    """The work tree of the team's folder ``folder``, for --branch and --commit, which act in the team's
-    repository (ADR-013 §3.11) — the branch made before anything is written. Asked where the folder is: a
-    link out of the project's repository is in that other place's work tree, or in none (§3.6)."""
+              folder: str = config.TEAM_FOLDER, committing: bool = False) -> Optional[str]:
+    """The work tree of the team's folder ``folder``, for --branch and --commit — ``committing`` — which act in the
+    team's repository (ADR-013 §3.11) — the branch made before anything is written. Asked where the folder is: a
+    link out of the project's repository is in that other place's work tree, or in none (§3.6) — said by what was
+    asked, as a project in none is (#351)."""
     top = _work_tree(os.path.realpath(agents))
     if top is None:
-        err.write(f"note: {folder}/ is in no git work tree — nothing is committed there\n")
+        what = (["no branch is made"] if branch is not None else []) + (["nothing is committed"] if committing else [])
+        err.write(f"note: {folder}/ is in no git work tree — {' and '.join(what)} there\n")
         return None
     if branch is not None and _on_branch(agents) != branch:
         if _branch_exists(agents, branch):
@@ -1109,7 +1132,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
             err.write(f"note: nothing was written in {folder}/, and {_and(names)} "
                       f"{'hold' if len(names) > 1 else 'holds'} changes git has not committed — a run cut short, or "
                       "a commit refused? `git status` there says what is left to commit\n")
-    top = _team_git(agents, branch, out, err, folder) if asked and files else None
+    top = _team_git(agents, branch, out, err, folder, message is not None) if asked and files else None
     before = {} if unchanged else {path: path.read_bytes() if path.is_file() else None for path in files}
     try:
         if not unchanged:
@@ -2028,8 +2051,9 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
         return outcome
     # A file of another work tree inside this one — the team's folder, a submodule — is that repository's.
     outcome.outside = [path for path in outcome.files if not _inside(top, path) or _other_tree(top, root, path)]
-    if outcome.outside:
-        names = [_where(path, root) for path in outcome.outside]
+    there = [path for path in outcome.outside if path not in outcome.lost()]      # in no work tree: said at the end
+    if there:
+        names = [_where(path, root) for path in there]
         them = "them where they are" if len(names) > 1 else "it where it is"
         err.write(f"note: {_and(names)} {'are' if len(names) > 1 else 'is'} outside the git work tree of "
                   f"{display(root)} — not committed with it: commit {them}\n")
