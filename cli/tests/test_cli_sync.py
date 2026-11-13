@@ -1332,6 +1332,24 @@ class CortexLockTests(SyncTestCase):
         proc = self.validate(project, "--strict")
         self.assertEqual(proc.returncode, 0, proc.out + proc.err)
 
+    @DOWNLOADS
+    def test_upgrade_writes_an_incomplete_stored_version_again(self):
+        # #384: every command that puts a version in the store does it as sync does — `cortex upgrade` too.
+        other = self.project(name="other", version="9.9.8")
+        self.assert_ok(self.sync(other))
+        stored = self.stored("9.9.8")
+        store.make_writable(stored)
+        shutil.rmtree(stored / "docs")
+        store.make_read_only(stored)                # read-only, as the store holds every version
+        project = self.project()
+        self.assert_ok(self.sync(project))
+        proc = harness.run("upgrade", "9.9.8", cwd=project, env=dict(self.env, CORTEX_NO_UPDATE_CHECK="1"))
+        self.assertEqual(proc.returncode, 0, proc.stdout.decode() + proc.stderr.decode())
+        self.assertTrue((stored / "docs").is_dir())
+        for root in (project, other):
+            proc = self.validate(root, "--strict")
+            self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+
     def test_a_link_a_user_made_at_a_stored_version_is_refused(self):
         # #384: the store repairs a folder of its own, never what a link a user made leads to.
         project = self.project()
