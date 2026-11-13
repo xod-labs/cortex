@@ -178,9 +178,10 @@ class LocalUnreadable(ValueError):
 def _local(root: Path) -> Mapping[str, Any]:
     """Of ``cortex.local.toml``, ``version`` and ``synced``. A file that opens and does not parse — a conflict a
     pull left, a typo — is refused as ``cortex sync`` refuses it, a ``LocalUnreadable`` (#344): the command
-    refuses everything until it is fixed. One the runtime cannot open — a container's mount, another user's file,
-    a named pipe, never waited on — is none, as a 1.7.0 runtime, which never read it, served it: said in the log,
-    once per error."""
+    refuses everything until it is fixed. What is no file — a directory, a named pipe, never waited on — is none,
+    and said nowhere, as ``cortex config`` reads none there (#375). A file the runtime cannot open — a container's
+    mount, another user's — is none, as a 1.7.0 runtime, which never read it, served it: said in the log, once per
+    error."""
     path = root / project.LOCAL_FILE
     try:
         raw = cascade.read_file(str(path))
@@ -188,6 +189,9 @@ def _local(root: Path) -> Mapping[str, Any]:
         _unread(path, None)
         return {}
     except OSError as error:
+        if not os.path.isfile(path):        # the CLI's own test: no file there, which it reads as none (read_project)
+            _unread(path, None)
+            return {}
         if _unread(path, (error.errno, error.strerror or str(error))):
             logger.warning("%s cannot be read, and is not: %s", path, error.strerror or error)
         return {}
