@@ -618,6 +618,21 @@ class TeamVersionTests(SyncedProjectTestCase):
                     self.assertEqual(host.returncode, 1, host.stdout + host.stderr)
                     self.assertEqual(host.stderr.decode(), f"cortex {command}: {said}\n")
 
+    def test_a_cortex_local_toml_with_a_byte_order_mark_is_read_as_the_cli_reads_it(self):
+        # Notepad writes one (#375): the file is read, not refused as one that does not parse — its try is named.
+        import json
+
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n')
+        (self.project / "cortex.local.toml").write_bytes(b'\xef\xbb\xbfversion = "10.0.0"\n')
+        with self.assertRaisesRegex(ValueError, r"^this machine's cortex reads Cortex 10\.0\.0, "
+                                                r"cortex\.local\.toml's version — a try"):
+            pin()
+        if os.name != "nt":                                             # run with an empty environment
+            host = self.cli("config", "--json")
+            self.assertEqual(host.returncode, 0, host.stdout + host.stderr)
+            version = json.loads(host.stdout)["settings"]["version"]
+            self.assertEqual((version["value"], version["origin"]), ("10.0.0", "cortex.local.toml"))
+
     def test_cortex_toml_is_read_before_cortex_local_toml_as_the_cli_reads_them(self):
         # Both files broken (#344): the CLI reads cortex.toml first and names its error, so the runtime names
         # cortex.toml's — the one to fix first — never cortex.local.toml's. Each error is at a line of its own.
