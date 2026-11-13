@@ -862,24 +862,31 @@ def commit_it(directory: str, version: store.Version, where: str = "") -> str:
 NOWHERE = " — in no git work tree, so committed nowhere"     # a file beyond a link, in no repository (#351)
 
 
+def beyond_every_repository(directory: str) -> bool:
+    """Whether ``directory`` is in a git repository as written, and in none where it leads: a link out of the
+    project's repository to a folder in none, which git does not follow — what is written there is committed
+    nowhere, and is said so (#351). In no repository as written either, it is not: nothing is said of what is
+    written there, as ``commit_it`` says nothing."""
+    return not in_no_repository(directory) and in_no_repository(os.path.realpath(directory))
+
+
 def then_commit(directory: str, version: store.Version) -> str:
     """What follows a remedy that writes a lock in ``directory`` for ``version``: ``, then commit it``. Nothing in
-    no git repository, nor for a build of no release's version, as ``commit_it`` says; a link out of the project's
-    repository to a folder in none — git does not follow it — is said committed nowhere (#351)."""
+    no git repository, nor for a build of no release's version, as ``commit_it`` says; ``beyond_every_repository``,
+    it is said committed nowhere."""
     if in_no_repository(directory) or store.development(version):
         return ""
-    return "; it is in no git work tree, so committed nowhere" if in_no_repository(os.path.realpath(directory)) \
+    return "; it is in no git work tree, so committed nowhere" if beyond_every_repository(directory) \
         else ", then commit it"
 
 
 def team_lock_note(folder: str, version: store.Version, shown: str = config.TEAM_FOLDER) -> str:
-    """What follows the team's lock written in ``folder`` — ``shown``, as the root names it: ``commit_it``, asked
-    where the folder is. A link out of the project's repository to a folder in none — git does not follow it — is
-    said committed nowhere (#351); in no repository as written either, nothing is said, as ``commit_it`` says."""
-    real = os.path.realpath(folder)
-    if in_no_repository(real) and not in_no_repository(folder) and not store.development(version):
+    """What follows the team's lock written in ``folder`` — ``shown``, as the root names it: ``commit_it``;
+    ``beyond_every_repository``, it is said committed nowhere — but for a build of no release's version, of which
+    nothing is said, as ``commit_it`` says."""
+    if beyond_every_repository(folder) and not store.development(version):
         return NOWHERE
-    return commit_it(real, version, team_lock_commit(Path(folder), shown))
+    return commit_it(folder, version, team_lock_commit(Path(folder), shown))
 
 
 def check_lock(root: str, version: store.Version, the_store: store.Store, out: TextIO,
