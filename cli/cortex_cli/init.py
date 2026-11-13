@@ -548,6 +548,11 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         instructions_file = root / TOOLS[tool] if tool else None
     if instructions_file is not None:
         _refuse_a_file_on_the_way(instructions_file.parent, f"the instructions file {display(str(instructions_file))}")
+        if os.path.exists(instructions_file) and not instructions_file.is_file():
+            # A named pipe, a socket, a directory, or a link to one: read as a file, a named pipe would hold the run
+            # with no limit (#358).
+            raise InitError(f"the instructions file {display(str(instructions_file))} is not a file: remove it, then "
+                            "run cortex init again, which writes it")
     if theme is not None and not is_theme(theme):
         raise InitError(f'--theme {theme}: no theme name — letters, digits, ".", "_" and "-"')
     services = _services(options, root, out, err) if options.workspace else []

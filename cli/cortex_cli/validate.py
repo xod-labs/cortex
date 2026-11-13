@@ -192,6 +192,9 @@ def roots_and_folder(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]], Op
         for note in sync.version_notes(project):
             if "is locked by" not in note and "is not read" not in note:
                 sys.stderr.write(f"note: {note}\n")
+        said = sync.gitmodules_note(Path(root))
+        if said is not None:
+            sys.stderr.write(f"note: {said}\n")
         warnings = [(project.team_name, "LOCKED_KEY" if "is locked by" in note else "TEAM_NOT_READ", note)
                     for note in (project.settings.notes if project.settings is not None else ())]
         folder = sync._team_folder_note(project)

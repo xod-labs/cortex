@@ -154,6 +154,30 @@ def _gitdir(path: Path) -> Optional[str]:
     return os.path.normpath(os.path.join(path, text[len("gitdir:"):].strip()))
 
 
+def gitmodules_lines(top: Path) -> Optional[List[str]]:
+    """The lines of the ``.gitmodules`` at ``top`` — ``None`` when there is none, or it is not a file: read without
+    blocking, a named pipe there is never waited on (#358)."""
+    try:
+        return cascade.read_file(str(top / ".gitmodules")).decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+
+
+def gitmodules_not_a_file(top: Path) -> bool:
+    """Whether the ``.gitmodules`` at ``top`` is there as no file — a named pipe, a socket, a directory, or a link to
+    one — which git, asked to read it, waits on or refuses (#358)."""
+    path = top / ".gitmodules"
+    return os.path.exists(path) and not os.path.isfile(path)
+
+
+def gitmodules_note(root: Path) -> Optional[str]:
+    """What a sync and a validate say of a ``.gitmodules`` that is not a file: read as naming no submodule."""
+    if not gitmodules_not_a_file(root):
+        return None
+    return (".gitmodules is not a file, which git cannot read, and Cortex reads it as naming no submodule: make it a "
+            "file, or remove it")
+
+
 def is_submodule(path: Path, relative: Optional[str] = None) -> bool:
     """``.gitmodules`` has a ``path = cortex``: a submodule, whether its repository is under the
     superproject's ``.git/modules/`` or, as older git made them, in the ``.git`` it holds. ``relative``,
@@ -163,11 +187,8 @@ def is_submodule(path: Path, relative: Optional[str] = None) -> bool:
     # ends with its text.
     top = path.parent if relative is None else path.parents[len(relative.split("/")) - 1]
     name = path.name if relative is None else relative
-    try:
-        lines = (top / ".gitmodules").read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return False
-    for line in lines:
+    lines = gitmodules_lines(top)
+    for line in lines or ():
         key, _, value = line.partition("=")
         if key.strip() == "path" and value.strip().strip('"').rstrip("/") == name:
             return True
@@ -180,9 +201,8 @@ OLD_THEME_MARKER = "agents/personalities/.active-*"     # the theme the scripts 
 def only_submodule(path: Path) -> bool:
     """``.gitmodules`` holds this submodule and no other: once it is removed, the file is left
     empty, and still tracked."""
-    try:
-        lines = (path.parent / ".gitmodules").read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
+    lines = gitmodules_lines(path.parent)
+    if lines is None:
         return False
     paths = {value.strip().strip('"').rstrip("/") for key, _, value in (line.partition("=") for line in lines)
              if key.strip() == "path"}
@@ -285,6 +305,8 @@ def submodule_name(path: Path) -> str:
     """The name of the submodule at ``cortex/`` — its section in ``.gitmodules``, at the top of the
     repository, read by git — or, without one, the name ``git submodule add`` gives: its path there."""
     where = _top_and_prefix(str(path.parent))
+    if where is not None and gitmodules_not_a_file(Path(where[0])):
+        return where[1] + path.name                 # never asked of git, which would wait on a named pipe (#358)
     if where is not None:
         top, prefix = where
         proc = _git(top, "config", "-f", ".gitmodules", "-z", "--get-regexp", r"^submodule\..*\.path$")
@@ -295,9 +317,8 @@ def submodule_name(path: Path) -> str:
         return names[-1] if names else prefix + path.name          # two sections with that path: git takes the last
     # Without git: the project's .gitmodules, read as git reads it — a header in any case, a comment
     # after it, and no section left open by a header of another kind.
-    try:
-        lines = (path.parent / ".gitmodules").read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
+    lines = gitmodules_lines(path.parent)
+    if lines is None:
         return path.name
     name, found = None, path.name
     for line in lines:
@@ -318,6 +339,8 @@ def _named_in_gitmodules(path: Path) -> bool:
     if where is None:
         return False
     top, prefix = where
+    if gitmodules_not_a_file(Path(top)):
+        return False
     proc = _git(top, "config", "-f", ".gitmodules", "--get", f"submodule.{submodule_name(path)}.path")
     return proc is not None and proc.returncode == 0 and proc.stdout.strip().rstrip("/") != prefix + path.name
 
@@ -1084,6 +1107,9 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
             continue                        # said by `cortex upgrade`, before this sync
         # A locked key set otherwise is a warning (ADR-013 §3.5): its value is not read.
         err.write(f"{'warning' if ' is locked by ' in note else 'note'}: {note}\n")
+    said_gitmodules = gitmodules_note(Path(root))
+    if said_gitmodules is not None:
+        err.write(f"note: {said_gitmodules}\n")
     if claude_access is not None:
         # This developer's choice, written with spec and kept for the next syncs: cortex.local.toml's
         # wins over the team's — unless the team's file locks it.
