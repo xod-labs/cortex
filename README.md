@@ -192,6 +192,8 @@ A workspace root that is no git repository — a folder holding the services' re
 
 ### The team's file
 
+[Who pins the version?](docs/who-pins-the-version.md) walks through which file wins in each case.
+
 `agents/cortex.team.toml`, in the team's folder and committed in the team's repository, gives every project that reads the folder the team's settings ([ADR-013](docs/adr/ADR-013-configuration-cascade.md)) — read once the team's version is 1.8.0 or later:
 
 ```toml
@@ -360,6 +362,8 @@ Manages the registry, `projects.toml` in the Cortex home — `~/.cortex/projects
 No registry is an empty list: `list` says so, and `check` exits 0. A project moved on disk is registered again at its new path, under a free name, by its next sync; its old entry is then `missing`, and the next `cortex prune` or `cortex project remove` drops it.
 
 ### `cortex config`
+
+Which file pins your version, case by case, and how to read this command's output: [Who pins the version?](docs/who-pins-the-version.md)
 
 ```text
 cortex config [KEY] [--locked] [--json]
