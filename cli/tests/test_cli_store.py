@@ -115,7 +115,10 @@ class EmbeddedTests(StoreTestCase):
         with mock.patch.dict(os.environ):
             os.environ.pop("CORTEX_SOURCE_VERSION", None)
             shown = f'"{display(REPO)}"' if " " in display(REPO) else display(REPO)
-            self.assertEqual(store.update_command(Version("1.8.0-rc.1")), f"git -C {shown} pull")
+            with mock.patch.object(store, "_detached", return_value=False):
+                self.assertEqual(store.update_command(Version("1.8.0-rc.1")), f"git -C {shown} pull")
+            with mock.patch.object(store, "_detached", return_value=True):          # #374: no branch to pull
+                self.assertEqual(store.update_command(Version("1.8.0-rc.1")), f"git -C {shown} pull origin HEAD")
             with mock.patch.object(store, "source_checkout", return_value=None):
                 self.assertEqual(store.update_command(Version("1.8.0-rc.1")),
                                  store.install_command(Version("1.8.0-rc.1")))

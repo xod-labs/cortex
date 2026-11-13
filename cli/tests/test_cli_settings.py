@@ -619,10 +619,10 @@ class DevelopmentBuildTests(SettingsTestCase):
         proc.out, proc.err = proc.stdout.decode(), proc.stderr.decode()
         return proc
 
-    def run_update(self, said, checkout, pattern=r"\n    git (-C .+ pull)\n"):
+    def run_update(self, said, checkout, pattern=r"\n    git (-C .+)\n"):
         """The update ``said`` names, run: a checkout's own, ``git -C CHECKOUT pull``."""
         named = shlex.split(re.search(pattern, said).group(1))
-        self.assertEqual(named[1], display(checkout))
+        self.assertEqual(named[:2], ["-C", display(checkout)])
         subprocess.run([*self.GIT_ARGS, *named], check=True, capture_output=True)
 
     @unittest.skipIf(harness.BINARY, "a source checkout's remedy")
@@ -646,6 +646,33 @@ class DevelopmentBuildTests(SettingsTestCase):
         self.run_update(proc.err, checkout)                                                 # the command it names
         self.assert_ok(self.from_checkout(checkout, project, "sync", CORTEX_RELEASES_URL=release.url))
         self.assertEqual(config.load(str(project)).synced["reads"], pinned)
+
+    @unittest.skipIf(harness.BINARY, "a source checkout's remedy")
+    @NEEDS_GIT
+    @harness.outside_a_repository
+    def test_a_checkout_on_a_detached_head_is_told_to_pull_its_remote_s_default_branch(self):
+        # #374: a detached HEAD — a tag checked out, say — has no branch for `git pull` to update: the clone's remote's
+        # default branch is pulled. So is it in a worktree of the clone, its HEAD in the repository its .git names.
+        pinned = "1.8.0"
+        checkout = self.checkout(behind={"CHANGELOG.md": self.BEHIND},
+                                 ahead={"CHANGELOG.md": (harness.REPO / "CHANGELOG.md").read_bytes()})
+        worktree = self.tmp / "worktree"
+        subprocess.run([*self.GIT_ARGS, "-C", str(checkout), "worktree", "add", "-q", "--detach", str(worktree)],
+                       check=True, capture_output=True)
+        subprocess.run([*self.GIT_ARGS, "-C", str(checkout), "checkout", "-q", "--detach"], check=True,
+                       capture_output=True)
+        release = FakeRelease((pinned,))
+        self.addCleanup(release.close)
+        project = self.project(pinned)
+        for tree in (worktree, checkout):
+            with self.subTest(tree=tree.name):
+                proc = self.from_checkout(tree, project, "sync", CORTEX_RELEASES_URL=release.url)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"newer than this cortex, {development(self.BEHIND.decode())} — update it:\n"
+                              f"    git -C {display(tree)} pull origin HEAD\n", proc.err)
+                self.run_update(proc.err, tree)                                             # the command it names
+                self.assert_ok(self.from_checkout(tree, project, "sync", CORTEX_RELEASES_URL=release.url))
+                self.assertEqual(config.load(str(project)).synced["reads"], pinned)
 
     def a_later_format(self, constant):
         """``core``'s ``project.py`` with ``constant`` — a format — at 2: a later Cortex's, which reads format 2."""

@@ -141,15 +141,33 @@ def update_command(version: Union[Version, str, None] = None) -> str:
     named: a build of no release has none, and its pin is moved to a release instead (``pin_command``, ADR-009 §9).
     With no ``version``, the latest release's: what reads a format newer than this cortex's, say.
     From a source checkout that says its own version — no ``CORTEX_SOURCE_VERSION`` naming the one its tests stand
-    for —, which no self-update replaces: the checkout updated, or, with none to name, the release installed."""
+    for —, which no self-update replaces: the checkout updated — on a detached HEAD, to its remote's default branch —,
+    or, with none to name, the release installed."""
     if embedded_archive() is None and not os.environ.get("CORTEX_SOURCE_VERSION"):
         checkout = source_checkout()
         if checkout is None:
             return install_command(version if isinstance(version, Version) else None)
         shown = display(str(checkout))
         quoted = f'"{shown}"' if any(c.isspace() for c in shown) else shown
-        return f"git -C {quoted} pull"
+        # A detached HEAD — a tag checked out, say — has no branch to pull: the clone's remote's default branch is.
+        return f"git -C {quoted} pull" + (" origin HEAD" if _detached(checkout) else "")
     return "cortex self-update" if version is None else f"cortex self-update {version}"
+
+
+def _detached(checkout: Path) -> bool:
+    """Whether ``checkout``'s HEAD is detached — read from its files: a source run needs no git on ``PATH``. Its
+    ``.git`` is the repository, or a file that names it — a worktree's, a submodule's."""
+    git = checkout / ".git"
+    try:
+        if git.is_file():
+            text = git.read_text(encoding="utf-8").strip()
+            if not text.startswith("gitdir:"):
+                return False
+            git = checkout / text[len("gitdir:"):].strip()
+        head = (git / "HEAD").read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return False
+    return bool(head) and not head.startswith("ref:")
 
 
 def update_first(command: str, block: bool = False) -> str:
