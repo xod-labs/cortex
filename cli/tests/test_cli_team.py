@@ -4224,6 +4224,32 @@ class DeferredFixTests(TeamTestCase):
             self.assertEqual((root / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(NEW, True)), root.name)
 
     @DOWNLOADS
+    def test_all_team_downloads_the_older_version_a_follower_read(self):
+        # #348, #375: the first project has no bootstrap, and never needs 9.9.7 — the follower's, 9.9.7's file, is
+        # compared with 9.9.7's template, downloaded for it, and written again from 9.9.8's.
+        self.release.replace_spec("9.9.7", {"templates/bootstrap-instructions.md": OLD})
+        self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": NEW})
+        team = self.tmp / "team"
+        team.mkdir()
+        (team / "cortex.team.toml").write_text('version = "9.9.7"\n', encoding="utf-8")
+        roots = []
+        for name in ("alpha", "beta"):
+            root = self.project('theme = "h2g2"\n', name=name)
+            (root / "agents").symlink_to(team, target_is_directory=True)
+            roots.append(root)
+        alpha, beta = roots
+        (beta / "CLAUDE.md").write_bytes(init.instructions(OLD, True))
+        (self.home / "projects.toml").write_text("format = 1\n" + "".join(
+            f'\n[[project]]\nname = "{root.name}"\npath = "{harness_path(root)}"\n' for root in roots), encoding="utf-8")
+        self.assertFalse((self.home / "versions" / "9.9.7").exists())
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team", "9.9.8")
+        self.assert_ok(proc)
+        self.assertNotIn("a bootstrap without the marker", proc.err)
+        self.assertFalse((alpha / "CLAUDE.md").exists())
+        self.assertEqual((beta / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(NEW, True)))
+        self.assertTrue((self.home / "versions" / "9.9.7" / "templates").is_dir())
+
+    @DOWNLOADS
     @harness.outside_a_repository
     def test_team_names_nothing_to_commit_of_a_linked_folder_in_no_repository(self):
         # #351: agents/ a link to a folder in no repository, the project in one — git commits neither file there; the
