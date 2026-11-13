@@ -16,6 +16,7 @@ the runtime reads ``version`` and ``synced`` only, never ``spec``, a path of the
 
 from __future__ import annotations
 
+import logging
 import os
 import tomllib
 from dataclasses import dataclass
@@ -23,6 +24,8 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from cortex_core import cascade, project, workspace
+
+logger = logging.getLogger("cortex_runtime.base")
 
 
 @dataclass(frozen=True)
@@ -63,11 +66,11 @@ def read_pin(root: Path) -> Optional[Pin]:
         return None
     if not path.is_file():
         raise ValueError(f"{project.PROJECT_FILE} of this workspace is not a file")
-    local = _local(Path(root))
     remedy = "cortex sync refuses this file too"
     alone = None        # before 1.8.0, what 1.7.0's grammar — every key required — says of cortex.toml read alone
     try:
         data = tomllib.loads(path.read_bytes().decode("utf-8-sig"))
+        local = _local(Path(root))          # after cortex.toml, as the command reads them
         before = project.is_version(data.get("version")) and project.before_team(data["version"])
         if before:
             # Below 1.8.0 nothing of ADR-013 is read (§3.8): committed, `cortex sync` reads cortex.toml alone, and
@@ -167,13 +170,29 @@ def _gives_what_it_lacks(root: Path, data: Mapping[str, Any]) -> bool:
                                                            for key in project.PROJECT_REQUIRED)
 
 
+class LocalUnreadable(ValueError):
+    """``cortex.local.toml`` opens and does not parse: a ``422`` naming the file and what the command says of it."""
+
+
 def _local(root: Path) -> Mapping[str, Any]:
-    """Of ``cortex.local.toml``, ``version`` and ``synced`` — what a 1.7.0 runtime never read, so a file that
-    does not read is none, as it was — a named pipe there included, read without waiting on it."""
+    """Of ``cortex.local.toml``, ``version`` and ``synced``. A file that opens and does not parse — a conflict a
+    pull left, a typo — is refused as ``cortex sync`` refuses it, a ``LocalUnreadable`` (#344): the command
+    refuses everything until it is fixed. One the runtime cannot open — a container's mount, another user's file,
+    a named pipe, never waited on — is none, as a 1.7.0 runtime, which never read it, served it: said in the log."""
+    path = root / project.LOCAL_FILE
     try:
-        data = tomllib.loads(cascade.read_file(str(root / project.LOCAL_FILE)).decode("utf-8-sig"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        raw = cascade.read_file(str(path))
+    except FileNotFoundError:
         return {}
+    except OSError as error:
+        logger.warning("%s cannot be read, and is not: %s", path, error.strerror or error)
+        return {}
+    try:
+        data = tomllib.loads(raw.decode("utf-8-sig"))
+    except UnicodeDecodeError:
+        raise LocalUnreadable(f"{project.LOCAL_FILE}: not UTF-8 text — cortex sync refuses this file too") from None
+    except tomllib.TOMLDecodeError as error:
+        raise LocalUnreadable(f"{project.LOCAL_FILE}: {error} — cortex sync refuses this file too") from None
     return {key: data[key] for key in ("version", "synced") if key in data}
 
 

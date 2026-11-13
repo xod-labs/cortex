@@ -34,6 +34,28 @@ def display(path):
     return str(path).replace(os.sep, "/")
 
 
+# A team's file there that does not read (#349): one that does not parse, a directory, a link that leads nowhere — which
+# Windows makes with a privilege only — in a folder nobody can search, which root searches all the same, and Windows
+# has no such mode for.
+UNREAD_TEAM_FILES = ("garbled", "directory") + (() if os.name == "nt" else ("dangling link",)) + (
+    () if AS_ROOT or os.name == "nt" else ("unsearchable",))
+
+
+def unread_team_file(root, kind):
+    """``agents/cortex.team.toml`` of the project at ``root``, of ``kind`` in ``UNREAD_TEAM_FILES``."""
+    team = root / "agents"
+    team.mkdir()
+    if kind == "directory":
+        (team / "cortex.team.toml").mkdir()
+    elif kind == "dangling link":
+        os.symlink(root / "nowhere", team / "cortex.team.toml")
+    else:
+        (team / "cortex.team.toml").write_text("version = \n", encoding="utf-8")
+    if kind == "unsearchable":
+        (team / "cortex.team.toml").write_text('version = "9.9.6"\n', encoding="utf-8")
+        os.chmod(team, 0o600)
+
+
 class PruneTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="cortex-prune-")).resolve()
@@ -541,6 +563,69 @@ class RegistryTests(RegistryTestCase):
         self.assertEqual(self.registry.read_bytes(), before)
         self.assertEqual(self.in_store(), ["9.9.6", "9.9.7"])
         self.assertIn("  kept     9.9.6 — used by later\n", proc.out)
+
+    def test_beside_a_team_s_file_that_does_not_read_what_the_project_reads_now_is_kept(self):
+        # #349: a version-less cortex.toml beside a team's file that does not read pins no version this cortex knows —
+        # the spec's version, and the versions synced records, are what the project reads now: kept, never removed.
+        self.put("9.9.5", "9.9.6", "9.9.7")
+        for kind in UNREAD_TEAM_FILES:
+            with self.subTest(kind=kind):
+                root = self.code / f"app-{kind}"
+                root.mkdir()
+                (root / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")
+                (root / "cortex.local.toml").write_text(
+                    f'spec = "{display(self.home / "versions" / "9.9.7")}"\n'
+                    'synced = { pinned = "9.9.6", reads = "9.9.7" }\n', encoding="utf-8")
+                unread_team_file(root, kind)
+                self.register(app=root)
+                for args in (("prune", "--dry-run"), ("prune", "--dry-run", display(root))):
+                    with self.subTest(args=args):
+                        proc = self.run_cortex(self.tmp, *args)
+                        self.assert_ok(proc)
+                        self.assertIn("  kept     9.9.6 — used by ", proc.out)
+                        self.assertIn("  kept     9.9.7 — used by ", proc.out)
+                        self.assertIn("  would remove  9.9.5\n", proc.out)
+                        self.assertIn("only its versions are read: 9.9.7, 9.9.6\n", proc.err)
+                        self.assertNotIn("its version is not known", proc.err)
+                self.assertEqual(self.in_store(), ["9.9.5", "9.9.6", "9.9.7"])
+
+    def test_an_unreadable_entry_keeps_its_candidate_versions_and_what_it_read_now(self):
+        # #349 pass 1: a registered project this cortex refuses — PINNED its cortex.toml's, committed — keeps the team's
+        # file's version and a local try's, read loosely, and the versions synced records; a synced value that is no
+        # version is no version of the store, and refuses nothing.
+        self.put("9.9.1", "9.9.2", "9.9.3", "9.9.4", "9.9.5", "9.9.6")
+        root = self.project("app", "9.9.6")
+        (root / ".git").mkdir()
+        with open(root / "cortex.toml", "a", encoding="utf-8") as toml:
+            toml.write('later = "x"\n')                                     # a key of a later cortex
+        (root / "agents").mkdir()
+        (root / "agents" / "cortex.team.toml").write_text('version = "9.9.5"\n', encoding="utf-8")
+        (root / "cortex.local.toml").write_text(
+            'version = "9.9.4"\nsynced = { pinned = "9.9.3", reads = "not-a-version" }\n', encoding="utf-8")
+        self.register(app=root)
+        proc = self.run_cortex(self.tmp, "prune", "--dry-run")
+        self.assert_ok(proc)
+        self.assertIn("— it stays in the registry, and only its versions are read: 9.9.6, 9.9.5, 9.9.4, 9.9.3\n",
+                      proc.err)
+        for version in ("9.9.3", "9.9.4", "9.9.5", "9.9.6"):
+            self.assertIn(f"  kept     {version} — used by app\n", proc.out)
+        self.assertIn("  would remove  9.9.1\n", proc.out)
+        self.assertIn("  would remove  9.9.2\n", proc.out)
+
+    def test_a_project_under_a_directory_it_refuses_keeps_what_it_read_now(self):
+        # #349 pass 1: under a DIR, a project this cortex refuses whose pin reads keeps the versions synced records too —
+        # never one that is no version.
+        self.put("9.9.4", "9.9.5", "9.9.6")
+        root = self.project("app", "9.9.6")
+        with open(root / "cortex.toml", "a", encoding="utf-8") as toml:
+            toml.write('later = "x"\n')
+        (root / "cortex.local.toml").write_text('synced = { pinned = "9.9.5", reads = "not-a-version" }\n',
+                                                encoding="utf-8")
+        proc = self.run_cortex(self.tmp, "prune", "--dry-run", display(self.code))
+        self.assert_ok(proc)
+        self.assertIn("— only its versions are read: 9.9.6, 9.9.5\n", proc.err)
+        self.assertIn("  kept     9.9.5 — used by ", proc.out)
+        self.assertIn("  would remove  9.9.4\n", proc.out)
 
     @PERMISSIONS
     def test_a_project_that_cannot_be_reached_is_unreadable_never_gone(self):

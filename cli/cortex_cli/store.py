@@ -39,6 +39,7 @@ from cortex_core.project import DEFAULT_RELEASES_URL  # noqa: F401 — part of t
 from cortex_core.project import FIRST_TEAM_VERSION, LOCAL_FILE, PROJECT_FILE, TEAM_FILE
 
 from . import machine, net
+from .paths import display
 from .semver import FIRST_SPEC_ARCHIVE, Version
 from .version import VERSION
 
@@ -137,7 +138,16 @@ def too_old_for(version: Version, own: Version) -> bool:
 
 def update_command(version: Union[Version, str]) -> str:
     """The command that moves this binary to ``version`` (ADR-010 §3.7) — a release's, or ``VERSION`` where none is
-    named: a build of no release has none, and its pin is moved to a release instead (``pin_command``, ADR-009 §9)."""
+    named: a build of no release has none, and its pin is moved to a release instead (``pin_command``, ADR-009 §9).
+    From a source checkout that says its own version — no ``CORTEX_SOURCE_VERSION`` naming the one its tests stand
+    for —, which no self-update replaces: the checkout updated, or, with none to name, the release installed."""
+    if embedded_archive() is None and not os.environ.get("CORTEX_SOURCE_VERSION"):
+        checkout = source_checkout()
+        if checkout is None:
+            return install_command(version if isinstance(version, Version) else None)
+        shown = display(str(checkout))
+        quoted = f'"{shown}"' if any(c.isspace() for c in shown) else shown
+        return f"git -C {quoted} pull"
     return f"cortex self-update {version}"
 
 

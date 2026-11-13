@@ -36,6 +36,28 @@ def display(path):
     return str(path).replace(os.sep, "/")
 
 
+# A team's file there that does not read (#349): one that does not parse, a directory, a link that leads nowhere — which
+# Windows makes with a privilege only — in a folder nobody can search, which root searches all the same, and Windows
+# has no such mode for.
+UNREAD_TEAM_FILES = ("garbled", "directory") + (() if os.name == "nt" else ("dangling link",)) + (
+    () if AS_ROOT or os.name == "nt" else ("unsearchable",))
+
+
+def unread_team_file(root, kind):
+    """``agents/cortex.team.toml`` of the project at ``root``, of ``kind`` in ``UNREAD_TEAM_FILES``."""
+    team = root / "agents"
+    team.mkdir()
+    if kind == "directory":
+        (team / "cortex.team.toml").mkdir()
+    elif kind == "dangling link":
+        os.symlink(root / "nowhere", team / "cortex.team.toml")
+    else:
+        (team / "cortex.team.toml").write_text("version = \n", encoding="utf-8")
+    if kind == "unsearchable":
+        (team / "cortex.team.toml").write_text('version = "9.9.6"\n', encoding="utf-8")
+        os.chmod(team, 0o600)
+
+
 def snapshot(root):
     """Everything under ``root``, files as bytes."""
     return {str(p.relative_to(root)): p.read_bytes() if p.is_file() else "dir" for p in sorted(root.rglob("*"))}
@@ -582,6 +604,44 @@ class ListTests(StateTestCase):
                 found = self.one(root)
                 self.assertEqual(found["state"], "unreadable")
                 self.assertIn("Permission denied", found["why"])
+
+    @harness.outside_a_repository
+    def test_beside_a_team_s_file_that_does_not_read_pinned_is_not_known(self):
+        # #349: a cortex.toml not committed beside the team's file pins the developer's own version, not the team's,
+        # which is not known while that file does not read — PINNED is "-", READS still the spec's. Committed, its
+        # version is the team's.
+        for kind in UNREAD_TEAM_FILES:
+            with self.subTest(kind=kind):
+                root = self.project(f"acme-{kind}", version="9.9.8")
+                self.synced_elsewhere(root, "9.9.7")
+                self.write_registry(("acme", root))
+                unread_team_file(root, kind)
+                found = self.one(root)
+                self.assertEqual((found["state"], found["pinned"], found["pinned_origin"], found["reads"]),
+                                 ("unreadable", None, None, "9.9.7"), found)
+                proc = self.run_cortex(self.tmp, "project", "list")
+                self.assert_ok(proc)
+                self.assertTrue(proc.out.splitlines()[1].startswith("acme  unreadable  -       9.9.7  -       "),
+                                proc.out)
+                (root / ".git").mkdir()                                  # committed: its version is the team's
+                found = self.one(root)
+                self.assertEqual((found["pinned"], found["pinned_origin"]), ("9.9.8", "cortex.toml"))
+
+    @harness.outside_a_repository
+    def test_beside_a_team_s_file_whose_version_reads_pinned_is_the_team_s(self):
+        # #349 pass 1: a project this cortex refuses, its cortex.toml not committed — a team's file whose version reads
+        # loosely, though the file is refused, gives PINNED: the team's version is known.
+        for kind, team in (("read", 'version = "9.9.6"\n'), ("refused", 'version = "9.9.6"\nlater = "x"\n')):
+            with self.subTest(team=kind):
+                root = self.project(f"acme-{kind}", version="9.9.8")
+                with open(root / "cortex.toml", "a", encoding="utf-8") as toml:
+                    toml.write('later = "x"\n')                             # a key of a later cortex
+                (root / "agents").mkdir()
+                (root / "agents" / "cortex.team.toml").write_text(team, encoding="utf-8")
+                self.write_registry(("acme", root))
+                found = self.one(root)
+                self.assertEqual((found["state"], found["pinned"], found["pinned_origin"]),
+                                 ("unreadable", "9.9.6", "agents/cortex.team.toml"), found)
 
     @PERMISSIONS
     def test_a_project_file_that_cannot_be_read_is_unreadable(self):

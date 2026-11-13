@@ -84,18 +84,33 @@ class Outcome:
     team_files: List[Path] = field(default_factory=list)  # --team: the team's files, which --commit commits there
     development: bool = False   # a build of no release's version: nothing written is to commit (ADR-009 §9)
 
+    def lost(self) -> List[Path]:
+        """The team's file and lock, written in no git work tree, the project being in one — an ``agents/`` linked to
+        a folder in no repository, beyond a link git does not follow: committed nowhere (#351). Any other file
+        outside is said to commit where it is, as before."""
+        if self.nowhere or sync.in_no_repository(self.root):
+            return []
+        folder = Path(os.path.abspath(self.root), config.loose_team_folder(self.root))
+        ours = (folder / config.TEAM_FILE, folder / config.TEAM_LOCK_FILE)
+        return [path for path in self.files if Path(os.path.abspath(path)) in ours
+                and sync.in_no_repository(os.path.realpath(folder))]
+
     def names(self) -> List[str]:
         """The files to commit in the project — those outside its git work tree, ``elsewhere``."""
-        return [_shown_path(path, self.root) for path in self.files if path not in self.outside]
+        lost = self.lost()
+        return [_shown_path(path, self.root) for path in self.files if path not in self.outside and path not in lost]
 
     def elsewhere(self) -> str:
         """The files written outside the project's git work tree, where they are, and what to do — ``""``
         when there are none."""
-        if not self.outside:
-            return ""
-        them = "them where they are" if len(self.outside) > 1 else "it where it is"
-        where = _and([display(os.path.realpath(path)) for path in self.outside])
-        return f"{where} — outside its git work tree: commit {them}"
+        lost = self.lost()
+        outside = [path for path in self.outside if path not in lost]
+        nowhere = f"{_and([_shown_path(path, self.root) for path in lost])}{sync.NOWHERE}" if lost else ""
+        if not outside:
+            return nowhere
+        them = "them where they are" if len(outside) > 1 else "it where it is"
+        where = _and([display(os.path.realpath(path)) for path in outside])
+        return "; ".join(part for part in (f"{where} — outside its git work tree: commit {them}", nowhere) if part)
 
 
 # --------------------------------------------------------------------------- #
@@ -564,8 +579,8 @@ def _write_try_lock(where: Tuple[str, str, str], version: Version, the_store: st
             return
     else:
         config.write_lock(directory, version, digest, name)
-    team = sync.team_lock_commit(Path(directory), folder) if team else ""
-    out.write(f"{shown_name}: {said}{sync.commit_it(directory, version, team)}\n")
+    note = sync.team_lock_note(directory, version, folder) if team else sync.commit_it(directory, version)
+    out.write(f"{shown_name}: {said}{note}\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -630,6 +645,7 @@ class _Options:
     branch: Optional[str] = None            # --branch
     message: Optional[str] = None           # --commit, with its --message
     which: str = "project"                  # what moves: cortex.toml's version, --team's, or --local's
+    read: Optional[Version] = None          # --all --team: the version a follower read before its team's file moved
 
 
 def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: Optional[str],
@@ -657,10 +673,16 @@ def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: 
             mine = [_shown_path(path, outcome.root) for path in own if path not in there]
             leads = _and([_shown_path(path, outcome.root) for path in there]) if there else ""
             lead = "they lead" if len(there) > 1 else "it leads"
-            if outcome.committed is None and sync.in_no_repository(outcome.team):
-                # The team's folder in no work tree — nor the project, which holds it: nothing commits them.
-                out.write(f"\nWritten: {_and([_shown_path(path, outcome.root) for path in outcome.files])} — in no git "
-                          "work tree, so committed nowhere.\n")
+            if outcome.committed is None and sync.in_no_repository(os.path.realpath(outcome.team)):
+                # The team's folder in no work tree, where it is — a link out of the project's repository included,
+                # which git does not follow (#351): nothing commits its files. The project's own, in a repository, are
+                # committed there.
+                rest = [_shown_path(path, outcome.root) for path in outcome.files
+                        if not sync.in_no_repository(os.path.dirname(os.path.realpath(path)))]
+                nowhere = [_shown_path(path, outcome.root) for path in outcome.files
+                           if _shown_path(path, outcome.root) not in rest]
+                ours = f"; commit {_and(rest)} in the project" if rest else ""
+                out.write(f"\nWritten: {_and(nowhere)} — in no git work tree, so committed nowhere{ours}.\n")
             elif outcome.committed is None:
                 also = f", and {leads} there too, where {lead}" if there else ""
                 ours = f"; {_and(mine)} in the project" if mine else ""
@@ -848,13 +870,15 @@ def _local_then_sync(root: str, values: Dict[str, object], out: TextIO, err: Tex
 
 
 def _team_git(agents: str, branch: Optional[str], out: TextIO, err: TextIO,
-              folder: str = config.TEAM_FOLDER) -> Optional[str]:
-    """The work tree of the team's folder ``folder``, for --branch and --commit, which act in the team's
-    repository (ADR-013 §3.11) — the branch made before anything is written. Asked where the folder is: a
-    link out of the project's repository is in that other place's work tree, or in none (§3.6)."""
+              folder: str = config.TEAM_FOLDER, committing: bool = False) -> Optional[str]:
+    """The work tree of the team's folder ``folder``, for --branch and --commit — ``committing`` — which act in the
+    team's repository (ADR-013 §3.11) — the branch made before anything is written. Asked where the folder is: a
+    link out of the project's repository is in that other place's work tree, or in none (§3.6) — said by what was
+    asked, as a project in none is (#351)."""
     top = _work_tree(os.path.realpath(agents))
     if top is None:
-        err.write(f"note: {folder}/ is in no git work tree — nothing is committed there\n")
+        what = (["no branch is made"] if branch is not None else []) + (["nothing is committed"] if committing else [])
+        err.write(f"note: {folder}/ is in no git work tree — {' and '.join(what)} there\n")
         return None
     if branch is not None and _on_branch(agents) != branch:
         if _branch_exists(agents, branch):
@@ -1108,7 +1132,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
             err.write(f"note: nothing was written in {folder}/, and {_and(names)} "
                       f"{'hold' if len(names) > 1 else 'holds'} changes git has not committed — a run cut short, or "
                       "a commit refused? `git status` there says what is left to commit\n")
-    top = _team_git(agents, branch, out, err, folder) if asked and files else None
+    top = _team_git(agents, branch, out, err, folder, message is not None) if asked and files else None
     before = {} if unchanged else {path: path.read_bytes() if path.is_file() else None for path in files}
     try:
         if not unchanged:
@@ -1219,12 +1243,13 @@ def _served(the_store: store.Store, target: Version, again: str, origin: Optiona
 
 def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: Optional[str],
              out: TextIO, err: TextIO, announce: bool = True,
-             prepare: Optional[Callable[[List[Path]], None]] = None) -> Outcome:
+             prepare: Optional[Callable[[List[Path]], None]] = None, read: Optional[Version] = None) -> Outcome:
     """The upgrade of the project at or above ``cwd`` (ADR-010 §3.5): what it did, or would do.
     ``announce`` off, the project is not named — ``--all`` has named it. ``prepare`` runs once all is
     checked, before anything of the project is written, with the files the team commits that will be
     written — and never when there are none: ``--branch``'s branch. A dry run runs it too, where it
-    may refuse, and makes nothing."""
+    may refuse, and makes nothing. ``read``: under ``--all --team``, the version a follower read before its team's
+    file moved, its bootstrap compared with that version's templates (#348)."""
     root = config.find_project(cwd)
     if root is None:
         raise UpgradeError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
@@ -1366,7 +1391,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
 
     if target == current:
         out.write(f"Cortex {current}: already on it — nothing to move\n")
-        return _resume(root, project, the_store, files, personality, dry_run, out, err, prepare, said)
+        return _resume(root, project, the_store, files, personality, dry_run, out, err, prepare, said, read)
 
     the_store.ensure(target)
     target_path = the_store.path(target)
@@ -1465,12 +1490,14 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
 
 def _resume(root: str, project: config.Project, the_store: store.Store, files: List[Path], personality: bool,
             dry_run: bool, out: TextIO, err: TextIO,
-            prepare: Optional[Callable[[List[Path]], None]] = None, said: Tuple[str, ...] = ()) -> Outcome:
+            prepare: Optional[Callable[[List[Path]], None]] = None, said: Tuple[str, ...] = (),
+            read: Optional[Version] = None) -> Outcome:
     """On the pinned version, finish what an upgrade cut short, or a pin moved by hand, left: a
     bootstrap file nobody changed, of another version, written again; this machine and the lock,
     when they are not on the pin, synced (ADR-010 §3.5, step 1). During a try, the lock of the team's
     version, which the sync leaves alone, is written from the store when it does not name it (ADR-013
-    §3.4)."""
+    §3.4). ``read``: the version read before the team's file moved, under ``--all --team`` — a bootstrap is
+    compared with its templates, as the project that moved the file compares its own (#348)."""
     current = project.team_version         # what the committed bootstrap follows (ADR-013 §3.10)
     behind = out_of_step(Path(root), project, the_store)
     stale = try_lock(project)
@@ -1483,7 +1510,13 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
         except store.StoreError as error:
             err.write(f"note: the bootstrap files were not checked — Cortex {current} is not in the store: {error}\n")
         else:
-            rewrites = bootstraps(theirs, current, the_store.path(current), the_store.path(current), personality, err)
+            before = read if read is not None else current
+            try:
+                the_store.ensure(before)
+                before_path: Optional[Path] = the_store.path(before)
+            except store.StoreError:
+                before_path = None
+            rewrites = bootstraps(theirs, before, before_path, the_store.path(current), personality, err)
     if own:
         try:
             mine = _own_rewrites(own, project, project.version, the_store, err)
@@ -1926,36 +1959,57 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
 
     def branch(files: List[Path]) -> None:
         asked.append(True)
+        # Made where the files are written (#347): none in the project's work tree — the team's lock alone, in a team's
+        # folder that is its own repository — the branch is the team's folder's, and no other work tree's.
+        if not any(_inside(top, path) and not _other_tree(top, root, path) for path in files):
+            folder = config.loose_team_folder(root)
+            agents = os.path.join(root, folder)
+            ours = {Path(os.path.abspath(agents), name) for name in (config.TEAM_FILE, config.TEAM_LOCK_FILE)}
+            try:
+                tree = _work_tree(os.path.realpath(agents)) \
+                    if all(Path(os.path.abspath(path)) in ours for path in files) else None
+            except UpgradeError:
+                tree = None
+            if tree is None:
+                if not options.dry_run:
+                    out.write(f"git: no branch {options.branch} is made — nothing is written in {display(top)}\n")
+                return
+            make(agents, tree, f" in {folder}/")
+            return
         ignored = _ignored(root, files)
         if len(ignored) == len(files):
             if not options.dry_run:
                 out.write(f"git: no branch {options.branch} is made — git ignores {_and(ignored)}\n")
             return
-        if _on_branch(root) == options.branch:
+        make(root, top, "")
+
+    def make(where: str, tree: str, said: str) -> None:
+        """The branch, made in the work tree ``tree`` of ``where`` — ``said`` naming it, when it is not the project's."""
+        if _on_branch(where) == options.branch:
             if not options.dry_run:
-                out.write(f"git: on the branch {options.branch} already\n")
+                out.write(f"git: on the branch {options.branch} already{said}\n")
             return
-        key, repository = _real(top), _repository(root)
-        if made.get(repository, (key, top))[0] != key:
+        key, repository = _real(tree), _repository(where)
+        if made.get(repository, (key, tree))[0] != key:
             dry = options.dry_run
             raise UpgradeError(f"the branch {options.branch} {'would be' if dry else 'is'} checked out in "
                                f"{display(made[repository][1])}, where this run {'would make' if dry else 'made'} it, "
                                "and git checks a branch out in one work tree at a time — nothing was changed. "
                                f"`cortex upgrade --branch NAME` in {display(root)} moves it on another branch")
-        if _branch_exists(root, options.branch):
-            raise UpgradeError(f"the branch {options.branch} exists already in {display(top)} — nothing was changed. "
+        if _branch_exists(where, options.branch):
+            raise UpgradeError(f"the branch {options.branch} exists already in {display(tree)} — nothing was changed. "
                                "Name another one with --branch")
         if options.dry_run:
-            made[repository] = (key, top)       # as the run would: a project of another work tree is refused
+            made[repository] = (key, tree)      # as the run would: a project of another work tree is refused
             return
-        _git_ok(root, "checkout", "-q", "-b", options.branch)
-        made[repository] = (key, top)
-        branched.append(top)
-        out.write(f"git: on a new branch, {options.branch}\n")
+        _git_ok(where, "checkout", "-q", "-b", options.branch)
+        made[repository] = (key, tree)
+        branched.append(tree)
+        out.write(f"git: on a new branch{said}, {options.branch}\n")
 
     try:
         outcome = _upgrade(cwd, options.wanted, options.dry_run, options.force, options.named, out, err, announce,
-                           branch if branching else None)
+                           branch if branching else None, options.read)
     except REFUSALS as error:
         if not branched:
             raise
@@ -1997,8 +2051,9 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
         return outcome
     # A file of another work tree inside this one — the team's folder, a submodule — is that repository's.
     outcome.outside = [path for path in outcome.files if not _inside(top, path) or _other_tree(top, root, path)]
-    if outcome.outside:
-        names = [_where(path, root) for path in outcome.outside]
+    there = [path for path in outcome.outside if path not in outcome.lost()]      # in no work tree: said at the end
+    if there:
+        names = [_where(path, root) for path in there]
         them = "them where they are" if len(names) > 1 else "it where it is"
         err.write(f"note: {_and(names)} {'are' if len(names) > 1 else 'is'} outside the git work tree of "
                   f"{display(root)} — not committed with it: commit {them}\n")
@@ -2129,8 +2184,9 @@ def _movers(entries: List[registry.Entry], own: Version) -> bool:
     return False
 
 
-def _followers(entries: List[registry.Entry], other_than: Optional[Version] = None) -> List[Tuple[str, str]]:
-    """``(path, team's folder)`` of each registered project that follows its team's file — whose
+def _followers(entries: List[registry.Entry],
+               other_than: Optional[Version] = None) -> List[Tuple[str, str, Version]]:
+    """``(path, team's folder, version read)`` of each registered project that follows its team's file — whose
     team's pin is not ``other_than``, when it is given."""
     found = []
     for entry in entries:
@@ -2139,13 +2195,13 @@ def _followers(entries: List[registry.Entry], other_than: Optional[Version] = No
         except (config.ConfigError, OSError):
             continue
         if project.follows and (other_than is None or project.team_version != other_than):
-            found.append((entry.path, folder_of(entry.path)))
+            found.append((entry.path, folder_of(entry.path), project.team_version))
     return found
 
 
 def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextIO,
                made: Dict[str, Tuple[str, str]], moved: Dict[str, Union[None, str, "_SharedRefusal"]],
-               followers: List[Tuple[str, str]] = (), targets: Optional[Dict[str, Version]] = None):
+               followers: List[Tuple[str, str, Version]] = (), targets: Optional[Dict[str, Version]] = None):
     """One project of ``--all``: its outcome, or why it is skipped (ADR-013 §3.11) — a project that
     follows its team's file, a developer's ``cortex.toml`` included, which ``--all`` does not move;
     under ``--team``, one with no team's file, or that does not follow it. ``--all --team`` moves each
@@ -2172,7 +2228,10 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
             out.write(f"{project.team_name}: Cortex {project.team_version} → {target}, moved once, above — the sync "
                       "would put this project on it\n--dry-run: nothing of the project was changed\n")
             return Outcome(entry.path, project.team_version, target)
-        outcome = _move(entry.path, _Options(None, options.dry_run, options.force), out, err, announce=False, made=made)
+        # Its bootstrap compared with the version it read before the file moved, as the first project's (#348).
+        read = next((version for path, _, version in followers if path == entry.path), None)
+        outcome = _move(entry.path, _Options(None, options.dry_run, options.force, read=read), out, err, announce=False,
+                        made=made)
         outcome.team = project.team_dir     # its files are its own: --team commits none
         return outcome
     # Every follower of this folder, checked against the target team_move will use, before it moves.
@@ -2188,7 +2247,7 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
     # At the pin, with its lock, nothing moves: no overlay is checked, as team_move checks none.
     pinned_and_locked = _pinned_and_locked(project.team_dir, team_pin(project), target, the_store, out,
                                            project.team_folder)
-    for other in [path for path, shared in followers if shared == folder and not pinned_and_locked]:
+    for other in [path for path, shared, _ in followers if shared == folder and not pinned_and_locked]:
         code, report = check_overlays(other, the_store.path(target))
         if code != 0:
             failing.append(other)

@@ -384,13 +384,35 @@ def state(entry: Entry) -> State:
         why, read = str(error), prune._loosely(root)
     except OSError as error:
         why, read = sync.os_error(error), prune._loosely(root)
-    # PINNED is the team's version; of a project this cortex cannot read whole, read loosely (ADR-013 §3.1).
+    # PINNED is the team's version; of a project this cortex cannot read whole, read loosely (ADR-013 §3.1) — not
+    # known beside a team's file whose version does not read, where an uncommitted cortex.toml's is the developer's.
     team = (str(read.team_version), read.team_origin) if read is not None and why is None else None
-    if read is not None and why is not None:
+    if read is not None and why is not None and not team_unknown(str(root)):
         loose = config.loose_team(str(root))
         team = (str(loose[1]), loose[0]) if loose else None
     return State(entry, OK if why is None else UNREADABLE, why, team[0] if team else None,
-                 _reads(read) if read else None, _layout(root), team[1] if team else None)
+                 _reads(read) if read else spec_reads(root), _layout(root), team[1] if team else None)
+
+
+def team_unknown(root: str) -> bool:
+    """Whether the team's version of the project at ``root``, read loosely, is not known: its team's file is there,
+    and its version does not read — a file that does not parse or cannot be opened, a directory, a link that leads
+    nowhere, in a folder this user cannot search — beside a ``cortex.toml`` not committed, whose version is then this
+    developer's own, not the team's (ADR-013 §3.1, #349)."""
+    folder = config.loose_team_folder(root)
+    found = cascade.read_team(root, folder)
+    if found is None or "team" in cascade.loose_versions(root, folder):
+        return False
+    return (isinstance(found, cascade.Unreadable) or "version" in found) and not config.committed(root)
+
+
+def spec_reads(root: Path) -> Optional[str]:
+    """The version the ``spec`` of the ``cortex.local.toml`` at ``root`` reads, of a project whose version is not
+    known — ``None`` when that is not known either: the spec is still what the project reads now (#349)."""
+    try:
+        return _left_behind(root)
+    except (OSError, ValueError):
+        return None
 
 
 # --------------------------------------------------------------------------- #

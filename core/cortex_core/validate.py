@@ -22,10 +22,11 @@ import io
 import os
 import re
 import sys
+from pathlib import Path
 from typing import List, Optional, Sequence, TextIO, Tuple
 
 from . import catalog, resolver
-from .workspace import find, listed_services, same_directory, services  # noqa: F401 — find, services: this module's API
+from .workspace import _refused, find, listed_services, same_directory, services  # noqa: F401 — find, services: this module's API
 
 LAYERS = ("roles", "capabilities", "personalities", "workflows")
 
@@ -282,11 +283,49 @@ def overlay_roots(project_root: str, base_root: str, service: str, team_folder: 
     may mount its own Cortex.
     """
     if service:
-        return [service if os.path.isabs(service) else f"{project_root}/{service}"]
+        return [_service_path(project_root, service)]
     is_base = same_directory(project_root, base_root) and team_folder is None
     roots = [project_root] if os.path.isdir(layer_directory(project_root, project_root, team_folder)) \
         and not is_base else []
     return roots + [s for s in listed_services(project_root, base_root, team_folder) if os.path.isdir(f"{s}/agents")]
+
+
+def _service_path(project_root: str, service: str) -> str:
+    return service if os.path.isabs(service) else f"{project_root}/{service}"
+
+
+def refused_service(project_root: str, service: str, team_folder: Optional[str] = None) -> Optional[str]:
+    """Why ``--service`` names a service the runtime refuses (ADR-013 §3.6, #353) — ``None`` when it does not, or
+    names no folder below the project root: a service that is ``agents/`` or the team's folder, or in one, or whose own
+    ``agents/`` is the team's folder, a link to it. ``overlay_roots`` leaves such a service out; named, it is warned of
+    and not checked, since its overlays would be the team's, checked as a service's."""
+    root = Path(project_root)
+    team = Path(team_folder) if team_folder is not None else root / "agents"
+    try:
+        folder = os.path.relpath(_service_path(project_root, service), project_root)
+    except ValueError:                  # another drive, on Windows
+        return None
+    if folder == os.curdir or folder.split(os.sep)[0] == os.pardir:
+        return None
+    folder = Path(folder).as_posix()
+    if not _refused(root, folder, team):
+        return None
+    name = strip_prefix(team.as_posix(), f"{root.as_posix()}/")
+    team_s = f"the team's folder, {name}/, whose overlays `cortex validate` checks as the workspace's"
+    parts = Path(folder).parts
+    for path in (root.joinpath(*parts[:depth]) for depth in range(1, len(parts) + 1)):
+        if _same_file(path, team):
+            return f"the runtime serves no service in {team_s} — run it without --service"
+        if _same_file(path, root / "agents"):           # a team's folder renamed: agents/ is no service's either
+            return f"the runtime serves no service in {path.relative_to(root).as_posix()}/, nor reads it"
+    return f"its agents/ is {team_s} — run it without --service"
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -315,13 +354,20 @@ def validate(project_root: str, base_root: str, service: str, strict: bool, out:
             report.warning(rel_path, code, message)
         report.echo("")
 
-    roots = overlay_roots(project_root, base_root, service, team_folder)
+    # A warning, never an error: a check a later cortex adds fails `--strict` only (ADR-008 §9).
+    refused = refused_service(project_root, service, team_folder) if service else None
+    if refused is not None:
+        report.echo(f"{c.BOLD}── Service ──{c.NC}")
+        report.warning(service, "SERVICE_REFUSED", f"a service the runtime refuses — {refused}")
+        report.echo("")
+    roots = overlay_roots(project_root, base_root, service, team_folder) if refused is None else []
     if not roots:
-        where = "no agents/ directory at workspace or service level" if team_folder is None else \
-            f"no {strip_prefix(str(team_folder), f'{project_root}/')}/ directory at workspace level, no agents/ at service level"
-        report.echo(f"{c.YELLOW}ℹ{c.NC}  No overlay roots found ({where}).")
-        report.echo("   Nothing to validate. This is expected if you haven't created overlays yet.")
-        if report.warnings:   # the project's own: said in the summary, as an overlay's would be
+        if refused is None:
+            where = "no agents/ directory at workspace or service level" if team_folder is None else \
+                f"no {strip_prefix(str(team_folder), f'{project_root}/')}/ directory at workspace level, no agents/ at service level"
+            report.echo(f"{c.YELLOW}ℹ{c.NC}  No overlay roots found ({where}).")
+            report.echo("   Nothing to validate. This is expected if you haven't created overlays yet.")
+        if report.warnings:   # the project's own, or the service's: said in the summary, as an overlay's would be
             report.echo(SEPARATOR)
             report.echo(f"Warnings: {c.YELLOW}{c.BOLD}{report.warnings}{c.NC}")
             if strict:

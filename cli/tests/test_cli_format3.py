@@ -122,8 +122,17 @@ class TemplateTests(unittest.TestCase):
                 self.assertLess(text.index(b"and the spec is of that version"),
                                 text.index(b"when it fails, follow the rules below"))
                 self.assertLess(text.index(b"`1.8.0-rc.1` and `1.8.0-dev.2` are not"), text.index(b"below 1.8.0, read as above,"))
-                self.assertIn(b"**No `synced`** in `cortex.local.toml`, and `cortex/` a link \xe2\x86\x92 nothing to "
-                              b"compare", text)
+                # A link to the store names the version it leads to, as `cortex validate` reads it (#352): with
+                # `sync = "link"` and no `synced` — a pin before 1.8.0 — a teammate's move of the pin is a sync.
+                self.assertIn(b"`cortex/` is a link that leads to such a path \xe2\x80\x94 `ls -l cortex` shows where, "
+                              b"`(Get-Item cortex).Target` in PowerShell \xe2\x80\x94 or `cortex/` is a copy", text)
+                self.assertIn(b"A `cortex/` link that leads elsewhere \xe2\x80\x94 to a checkout \xe2\x80\x94 names no version: "
+                              b"compare the files only.", text)
+                self.assertIn(b"**No `synced`** in `cortex.local.toml`, and `cortex/` a link that leads elsewhere than "
+                              b"`\xe2\x80\xa6/versions/\xe2\x80\xa6` \xe2\x80\x94 to a checkout \xe2\x86\x92 nothing to compare: it names no "
+                              b"version. A link to `\xe2\x80\xa6/versions/1.7.0` names 1.7.0, as above.", text)
+                self.assertNotIn(b"and `cortex/` a link \xe2\x86\x92 nothing to compare", text)
+                self.assertNotIn(b"A `cortex/` link names no version", text)
 
 
 @DOWNLOADS
