@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -178,15 +179,19 @@ def _local(root: Path) -> Mapping[str, Any]:
     """Of ``cortex.local.toml``, ``version`` and ``synced``. A file that opens and does not parse — a conflict a
     pull left, a typo — is refused as ``cortex sync`` refuses it, a ``LocalUnreadable`` (#344): the command
     refuses everything until it is fixed. One the runtime cannot open — a container's mount, another user's file,
-    a named pipe, never waited on — is none, as a 1.7.0 runtime, which never read it, served it: said in the log."""
+    a named pipe, never waited on — is none, as a 1.7.0 runtime, which never read it, served it: said in the log,
+    once per error."""
     path = root / project.LOCAL_FILE
     try:
         raw = cascade.read_file(str(path))
     except FileNotFoundError:
+        _unread(path, None)
         return {}
     except OSError as error:
-        logger.warning("%s cannot be read, and is not: %s", path, error.strerror or error)
+        if _unread(path, (error.errno, error.strerror or str(error))):
+            logger.warning("%s cannot be read, and is not: %s", path, error.strerror or error)
         return {}
+    _unread(path, None)
     try:
         data = tomllib.loads(raw.decode("utf-8-sig"))
     except UnicodeDecodeError:
@@ -194,6 +199,25 @@ def _local(root: Path) -> Mapping[str, Any]:
     except tomllib.TOMLDecodeError as error:
         raise LocalUnreadable(f"{project.LOCAL_FILE}: {error} — cortex sync refuses this file too") from None
     return {key: data[key] for key in ("version", "synced") if key in data}
+
+
+# The error each cortex.local.toml the runtime could not open last gave (#375): it is read at every request, and its
+# warning is said once per error — again once the file was read, or gone, in between.
+_UNREAD: dict = {}
+_UNREAD_LOCK = threading.Lock()
+
+
+def _unread(path: Path, error: Optional[tuple]) -> bool:
+    """Records ``error`` — ``None`` once the file at ``path`` is read, or gone — as what ``path`` last gave;
+    whether it differs from what it gave before: a warning to say."""
+    with _UNREAD_LOCK:
+        if error is None:
+            _UNREAD.pop(str(path), None)
+            return False
+        if _UNREAD.get(str(path)) == error:
+            return False
+        _UNREAD[str(path)] = error
+        return True
 
 
 class Unrecorded(ValueError):

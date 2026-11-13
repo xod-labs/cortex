@@ -687,6 +687,36 @@ class TeamVersionTests(SyncedProjectTestCase):
             self.assertEqual(pin().version, "9.9.9")
         logger.warning.assert_not_called()
 
+    def test_a_cortex_local_toml_the_runtime_cannot_open_is_logged_once_per_error(self):
+        # Read at every request (#375): a mount that keeps failing is said once, not at each — again once its error
+        # changes, or once it was read, or gone, in between and fails anew.
+        import errno
+
+        from cortex_runtime import base
+
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local='spec = "cortex"\n')
+        local = self.project / "cortex.local.toml"
+        read_file = base.cascade.read_file
+        failure = []
+
+        def failing(path):
+            if Path(path) == local and failure:
+                raise OSError(failure[0], os.strerror(failure[0]), path)
+            return read_file(path)
+
+        said = []
+        with mock.patch.object(base.cascade, "read_file", failing), \
+                self.assertLogs("cortex_runtime.base", "WARNING") as logged:
+            for error in (errno.EIO, errno.EIO, errno.EIO, errno.EACCES, errno.EACCES, None, errno.EACCES,
+                          errno.ENOENT, errno.EACCES, errno.EIO):           # None: read; ENOENT: gone
+                failure[:] = [error] if error else []
+                self.assertEqual(pin().version, "9.9.9")
+                said.append(len(logged.records))
+        self.assertEqual(said, [1, 1, 1, 2, 2, 2, 3, 3, 4, 5])
+        self.assertEqual([record.getMessage() for record in logged.records],
+                         [f"{local} cannot be read, and is not: {os.strerror(error)}"
+                          for error in (errno.EIO, errno.EACCES, errno.EACCES, errno.EACCES, errno.EIO)])
+
     @unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipes here")
     def test_a_named_pipe_at_cortex_local_toml_is_none_never_waited_on(self):
         import threading
