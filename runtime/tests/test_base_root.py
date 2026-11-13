@@ -618,6 +618,19 @@ class TeamVersionTests(SyncedProjectTestCase):
                     self.assertEqual(host.returncode, 1, host.stdout + host.stderr)
                     self.assertEqual(host.stderr.decode(), f"cortex {command}: {said}\n")
 
+    def test_cortex_toml_is_read_before_cortex_local_toml_as_the_cli_reads_them(self):
+        # Both files broken (#344): the CLI reads cortex.toml first and names its error, so the runtime names
+        # cortex.toml's — the one to fix first — never cortex.local.toml's. Each error is at a line of its own.
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n<<<<<<< HEAD\n', local="spec = [\n<<<<<<< HEAD\n")
+        said = "Invalid statement (at line 3, column 1)"
+        with self.assertRaises(ValueError) as caught:
+            pin()
+        self.assertEqual(str(caught.exception), f"cortex.toml of this workspace cannot be read: {said}")
+        for command in () if os.name == "nt" else ("config", "sync"):   # run with an empty environment
+            host = self.cli(command)
+            self.assertEqual(host.returncode, 1, host.stdout + host.stderr)
+            self.assertEqual(host.stderr.decode(), f"cortex {command}: cortex.toml: {said}\n")
+
     def test_a_cortex_local_toml_the_runtime_cannot_open_is_none_as_in_1_7_0_and_logged(self):
         # A container's mount, another user's file: a deployment that works today keeps working (#344), said in the
         # runtime's log. A directory stands for it everywhere; a file this user may not read, where it cannot.
@@ -728,6 +741,19 @@ class ApiTests(SyncedProjectTestCase):
                     self.assertEqual(r.status_code, 422, r.text)
                     self.assertEqual(r.json()["detail"], "cortex.local.toml: Invalid value (at line 2, column 1) — "
                                                           "cortex sync refuses this file too")
+
+    def test_both_files_broken_is_a_422_naming_cortex_toml_s_error(self):
+        # cortex.toml is read first, as the CLI reads it (#344): its error is the one the assistant relays.
+        (self.project / "cortex.toml").write_bytes(b'version = "9.9.9"\ntheme = "h2g2"\n<<<<<<< HEAD\n')
+        (self.project / "cortex.local.toml").write_bytes(b"spec = [\n<<<<<<< HEAD\n")
+        for queue in (False, True):
+            with self.subTest(asynchronous=queue):
+                client = self.client(queue)
+                for path in ("/run", "/resolve"):
+                    r = client.post(path, json={"workspace": "host", "role": "lead-backend", "subject": "ACME-11"})
+                    self.assertEqual(r.status_code, 422, r.text)
+                    self.assertEqual(r.json()["detail"], "cortex.toml of this workspace cannot be read: "
+                                                          "Invalid statement (at line 3, column 1)")
 
 
 if __name__ == "__main__":
