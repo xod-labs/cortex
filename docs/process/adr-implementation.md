@@ -8,6 +8,8 @@ a pile of unrelated pull requests loses the thread of the decision.
 A small ADR, or one that lands in a single change, does not need any of this: use a normal
 `feat/*` branch and a single pull request, as [CONTRIBUTING.md](../../CONTRIBUTING.md#-branch--pr-workflow)
 describes.
+Its size and its review budget ([§10](#10-size-and-review-budget)) apply all the same, as they do
+to every release.
 
 > The role-by-role pipeline — who does what, and the checklist each step must satisfy — is
 > the generic workflow [agents/workflows/engineering/adr-implementation.md](../../agents/workflows/engineering/adr-implementation.md).
@@ -229,6 +231,9 @@ Every phase goes through the same eight steps. The checklists belong to
 7. **Documentation** — merged with the code it describes.
 8. **Pull request** — opened once steps 4 to 7 have signed off, targeting the parent branch.
 
+Reviews then run within the record's budget ([§10.2](#102-the-review-budget)): passes after the
+first read the delta only, and a cap reached stops the stack until the maintainer decides.
+
 A step that finds a defect sends the phase back to step 3; it does not open a follow-up issue on
 a later phase, because the stack would carry the defect upward.
 
@@ -268,7 +273,8 @@ stack, including the last one into `main`.
    (ADR-009 §3.7).
 3. Final pull request: `release/adr-NNN-slug` → `main`, opened once the `binary` workflow is
    green on the release branch (§8), describing the whole decision and carrying **every**
-   `Closes #NN` line, one per issue (§6). The `release gate` names its version. It merges through
+   `Closes #NN` line, one per issue (§6). It records the size, the review budget and what was spent
+   ([§10.5](#105-what-was-spent-at-closing)), and any decision taken at a cap. The `release gate` names its version. It merges through
    the merge queue, with a merge commit, when its checks are green.
 4. **The merge is the release.** The draft `X.Y.Z` appears on the Releases page about a quarter of
    an hour later, with its assets; the maintainer reads it and presses *Publish release*, and the
@@ -279,3 +285,80 @@ stack, including the last one into `main`.
    epic closes with it.
 7. An issue delivered only in part stays **open**, with a comment saying what shipped and which
    criterion remains.
+
+## 10. Size and review budget
+
+1.8.0 took five review passes over four days, each followed by counter-review rounds. After the
+second pass, most findings were edge cases that the previous pass's own fixes had created: the
+review no longer converged, it moved. Nothing said how large the record was before it was
+written, nor when to stop. This section does both. It applies to every ADR from ADR-014 on, and
+to every release.
+
+### 10.1 The size
+
+Every ADR opens with a `Size` section, right after its header and before §1 — the
+[record's structure](../adr/README.md#required-sections) has its form. Five criteria, each
+scored S = 1, M = 2 or L = 3:
+
+| Criterion | S | M | L |
+|---|---|---|---|
+| **Phases** | 1–2 | 3–4 | 5 or more |
+| **Public surface** — commands, options, keys, file formats added or changed | 1–2 | 3–5 | 6 or more |
+| **User files Cortex writes or rewrites** — the bootstrap, `cortex.toml`, the team's file… | none | one | several, or a format that changes |
+| **Environment matrix** — operating systems, links, with or without git, workspace flavours | one case | a few | the whole matrix |
+| **Existing ADRs touched or amended** | 0–1 | 2–3 | 4 or more |
+
+A total of 5 to 7 is **S**, 8 to 11 is **M**, 12 to 15 is **L**. An L record first answers one
+question in its `Size` section: can it be split? #98 was, into the configuration cascade and the
+IDE modes.
+
+The size is set before the first review. While the text is still being written it follows the
+text — a phase added is a size recomputed. Once the first review has started, it does not move.
+
+A release that carries no ADR — fixes, content, documentation — is sized the same way, in the
+description of its first pull request; its phases are its pull requests.
+
+### 10.2 The review budget
+
+| Size | Review passes | Counter-review rounds per pass |
+|---|---|---|
+| S | 2 | 2 |
+| M | 3 | 2 |
+| L | 4 | 2 |
+
+A **review pass** reads the stack and returns findings. A **counter-review round** is one turn of
+the [code-review workflow](../../agents/workflows/engineering/code-review.md)'s step B6 on the
+fixes of a pass: a reviewer without the context reads the delta, until a round finds no 🔴 nor 🟠
+or the rounds are spent. There is no fixed duration: the caps bound the release.
+
+- **Each pass after the first reads the delta only** — what changed since the head it last
+  reviewed. A finding older than the delta becomes an issue, never a new round.
+- **An approved phase merges** into the release branch at once. A later pass does not reopen it:
+  what it would change goes into a later phase, or an issue.
+
+### 10.3 A cap reached is the maintainer's call
+
+When a pass or a round would go past its cap, work on the stack stops, and the maintainer decides
+what follows: one more pass or round, the remaining findings as issues on the next patch, or a
+split of the record. The same goes for splitting a record at any point. **Nobody exceeds a cap or
+splits a record without that decision**, written in the stack's final pull request.
+
+A 🔴 found at the cap still blocks the merge — it is never deferred to an issue. What the
+maintainer decides is how it gets fixed and reviewed.
+
+### 10.4 Two lessons of 1.8.0
+
+- **A message that names a command is tested by running that command.** A remedy copied from a
+  test's new output into its assertion proves nothing: during 1.8.0's reviews, a merged branch
+  changed an assertion to a new remedy that did not work.
+- **A test never pins the version of the binary that replays it.** At `1.8.0-rc.1`, moving a pin
+  to the binary's version was a move; at `1.8.0` it was none, and the release run failed after
+  the merge.
+
+### 10.5 What was spent, at closing
+
+The final pull request records the size, the budget, and what was spent — passes, and rounds per
+pass — and the ADR's `Size` section gets the same line when its status becomes `Implemented`.
+The accepted margin is **one pass, or one class**. When two records in a row land outside it, the
+same way, the thresholds are revisited, in a pull request on this document. The criteria evolve
+the same way, as experience shows them wrong.

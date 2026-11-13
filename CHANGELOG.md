@@ -7,6 +7,9 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+### Documentation
+- **Every ADR and every release has a size, and the size sets its review budget** ([docs/process/adr-implementation.md §10](docs/process/adr-implementation.md#10-size-and-review-budget), [#361](https://github.com/xod-labs/cortex/issues/361)). Five criteria — phases, public surface, user files Cortex writes, environment matrix, ADRs touched — scored S, M or L, in a `Size` section at the top of every ADR from ADR-014 on, or in a release's first pull request. An S gets 2 review passes, an M 3, an L 4, and each pass at most 2 counter-review rounds; a later pass reads the delta only, and an approved phase merges at once. Going past a cap, or splitting a record, is the maintainer's decision; a 🔴 still blocks. What was spent is recorded at closing, and the thresholds move when two records in a row miss them. Cortex's own process only: nothing under `agents/` changes.
+
 ## [1.8.1] - 2026-11-12 — Never Could Get the Hang of Thursdays _(Released)_
 [Full notes](changelog/1.8.1.md)
 
