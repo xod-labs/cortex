@@ -4078,6 +4078,110 @@ class DeferredFixTests(TeamTestCase):
         self.assertEqual(self.git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "main")
         self.assertEqual(self.git(root, "branch", "--list", "fix").stdout, "")
 
+    def team_s_own_repository(self, name="app"):
+        """A project in a repository of its own, synced, whose agents/ is another — both on main —, the team's lock in
+        agents/ naming 9.9.7 where the team's file pins 9.9.8: a resume writes that lock alone (#347)."""
+        root, lock = self.stale(name=name)
+        shutil.rmtree(root / ".git")
+        (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        self.assert_ok(self.cortex(root, "sync", **env))
+        for where in (root / "agents", root):
+            self.git(where, "init", "-q", "-b", "main")
+            self.git(where, "add", "-A")
+            self.git(where, "commit", "-q", "-m", "init")
+        return root, lock, env
+
+    def head(self, where):
+        return self.git(where, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+
+    @SOURCE
+    @NEEDS_GIT
+    def test_a_resume_s_dry_run_makes_no_branch_in_the_team_s_own_repository(self):
+        # #347 pass 1: --dry-run checks the branch the resume would make in agents/, and makes none.
+        root, lock, env = self.team_s_own_repository()
+        before = lock.read_bytes()
+        proc = self.cortex(root, "upgrade", "--branch", "fix", "--dry-run", **env)
+        self.assert_ok(proc)
+        self.assertNotIn("git: on a new branch", proc.out)
+        self.assertEqual(lock.read_bytes(), before)
+        for where in (root / "agents", root):
+            self.assertEqual(self.head(where), "main")
+            self.assertEqual(self.git(where, "branch", "--list", "fix").stdout, "")
+
+    @SOURCE
+    @NEEDS_GIT
+    def test_a_resume_refuses_a_branch_the_team_s_own_repository_has_already(self):
+        # #347 pass 1: the branch exists in agents/ — refused, agents/ named, nothing changed, as --dry-run says; another
+        # name, as the message says, is made there.
+        root, lock, env = self.team_s_own_repository()
+        self.git(root / "agents", "branch", "fix")
+        before = lock.read_bytes()
+        for args in ((), ("--dry-run",)):
+            with self.subTest(args=args):
+                proc = self.cortex(root, "upgrade", "--branch", "fix", *args, **env)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"the branch fix exists already in {harness_path(root / 'agents')} — nothing was "
+                              "changed. Name another one with --branch", proc.err)
+                self.assertEqual(lock.read_bytes(), before)
+                self.assertEqual(self.head(root / "agents"), "main")
+        proc = self.cortex(root, "upgrade", "--branch", "fix-2", **env)
+        self.assert_ok(proc)
+        self.assertIn("git: on a new branch in agents/, fix-2\n", proc.out)
+        self.assertEqual(self.head(root / "agents"), "fix-2")
+        self.assertEqual(str(config.load_lock(str(root / "agents"), config.TEAM_LOCK_FILE).version), "9.9.8")
+
+    @SOURCE
+    @NEEDS_GIT
+    def test_a_resume_on_the_branch_already_in_the_team_s_own_repository_says_so(self):
+        # #347 pass 1: agents/ is on the branch already — said, agents/ named, and the lock written there.
+        root, lock, env = self.team_s_own_repository()
+        self.git(root / "agents", "checkout", "-q", "-b", "fix")
+        proc = self.cortex(root, "upgrade", "--branch", "fix", **env)
+        self.assert_ok(proc)
+        self.assertIn("git: on the branch fix already in agents/\n", proc.out)
+        self.assertNotIn("git: on a new branch", proc.out)
+        self.assertEqual(str(config.load_lock(str(root / "agents"), config.TEAM_LOCK_FILE).version), "9.9.8")
+        self.assertEqual(self.head(root / "agents"), "fix")
+        self.assertEqual(self.head(root), "main")
+
+    @SOURCE
+    @NEEDS_GIT
+    @harness.outside_a_repository
+    def test_two_projects_whose_agents_are_in_one_repository_branch_it_once(self):
+        # #347 pass 1: two projects' agents/ lead to two folders of one repository, the team's — the first resume makes
+        # the branch there, the second finds it on that branch and writes its lock there; neither project's repository
+        # is branched.
+        env = {"PATH": os.path.dirname(GIT), **GIT_ENV}
+        team = self.tmp / "team"
+        team.mkdir()
+        roots = []
+        for name in ("alpha", "beta"):
+            root, lock = self.stale(name=name)
+            shutil.rmtree(root / ".git")
+            shutil.move(str(root / "agents"), str(team / name))
+            (root / "agents").symlink_to(team / name, target_is_directory=True)
+            (root / ".gitignore").write_text("cortex.local.toml\ncortex\n", encoding="utf-8")
+            self.assert_ok(self.cortex(root, "sync", **env))
+            roots.append(root)
+        for where in (team, *roots):
+            self.git(where, "init", "-q", "-b", "main")
+            self.git(where, "add", "-A")
+            self.git(where, "commit", "-q", "-m", "init")
+        alpha, beta = roots
+        proc = self.cortex(alpha, "upgrade", "--branch", "fix", **env)
+        self.assert_ok(proc)
+        self.assertIn("git: on a new branch in agents/, fix\n", proc.out)
+        proc = self.cortex(beta, "upgrade", "--branch", "fix", **env)
+        self.assert_ok(proc)
+        self.assertIn("git: on the branch fix already in agents/\n", proc.out)
+        self.assertNotIn("git: on a new branch", proc.out)
+        self.assertEqual(self.head(team), "fix")
+        for root in roots:
+            self.assertEqual(str(config.load_lock(str(team / root.name), config.TEAM_LOCK_FILE).version), "9.9.8")
+            self.assertEqual(self.head(root), "main")
+            self.assertEqual(self.git(root, "branch", "--list", "fix").stdout, "")
+
     @DOWNLOADS
     def test_all_team_checks_each_follower_s_bootstrap_against_the_version_it_read(self):
         # #348: two projects follow one team's folder; the first moves it from 9.9.7, the second follows. Each one's
