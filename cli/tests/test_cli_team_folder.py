@@ -83,6 +83,37 @@ class FollowsTests(FolderTestCase):
         self.assertIn(f"{FOLDER}/roles/engineering/our-own-role.md", proc.out)
         self.assertIn("Checked:  1", proc.out.replace("\x1b[1m", "").replace("\x1b[0m", ""))
 
+    @LINKS
+    def test_validate_service_warns_of_a_service_whose_agents_is_the_team_s_folder(self):
+        # #353: --service checked the team's overlays as svc-c's, past the filter the runtime applies. A warning says
+        # why and nothing of svc-c is checked — exit 0, and 1 under --strict, as every warning (ADR-008 §9) — with the
+        # default team's folder and a renamed one; the command it names, run, checks the team's overlays once.
+        for folder in ("agents", FOLDER):
+            with self.subTest(folder=folder):
+                toml = NAMED if folder == FOLDER else 'theme = "h2g2"\n'
+                root = self.project(toml, name=f"ws-{folder}")
+                roles = root / folder / "roles" / "engineering"
+                roles.mkdir(parents=True)
+                (root / folder / "cortex.team.toml").write_text(f'version = "{OWN}"\n', encoding="utf-8")
+                (roles / "our-own-role.md").write_text("# Ours\n", encoding="utf-8")
+                (root / "svc-c").mkdir()
+                (root / "svc-c" / "project-overview.md").write_text("# svc-c\n", encoding="utf-8")
+                (root / "svc-c" / "agents").symlink_to(root / folder, target_is_directory=True)
+                self.assert_ok(self.cortex(root, "sync"))
+                for strict in ((), ("--strict",)):
+                    proc = self.cortex(root, "validate", "--service", "svc-c", *strict)
+                    self.assertEqual(proc.returncode, 1 if strict else 0, proc.out + proc.err)
+                    self.assertIn(f"⚠ svc-c\n  SERVICE_REFUSED — a service the runtime refuses — its agents/ is the "
+                                  f"team's folder, {folder}/, whose overlays `cortex validate` checks as the "
+                                  "workspace's — run it without --service\n", proc.out)
+                    self.assertIn("Warnings: 1\n", proc.out)
+                    self.assertNotIn("our-own-role.md", proc.out)
+                proc = self.cortex(root, "validate")
+                self.assert_ok(proc)
+                self.assertEqual(proc.out.count("our-own-role.md"), 1, proc.out)
+                self.assertIn(f"{folder}/roles/engineering/our-own-role.md", proc.out)
+                self.assertNotIn("svc-c", proc.out)
+
     def test_the_project_s_own_theme_is_the_folder_s(self):
         root = self.named(toml=f'agents = "{FOLDER}"\ntheme = "ours"\n')
         (root / FOLDER / "personalities" / "ours").mkdir(parents=True)
