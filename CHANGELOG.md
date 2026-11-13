@@ -10,6 +10,9 @@ release note under [`changelog/`](changelog/).
 ### Documentation
 - **A commit budget per release, set by its size** ([docs/process/adr-implementation.md §10.6](docs/process/adr-implementation.md#106-the-commit-budget), [#367](https://github.com/xod-labs/cortex/issues/367)): at most 30 commits that are not merges for an S release, 60 for an M, 100 for an L. One commit per review finding, its touch-ups folded in before the push; no merge inside a stack but the pull requests' own, a fix travelling up by `git rebase --update-refs`; an accepted ADR's text frozen, its changes in `Amendments`. Reaching the budget stops the work until the contributor who carries the change decides, as a review cap does. 1.8.0 had made 380 such commits, and 131 merges.
 
+### Fixed
+- **A source checkout too old for a project names its own update** ([#345](https://github.com/xod-labs/cortex/issues/345)): a cortex run from a checkout, older than the version a project pins, named `cortex self-update VERSION`, which a checkout refuses. It now names `git -C CHECKOUT pull`, which updates the checkout — or, from a copy of the package with no checkout, the install script's command. A checkout whose tests name the version it stands for, with `CORTEX_SOURCE_VERSION`, still names the self-update a binary of that version would.
+
 ## [1.8.2] - 2026-11-13 — The Whooshing Sound _(Released)_
 [Full notes](changelog/1.8.2.md)
 
