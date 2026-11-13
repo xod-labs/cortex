@@ -4023,6 +4023,29 @@ class DeferredFixTests(TeamTestCase):
         self.assertEqual(self.git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip(), "main")
         self.assertEqual(self.git(root, "branch", "--list", "fix").stdout, "")
 
+    @DOWNLOADS
+    def test_all_team_checks_each_follower_s_bootstrap_against_the_version_it_read(self):
+        # #348: two projects follow one team's folder; the first moves it from 9.9.7, the second follows. Each one's
+        # bootstrap without a marker, 9.9.7's file, is written again from 9.9.8's — the second's as the first's.
+        self.release.replace_spec("9.9.7", {"templates/bootstrap-instructions.md": OLD})
+        self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": NEW})
+        team = self.tmp / "team"
+        team.mkdir()
+        (team / "cortex.team.toml").write_text('version = "9.9.7"\n', encoding="utf-8")
+        roots = []
+        for name in ("alpha", "beta"):
+            root = self.project('theme = "h2g2"\n', name=name)
+            (root / "agents").symlink_to(team, target_is_directory=True)
+            (root / "CLAUDE.md").write_bytes(init.instructions(OLD, True))
+            roots.append(root)
+        (self.home / "projects.toml").write_text("format = 1\n" + "".join(
+            f'\n[[project]]\nname = "{root.name}"\npath = "{harness_path(root)}"\n' for root in roots), encoding="utf-8")
+        proc = self.cortex(self.tmp, "upgrade", "--all", "--team", "9.9.8")
+        self.assert_ok(proc)
+        self.assertNotIn("a bootstrap without the marker", proc.err)
+        for root in roots:
+            self.assertEqual((root / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(NEW, True)), root.name)
+
 
 def newer_refused(pin):
     """What --team with no VERSION says of a team's pin newer than this cortex."""

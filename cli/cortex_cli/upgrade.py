@@ -630,6 +630,7 @@ class _Options:
     branch: Optional[str] = None            # --branch
     message: Optional[str] = None           # --commit, with its --message
     which: str = "project"                  # what moves: cortex.toml's version, --team's, or --local's
+    read: Optional[Version] = None          # --all --team: the version a follower read before its team's file moved
 
 
 def upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: Optional[str],
@@ -1219,12 +1220,13 @@ def _served(the_store: store.Store, target: Version, again: str, origin: Optiona
 
 def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named: Optional[str],
              out: TextIO, err: TextIO, announce: bool = True,
-             prepare: Optional[Callable[[List[Path]], None]] = None) -> Outcome:
+             prepare: Optional[Callable[[List[Path]], None]] = None, read: Optional[Version] = None) -> Outcome:
     """The upgrade of the project at or above ``cwd`` (ADR-010 §3.5): what it did, or would do.
     ``announce`` off, the project is not named — ``--all`` has named it. ``prepare`` runs once all is
     checked, before anything of the project is written, with the files the team commits that will be
     written — and never when there are none: ``--branch``'s branch. A dry run runs it too, where it
-    may refuse, and makes nothing."""
+    may refuse, and makes nothing. ``read``: under ``--all --team``, the version a follower read before its team's
+    file moved, its bootstrap compared with that version's templates (#348)."""
     root = config.find_project(cwd)
     if root is None:
         raise UpgradeError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
@@ -1366,7 +1368,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
 
     if target == current:
         out.write(f"Cortex {current}: already on it — nothing to move\n")
-        return _resume(root, project, the_store, files, personality, dry_run, out, err, prepare, said)
+        return _resume(root, project, the_store, files, personality, dry_run, out, err, prepare, said, read)
 
     the_store.ensure(target)
     target_path = the_store.path(target)
@@ -1465,12 +1467,14 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
 
 def _resume(root: str, project: config.Project, the_store: store.Store, files: List[Path], personality: bool,
             dry_run: bool, out: TextIO, err: TextIO,
-            prepare: Optional[Callable[[List[Path]], None]] = None, said: Tuple[str, ...] = ()) -> Outcome:
+            prepare: Optional[Callable[[List[Path]], None]] = None, said: Tuple[str, ...] = (),
+            read: Optional[Version] = None) -> Outcome:
     """On the pinned version, finish what an upgrade cut short, or a pin moved by hand, left: a
     bootstrap file nobody changed, of another version, written again; this machine and the lock,
     when they are not on the pin, synced (ADR-010 §3.5, step 1). During a try, the lock of the team's
     version, which the sync leaves alone, is written from the store when it does not name it (ADR-013
-    §3.4)."""
+    §3.4). ``read``: the version read before the team's file moved, under ``--all --team`` — a bootstrap is
+    compared with its templates, as the project that moved the file compares its own (#348)."""
     current = project.team_version         # what the committed bootstrap follows (ADR-013 §3.10)
     behind = out_of_step(Path(root), project, the_store)
     stale = try_lock(project)
@@ -1483,7 +1487,13 @@ def _resume(root: str, project: config.Project, the_store: store.Store, files: L
         except store.StoreError as error:
             err.write(f"note: the bootstrap files were not checked — Cortex {current} is not in the store: {error}\n")
         else:
-            rewrites = bootstraps(theirs, current, the_store.path(current), the_store.path(current), personality, err)
+            before = read if read is not None else current
+            try:
+                the_store.ensure(before)
+                before_path: Optional[Path] = the_store.path(before)
+            except store.StoreError:
+                before_path = None
+            rewrites = bootstraps(theirs, before, before_path, the_store.path(current), personality, err)
     if own:
         try:
             mine = _own_rewrites(own, project, project.version, the_store, err)
@@ -1976,7 +1986,7 @@ def _git_move(cwd: str, options: _Options, out: TextIO, err: TextIO, announce: b
 
     try:
         outcome = _upgrade(cwd, options.wanted, options.dry_run, options.force, options.named, out, err, announce,
-                           branch if branching else None)
+                           branch if branching else None, options.read)
     except REFUSALS as error:
         if not branched:
             raise
@@ -2150,8 +2160,9 @@ def _movers(entries: List[registry.Entry], own: Version) -> bool:
     return False
 
 
-def _followers(entries: List[registry.Entry], other_than: Optional[Version] = None) -> List[Tuple[str, str]]:
-    """``(path, team's folder)`` of each registered project that follows its team's file — whose
+def _followers(entries: List[registry.Entry],
+               other_than: Optional[Version] = None) -> List[Tuple[str, str, Version]]:
+    """``(path, team's folder, version read)`` of each registered project that follows its team's file — whose
     team's pin is not ``other_than``, when it is given."""
     found = []
     for entry in entries:
@@ -2160,13 +2171,13 @@ def _followers(entries: List[registry.Entry], other_than: Optional[Version] = No
         except (config.ConfigError, OSError):
             continue
         if project.follows and (other_than is None or project.team_version != other_than):
-            found.append((entry.path, folder_of(entry.path)))
+            found.append((entry.path, folder_of(entry.path), project.team_version))
     return found
 
 
 def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextIO,
                made: Dict[str, Tuple[str, str]], moved: Dict[str, Union[None, str, "_SharedRefusal"]],
-               followers: List[Tuple[str, str]] = (), targets: Optional[Dict[str, Version]] = None):
+               followers: List[Tuple[str, str, Version]] = (), targets: Optional[Dict[str, Version]] = None):
     """One project of ``--all``: its outcome, or why it is skipped (ADR-013 §3.11) — a project that
     follows its team's file, a developer's ``cortex.toml`` included, which ``--all`` does not move;
     under ``--team``, one with no team's file, or that does not follow it. ``--all --team`` moves each
@@ -2193,7 +2204,10 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
             out.write(f"{project.team_name}: Cortex {project.team_version} → {target}, moved once, above — the sync "
                       "would put this project on it\n--dry-run: nothing of the project was changed\n")
             return Outcome(entry.path, project.team_version, target)
-        outcome = _move(entry.path, _Options(None, options.dry_run, options.force), out, err, announce=False, made=made)
+        # Its bootstrap compared with the version it read before the file moved, as the first project's (#348).
+        read = next((version for path, _, version in followers if path == entry.path), None)
+        outcome = _move(entry.path, _Options(None, options.dry_run, options.force, read=read), out, err, announce=False,
+                        made=made)
         outcome.team = project.team_dir     # its files are its own: --team commits none
         return outcome
     # Every follower of this folder, checked against the target team_move will use, before it moves.
@@ -2209,7 +2223,7 @@ def _each_move(entry: registry.Entry, options: _Options, out: TextIO, err: TextI
     # At the pin, with its lock, nothing moves: no overlay is checked, as team_move checks none.
     pinned_and_locked = _pinned_and_locked(project.team_dir, team_pin(project), target, the_store, out,
                                            project.team_folder)
-    for other in [path for path, shared in followers if shared == folder and not pinned_and_locked]:
+    for other in [path for path, shared, _ in followers if shared == folder and not pinned_and_locked]:
         code, report = check_overlays(other, the_store.path(target))
         if code != 0:
             failing.append(other)
