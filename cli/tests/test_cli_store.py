@@ -152,8 +152,174 @@ class EmbeddedTests(StoreTestCase):
         the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
         the_store.path(Version("2.0.0")).mkdir(parents=True)
         self.assertFalse(the_store.has(Version("2.0.0")))
-        with self.assertRaisesRegex(store.StoreError, "holds no complete spec"):
-            the_store.ensure(Version("2.0.0"))
+        self.assertEqual(the_store.ensure(Version("2.0.0")), "written")         # #384: written again
+        self.assertTrue(the_store.has(Version("2.0.0")))
+
+    def incomplete(self, the_store, version):
+        """``version`` written, then a tree of it removed — read-only again, as the store holds it."""
+        the_store.ensure(version)
+        path = the_store.path(version)
+        store.make_writable(path)
+        shutil.rmtree(path / "docs")
+        (path / "agents" / "left-over.md").write_text("from before\n", encoding="utf-8")
+        store.make_read_only(path)
+        return path
+
+    def test_a_read_only_version_that_holds_no_complete_spec_is_written_again(self):
+        # #384: read-only, a user who is not root cannot remove it — on Windows, no one can, plainly.
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        version = Version("2.0.0")
+        path = self.incomplete(the_store, version)
+        self.assertEqual(the_store.ensure(version), "written")
+        self.assertTrue(the_store.has(version))
+        self.assertFalse((path / "agents" / "left-over.md").exists())
+        self.assertEqual(store.digest(path), store.digest_of({
+            p.relative_to(REPO).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+            for tree in store.SPEC_TREES for p in (REPO / tree).rglob("*")
+            if p.is_file() and not p.name.startswith(".active-")}))
+        self.assertFalse(os.stat(path / "agents" / "roles" / "prompt-manager.md").st_mode & 0o222)
+        self.assertEqual(self.listing(), ["2.0.0"])                            # nothing left aside
+
+    def test_a_downloaded_version_that_holds_no_complete_spec_is_downloaded_again(self):
+        archive = spec_archive(self.tmp, "1.5.0").read_bytes()
+        files = {"SHA256SUMS": f"{hashlib.sha256(archive).hexdigest()}  cortex-spec.tar.gz\n".encode(),
+                 "cortex-spec.tar.gz": archive}
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO,
+                                fetch=lambda url, limit: files[url.rsplit("/", 1)[1]])
+        version = Version("1.5.0")
+        self.incomplete(the_store, version)
+        with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": "http://127.0.0.1:1"}):
+            self.assertEqual(the_store.ensure(version), "downloaded")
+        self.assertTrue(the_store.has(version))
+
+    def test_a_link_at_a_version_is_refused_not_followed(self):
+        # #384: a link a user made is none of the store's — what it leads to is neither removed nor changed.
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        version = Version("2.0.0")
+        mine = self.tmp / "mine"
+        (mine / "agents").mkdir(parents=True)
+        (mine / "agents" / "notes.md").write_text("mine\n", encoding="utf-8")
+        os.chmod(mine / "agents" / "notes.md", 0o444)
+        the_store.versions.mkdir(parents=True)
+        try:
+            os.symlink(mine, the_store.path(version), target_is_directory=True)
+        except OSError as error:            # Windows without the privilege
+            self.skipTest(f"no symbolic link: {error}")
+        for _ in range(2):                  # refused, and refused again: nothing was changed
+            with self.assertRaises(store.StoreError) as raised:
+                the_store.ensure(version)
+            self.assertEqual(str(raised.exception), f"{display(the_store.path(version))} is there, and is no folder "
+                             "of the store — a link or a file, which holds no complete spec: remove it, then run the "
+                             "command again")
+        self.assertTrue(os.path.islink(the_store.path(version)))
+        self.assertEqual((mine / "agents" / "notes.md").read_text(encoding="utf-8"), "mine\n")
+        self.assertFalse(os.stat(mine / "agents" / "notes.md").st_mode & 0o222)
+        self.assertEqual(self.listing(), ["2.0.0"])
+        os.unlink(the_store.path(version))                                     # the remedy named
+        self.assertEqual(the_store.ensure(version), "written")
+
+    def test_a_file_at_a_version_is_refused(self):
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        version = Version("2.0.0")
+        the_store.versions.mkdir(parents=True)
+        the_store.path(version).write_text("mine\n", encoding="utf-8")
+        with self.assertRaisesRegex(store.StoreError, "is no folder of the store"):
+            the_store.ensure(version)
+        self.assertEqual(the_store.path(version).read_text(encoding="utf-8"), "mine\n")
+        the_store.path(version).unlink()                                       # the remedy named
+        self.assertEqual(the_store.ensure(version), "written")
+
+    def test_a_link_inside_a_version_written_again_is_not_followed(self):
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        version = Version("2.0.0")
+        path = self.incomplete(the_store, version)
+        mine = self.tmp / "mine.md"
+        mine.write_text("mine\n", encoding="utf-8")
+        os.chmod(mine, 0o444)
+        store.make_writable(path / "agents")
+        try:
+            os.symlink(mine, path / "agents" / "mine.md")
+            os.symlink(self.tmp, path / "agents" / "tmp", target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f"no symbolic link: {error}")
+        store.make_read_only(path / "agents")
+        os.chmod(mine, 0o444)                   # make_read_only followed it: as the user left it
+        mode = os.stat(self.tmp).st_mode
+        self.assertEqual(the_store.ensure(version), "written")
+        self.assertEqual(mine.read_text(encoding="utf-8"), "mine\n")
+        self.assertFalse(os.stat(mine).st_mode & 0o222)
+        self.assertEqual(os.stat(self.tmp).st_mode, mode)
+
+    def test_a_link_put_in_its_place_meanwhile_is_removed_not_followed(self):
+        # Between the look and the rename, a link took the folder's place: the link goes, what it leads to stays.
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        version = Version("2.0.0")
+        path = self.incomplete(the_store, version)
+        mine = self.tmp / "mine"
+        (mine / "agents").mkdir(parents=True)
+        (mine / "agents" / "notes.md").write_text("mine\n", encoding="utf-8")
+        os.chmod(mine / "agents" / "notes.md", 0o444)
+        aside = the_store._aside
+
+        def linked_first(*args):
+            store.remove_tree(path)
+            try:
+                os.symlink(mine, path, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"no symbolic link: {error}")
+            return aside(*args)
+        with mock.patch.object(the_store, "_aside", side_effect=linked_first):
+            self.assertEqual(the_store.ensure(version), "written")
+        self.assertFalse(os.path.islink(path))
+        self.assertEqual((mine / "agents" / "notes.md").read_text(encoding="utf-8"), "mine\n")
+        self.assertFalse(os.stat(mine / "agents" / "notes.md").st_mode & 0o222)
+
+    def test_a_version_taken_away_meanwhile_is_written(self):
+        # A prune, or another sync's repair, took it between the look and the rename: no refusal, no removal named.
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        version = Version("2.0.0")
+        self.incomplete(the_store, version)
+        other = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        aside = the_store._aside
+
+        def pruned_first(*args):
+            other.remove(version)
+            return aside(*args)
+        with mock.patch.object(the_store, "_aside", side_effect=pruned_first):
+            self.assertEqual(the_store.ensure(version), "written")
+        self.assertTrue(the_store.has(version))
+
+    def test_a_file_taken_away_meanwhile_is_not_named(self):
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        version = Version("2.0.0")
+        the_store.versions.mkdir(parents=True)
+        the_store.path(version).write_text("mine\n", encoding="utf-8")
+        is_link = store.is_link
+
+        def removed_first(path):
+            if Path(path) == the_store.path(version) and os.path.lexists(path):
+                os.unlink(path)
+            return is_link(path)
+        with mock.patch.object(store, "is_link", side_effect=removed_first):
+            self.assertEqual(the_store.ensure(version), "written")
+
+    def test_a_version_put_in_whole_meanwhile_is_kept(self):
+        # Another sync wrote it after this one found it incomplete: what this one sets aside goes back.
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        version = Version("2.0.0")
+        self.incomplete(the_store, version)
+        other = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        aside = the_store._aside
+
+        def written_first(*args):
+            other.ensure(version)
+            return aside(*args)
+        with mock.patch.object(the_store, "_aside", side_effect=written_first), \
+                mock.patch.object(the_store, "_install", side_effect=AssertionError("written twice")):
+            self.assertEqual(the_store.ensure(version), "stored")
+        self.assertTrue(the_store.has(version))
+        self.assertFalse(os.stat(the_store.path(version) / "agents" / "roles" / "prompt-manager.md").st_mode & 0o222)
+        self.assertEqual(self.listing(), ["2.0.0"])
 
     @unittest.skipIf(os.name == "nt", "the mode of a directory is POSIX's")
     def test_a_version_left_writable_is_made_read_only_again(self):

@@ -1298,22 +1298,40 @@ class CortexLockTests(SyncTestCase):
                 self.assert_ok(self.sync(project, mode))
                 store.make_writable(self.stored())
                 shutil.rmtree(self.stored() / "docs")
+                store.make_read_only(self.stored())         # #384: read-only, as the store holds every version
                 proc = self.validate(project)
                 self.assertEqual(proc.returncode, 0, proc.out + proc.err)
                 self.assertIn("LOCK_DIGEST", proc.out)
                 self.assertIn("holds no docs/ — no whole spec to take the digest of", proc.out)
                 self.assertNotIn("Traceback", proc.out + proc.err)
                 self.assertEqual(self.validate(project, "--strict").returncode, 1)
-                # #369: the removal first, then the sync — a sync alone is refused by the store, which holds it so.
                 self.assertIn(f'— remove "{display(self.stored())}", then run `cortex sync`', proc.out)
-                refused = self.sync(project)
-                self.assertEqual(refused.returncode, 1, refused.out + refused.err)
-                self.assertIn("holds no complete spec — remove it", refused.err)
-                shutil.rmtree(self.stored())                # the commands it names, in their order
+                # #384: the sync puts it in the store again by itself — for a user who is not root too.
                 self.assert_ok(self.sync(project))
                 proc = self.validate(project, "--strict")
                 self.assertEqual(proc.returncode, 0, proc.out + proc.err)
                 self.assertNotIn("LOCK_", proc.out)
+
+    def test_a_link_a_user_made_at_a_stored_version_is_refused(self):
+        # #384: the store repairs a folder of its own, never what a link a user made leads to.
+        project = self.project()
+        mine = self.tmp / "mine"
+        (mine / "agents").mkdir(parents=True)
+        (mine / "agents" / "notes.md").write_text("mine\n", encoding="utf-8")
+        self.stored().parent.mkdir(parents=True)
+        try:
+            os.symlink(mine, self.stored(), target_is_directory=True)
+        except OSError as error:            # Windows without the privilege
+            self.skipTest(f"no symbolic link: {error}")
+        proc = self.sync(project)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"{display(self.stored())} is there, and is no folder of the store — a link or a file, which "
+                      "holds no complete spec: remove it, then run the command again", proc.err)
+        self.assertTrue(os.path.islink(self.stored()))
+        self.assertEqual(sorted(p.name for p in mine.rglob("*")), ["agents", "notes.md"])
+        os.unlink(self.stored())                    # the remedy named, then the command again
+        self.assert_ok(self.sync(project))
+        self.assertEqual(self.validate(project, "--strict").returncode, 0)
 
     @DOWNLOADS
     def test_offline_a_stored_spec_the_lock_refuses_is_said_so(self):
