@@ -15,7 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cortex_core.validate import (  # noqa: E402
-    Colors, Report, check_overlay, find, main, overlay_roots, shown, validate,
+    Colors, Report, _main, check_overlay, display, find, main, overlay_roots, shown, validate,
 )
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 import validator_harness as harness  # noqa: E402
@@ -469,6 +469,59 @@ class PathTests(unittest.TestCase):
         self.assertEqual(found, [str(project)] + [f"{project}/{s}" for s in ("svc-a", "svc-d", "svc-e")])
         found = overlay_roots(str(project), str(project / "cortex"), "", f"{project}/team")
         self.assertEqual(found, [str(project)] + [f"{project}/{s}" for s in ("svc-a", "svc-c", "svc-e")])
+
+    def test_service_warns_of_a_service_the_runtime_refuses_and_checks_none_of_it(self):
+        # #353: --service named the team's overlays as a service's, past the filter overlay_roots applies. A warning
+        # says why, and nothing of it is checked: exit 0, and 1 under --strict, as every warning (ADR-008 §9) — with
+        # the default team's folder and a renamed one; the others are checked as before.
+        tmp = Path(tempfile.mkdtemp(prefix="cortex-validator-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        project = tmp / "host"
+        for team in ("agents", "team"):
+            (project / team / "roles" / "engineering").mkdir(parents=True)
+            (project / team / "roles" / "engineering" / "our-own-role.md").write_text("# Ours\n", encoding="utf-8")
+        (project / "svc-a" / "agents").mkdir(parents=True)
+        for service, target in (("svc-c", project / "agents"), ("svc-d", project / "team")):
+            (project / service).mkdir()
+            try:
+                os.symlink(target, project / service / "agents", target_is_directory=True)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest(f"no symbolic link here: {error}")
+        for service in ("svc-a", "svc-c", "svc-d"):
+            (project / service / "project-overview.md").write_text("# overview\n", encoding="utf-8")
+        default = "the team's folder, agents/, whose overlays `cortex validate` checks as the workspace's — run it " \
+                  "without --service"
+        renamed = default.replace("agents/", "team/")
+        for team, cases in ((None, {"svc-c": f"its agents/ is {default}",
+                                    f"{project}/svc-c": f"its agents/ is {default}",
+                                    "agents/roles": f"the runtime serves no service in {default}"}),
+                            (f"{project}/team", {"svc-d": f"its agents/ is {renamed}",
+                                                 "agents": "the runtime serves no service in agents/, nor reads it"})):
+            for service, said in cases.items():
+                for strict in ((), ("--strict",)):
+                    with self.subTest(team=team, service=service, strict=strict):
+                        out, err = io.StringIO(), io.StringIO()
+                        code = _main(["--service", service, *strict], str(project), str(project / "cortex"), out,
+                                     err, "cortex validate", (), team)
+                        self.assertEqual((code, err.getvalue()), (1 if strict else 0, ""), out.getvalue())
+                        self.assertIn(f"⚠ {display(service)}\n  SERVICE_REFUSED — a service the runtime refuses — "
+                                      f"{said}\n", out.getvalue())
+                        self.assertNotIn("our-own-role.md", out.getvalue())
+                        self.assertIn("Warnings: 1", out.getvalue())
+            out, err = io.StringIO(), io.StringIO()
+            code = _main([], str(project), str(project / "cortex"), out, err, "cortex validate", (), team)
+            self.assertEqual(code, 0, out.getvalue())
+            name, linked = ("agents", "svc-c") if team is None else ("team", "svc-d")
+            self.assertEqual(out.getvalue().count(f" {name}/roles/engineering/our-own-role.md"), 1, out.getvalue())
+            self.assertNotIn(f"{linked}/agents/", out.getvalue())             # the team's overlays, checked once
+            self.assertNotIn("SERVICE_REFUSED", out.getvalue())
+            for service in ("svc-a", ".", "svc-d" if team is None else "svc-c"):
+                with self.subTest(team=team, service=service):
+                    out, err = io.StringIO(), io.StringIO()
+                    code = _main(["--service", service, "--strict"], str(project), str(project / "cortex"), out, err,
+                                 "cortex validate", (), team)
+                    self.assertEqual((code, err.getvalue()), (0, ""), out.getvalue())
+                    self.assertNotIn("SERVICE_REFUSED", out.getvalue())
 
 
 class OutputTests(unittest.TestCase):

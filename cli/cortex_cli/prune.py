@@ -116,8 +116,12 @@ def versions_of(root: Path, err: TextIO) -> List[str]:
     except config.ConfigError as error:
         refused, project = error, _loosely(root)
         if project is None:
-            err.write(f"note: {display(str(root))}: {error} — its version is not known, so none is kept for it\n")
-            return []
+            # No pin reads — beside a team's file that does not, say: what the project reads now is kept (#349).
+            now = list(dict.fromkeys(version for version in (registry.spec_reads(root), *read_now(root)) if version))
+            what = (f"only its versions are read: {', '.join(now)}" if now
+                    else "its version is not known, so none is kept for it")
+            err.write(f"note: {display(str(root))}: {error} — {what}\n")
+            return now
     except OSError as error:
         err.write(f"note: {display(str(root))}: {sync.os_error(error)} — its version is not known, so none is kept for it\n")
         return []
@@ -132,8 +136,23 @@ def versions_of(root: Path, err: TextIO) -> List[str]:
         if synced and synced not in used:
             used.append(synced)
     if refused is not None:
+        used.extend(version for version in read_now(root) if version not in used)
         err.write(f"note: {display(str(root))}: {refused} — only its versions are read: {', '.join(used)}\n")
     return used
+
+
+def read_now(root: Path) -> List[str]:
+    """The versions ``synced`` records in the ``cortex.local.toml`` at ``root`` — ``pinned`` and ``reads`` — of a
+    project this cortex refuses: what its last sync read, kept though no pin reads now, or the one that reads is not
+    the team's (#349). None when the file or its ``synced`` does not read."""
+    try:
+        synced = tomllib.loads(cascade.read_file(str(root / config.LOCAL_FILE)).decode("utf-8-sig")).get("synced")
+    except (OSError, ValueError):
+        return []
+    if not isinstance(synced, dict):
+        return []
+    return [version for version in (synced.get(key) for key in ("pinned", "reads"))
+            if isinstance(version, str) and Version.valid(version)]
 
 
 def stored(the_store: store.Store) -> List[Version]:
@@ -172,6 +191,12 @@ def _registered(entries: List[registry.Entry], used: Dict[Version, List[str]], e
             gone.append(entry)
             continue
         versions = list(dict.fromkeys(version for version in (found.pinned, found.reads) if version))
+        if found.state == registry.UNREADABLE:
+            # Its candidate versions, and what its last sync read: kept where its PINNED is not known (#349).
+            loose = cascade.loose_versions(entry.path, config.loose_team_folder(entry.path))
+            for version in (*(version for _, version in loose.values()), *read_now(Path(entry.path))):
+                if version not in versions:
+                    versions.append(version)
         if found.state == registry.NO_PROJECT:
             err.write(f"note: {entry.name}: {entry.path} holds no {config.PROJECT_FILE}, but its {config.LOCAL_FILE} "
                       f"still reads {found.reads} — a branch without Cortex checked out? It stays in the registry, and "

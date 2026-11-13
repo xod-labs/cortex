@@ -83,6 +83,37 @@ class FollowsTests(FolderTestCase):
         self.assertIn(f"{FOLDER}/roles/engineering/our-own-role.md", proc.out)
         self.assertIn("Checked:  1", proc.out.replace("\x1b[1m", "").replace("\x1b[0m", ""))
 
+    @LINKS
+    def test_validate_service_warns_of_a_service_whose_agents_is_the_team_s_folder(self):
+        # #353: --service checked the team's overlays as svc-c's, past the filter the runtime applies. A warning says
+        # why and nothing of svc-c is checked — exit 0, and 1 under --strict, as every warning (ADR-008 §9) — with the
+        # default team's folder and a renamed one; the command it names, run, checks the team's overlays once.
+        for folder in ("agents", FOLDER):
+            with self.subTest(folder=folder):
+                toml = NAMED if folder == FOLDER else 'theme = "h2g2"\n'
+                root = self.project(toml, name=f"ws-{folder}")
+                roles = root / folder / "roles" / "engineering"
+                roles.mkdir(parents=True)
+                (root / folder / "cortex.team.toml").write_text(f'version = "{OWN}"\n', encoding="utf-8")
+                (roles / "our-own-role.md").write_text("# Ours\n", encoding="utf-8")
+                (root / "svc-c").mkdir()
+                (root / "svc-c" / "project-overview.md").write_text("# svc-c\n", encoding="utf-8")
+                (root / "svc-c" / "agents").symlink_to(root / folder, target_is_directory=True)
+                self.assert_ok(self.cortex(root, "sync"))
+                for strict in ((), ("--strict",)):
+                    proc = self.cortex(root, "validate", "--service", "svc-c", *strict)
+                    self.assertEqual(proc.returncode, 1 if strict else 0, proc.out + proc.err)
+                    self.assertIn(f"⚠ svc-c\n  SERVICE_REFUSED — a service the runtime refuses — its agents/ is the "
+                                  f"team's folder, {folder}/, whose overlays `cortex validate` checks as the "
+                                  "workspace's — run it without --service\n", proc.out)
+                    self.assertIn("Warnings: 1\n", proc.out)
+                    self.assertNotIn("our-own-role.md", proc.out)
+                proc = self.cortex(root, "validate")
+                self.assert_ok(proc)
+                self.assertEqual(proc.out.count("our-own-role.md"), 1, proc.out)
+                self.assertIn(f"{folder}/roles/engineering/our-own-role.md", proc.out)
+                self.assertNotIn("svc-c", proc.out)
+
     def test_the_project_s_own_theme_is_the_folder_s(self):
         root = self.named(toml=f'agents = "{FOLDER}"\ntheme = "ours"\n')
         (root / FOLDER / "personalities" / "ours").mkdir(parents=True)
@@ -234,6 +265,40 @@ class FolderStateTests(FolderTestCase):
         proc = self.cortex(root, "sync")
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn(f'"version" is required, or in {FOLDER}/cortex.team.toml — {FOLDER}/', proc.err)
+
+    @LINKS
+    def test_a_folder_the_key_names_linked_nowhere_names_the_link_and_its_remedies(self):
+        # #350: no checkout makes a link that leads nowhere lead somewhere. The link is named, and where it leads, as
+        # for the default folder; each of its remedies, followed, ends the warning.
+        for remedy in ("lead to the team's folder", "remove it"):
+            with self.subTest(remedy=remedy):
+                root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\nagents = "{FOLDER}"\n',
+                                    name=f"app-{len(remedy)}")
+                gone = self.tmp / f"gone-{len(remedy)}"
+                (root / FOLDER).symlink_to(gone, target_is_directory=True)
+                said = (f'{FOLDER}/ is a link to "{harness_path(gone)}", which leads nowhere: make it lead to the '
+                        "team's folder, or remove it and check that folder out in its place")
+                proc = self.cortex(root, "sync")
+                self.assert_ok(proc)
+                self.assertIn(f"warning: {said}\n", proc.err)
+                self.assertNotIn("is not there", proc.err)
+                proc = self.cortex(root, "sync", "--locked")
+                self.assertEqual(proc.returncode, 1, proc.err)
+                self.assertIn(f"--locked: {said}. Nothing of the project was changed", proc.err)
+                proc = self.cortex(root, "validate")
+                self.assertIn(f"TEAM_FOLDER_MISSING — {said}\n", proc.out)
+                if remedy == "remove it":
+                    (root / FOLDER).unlink()
+                    (root / FOLDER).mkdir()                              # the team's folder, checked out in its place
+                else:
+                    team = self.tmp / f"team-{len(remedy)}"             # where the team's folder is now
+                    team.mkdir()
+                    (root / FOLDER).unlink()
+                    (root / FOLDER).symlink_to(team, target_is_directory=True)
+                proc = self.cortex(root, "sync")
+                self.assert_ok(proc)
+                self.assertNotIn(f"{FOLDER}/", proc.err)
+                self.assertNotIn("TEAM_FOLDER_MISSING", self.cortex(root, "validate").out)
 
     def test_a_folder_the_key_names_an_empty_submodule_fails_locked(self):
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\nagents = "{FOLDER}"\n')

@@ -37,6 +37,7 @@ import argparse
 import hashlib
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
@@ -501,13 +502,24 @@ def _services(options: argparse.Namespace, root: Path, out: TextIO, err: TextIO)
     return [service_path(name) for name in names]
 
 
-def _team_s_error(error: Exception, name: str = config.TEAM_NAME) -> str:
+def _team_s_error(error: Exception, root: Path, folder: str = config.TEAM_FOLDER) -> str:
     """The team's file's own error — it does not parse, cannot be read, or its grammar refuses it — and its remedy:
-    removing cortex.toml, the developer's own at a 2.B root, loses it and changes nothing of this. ``name`` is the
-    file as the team's folder shows it. A file that cannot be read — not a file, a link that leads nowhere, a folder
-    this user cannot search — holds no conflict to fix."""
+    removing cortex.toml, the developer's own at a 2.B root, loses it and changes nothing of this. ``folder`` is the
+    team's folder of the project at ``root``. A file that cannot be read — not a file, a link that leads nowhere, a
+    folder this user cannot search — holds no conflict to fix; in a folder this user cannot search, the folder's mode is
+    the fix, not the file (#350)."""
+    name = cascade.team_name(folder)
+    if ": cannot be read — " in str(error) and _unsearchable(root / folder):
+        return (f"{error}\ncortex init reads {name}, and {folder}/ is a folder this user cannot search: give its owner "
+                f"read, write and search on it — chmod u+rwx {shlex.quote(folder)} — then run cortex init again")
     how = "make it a file you can read" if ": cannot be read — " in str(error) else "a conflict a pull left in it, say"
     return f"{error}\ncortex init reads {name}: fix it — {how} — then run cortex init again"
+
+
+def _unsearchable(folder: Path) -> bool:
+    """Whether ``folder`` is a directory this user cannot search: what is in it cannot be opened, whatever its own
+    mode. Never on Windows, which has no such mode."""
+    return os.name != "nt" and folder.is_dir() and not os.access(folder, os.X_OK)
 
 
 def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> None:
@@ -549,7 +561,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     except config.ConfigError as error:
         folder = config.loose_team_folder(str(root))
         if str(error).startswith(f"{cascade.team_name(folder)}:"):       # the team's file's own error
-            raise InitError(_team_s_error(error, cascade.team_name(folder)))
+            raise InitError(_team_s_error(error, root, folder))
         raise InitError(f"{error}\ncortex init keeps an existing {config.PROJECT_FILE}: fix it, or remove it to "
                         "start over")
     # As the sync's own check (#310, #325): a link sync from a checkout replaces a link that leads nowhere.
@@ -568,7 +580,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             if team_data is not None:
                 grammar.check_team(team_data, config.TEAM_NAME)
         except grammar.ProjectFileError as error:
-            raise InitError(_team_s_error(error))
+            raise InitError(_team_s_error(error, root))
     locks = {key: team_data[key] for key in team_data.get("locked", ())} if team_data else \
         {key: setting.value for key, setting in project.settings.settings.items() if setting.locked} if project else {}
     flags = {"theme": theme if options.theme is not None or options.no_personality else None, "sync": mode,

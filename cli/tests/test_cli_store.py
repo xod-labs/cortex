@@ -23,6 +23,12 @@ from cortex_cli.semver import Version  # noqa: E402
 from release_fixture import FakeRelease, spec_archive  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
+
+
+def display(path):
+    return str(path).replace(os.sep, "/")
+
+
 AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
 
 
@@ -86,7 +92,8 @@ class EmbeddedTests(StoreTestCase):
                          "serves — pin a release: `cortex upgrade --team VERSION`")
         # From a build that prepares 1.8.0, every release that reads the team's file is newer: a self-update first.
         early = store.Store(self.home, own_version="1.8.0-dev.5", checkout=REPO, fetch=self.no_network)
-        with self.assertRaises(store.StoreError) as raised:
+        with self.assertRaises(store.StoreError) as raised, \
+                mock.patch.dict(os.environ, {"CORTEX_SOURCE_VERSION": "1.8.0-dev.5"}):       # a build, stood for
             early.ensure(Version("1.8.0-dev.4"), origin="agents/cortex.team.toml")
         self.assertEqual(str(raised.exception), "Cortex 1.8.0-dev.4 is a build of no release, which no release serves "
                          "— update this cortex to a release that reads the team's file — 1.8.0 or a candidate of it — "
@@ -100,7 +107,17 @@ class EmbeddedTests(StoreTestCase):
                                 ("cortex.local.toml", "cortex upgrade --local VERSION")):
             with self.subTest(origin=origin):
                 self.assertEqual(store.pin_command(origin), command)
-        self.assertEqual(store.update_command(Version("1.8.0-rc.1")), "cortex self-update 1.8.0-rc.1")
+        with mock.patch.dict(os.environ, {"CORTEX_SOURCE_VERSION": "1.8.0-rc.1"}):       # a binary, stood for
+            self.assertEqual(store.update_command(Version("1.8.0-rc.1")), "cortex self-update 1.8.0-rc.1")
+        # #345: a source checkout that says its own version, which no self-update replaces, is updated itself — or,
+        # with none, the release installed.
+        with mock.patch.dict(os.environ):
+            os.environ.pop("CORTEX_SOURCE_VERSION", None)
+            shown = f'"{display(REPO)}"' if " " in display(REPO) else display(REPO)
+            self.assertEqual(store.update_command(Version("1.8.0-rc.1")), f"git -C {shown} pull")
+            with mock.patch.object(store, "source_checkout", return_value=None):
+                self.assertEqual(store.update_command(Version("1.8.0-rc.1")),
+                                 store.install_command(Version("1.8.0-rc.1")))
 
     @unittest.skipIf(AS_ROOT, "root writes any file")
     def test_it_is_read_only_once_written(self):

@@ -10,6 +10,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -22,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a p
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 
 import cli_harness as harness  # noqa: E402
-from cortex_cli import machine, store, sync, upgrade  # noqa: E402
+from cortex_cli import config, machine, store, sync, upgrade  # noqa: E402
 from cortex_cli.devversion import development  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
@@ -585,6 +586,47 @@ class DevelopmentBuildTests(SettingsTestCase):
                       "reads its committed cortex.toml — nothing was changed. Pin a release there\n", proc.err)
         self.assertNotIn("--team", proc.err)
         self.assertEqual((project / "cortex.toml").read_bytes(), before)
+
+    @unittest.skipIf(harness.BINARY, "a source checkout's remedy")
+    @NEEDS_GIT
+    @harness.outside_a_repository
+    def test_a_checkout_too_old_for_the_pin_is_told_to_update_itself(self):
+        # #345: no self-update replaces a source checkout — the update it names is the checkout's own. A clone of this
+        # one, its changelog behind a release this checkout prepares past: the command named, run, makes it serve it.
+        pinned = "1.8.0"
+        self.assertLess(Version(pinned), Version(OWN_DEV))
+        git = [GIT, "-c", "user.name=Cortex Tests", "-c", "user.email=tests@example.invalid", "-c", "core.autocrlf=false"]
+        upstream = self.tmp / "upstream"
+        for tree in ("cli/cortex_cli", "core/cortex_core", "agents", "templates", "docs"):
+            shutil.copytree(harness.REPO / tree, upstream / tree, ignore=shutil.ignore_patterns("__pycache__"))
+        behind = b"# Changelog\n\n## [Unreleased]\n\n## [1.7.0] - 2026-01-01\n"
+        (upstream / "CHANGELOG.md").write_bytes(behind)
+        subprocess.run([*git, "init", "-q", str(upstream)], check=True, capture_output=True)
+        subprocess.run([*git, "-C", str(upstream), "add", "-A"], check=True, capture_output=True)
+        subprocess.run([*git, "-C", str(upstream), "commit", "-q", "-m", "behind"], check=True, capture_output=True)
+        checkout = self.tmp / "checkout"
+        subprocess.run([*git, "clone", "-q", str(upstream), str(checkout)], check=True, capture_output=True)
+        shutil.copyfile(harness.REPO / "CHANGELOG.md", upstream / "CHANGELOG.md")
+        subprocess.run([*git, "-C", str(upstream), "commit", "-q", "-am", "ahead"], check=True, capture_output=True)
+        release = FakeRelease((pinned,))
+        self.addCleanup(release.close)
+        project = self.project(pinned)
+
+        def sync():
+            proc = subprocess.run([sys.executable, "-I", "-S", "-c", harness.SOURCE_CALL, str(checkout / "core"),
+                                   str(checkout / "cli"), "sync"], cwd=project, capture_output=True,
+                                  env={**self.env, "CORTEX_RELEASES_URL": release.url, "PWD": str(project)})
+            proc.out, proc.err = proc.stdout.decode(), proc.stderr.decode()
+            return proc
+
+        proc = sync()
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"newer than this cortex, {development(behind.decode())} — update it:\n    git -C {display(checkout)} pull\n", proc.err)
+        self.assertNotIn("self-update", proc.err)
+        named = re.search(r"update it:\n    git (-C .+ pull)\n", proc.err).group(1)
+        subprocess.run([*git, *shlex.split(named)], check=True, capture_output=True)     # the command it names
+        self.assert_ok(sync())
+        self.assertEqual(config.load(str(project)).synced["reads"], pinned)
 
     def test_upgrade_all_names_the_version_once(self):
         project = self.project("1.7.0")

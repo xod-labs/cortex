@@ -95,8 +95,7 @@ def lock_warnings(project: config.Project, base: str, files: Optional[Dict[str, 
         lock = config.load_lock(directory, name, shown_name, writer=writer)
     except config.ConfigError as error:
         return [(shown_name, "LOCK_INVALID", str(error))]
-    # Committed nowhere (ADR-008 §9); nor a build of no release's lock, which no teammate can use (ADR-009 §9).
-    commit = "" if sync.in_no_repository(directory) or store.development(version) else ", then commit it"
+    commit = sync.then_commit(directory, version)
     # The team's lock in a folder this user cannot write: the sync only warns of it here (ADR-013 §3.4). A
     # prediction: on Windows, os.access does not read a folder's ACL.
     fix = (f"{project.team_folder}/ cannot be written here — a {writer} where it can be writes it, committed in "
@@ -107,13 +106,15 @@ def lock_warnings(project: config.Project, base: str, files: Optional[Dict[str, 
     if lock.version != version:
         return [(shown_name, "LOCK_STALE", f"{shown_name} names Cortex {lock.version}, and {pins} pins "
                  f"{version} — {fix}")]
+    # Its spec, synced with --locked beside a try, is put in the store again by that sync: a plain one reads the try.
+    resync = "`cortex sync --locked`" if version != project.version else "`cortex sync`"
     try:
         actual = store.digest_of(files) if files is not None else store.digest(Path(base))
     except store.StoreError as error:      # a version removed from the store meanwhile
-        return [(shown_name, "LOCK_DIGEST", f"{error} — run `cortex sync`")]
+        return [(shown_name, "LOCK_DIGEST", f"{error} — run {resync}")]
     if actual != lock.digest:
         return [(shown_name, "LOCK_DIGEST", f"the spec synced is {actual}, and {shown_name} names {lock.digest} — "
-                 "run `cortex sync`, which puts it in the store again")]
+                 f"run {resync}, which puts it in the store again")]
     return []
 
 
