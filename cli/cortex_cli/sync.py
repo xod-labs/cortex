@@ -843,8 +843,7 @@ def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err:
     ``cortex upgrade``'s — not said again."""
     root = config.find_project(cwd)
     if root is None:
-        raise SyncError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
-                        "a Cortex project")
+        raise SyncError(config.no_project(cwd))
     with project_lock(Path(root), err):
         _sync(root, mode, source, out, err, claude_access, notes, locked, announce, said)
         if bootstraps is not None and source is None and not locked:

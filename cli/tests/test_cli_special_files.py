@@ -114,5 +114,38 @@ class InstructionsFileTests(SpecialFileTestCase):
                 self.assertTrue((root / "CLAUDE.md").is_file())
 
 
+class ProjectFileTests(SpecialFileTestCase):
+    """``cortex.toml``, which makes a directory a Cortex project."""
+
+    @harness.outside_a_repository
+    def test_a_cortex_toml_that_is_not_a_file_is_said_not_a_file_never_missing(self):
+        # Read as no cortex.toml at all, it was said missing, and `cortex init` named — which keeps it. What it is
+        # is said, with its remedy, which, followed, lets the commands run.
+        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.tmp / f"project-{kind}"
+                root.mkdir()
+                if kind == "directory":
+                    (root / "cortex.toml").mkdir()
+                else:
+                    os.mkfifo(root / "cortex.toml")
+                said = (f"{display(str(root / 'cortex.toml'))} is not a file: remove it, then `cortex init` makes the "
+                        "directory a Cortex project\n")
+                for args in (("sync",), ("validate",), ("upgrade",), ("upgrade", OWN), ("upgrade", "--local", OWN),
+                             ("upgrade", "--team")):
+                    proc = self.within(root, *args)
+                    self.assertNotEqual(proc.returncode, 0, proc.out + proc.err)
+                    self.assertIn(f"cortex {args[0]}: {said}", proc.err)
+                    self.assertNotIn("no cortex.toml", proc.err)
+                if kind == "directory":
+                    (root / "cortex.toml").rmdir()
+                else:
+                    (root / "cortex.toml").unlink()
+                self.assert_ok(self.within(root, "init", "--tool", "claude"))
+                for args in (("sync",), ("validate",)):
+                    self.assert_ok(self.within(root, *args))
+
+
 if __name__ == "__main__":
     unittest.main()

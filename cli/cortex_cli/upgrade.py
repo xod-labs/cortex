@@ -744,8 +744,7 @@ def _ending(outcome: Outcome, out: TextIO) -> None:
 def _project(cwd: str) -> Tuple[str, config.Project]:
     root = config.find_project(cwd)
     if root is None:
-        raise UpgradeError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
-                           "a Cortex project")
+        raise UpgradeError(config.no_project(cwd))
     old = config.too_new(root, store.own_version())
     if old is not None and config.loose_pin(root)[0] == config.PROJECT_FILE:
         raise UpgradeError(old)
@@ -1256,8 +1255,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     file moved, its bootstrap compared with that version's templates (#348)."""
     root = config.find_project(cwd)
     if root is None:
-        raise UpgradeError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
-                           "a Cortex project")
+        raise UpgradeError(config.no_project(cwd))
     the_store = store.Store()
     pinned = config.loose_pin(root)
     refusal = config.team_refusal(root) if wanted is None and pinned is not None and pinned[1] > the_store.own \

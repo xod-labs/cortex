@@ -220,8 +220,7 @@ def roots_and_folder(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]], Op
         return cwd, cwd, [], None
     hint = (" — a cortex/ submodule or clone is here: `cortex init` says how to leave it"
             if os.path.isdir(os.path.join(cwd, "cortex")) else "")
-    raise RootsError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory a "
-                     f"Cortex project{hint}")
+    raise RootsError(config.no_project(cwd, hint))
 
 
 def run(args: List[str]) -> int:

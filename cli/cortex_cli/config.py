@@ -34,6 +34,7 @@ from cortex_core.project import (LOCAL_FILE, LOCK_FILE, MODES, PROJECT_FILE, TEA
                                   TEAM_LOCK_FILE)
 
 from . import store
+from .paths import display
 from .semver import Version
 
 PROJECT_HEADER = "# Written by `cortex init`. Committed: the Cortex version this project uses, and the team's theme.\n"
@@ -196,6 +197,22 @@ def find_project(start: str) -> Optional[str]:
         parent = os.path.dirname(current)
         if parent == current:
             return None
+        current = parent
+
+
+def no_project(cwd: str, hint: str = "") -> str:
+    """Why ``find_project`` found no project from ``cwd``: no ``cortex.toml`` there or above it — or, nearest, one
+    that is not a file, a named pipe, a socket or a directory, which was read as none (#358). ``hint`` follows the
+    first."""
+    current = cwd
+    while True:
+        path = os.path.join(current, PROJECT_FILE)
+        if os.path.exists(path) and not os.path.isfile(path):
+            return f"{display(path)} is not a file: remove it, then `cortex init` makes the directory a Cortex project"
+        parent = os.path.dirname(current)
+        if parent == current:
+            return (f"no {PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory a Cortex "
+                    f"project{hint}")
         current = parent
 
 
