@@ -27,16 +27,35 @@ An ADR documents a **significant architectural decision**: the context that trig
 Every ADR must contain:
 
 1. **Status** + date
-2. **Context** — What situation triggers the decision?
-3. **Decision** — What is decided, in clear terms?
-4. **Detailed contract** — How exactly does it work? (schemas, examples, edge cases)
-5. **Consequences** — Positive, negative, neutral impacts
-6. **Alternatives considered** — What was rejected and why
-7. **References** — Linked files, related ADRs, external sources
+2. **Size** — from ADR-014 on, right after the header and before §1: the five criteria of
+   [docs/process/adr-implementation.md §10.1](../process/adr-implementation.md#101-the-size), each
+   scored with one line of why, the total, the size and its review budget. An L record says
+   whether it can be split. At closing, the same section gets what was spent
+   ([§10.5](../process/adr-implementation.md#105-what-was-spent-at-closing)):
+
+   ```markdown
+   ## Size
+
+   | Criterion | Score | Why |
+   |---|---|---|
+   | Phases | M (2) | four phases |
+   | Public surface | L (3) | `cortex config`, `--team`, `--local`, three keys |
+   | User files Cortex writes | L (3) | the team's file and its lock, the bootstrap's format |
+   | Environment matrix | L (3) | git or none, links, both workspace flavours, Windows |
+   | Existing ADRs touched | M (2) | ADR-008, ADR-010 |
+
+   **13 — L.** Budget: 4 review passes, 2 counter-review rounds each. Split: …
+   ```
+3. **Context** — What situation triggers the decision?
+4. **Decision** — What is decided, in clear terms?
+5. **Detailed contract** — How exactly does it work? (schemas, examples, edge cases)
+6. **Consequences** — Positive, negative, neutral impacts
+7. **Alternatives considered** — What was rejected and why
+8. **References** — Linked files, related ADRs, external sources
 
 An ADR delivered in several steps adds:
 
-8. **Phases** — numbered, each with its scope and its acceptance criteria. This list is the
+9. **Phases** — numbered, each with its scope and its acceptance criteria. This list is the
    authoritative scope: the implementation issues quote it rather than paraphrase it, and the
    phase numbers become the `phase:N` labels. How a phased ADR is then delivered — branches,
    issues, gates — is described in [docs/process/adr-implementation.md](../process/adr-implementation.md).
@@ -63,6 +82,7 @@ An ADR delivered in several steps adds:
 
 1. Copy the latest ADR as a starting structure
 2. Increment the number
-3. Open a PR — the discussion happens in the PR review, not in the ADR text
-4. Once accepted, change `Status: Proposed` → `Status: Accepted` + commit
-5. Update the index above
+3. Fill in its `Size` section first: the size sets the review budget, and a cap reached or a split is the call of the contributor who carries it — a person, never an agent ([§10](../process/adr-implementation.md#10-size-and-review-budget))
+4. Open a PR — the discussion happens in the PR review, not in the ADR text
+5. Once accepted, change `Status: Proposed` → `Status: Accepted` + commit
+6. Update the index above
