@@ -289,9 +289,16 @@ def _missing_team_folder(root: str, folder: str = TEAM_FOLDER) -> None:
     except project.ProjectFileError:
         return                          # another fault of the file, which its own error says
     missing = team_folder_state(root, folder)
-    if missing is not None:
-        raise ConfigError(f'{PROJECT_FILE}: "version" is required, or in {cascade.team_name(folder)} — {missing}: '
-                          "check it out, a submodule with `git submodule update --init`")
+    if missing is None:
+        return
+    required = f'{PROJECT_FILE}: "version" is required, or in {cascade.team_name(folder)}'
+    path = os.path.join(root, folder)
+    if os.path.islink(path) and not os.path.exists(path):
+        # A link that leads nowhere: no checkout makes it lead somewhere — a submodule's update leaves it (#350).
+        target = project.shown(os.readlink(path).replace(os.sep, "/"))
+        raise ConfigError(f"{required} — {folder}/ is a link to {target}, which leads nowhere: make it lead to the "
+                          "team's folder, or remove it and check that folder out in its place")
+    raise ConfigError(f"{required} — {missing}: check it out, a submodule with `git submodule update --init`")
 
 
 def team_folder(root: str, known: Optional[bool] = None) -> Tuple[str, Optional[bool]]:

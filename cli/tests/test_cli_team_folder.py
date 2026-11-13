@@ -235,6 +235,40 @@ class FolderStateTests(FolderTestCase):
         self.assertEqual(proc.returncode, 1, proc.err)
         self.assertIn(f'"version" is required, or in {FOLDER}/cortex.team.toml — {FOLDER}/', proc.err)
 
+    @LINKS
+    def test_a_folder_the_key_names_linked_nowhere_names_the_link_and_its_remedies(self):
+        # #350: no checkout makes a link that leads nowhere lead somewhere. The link is named, and where it leads, as
+        # for the default folder; each of its remedies, followed, ends the warning.
+        for remedy in ("lead to the team's folder", "remove it"):
+            with self.subTest(remedy=remedy):
+                root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\nagents = "{FOLDER}"\n',
+                                    name=f"app-{len(remedy)}")
+                gone = self.tmp / f"gone-{len(remedy)}"
+                (root / FOLDER).symlink_to(gone, target_is_directory=True)
+                said = (f'{FOLDER}/ is a link to "{harness_path(gone)}", which leads nowhere: make it lead to the '
+                        "team's folder, or remove it and check that folder out in its place")
+                proc = self.cortex(root, "sync")
+                self.assert_ok(proc)
+                self.assertIn(f"warning: {said}\n", proc.err)
+                self.assertNotIn("is not there", proc.err)
+                proc = self.cortex(root, "sync", "--locked")
+                self.assertEqual(proc.returncode, 1, proc.err)
+                self.assertIn(f"--locked: {said}. Nothing of the project was changed", proc.err)
+                proc = self.cortex(root, "validate")
+                self.assertIn(f"TEAM_FOLDER_MISSING — {said}\n", proc.out)
+                if remedy == "remove it":
+                    (root / FOLDER).unlink()
+                    (root / FOLDER).mkdir()                              # the team's folder, checked out in its place
+                else:
+                    team = self.tmp / f"team-{len(remedy)}"             # where the team's folder is now
+                    team.mkdir()
+                    (root / FOLDER).unlink()
+                    (root / FOLDER).symlink_to(team, target_is_directory=True)
+                proc = self.cortex(root, "sync")
+                self.assert_ok(proc)
+                self.assertNotIn(f"{FOLDER}/", proc.err)
+                self.assertNotIn("TEAM_FOLDER_MISSING", self.cortex(root, "validate").out)
+
     def test_a_folder_the_key_names_an_empty_submodule_fails_locked(self):
         root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\nagents = "{FOLDER}"\n')
         (root / FOLDER).mkdir()

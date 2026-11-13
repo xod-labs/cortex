@@ -1194,6 +1194,34 @@ class SecondReviewTests(TeamTestCase):
                 self.assertIn(f'"version" is required, or in {TEAM} — agents/ {state}: check it out, a submodule with '
                               "`git submodule update --init`", proc.err)
 
+    @unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")
+    def test_a_version_less_cortex_toml_names_its_team_s_folder_linked_nowhere(self):
+        # #350: no checkout makes a link that leads nowhere lead somewhere — `git submodule update --init` leaves it.
+        # The link is named, and where it leads; each of its remedies, followed, lets the sync run.
+        for remedy in ("lead to the team's folder", "remove it"):
+            with self.subTest(remedy=remedy):
+                root = self.project('theme = "h2g2"\n', name=f"app-{len(remedy)}")
+                gone = self.tmp / f"gone-{len(remedy)}"
+                (root / "agents").symlink_to(gone)
+                for command in (("sync",), ("init", "--tool", "claude")):
+                    proc = self.cortex(root, *command)
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertIn(f'cortex.toml: "version" is required, or in {TEAM} — agents/ is a link to '
+                                  f'"{harness_path(gone)}", which leads nowhere: make it lead to the team\'s folder, or '
+                                  "remove it and check that folder out in its place\n", proc.err)
+                    self.assertNotIn("git submodule update", proc.err)
+                if remedy == "remove it":
+                    (root / "agents").unlink()
+                    (root / "agents").mkdir()                           # the team's folder, checked out in its place
+                    (root / TEAM).write_text(f'version = "{OWN}"\n', encoding="utf-8")
+                else:
+                    team = self.tmp / f"team-{len(remedy)}"            # where the team's folder is now
+                    team.mkdir()
+                    (team / "cortex.team.toml").write_text(f'version = "{OWN}"\n', encoding="utf-8")
+                    (root / "agents").unlink()
+                    (root / "agents").symlink_to(team)
+                self.assert_ok(self.cortex(root, "sync"))
+
     @SOURCE
     @DOWNLOADS
     def test_init_during_a_try_writes_the_bootstrap_from_the_team_s_version(self):
@@ -3156,19 +3184,25 @@ class ThirdCodeReviewTests(TeamTestCase):
     @AS_ROOT
     @harness.outside_a_repository
     def test_a_fresh_init_beside_a_team_s_folder_that_cannot_be_searched_says_how_to_go_on(self):
-        root = self.tmp / "fresh"
-        (root / "agents").mkdir(parents=True)
-        (root / TEAM).write_text(f'version = "{OWN}"\n', encoding="utf-8")
-        os.chmod(root / "agents", 0)
-        self.addCleanup(os.chmod, root / "agents", 0o755)
-        proc = self.cortex(root, "init", "--tool", "claude")
-        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-        self.assertIn(f"{TEAM}: cannot be read — Permission denied", proc.err)
-        self.assertIn(f"cortex init reads {TEAM}: fix it — make it a file you can read — then", proc.err)
-        self.assertNotIn("conflict", proc.err)
-        self.assertFalse((root / "cortex.toml").exists())
-        os.chmod(root / "agents", 0o755)
-        self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+        # #350: the folder's mode is the fix, not the file — the folder is named, and the command the message names,
+        # run, lets init run. Without its search bit, or with no permission at all.
+        for mode in (0o600, 0):
+            with self.subTest(mode=oct(mode)):
+                root = self.tmp / f"fresh-{mode:o}"
+                (root / "agents").mkdir(parents=True)
+                (root / TEAM).write_text(f'version = "{OWN}"\n', encoding="utf-8")
+                os.chmod(root / "agents", mode)
+                self.addCleanup(os.chmod, root / "agents", 0o755)
+                proc = self.cortex(root, "init", "--tool", "claude")
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"{TEAM}: cannot be read — Permission denied\ncortex init reads {TEAM}, and agents/ is a "
+                              "folder this user cannot search: give its owner read, write and search on it — chmod "
+                              "u+rwx agents — then run cortex init again\n", proc.err)
+                self.assertNotIn("conflict", proc.err)
+                self.assertNotIn("make it a file", proc.err)
+                self.assertFalse((root / "cortex.toml").exists())
+                subprocess.run(["chmod", "u+rwx", "agents"], cwd=root, check=True)
+                self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
 
     @SOURCE
     @unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")

@@ -993,7 +993,12 @@ def renamed_folder_notes(project: config.Project) -> List[Tuple[str, str]]:
     if project.team_folder == config.TEAM_FOLDER:
         return []
     said = []
-    if not os.path.isdir(project.team_dir):
+    if os.path.islink(project.team_dir) and not os.path.exists(project.team_dir):
+        target = json.dumps(display(os.readlink(project.team_dir)))
+        said.append(("TEAM_FOLDER_MISSING",
+                     f"{project.team_folder}/ is a link to {target}, which leads nowhere: make it lead to the team's "
+                     "folder, or remove it and check that folder out in its place"))
+    elif not os.path.isdir(project.team_dir):
         said.append(("TEAM_FOLDER_MISSING",
                      f"{project.team_folder}/ is not there — the team's folder {config.PROJECT_FILE} names: its "
                      "overlays, its context files and the team's file are not read; check it out there"))
