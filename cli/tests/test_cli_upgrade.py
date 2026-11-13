@@ -1242,5 +1242,37 @@ class UpgradeHelpTests(unittest.TestCase):
         self.assertIn(b"no cortex.toml", proc.stderr)
 
 
+class IgnoredTimeoutTests(unittest.TestCase):
+    @unittest.skipUnless(hasattr(os, "mkfifo") and shutil.which("git"), "needs git and a named pipe")
+    @harness.outside_a_repository
+    def test_git_waiting_on_an_ignore_file_above_neither_fails_the_upgrade_nor_is_asked_again(self):
+        # A named pipe as the .gitignore of a folder above the project: each `git check-ignore` of what --commit
+        # and --branch commit waited its whole timeout, then failed the upgrade. Asked as `cortex sync` asks, the
+        # first question that times out is the last of that repository: the project's own .gitignore answers.
+        tmp = Path(tempfile.mkdtemp(prefix="cortex-upgrade-")).resolve()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        top = tmp / "top"
+        top.mkdir()
+        subprocess.run(["git", "init", "-q", str(top)], check=True)
+        os.mkfifo(top / ".gitignore")
+        root = top / "app"
+        root.mkdir()
+        (root / ".gitignore").write_bytes(b"cortex.local.toml\n")
+        files = [root / "cortex.local.toml", root / "cortex.toml", root / "cortex.lock"]
+        run = subprocess.run
+
+        def bounded(*args, **kwargs):           # the old 30 s timeout too: the test never waits it out
+            if kwargs.get("timeout") is not None:
+                kwargs["timeout"] = min(kwargs["timeout"], 2)
+            return run(*args, **kwargs)
+
+        with mock.patch.object(upgrade.sync, "GIT_TIMEOUT", 0.5), \
+                mock.patch.object(upgrade.sync, "_TIMED_OUT", set()), \
+                mock.patch.object(subprocess, "run", side_effect=bounded) as asked:
+            self.assertEqual(upgrade._ignored(str(root), files), ["cortex.local.toml"])
+            self.assertEqual(upgrade._ignored(str(root), files), ["cortex.local.toml"])
+            self.assertEqual(sum("check-ignore" in call.args[0] for call in asked.call_args_list), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

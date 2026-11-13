@@ -1791,8 +1791,10 @@ def _git_paths(root: str, files: List[Path]) -> List[str]:
 
 
 def _ignored(root: str, files: List[Path]) -> List[str]:
-    """Those of ``files`` git ignores, as git names them."""
-    return [path for path in _git_paths(root, files) if _git(root, "check-ignore", "-q", "--", path).returncode == 0]
+    """Those of ``files`` git ignores, as git names them — asked as `cortex sync` asks (``sync.ignored``): a git that
+    did not answer in time, waiting on an ignore file that is a named pipe, is asked no more in that repository, and
+    the project's own .gitignore answers, as without git."""
+    return [path for path in _git_paths(root, files) if sync.ignored(Path(root), path) is True]
 
 
 def _changed(root: str, top: str, files: List[Path]) -> List[Path]:
