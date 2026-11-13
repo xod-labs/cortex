@@ -489,6 +489,9 @@ class PathTests(unittest.TestCase):
                 self.skipTest(f"no symbolic link here: {error}")
         for service in ("svc-a", "svc-c", "svc-d"):
             (project / service / "project-overview.md").write_text("# overview\n", encoding="utf-8")
+        # Above the project root, no service of it: never refused, though its agents/ leads to the team's folder (#375).
+        (tmp / "elsewhere").mkdir()
+        os.symlink(project / "agents", tmp / "elsewhere" / "agents", target_is_directory=True)
         default = "the team's folder, agents/, whose overlays `cortex validate` checks as the workspace's — run it " \
                   "without --service"
         renamed = default.replace("agents/", "team/")
@@ -517,7 +520,7 @@ class PathTests(unittest.TestCase):
             self.assertEqual(out.getvalue().count(f" {name}/roles/engineering/our-own-role.md"), 1, out.getvalue())
             self.assertNotIn(f"{linked}/agents/", out.getvalue())             # the team's overlays, checked once
             self.assertNotIn("SERVICE_REFUSED", out.getvalue())
-            for service in ("svc-a", ".", "svc-d" if team is None else "svc-c"):
+            for service in ("svc-a", ".", "svc-d" if team is None else "svc-c", os.path.join(os.pardir, "elsewhere")):
                 with self.subTest(team=team, service=service):
                     out, err = io.StringIO(), io.StringIO()
                     code = _main(["--service", service, "--strict"], str(project), str(project / "cortex"), out, err,
