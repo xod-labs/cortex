@@ -851,10 +851,13 @@ def load_lock(root: str, name: str = LOCK_FILE, shown: Optional[str] = None, *,
     there is none. ``writer`` is the command a lock that is no lock is deleted for: the sync, or — the
     lock a try leaves — `cortex upgrade`."""
     path = os.path.join(root, name)
-    if not os.path.isfile(path):
-        return None
     again = f"delete it, and {writer} writes it again"     # a merge left conflict markers in it, say
     shown_name = shown or (TEAM_LOCK_NAME if name == TEAM_LOCK_FILE else name)
+    if os.path.exists(path) and not os.path.isfile(path):
+        # A named pipe, a socket, a directory, or a link to one: no lock to read, nor one to write over (#358).
+        raise ConfigError(f"{shown_name} is not a file — {again}")
+    if not os.path.isfile(path):
+        return None
     try:
         data = _read(path, shown_name)
         project.check_lock(data, shown_name)

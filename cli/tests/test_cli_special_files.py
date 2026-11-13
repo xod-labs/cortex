@@ -147,5 +147,44 @@ class ProjectFileTests(SpecialFileTestCase):
                     self.assert_ok(self.within(root, *args))
 
 
+class LockTests(SpecialFileTestCase):
+    """``cortex.lock``, and the team's lock beside the team's file."""
+
+    @harness.outside_a_repository
+    def test_a_lock_that_is_not_a_file_is_said_not_a_file_never_missing(self):
+        # Read as no lock, it was said missing — LOCK_MISSING, `--locked: no cortex.lock` — and a sync wrote over a
+        # named pipe. What it is is said, with its remedy, which, followed, lets the sync write it again.
+        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        for kind in kinds:
+            for lock in ("cortex.lock", "agents/cortex.team.lock"):
+                with self.subTest(kind=kind, lock=lock):
+                    team = lock.startswith("agents/")
+                    pin = f'version = "{OWN}"\n'
+                    root = self.project('theme = "h2g2"\n' if team else pin + 'theme = "h2g2"\n',
+                                        team=pin if team else None, name=f"lock-{kind}-{team}")
+                    self.assert_ok(self.within(root, "sync"))
+                    (root / lock).unlink()
+                    if kind == "directory":
+                        (root / lock).mkdir()
+                    else:
+                        os.mkfifo(root / lock)
+                    said = f"{lock} is not a file — delete it, and `cortex sync` writes it again"
+                    proc = self.within(root, "validate")
+                    self.assert_ok(proc)
+                    self.assertIn(f"LOCK_INVALID — {said}\n", proc.out)
+                    self.assertNotIn("LOCK_MISSING", proc.out)
+                    for args in (("sync",), ("sync", "--locked")):
+                        proc = self.within(root, *args)
+                        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                        self.assertIn(f"cortex sync: {said}\n", proc.err)
+                    if kind == "directory":
+                        (root / lock).rmdir()
+                    else:
+                        (root / lock).unlink()
+                    self.assert_ok(self.within(root, "sync"))
+                    self.assertTrue((root / lock).is_file())
+                    self.assertNotIn("LOCK_", self.within(root, "validate").out)
+
+
 if __name__ == "__main__":
     unittest.main()
