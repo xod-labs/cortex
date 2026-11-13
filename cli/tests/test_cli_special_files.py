@@ -186,5 +186,35 @@ class LockTests(SpecialFileTestCase):
                     self.assertNotIn("LOCK_", self.within(root, "validate").out)
 
 
+class LocalFileTests(SpecialFileTestCase):
+    """``cortex.local.toml``, which ``cortex sync`` writes."""
+
+    @harness.outside_a_repository
+    def test_a_cortex_local_toml_that_is_not_a_file_is_said_before_the_sync_writes_anything(self):
+        # Read as none, as `cortex config` reads it, a directory there failed the sync only when it wrote the file,
+        # with a raw `Is a directory`. Said first, with its remedy, which, followed, lets the sync write it.
+        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', name=f"local-{kind}")
+                if kind == "directory":
+                    (root / "cortex.local.toml").mkdir()
+                else:
+                    os.mkfifo(root / "cortex.local.toml")
+                before = sorted(path.name for path in root.iterdir())
+                proc = self.within(root, "sync")
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn("cortex sync: cortex.local.toml is not a file — remove it, and `cortex sync` writes it "
+                              "again. Nothing of the project was changed\n", proc.err)
+                self.assertNotIn(".tmp", proc.err)
+                self.assertEqual(sorted(path.name for path in root.iterdir()), before)
+                if kind == "directory":
+                    (root / "cortex.local.toml").rmdir()
+                else:
+                    (root / "cortex.local.toml").unlink()
+                self.assert_ok(self.within(root, "sync"))
+                self.assertTrue((root / "cortex.local.toml").is_file())
+
+
 if __name__ == "__main__":
     unittest.main()
