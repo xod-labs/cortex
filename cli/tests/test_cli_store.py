@@ -363,6 +363,30 @@ class EmbeddedTests(StoreTestCase):
         self.assertEqual((mine / "agents" / "notes.md").read_text(encoding="utf-8"), "mine\n")
         self.assertFalse(os.stat(mine / "agents" / "notes.md").st_mode & 0o222)
 
+    @unittest.skipIf(os.name == "nt", "the mode of a directory is POSIX's")
+    def test_a_link_put_in_its_place_before_it_is_opened_is_not_followed(self):
+        # Between the look and the open that makes it writable, a link took the folder's place: never opened
+        # through, the folder it leads to keeps its mode, and the link, there, is refused.
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        version = Version("2.0.0")
+        path = self.incomplete(the_store, version)
+        mine = self.tmp / "mine"
+        (mine / "agents").mkdir(parents=True)
+        os.chmod(mine, 0o555)
+        opened = os.open
+
+        def linked_first(name, *args, **kwargs):
+            if name == path and not os.path.islink(path):
+                with mock.patch.object(store.os, "open", opened):
+                    store.remove_tree(path)
+                os.symlink(mine, path, target_is_directory=True)
+            return opened(name, *args, **kwargs)
+        with mock.patch.object(store.os, "open", side_effect=linked_first), \
+                self.assertRaisesRegex(store.StoreError, "is no folder of the store"):
+            the_store.ensure(version)
+        self.assertTrue(os.path.islink(path))
+        self.assertEqual(os.stat(mine).st_mode & 0o777, 0o555)
+
     def test_a_version_taken_away_meanwhile_is_written(self):
         # A prune, or another sync's repair, took it between the look and the rename: no refusal, no removal named.
         the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
