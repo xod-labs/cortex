@@ -227,6 +227,25 @@ class EmbeddedTests(StoreTestCase):
         os.unlink(the_store.path(version))                                     # the remedy named
         self.assertEqual(the_store.ensure(version), "written")
 
+    def test_a_dangling_link_at_a_version_is_refused(self):
+        # A link to nothing is there all the same: the store neither writes through it nor removes it.
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        version = Version("2.0.0")
+        the_store.versions.mkdir(parents=True)
+        try:
+            os.symlink(self.tmp / "nowhere", the_store.path(version), target_is_directory=True)
+        except OSError as error:            # Windows without the privilege
+            self.skipTest(f"no symbolic link: {error}")
+        with self.assertRaises(store.StoreError) as raised:
+            the_store.ensure(version)
+        self.assertEqual(str(raised.exception), f"{display(the_store.path(version))} is there, and is no folder of "
+                         "the store — a link or a file, which holds no complete spec: remove it, then run the command "
+                         "again")
+        self.assertTrue(os.path.islink(the_store.path(version)))
+        self.assertFalse(os.path.lexists(self.tmp / "nowhere"))
+        os.unlink(the_store.path(version))                                     # the remedy named
+        self.assertEqual(the_store.ensure(version), "written")
+
     def test_a_file_at_a_version_is_refused(self):
         the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
         version = Version("2.0.0")
