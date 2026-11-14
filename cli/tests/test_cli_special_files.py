@@ -46,8 +46,15 @@ class SpecialFileTestCase(TeamTestCase):
         elif kind == "device":
             os.mknod(path, stat.S_IFCHR | 0o666, os.makedev(1, 3))
         else:
-            with socket.socket(socket.AF_UNIX) as bound:
-                bound.bind(str(path))
+            # Bound by its name alone, from its folder: an AF_UNIX path holds about 104 bytes, and macOS's
+            # TMPDIR (/private/var/folders/…) alone comes close to that.
+            here = os.getcwd()
+            os.chdir(path.parent)
+            try:
+                with socket.socket(socket.AF_UNIX) as bound:
+                    bound.bind(path.name)
+            finally:
+                os.chdir(here)
 
 
 class GitmodulesTests(SpecialFileTestCase):
@@ -184,7 +191,11 @@ class FolderToMakeTests(SpecialFileTestCase):
                 proc = self.within(root, "init", *args)
                 self.assertEqual(proc.returncode, 1, proc.out + proc.err)
                 self.assertIn(f"{where} is {said}, not a folder\n", proc.err)
-                self.assertEqual(proc.err.count("folder"), 1, proc.err)
+                message = proc.err
+                for shown in sorted({display(str(root)), str(root), os.path.realpath(root),
+                                     display(os.path.realpath(root))}, key=len, reverse=True):
+                    message = message.replace(shown, "ROOT")     # macOS's TMPDIR holds "folders"
+                self.assertEqual(message.count("folder"), 1, proc.err)
                 self.assertEqual(sorted(path.name for path in root.iterdir()), [name])
                 (root / name).unlink()
                 self.assert_ok(self.within(root, "init", *args))
