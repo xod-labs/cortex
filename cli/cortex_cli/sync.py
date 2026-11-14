@@ -83,6 +83,12 @@ def not_a_file(path: Path) -> bool:
     return not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode) or is_link(path))
 
 
+def no_gitignore_file(path: Path) -> bool:
+    """Whether the .gitignore at ``path`` is no file a line can be written to, nor a link: what ``not_a_file`` says,
+    or a directory."""
+    return not_a_file(path) or (os.path.isdir(path) and not is_link(path))
+
+
 def link_target(path: Path) -> str:
     target = os.readlink(path)
     if target.startswith("\\\\?\\"):                        # how Windows spells a junction's target
@@ -148,6 +154,30 @@ def _gitdir(path: Path) -> Optional[str]:
     return os.path.normpath(os.path.join(path, text[len("gitdir:"):].strip()))
 
 
+def gitmodules_lines(top: Path) -> Optional[List[str]]:
+    """The lines of the ``.gitmodules`` at ``top`` — ``None`` when there is none, or it is not a file: read without
+    blocking, a named pipe there is never waited on (#358)."""
+    try:
+        return cascade.read_file(str(top / ".gitmodules")).decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+
+
+def gitmodules_not_a_file(top: Path) -> bool:
+    """Whether the ``.gitmodules`` at ``top`` is there as no file — a named pipe, a socket, a directory, or a link to
+    one — which git, asked to read it, waits on or refuses (#358)."""
+    path = top / ".gitmodules"
+    return os.path.exists(path) and not os.path.isfile(path)
+
+
+def gitmodules_note(root: Path) -> Optional[str]:
+    """What a sync and a validate say of a ``.gitmodules`` that is not a file: read as naming no submodule."""
+    if not gitmodules_not_a_file(root):
+        return None
+    return (".gitmodules is not a file, which git cannot read, and Cortex reads it as naming no submodule: make it a "
+            "file, or remove it")
+
+
 def is_submodule(path: Path, relative: Optional[str] = None) -> bool:
     """``.gitmodules`` has a ``path = cortex``: a submodule, whether its repository is under the
     superproject's ``.git/modules/`` or, as older git made them, in the ``.git`` it holds. ``relative``,
@@ -157,11 +187,8 @@ def is_submodule(path: Path, relative: Optional[str] = None) -> bool:
     # ends with its text.
     top = path.parent if relative is None else path.parents[len(relative.split("/")) - 1]
     name = path.name if relative is None else relative
-    try:
-        lines = (top / ".gitmodules").read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return False
-    for line in lines:
+    lines = gitmodules_lines(top)
+    for line in lines or ():
         key, _, value = line.partition("=")
         if key.strip() == "path" and value.strip().strip('"').rstrip("/") == name:
             return True
@@ -174,9 +201,8 @@ OLD_THEME_MARKER = "agents/personalities/.active-*"     # the theme the scripts 
 def only_submodule(path: Path) -> bool:
     """``.gitmodules`` holds this submodule and no other: once it is removed, the file is left
     empty, and still tracked."""
-    try:
-        lines = (path.parent / ".gitmodules").read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
+    lines = gitmodules_lines(path.parent)
+    if lines is None:
         return False
     paths = {value.strip().strip('"').rstrip("/") for key, _, value in (line.partition("=") for line in lines)
              if key.strip() == "path"}
@@ -279,6 +305,8 @@ def submodule_name(path: Path) -> str:
     """The name of the submodule at ``cortex/`` — its section in ``.gitmodules``, at the top of the
     repository, read by git — or, without one, the name ``git submodule add`` gives: its path there."""
     where = _top_and_prefix(str(path.parent))
+    if where is not None and gitmodules_not_a_file(Path(where[0])):
+        return where[1] + path.name                 # never asked of git, which would wait on a named pipe (#358)
     if where is not None:
         top, prefix = where
         proc = _git(top, "config", "-f", ".gitmodules", "-z", "--get-regexp", r"^submodule\..*\.path$")
@@ -289,9 +317,8 @@ def submodule_name(path: Path) -> str:
         return names[-1] if names else prefix + path.name          # two sections with that path: git takes the last
     # Without git: the project's .gitmodules, read as git reads it — a header in any case, a comment
     # after it, and no section left open by a header of another kind.
-    try:
-        lines = (path.parent / ".gitmodules").read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
+    lines = gitmodules_lines(path.parent)
+    if lines is None:
         return path.name
     name, found = None, path.name
     for line in lines:
@@ -312,6 +339,8 @@ def _named_in_gitmodules(path: Path) -> bool:
     if where is None:
         return False
     top, prefix = where
+    if gitmodules_not_a_file(Path(top)):
+        return False
     proc = _git(top, "config", "-f", ".gitmodules", "--get", f"submodule.{submodule_name(path)}.path")
     return proc is not None and proc.returncode == 0 and proc.stdout.strip().rstrip("/") != prefix + path.name
 
@@ -814,8 +843,7 @@ def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err:
     ``cortex upgrade``'s — not said again."""
     root = config.find_project(cwd)
     if root is None:
-        raise SyncError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
-                        "a Cortex project")
+        raise SyncError(config.no_project(cwd))
     with project_lock(Path(root), err):
         _sync(root, mode, source, out, err, claude_access, notes, locked, announce, said)
         if bootstraps is not None and source is None and not locked:
@@ -1009,11 +1037,20 @@ def renamed_folder_notes(project: config.Project) -> List[Tuple[str, str]]:
     if project.team_folder == config.TEAM_FOLDER:
         return []
     said = []
-    if os.path.islink(project.team_dir) and not os.path.exists(project.team_dir):
+    if os.path.islink(project.team_dir) and not os.path.isdir(project.team_dir):
+        # A link that leads nowhere, or to what is no folder: no checkout makes it lead to one (#350) — named as
+        # config._missing_team_folder names the default agents/ (#358).
         target = json.dumps(display(os.readlink(project.team_dir)))
+        what = "which leads nowhere" if not os.path.exists(project.team_dir) else \
+            "a file" if os.path.isfile(project.team_dir) else "which is no folder"
         said.append(("TEAM_FOLDER_MISSING",
-                     f"{project.team_folder}/ is a link to {target}, which leads nowhere: make it lead to the team's "
-                     "folder, or remove it and check that folder out in its place"))
+                     f"{project.team_folder}/ is a link to {target}, {what}: make it lead to the team's folder, or "
+                     "remove it and check that folder out in its place"))
+    elif os.path.lexists(project.team_dir) and not os.path.isdir(project.team_dir):
+        # A file, a named pipe, a socket where the team's folder is: no checkout writes over it (#358).
+        what = "a file, not the team's folder" if os.path.isfile(project.team_dir) else "no folder"
+        said.append(("TEAM_FOLDER_MISSING",
+                     f"{project.team_folder} is {what}: remove it and check the team's folder out in its place"))
     elif not os.path.isdir(project.team_dir):
         said.append(("TEAM_FOLDER_MISSING",
                      f"{project.team_folder}/ is not there — the team's folder {config.PROJECT_FILE} names: its "
@@ -1070,6 +1107,10 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         if old is not None:
             raise SyncError(old)
     project = config.load(root, lenient=True)          # a synced it cannot read is its own to write again
+    local = config.local_not_a_file(root)
+    if local is not None:
+        # Read as none, as `cortex config` reads it: the sync writes the file, which would fail half-way (#358).
+        raise SyncError(f"{local}. Nothing of the project was changed")
     against_locks(project, {"sync": mode, "claude_access": claude_access})
     if announce:
         out.write(f"Project: {display(root)}\n")
@@ -1078,6 +1119,9 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
             continue                        # said by `cortex upgrade`, before this sync
         # A locked key set otherwise is a warning (ADR-013 §3.5): its value is not read.
         err.write(f"{'warning' if ' is locked by ' in note else 'note'}: {note}\n")
+    said_gitmodules = gitmodules_note(Path(root))
+    if said_gitmodules is not None:
+        err.write(f"note: {said_gitmodules}\n")
     if claude_access is not None:
         # This developer's choice, written with spec and kept for the next syncs: cortex.local.toml's
         # wins over the team's — unless the team's file locks it.
@@ -1252,9 +1296,10 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
     endings. Without a repository to ask, a line is added unless it, or one that means the same,
     is there with no negation below it — and no .gitignore is created: it would keep nothing out of any commit. A
     .gitignore that is a symbolic link is never written through — git does not read it, and its target may be outside
-    the project, or none yet: the note names the link (``_notes``)."""
+    the project, or none yet: the note names the link (``_notes``) — nor is one that is no file: a named pipe, a
+    directory."""
     path = root / ".gitignore"
-    if is_link(path) or not_a_file(path):        # never written through, nor waited on: the note names it
+    if is_link(path) or no_gitignore_file(path):  # never written through, nor waited on: the note names it
         return []
     if not path.is_file() and ignored(root, config.LOCAL_FILE) is None:
         return []
@@ -1262,14 +1307,18 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
     lines = gitignore_lines(data.decode("utf-8", errors="replace"))
     missing = []
     for line, probe in entries.items():
+        glob = _stands_in(line)
         state = ignored(root, probe)
         if state is None:                       # no repository to ask
             name = probe.rstrip("/")
             state = _named(lines, {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if probe.endswith("/") else set()),
                            name)
-        # A line that is a pattern is asked of a name standing in for the paths it matches: a negation below it that
-        # is a pattern too, or names one of them, may take back another — `!/.cortex-sync-[0-9]*` the real ones.
-        if not state and not _named(lines, {line}, probe, _stands_in(line)):  # there, with no negation below: kept
+        # A line that is a pattern is asked of a name standing in for the paths it matches: a negation that is a
+        # pattern too, or names one of them, may take back another — `!/.cortex-sync-[0-9]*` the real ones, which
+        # git's answer for the name does not tell. The line, then, counts only there with no such negation below it.
+        elif state and glob is not None and _negations(lines, probe, glob):
+            state = False
+        if not state and not _named(lines, {line}, probe, glob):  # there, with no negation below: kept
             missing.append(line)
     if missing:
         newline = b"\r\n" if b"\r\n" in data else b"\n"
@@ -1427,15 +1476,38 @@ def _named(lines: List[str], wanted: Set[str], name: str, glob: Optional[Pattern
     return bool(found) and not _negations(lines[found[-1] + 1:], name, glob)
 
 
+# How long git is given to say what it ignores, and the repositories where it did not say it in time: it waits on an
+# ignore file Cortex does not check — a named pipe as the .gitignore of a folder above the project, as info/exclude
+# or core.excludesFile. Asked again, it would wait again: one wait per repository and command, then .gitignore's own
+# lines, as without git.
+GIT_TIMEOUT = 30
+_TIMED_OUT: Set[str] = set()
+
+
+def _repository_of(root: Path) -> str:
+    """The folder that holds the ``.git`` at ``root`` or above it, as written — ``root`` when there is none."""
+    for folder in (root, *root.parents):
+        if os.path.lexists(folder / ".git"):
+            return str(folder)
+    return str(root)
+
+
 def git_ignores(root: Path, name: str) -> Optional[bool]:
     """git's own answer, whether it ignores ``name`` in the project: ``None`` when there is no git to ask, or it
-    refuses the repository — its owner, say — or there is none, or it would wait on a .gitignore that is no file."""
+    refuses the repository — its owner, say — or there is none, or it would wait on a .gitignore that is no file, or
+    it did not answer in time, in this repository, once already."""
     git = shutil.which("git")
     if git is None or not_a_file(root / ".gitignore"):     # a named pipe there: git would wait on it
         return None
+    repository = _repository_of(Path(os.path.abspath(root)))
+    if repository in _TIMED_OUT:
+        return None
     try:
         proc = subprocess.run([git, "-C", str(root), "check-ignore", "-q", "--", name],
-                              capture_output=True, timeout=30, env=git_environment())
+                              capture_output=True, timeout=GIT_TIMEOUT, env=git_environment())
+    except subprocess.TimeoutExpired:
+        _TIMED_OUT.add(repository)
+        return None
     except (OSError, subprocess.SubprocessError):
         return None
     return proc.returncode == 0 if proc.returncode in (0, 1) else None
@@ -1444,7 +1516,8 @@ def git_ignores(root: Path, name: str) -> Optional[bool]:
 def ignored(root: Path, name: str) -> Optional[bool]:
     """Whether git ignores ``name`` in the project: asked of git when the project is a repository
     of it; ``None`` when there is no repository to ask about — no ``.git`` at the root or above it.
-    Without git's answer, ``True`` only for what Cortex can tell from the project's own .gitignore."""
+    Without git's answer, ``True`` only for what Cortex can tell from the project's own .gitignore, and those of
+    the folders between it and the path."""
     answer = git_ignores(root, name)
     if answer is not None:
         return answer
@@ -1452,17 +1525,33 @@ def ignored(root: Path, name: str) -> Optional[bool]:
         return None
     # No git to ask, or git refusing the repository: the project's own .gitignore, at the root of the repository or
     # in a subdirectory of it, read for a line that names the path as Cortex writes it — no pattern, no negation
-    # below it, no .gitignore of a folder above, which git would read too. A link is a file to git — `cortex/` does
+    # below it, no .gitignore of a folder above, which git would read too —, then the .gitignore of each folder
+    # between it and the path, whose lines outrank the root's, as git reads them: `!settings.local.json` in
+    # .claude/.gitignore takes back the root's `.claude/settings.local.json`. A link is a file to git — `cortex/` does
     # not match it. A .gitignore that is a link git does not read, nor does Cortex.
-    if is_link(root / ".gitignore"):
+    # A path out of the project, `../../out/f.txt` — a file a link leads out to —, is none of its .gitignore files' to
+    # tell: never read up there, where they are no longer the project's.
+    parts = name.split("/")
+    if ".." in parts:
         return False
     directory = (root / name).is_dir() and not is_link(root / name)
-    wanted = {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if directory else set())
-    try:
-        lines = gitignore_lines(cascade.read_file(str(root / ".gitignore")).decode("utf-8", errors="replace"))
-    except OSError:
-        return False
-    return _named(lines, wanted, name)
+    said = False
+    for depth in range(len(parts)):
+        gitignore = root.joinpath(*parts[:depth], ".gitignore")
+        if is_link(gitignore):                  # git does not read it
+            continue
+        try:
+            lines = gitignore_lines(cascade.read_file(str(gitignore)).decode("utf-8", errors="replace"))
+        except OSError:                         # none there, or no file: nothing to read
+            continue
+        rest = "/".join(parts[depth:])
+        # A name with no `/` but at its end matches at any depth below its .gitignore: `foo` there, `x/foo` too.
+        wanted = {rest, f"/{rest}", parts[-1]} | ({f"{rest}/", f"/{rest}/", f"{parts[-1]}/"} if directory else set())
+        if _named(lines, wanted, rest):
+            said = True
+        elif _negations(lines, rest):
+            said = False
+    return said
 
 
 def _not_ignored(root: Path, name: str, shown: str) -> Optional[str]:
@@ -1492,11 +1581,13 @@ def _notes(root: Path, mode: str, err: TextIO) -> None:
     # A .gitignore that is a symbolic link, which git does not read: no line added to it would count (#329).
     linked = ".gitignore is a symbolic link, which git does not read: make it a file, with " \
         if is_link(root / ".gitignore") else ".gitignore is not a file, which git cannot read: make it a file, with " \
-        if not_a_file(root / ".gitignore") else None
+        if no_gitignore_file(root / ".gitignore") else None
     said = _not_ignored(root, LINK, f"{LINK}/") if mode != "store" else None
     if said is not None:
         line = f"a `/{LINK}` line" + ("" if linked else " to .gitignore")
-        err.write(f"note: {said} — {linked or 'add '}{line}, without the final slash: a link is a file to git\n")
+        # The final slash is a link's matter: a copy is a directory, which a `/cortex/` line ignores too.
+        slash = "" if mode == "copy" else ", without the final slash: a link is a file to git"
+        err.write(f"note: {said} — {linked or 'add '}{line}{slash}\n")
     said = _not_ignored(root, config.LOCAL_FILE, f"{config.LOCAL_FILE}, which holds this machine's paths")
     if said is not None:
         err.write(f"note: {said} — {linked + 'a line for it' if linked else 'add it to .gitignore'}\n")

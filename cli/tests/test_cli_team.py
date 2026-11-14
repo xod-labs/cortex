@@ -2264,6 +2264,28 @@ class CodeReviewSecondFixTests(TeamTestCase):
         self.assertEqual(self.local(root)["version"], OWN)                          # the try kept
 
     @SOURCE
+    def test_validate_names_the_locked_sync_that_writes_a_try_s_incomplete_team_spec_again(self):
+        # #384: the team's version, synced with --locked beside a try, missing a tree and read-only, as the store
+        # holds it: the remedy validate gives, alone, puts it in the store again — the try kept.
+        root, _ = self.stale()
+        self.assert_ok(self.cortex(root, "upgrade", "9.9.8"))
+        self.assert_ok(self.cortex(root, "sync", "--locked"))
+        stored = self.home / "versions" / "9.9.8"
+        store.make_writable(stored)
+        shutil.rmtree(stored / "docs")
+        store.make_read_only(stored)
+        proc = self.cortex(root, "validate")
+        self.assertIn("LOCK_DIGEST", proc.out)
+        self.assertIn("holds no docs/ — no whole spec to take the digest of — run `cortex sync --locked`, which puts "
+                      "it in the store again", proc.out)
+        self.assertNotIn("remove", proc.out)
+        self.assert_ok(self.cortex(root, "sync", "--locked"))                       # the command it names
+        proc = self.cortex(root, "validate", "--strict")
+        self.assert_ok(proc)
+        self.assertNotIn("LOCK_", proc.out)
+        self.assertEqual(self.local(root)["version"], OWN)                          # the try kept
+
+    @SOURCE
     def test_validate_names_the_plain_sync_that_puts_the_team_s_spec_back_outside_a_try(self):
         # #346, #375: no try — the plain sync reads the team's version, and is the remedy, never --locked.
         root, _ = self.stale(local=None)
@@ -3720,6 +3742,33 @@ class FourthCodeReviewTests(TeamTestCase):
                     self.assertIn(".gitignore is not a file, which git cannot read: make it a file, with ", proc.err)
                     self.assertNotIn("Traceback", proc.err)
                 self.assertTrue(stat.S_ISFIFO(os.lstat(root / ".gitignore").st_mode))
+
+    @harness.outside_a_repository
+    def test_a_directory_at_gitignore_is_said_not_a_file_and_never_written(self):
+        # A directory as .gitignore: `cortex init` wrote cortex.toml, cortex.local.toml and cortex.lock, then failed
+        # writing a line to it — `Is a directory` —, and `cortex sync` said to add a line to it. As a named pipe there:
+        # nothing is written to it, and a note says to make it a file — in a repository git refuses and one git takes.
+        kinds = ("refused",) + (("git",) if GIT is not None and os.name != "nt" else ())
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.tmp / f"dir-{kind}"
+                root.mkdir()
+                if kind == "git":
+                    self.git(root, "init", "-q")
+                else:
+                    (root / ".git").mkdir()
+                (root / ".gitignore").mkdir()
+                env = {"PATH": os.path.dirname(GIT), **GIT_ENV} if kind == "git" else {}
+                for args in (("init", "--tool", "claude", "--link"), ("sync",), ("sync", "--claude-access")):
+                    proc = self.cortex_within(root, *args, **env)
+                    self.assert_ok(proc)
+                    self.assertNotIn("Traceback", proc.err)
+                    self.assertNotIn(".gitignore:", proc.out)
+                    self.assertIn("— .gitignore is not a file, which git cannot read: make it a file, with a line for "
+                                  "it\n", proc.err)
+                    self.assertNotIn("add it to .gitignore", proc.err)
+                self.assertTrue((root / "CLAUDE.md").is_file())
+                self.assertEqual(os.listdir(root / ".gitignore"), [])
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipe here")
     @harness.outside_a_repository

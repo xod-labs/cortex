@@ -536,3 +536,10 @@ Carried by [#342](https://github.com/xod-labs/cortex/issues/342), for 1.8.0.
 
 - **§9 — a build of no release** is no longer `0.0.0-dev.N`, nor a source checkout `0.0.0-dev`: each takes the version its branch prepares, `X.Y.Z-dev.N` and `X.Y.Z-dev`, from its `CHANGELOG.md` ([ADR-009](ADR-009-release-cycle.md) §9). Only the release workflow stamps a released version, as before.
 - **§9 — `CORTEX_SOURCE_VERSION`** still names the version a checkout's tests stand for, now in place of the one its changelog prepares.
+
+### 2026-11-14 — 1.8.5, the store and git's ignore files
+
+Carried by [#384](https://github.com/xod-labs/cortex/issues/384) and [#358](https://github.com/xod-labs/cortex/issues/358).
+
+- **§3.3 — a version that holds less than its three trees is written again.** The amendment "A version in the store is complete when its three trees are" said that a directory holding less is refused and named, not taken for a version. Since 1.8.5, a real folder of the store that holds less is removed, the way `cortex prune` removes a version (writable first), and written or downloaded again by the command that needs it: `cortex sync`, `cortex init` or `cortex upgrade`. The removal it named could not be done by a user who is not root, since the store is read-only, nor on Windows. A link or a file at that name is still refused and named, and is never followed or removed. A link a user made that leads to a complete spec is still accepted. §3.3's "read-only once written" holds.
+- **§9 — whether git ignores a file is asked of git, once per repository and command.** The amendment says this is asked of git (`git check-ignore`), which reads every rule. Since 1.8.5, once git leaves a question unanswered for 30 s — an ignore file above the project that is a named pipe — it is not asked again in that repository during the command. The project's own `.gitignore`, and those of the folders down to the file, answer instead, as they do without git. `cortex upgrade` asks the same way.

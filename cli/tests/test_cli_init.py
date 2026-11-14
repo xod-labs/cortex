@@ -378,6 +378,33 @@ class OptionTests(InitTestCase):
                 self.assertEqual(proc.returncode, 0, proc.err)
                 self.assertEqual((self.project / ".gitignore").read_bytes(), written + b"/.cortex-sync-*\n")
 
+    @unittest.skipUnless(HAS_GIT, "needs git")
+    def test_with_git_a_negation_of_what_a_killed_sync_leaves_has_its_line_written_again(self):
+        # git, asked of the name that stands in for `/.cortex-sync-*`, says it is ignored: the negation below takes
+        # back the real names — `.cortex-sync-<pid>-<hex>` —, not that one. The line is written again below it, as
+        # without git; it is not where git ignores those paths by a file of its own, info/exclude here.
+        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        self.env = dict(self.env, PATH=os.pathsep.join([os.path.dirname(shutil.which("git")), self.env["PATH"]]))
+        staging = ".cortex-sync-4242-ab12cd34"
+        for below, again in ((b"!/.cortex-sync-[0-9]*\n", True), (b"!.cortex-sync-1234-abcd\n", True),
+                             (b"!.gitkeep\n", False)):
+            with self.subTest(below=below):
+                written = b"cortex.local.toml\n/cortex\n/.cortex-sync-*\n" + below
+                (self.project / ".gitignore").write_bytes(written)
+                proc = self.init("--link", "--force")
+                self.assertEqual(proc.returncode, 0, proc.err)
+                self.assertEqual((self.project / ".gitignore").read_bytes(),
+                                 written + (b"/.cortex-sync-*\n" if again else b""))
+                self.assertEqual("✓ .gitignore: /.cortex-sync-*\n" in proc.out, again, proc.out)
+                self.assertEqual(subprocess.run(["git", "-C", str(self.project), "check-ignore", "-q", staging])
+                                 .returncode, 0)
+        (self.project / ".git" / "info" / "exclude").write_bytes(b"/.cortex-sync-*\n")
+        written = b"cortex.local.toml\n/cortex\n"
+        (self.project / ".gitignore").write_bytes(written)
+        proc = self.init("--link", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertEqual((self.project / ".gitignore").read_bytes(), written)
+
     def test_a_root_inside_a_repository_is_not_said_to_be_in_none(self):
         # The repository is a .git at the root or above it, git or not on the PATH — as cortex upgrade tells it.
         # Without git to ask, .gitignore's own lines say what is ignored, in a subdirectory too: it is written.
@@ -1040,7 +1067,7 @@ class OptionTests(InitTestCase):
             (self.project / ".cursor").symlink_to(self.project / "gone")
             proc = self.init("--tool", "cursor")
             self.assertEqual(proc.returncode, 1)
-            self.assertIn("is a file, not a folder", proc.err)
+            self.assertIn("is a link that leads nowhere, not a folder", proc.err)
             self.assertEqual(sorted(p.name for p in self.project.iterdir()), [".cursor", "api"])
 
     def test_force_never_overwrites_a_backup(self):

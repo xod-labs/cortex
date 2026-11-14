@@ -111,9 +111,8 @@ def lock_warnings(project: config.Project, base: str, files: Optional[Dict[str, 
     try:
         actual = store.digest_of(files) if files is not None else store.digest(Path(base))
     except store.StoreError as error:      # a version removed from the store meanwhile, or left incomplete
-        # The store refuses to sync a version it holds incomplete: it is removed first, as its refusal says (#369).
-        stored = shown(display(os.path.realpath(base)))
-        return [(shown_name, "LOCK_DIGEST", f"{error} — remove {stored}, then run {resync}")]
+        # The sync puts either in the store again (#384): a removal by hand fails on a read-only store.
+        return [(shown_name, "LOCK_DIGEST", f"{error} — run {resync}, which puts it in the store again")]
     if actual != lock.digest:
         return [(shown_name, "LOCK_DIGEST", f"the spec synced is {actual}, and {shown_name} names {lock.digest} — "
                  f"run {resync}, which puts it in the store again")]
@@ -166,6 +165,10 @@ def roots_and_folder(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]], Op
             project = config.load(root)
         except config.ConfigError as error:
             raise RootsError(str(error))
+        local = config.local_not_a_file(root)
+        if local is not None:
+            # Read as none, it names no spec — but `cortex sync` refuses it: its own remedy is named (#358).
+            raise RootsError(local)
         base = project.spec_directory()
         if base is None:
             raise RootsError(f"{config.LOCAL_FILE} names no spec yet — run `cortex sync`")
@@ -193,6 +196,9 @@ def roots_and_folder(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]], Op
         for note in sync.version_notes(project):
             if "is locked by" not in note and "is not read" not in note:
                 sys.stderr.write(f"note: {note}\n")
+        said = sync.gitmodules_note(Path(root))
+        if said is not None:
+            sys.stderr.write(f"note: {said}\n")
         warnings = [(project.team_name, "LOCKED_KEY" if "is locked by" in note else "TEAM_NOT_READ", note)
                     for note in (project.settings.notes if project.settings is not None else ())]
         folder = sync._team_folder_note(project)
@@ -218,8 +224,7 @@ def roots_and_folder(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]], Op
         return cwd, cwd, [], None
     hint = (" — a cortex/ submodule or clone is here: `cortex init` says how to leave it"
             if os.path.isdir(os.path.join(cwd, "cortex")) else "")
-    raise RootsError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory a "
-                     f"Cortex project{hint}")
+    raise RootsError(config.no_project(cwd, hint))
 
 
 def run(args: List[str]) -> int:
