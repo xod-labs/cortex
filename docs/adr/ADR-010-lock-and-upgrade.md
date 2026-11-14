@@ -417,7 +417,7 @@ Carried by [#334](https://github.com/xod-labs/cortex/issues/334) to [#336](https
 - **§3.6 — `cortex prune`** keeps every candidate version of a project — `cortex.toml`'s, the team's file's, a try — and the version of the spec read now.
 - **§3.8 — the rules.** The assistant syncs once when a file's `version`, or the spec's, differs from what `synced` records — plain equality, no order of versions, no git — and never moves a pin of its own accord: the team's file's and a local `version` as `cortex.toml`'s.
 
-### 2026-11-13 — 1.8.5, a folder's own `.gitignore`, and a lock that is not a file
+### 2026-11-14 — 1.8.5, a folder's own `.gitignore`, and a lock that is not a file
 
 Carried by [#355](https://github.com/xod-labs/cortex/issues/355) and [#358](https://github.com/xod-labs/cortex/issues/358).
 

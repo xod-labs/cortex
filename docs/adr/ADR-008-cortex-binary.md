@@ -537,7 +537,7 @@ Carried by [#342](https://github.com/xod-labs/cortex/issues/342), for 1.8.0.
 - **§9 — a build of no release** is no longer `0.0.0-dev.N`, nor a source checkout `0.0.0-dev`: each takes the version its branch prepares, `X.Y.Z-dev.N` and `X.Y.Z-dev`, from its `CHANGELOG.md` ([ADR-009](ADR-009-release-cycle.md) §9). Only the release workflow stamps a released version, as before.
 - **§9 — `CORTEX_SOURCE_VERSION`** still names the version a checkout's tests stand for, now in place of the one its changelog prepares.
 
-### 2026-11-13 — 1.8.5, the store and git's ignore files
+### 2026-11-14 — 1.8.5, the store and git's ignore files
 
 Carried by [#384](https://github.com/xod-labs/cortex/issues/384) and [#358](https://github.com/xod-labs/cortex/issues/358).
 
