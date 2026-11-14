@@ -34,7 +34,7 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Dict, Iterator, Optional, Union
+from typing import Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 from cortex_core.project import DEFAULT_RELEASES_URL  # noqa: F401 — part of this module's API
 from cortex_core.project import FIRST_TEAM_VERSION, LOCAL_FILE, PROJECT_FILE, TEAM_FILE
@@ -250,13 +250,14 @@ def source_checkout() -> Optional[Path]:
 # --------------------------------------------------------------------------- #
 
 def make_read_only(root: Path) -> None:
-    """Remove every write permission under ``root``, ``root`` included.
+    """Remove every write permission under ``root``, ``root`` included — never through a link, nor
+    on one: a link found there is a user's, and so is what it leads to.
 
     POSIX: files ``0444``, directories ``0555`` — nothing is modified, created or removed. On
     Windows the read-only attribute protects files, not directories: a file of the spec cannot
     be modified or deleted, but a new one can be created beside it (ADR-008 §9).
     """
-    for directory, subdirs, files in os.walk(root, topdown=False):
+    for directory, _, files, _ in reversed(list(_walk(root))):     # from the deepest files up
         for name in files:
             os.chmod(os.path.join(directory, name), stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
         if os.name != "nt":
@@ -265,7 +266,17 @@ def make_read_only(root: Path) -> None:
 
 def _a_file_writable(root: Path) -> bool:
     return any(os.stat(os.path.join(directory, name)).st_mode & stat.S_IWUSR
-               for directory, _, files in os.walk(root) for name in files)
+               for directory, _, files, _ in _walk(root) for name in files)
+
+
+def _walk(root: Path) -> Iterator[Tuple[str, List[str], List[str], List[str]]]:
+    """``os.walk`` from the top down, which never enters a link: on Windows it enters a junction,
+    which ``os.path.islink`` does not see. Each folder comes with its folders, its files and its
+    links — a link is in none of the first two, nor is it walked into."""
+    for directory, subdirs, files in os.walk(root):
+        links = [name for name in subdirs + files if is_link(os.path.join(directory, name))]
+        subdirs[:] = [name for name in subdirs if name not in links]
+        yield directory, subdirs, [name for name in files if name not in links], links
 
 
 def is_link(path: Union[Path, str]) -> bool:
@@ -282,21 +293,36 @@ def is_link(path: Union[Path, str]) -> bool:
 
 def make_writable(root: Path) -> None:
     """Give back the write permission under ``root``, ``root`` included — never through a link: a
-    link found there is a user's, and what it leads to is none of the store's."""
+    link found there is a user's, and what it leads to is none of the store's. A link's own
+    read-only attribute is cleared, on Windows, so that it can be removed."""
     if os.name != "nt":
         os.chmod(root, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
-    for directory, subdirs, files in os.walk(root):
+    for directory, subdirs, files, links in _walk(root):
         for name in subdirs:
-            if os.name != "nt" and not is_link(os.path.join(directory, name)):
+            if os.name != "nt":
                 os.chmod(os.path.join(directory, name), stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
         for name in files:
-            if not is_link(os.path.join(directory, name)):
-                os.chmod(os.path.join(directory, name), stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+            os.chmod(os.path.join(directory, name), stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        for name in links:
+            _link_writable(os.path.join(directory, name))
+
+
+def _link_writable(path: Union[Path, str]) -> None:
+    """Clear the read-only attribute of a link on Windows — its own, never its target's: Windows
+    refuses to remove a read-only link (``DeleteFileW``), as it does a read-only file. A link has
+    no attribute of its own on POSIX that its removal reads."""
+    if os.name != "nt" or not os.lstat(path).st_file_attributes & stat.FILE_ATTRIBUTE_READONLY:
+        return
+    if os.chmod in os.supports_follow_symlinks:    # Python 3.13 on: chmod follows a link unless told not to
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE, follow_symlinks=False)
+    else:                                           # Python 3.12: SetFileAttributesW, on the link itself
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
 
 
 def remove_tree(root: Path) -> None:
     """Remove a tree the store, or sync, made read-only — a link in its place is removed, not followed."""
     if is_link(root):
+        _link_writable(root)
         os.unlink(root) if os.path.islink(root) else os.rmdir(root)
         return
     make_writable(root)

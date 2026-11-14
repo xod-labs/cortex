@@ -9,6 +9,7 @@ import hashlib
 import io
 import os
 import shutil
+import stat
 import sys
 import tarfile
 import tempfile
@@ -27,6 +28,14 @@ REPO = Path(__file__).resolve().parents[2]
 
 def display(path):
     return str(path).replace(os.sep, "/")
+
+
+def link_read_only(path):
+    """Set the read-only attribute of a link itself, on Windows — never its target's."""
+    if os.chmod in os.supports_follow_symlinks:     # Python 3.13 on
+        os.chmod(path, 0o444, follow_symlinks=False)
+    else:                                           # Python 3.12: SetFileAttributesW, on the link itself
+        os.chmod(path, 0o444)
 
 
 AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
@@ -243,12 +252,54 @@ class EmbeddedTests(StoreTestCase):
         except OSError as error:
             self.skipTest(f"no symbolic link: {error}")
         store.make_read_only(path / "agents")
-        os.chmod(mine, 0o444)                   # make_read_only followed it: as the user left it
+        if os.name == "nt":
+            # The store before 1.8.5 left the read-only attribute on a link itself, which refuses its removal.
+            for name in ("mine.md", "tmp"):
+                link_read_only(path / "agents" / name)
+                self.assertTrue(os.lstat(path / "agents" / name).st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
         mode = os.stat(self.tmp).st_mode
         self.assertEqual(the_store.ensure(version), "written")
         self.assertEqual(mine.read_text(encoding="utf-8"), "mine\n")
         self.assertFalse(os.stat(mine).st_mode & 0o222)
         self.assertEqual(os.stat(self.tmp).st_mode, mode)
+
+    def test_a_link_inside_a_version_is_not_made_read_only(self):
+        # What a link leads to is the user's: the store's chmod neither follows it nor marks it.
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        version = Version("2.0.0")
+        path = self.incomplete(the_store, version)
+        mine = self.tmp / "mine.md"
+        mine.write_text("mine\n", encoding="utf-8")
+        store.make_writable(path / "agents")
+        try:
+            os.symlink(mine, path / "agents" / "mine.md")
+        except OSError as error:
+            self.skipTest(f"no symbolic link: {error}")
+        store.make_read_only(path)
+        self.assertTrue(os.stat(mine).st_mode & 0o200)
+        if os.name == "nt":
+            self.assertFalse(os.lstat(path / "agents" / "mine.md").st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
+        self.assertEqual(the_store.ensure(version), "written")
+        self.assertEqual(mine.read_text(encoding="utf-8"), "mine\n")
+
+    @unittest.skipUnless(os.name == "nt", "a junction is Windows'")
+    def test_a_junction_inside_a_version_written_again_is_not_followed(self):
+        # os.walk enters a junction — os.path.islink does not see one: its read-only files stay so, and stay.
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        version = Version("2.0.0")
+        path = self.incomplete(the_store, version)
+        mine = self.tmp / "mine"
+        mine.mkdir()
+        (mine / "notes.md").write_text("mine\n", encoding="utf-8")
+        os.chmod(mine / "notes.md", 0o444)
+        import _winapi
+        _winapi.CreateJunction(str(mine), str(path / "agents" / "theirs"))
+        self.assertTrue(store.is_link(path / "agents" / "theirs"))
+        store.make_read_only(path)
+        self.assertEqual(the_store.ensure(version), "written")
+        self.assertFalse(os.path.lexists(path / "agents" / "theirs"))
+        self.assertEqual((mine / "notes.md").read_text(encoding="utf-8"), "mine\n")
+        self.assertFalse(os.stat(mine / "notes.md").st_mode & 0o222)
 
     def test_a_link_put_in_its_place_meanwhile_is_removed_not_followed(self):
         # Between the look and the rename, a link took the folder's place: the link goes, what it leads to stays.
