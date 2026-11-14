@@ -297,7 +297,7 @@ def make_writable(root: Path) -> None:
     read-only attribute is cleared, on Windows, so that it can be removed."""
     if os.name != "nt":
         os.chmod(root, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
-    for directory, subdirs, files, links in _walk(root):
+    for directory, subdirs, files, links in ((d, s, f, []) for d, s, f in os.walk(root)):
         for name in subdirs:
             if os.name != "nt":
                 os.chmod(os.path.join(directory, name), stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
