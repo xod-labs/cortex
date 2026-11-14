@@ -417,8 +417,9 @@ Carried by [#334](https://github.com/xod-labs/cortex/issues/334) to [#336](https
 - **§3.6 — `cortex prune`** keeps every candidate version of a project — `cortex.toml`'s, the team's file's, a try — and the version of the spec read now.
 - **§3.8 — the rules.** The assistant syncs once when a file's `version`, or the spec's, differs from what `synced` records — plain equality, no order of versions, no git — and never moves a pin of its own accord: the team's file's and a local `version` as `cortex.toml`'s.
 
-### 2026-11-13 — 1.8.5, a folder's own `.gitignore`
+### 2026-11-13 — 1.8.5, a folder's own `.gitignore`, and a lock that is not a file
 
 Carried by [#355](https://github.com/xod-labs/cortex/issues/355) and [#358](https://github.com/xod-labs/cortex/issues/358).
 
 - **§9, where Cortex reads `.gitignore` itself.** A project at its root, or in a subdirectory, reads its own `.gitignore` for a line that names the path as git reads it. Since 1.8.5 it then reads the `.gitignore` of each folder between the root and the path, whose lines outrank the root's, as git ranks them; one that is a symbolic link is skipped, as git skips it. A `.gitignore` above the project, `info/exclude` and `core.excludesFile` remain git's to read. A `.gitignore` that is no file — a named pipe, a socket, a device, or since 1.8.5 a directory — is written nothing through, and the note says it is not a file.
+- **A lock that is not a file** ([#358](https://github.com/xod-labs/cortex/issues/358)). `cortex.lock`, or the team's `cortex.team.lock`, that is a named pipe, a socket or a directory was read as no lock: `LOCK_MISSING`, and a plain sync wrote over it. Since 1.8.5 it is said not to be a file. `cortex validate` gives `LOCK_INVALID`, a warning. `cortex sync`, `cortex sync --locked` and the `cortex upgrade` commands that read the lock refuse it, naming its removal — after which `cortex sync` writes it again.
