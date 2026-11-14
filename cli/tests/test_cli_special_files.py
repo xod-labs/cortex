@@ -327,6 +327,45 @@ class LocalFileTests(SpecialFileTestCase):
                 self.assert_ok(self.within(root, "upgrade", "--local", OWN))
                 self.assertIn(f'version = "{OWN}"', (root / "cortex.local.toml").read_text(encoding="utf-8"))
 
+    def make_a_broken_link(self, root, kind):
+        """At ``root``'s ``cortex.local.toml``: a link that leads nowhere, or a link to itself."""
+        local = root / "cortex.local.toml"
+        local.symlink_to(root / "nowhere.toml" if kind == "nowhere" else local)
+
+    @LINKS
+    @harness.outside_a_repository
+    def test_a_cortex_local_toml_link_that_leads_nowhere_or_to_itself_is_replaced_by_the_sync(self):
+        # No file there, read as none: the sync writes the file in its place, never refused as not a file, and never
+        # through the link.
+        for kind in ("nowhere", "loop"):
+            with self.subTest(kind=kind):
+                root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', name=f"broken-{kind}")
+                self.make_a_broken_link(root, kind)
+                proc = self.within(root, "sync")
+                self.assert_ok(proc)
+                self.assertNotIn("not a file", proc.err)
+                self.assertFalse((root / "cortex.local.toml").is_symlink())
+                self.assertTrue((root / "cortex.local.toml").is_file())
+                self.assertFalse((root / "nowhere.toml").exists())
+
+    @LINKS
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_a_cortex_local_toml_link_that_leads_nowhere_or_to_itself_is_replaced_by_upgrade_local(self):
+        # As the sync does: the try is written in its place, never refused as not a file.
+        for kind in ("nowhere", "loop"):
+            with self.subTest(kind=kind):
+                root = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n', name=f"broken-try-{kind}")
+                self.assert_ok(self.within(root, "sync"))
+                (root / "cortex.local.toml").unlink()
+                self.make_a_broken_link(root, kind)
+                proc = self.within(root, "upgrade", "--local", OWN)
+                self.assert_ok(proc)
+                self.assertNotIn("not a file", proc.err)
+                self.assertFalse((root / "cortex.local.toml").is_symlink())
+                self.assertIn(f'version = "{OWN}"', (root / "cortex.local.toml").read_text(encoding="utf-8"))
+                self.assertFalse((root / "nowhere.toml").exists())
+
     @harness.outside_a_repository
     def test_validate_names_the_remedy_of_the_sync_for_a_cortex_local_toml_that_is_not_a_file(self):
         # Read as none, it named no spec, and `run cortex sync` — which refuses it. The sync's own remedy is named,
