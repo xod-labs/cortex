@@ -160,6 +160,35 @@ class ProjectFileTests(SpecialFileTestCase):
                 for args in (("sync",), ("validate",)):
                     self.assert_ok(self.within(root, *args))
 
+    @harness.outside_a_repository
+    def test_a_cortex_toml_that_is_not_a_file_above_the_folder_a_command_runs_in_is_said_not_a_file(self):
+        # Looked for from a folder of the project, as a project is found: the nearest cortex.toml above it, not a
+        # file, is named where it is — and its remedy, followed, lets the commands run from that folder.
+        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.tmp / f"above-{kind}"
+                below = root / "src" / "app"
+                below.mkdir(parents=True)
+                if kind == "directory":
+                    (root / "cortex.toml").mkdir()
+                else:
+                    os.mkfifo(root / "cortex.toml")
+                said = (f"{display(str(root / 'cortex.toml'))} is not a file: remove it, then `cortex init` makes the "
+                        "directory a Cortex project\n")
+                for args in (("sync",), ("validate",), ("upgrade",), ("upgrade", "--local", OWN)):
+                    proc = self.within(below, *args)
+                    self.assertNotEqual(proc.returncode, 0, proc.out + proc.err)
+                    self.assertIn(f"cortex {args[0]}: {said}", proc.err)
+                    self.assertNotIn("no cortex.toml", proc.err)
+                if kind == "directory":
+                    (root / "cortex.toml").rmdir()
+                else:
+                    (root / "cortex.toml").unlink()
+                self.assert_ok(self.within(root, "init", "--tool", "claude"))
+                for args in (("sync",), ("validate",)):
+                    self.assert_ok(self.within(below, *args))
+
 
 class LockTests(SpecialFileTestCase):
     """``cortex.lock``, and the team's lock beside the team's file."""
