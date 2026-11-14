@@ -459,15 +459,16 @@ def _refuse_a_file_on_the_way(path: Path, what: str) -> None:
 
 
 def _no_folder(path: Path) -> str:
-    """What is at ``path``, which is there and is no folder: a file, a named pipe, a socket, a link to one, or a link
-    that leads nowhere — said as it is, never all a file (#358)."""
+    """What is at ``path``, which is there and is no folder: a file, a named pipe, a socket, a device, a link to one, or
+    a link that leads nowhere — said as it is, never all a file (#358)."""
     try:
         mode = os.stat(path).st_mode
     except OSError:
         return "a link that leads nowhere"
     kind = ("a file" if stat.S_ISREG(mode) else "a named pipe" if stat.S_ISFIFO(mode) else
-            "a socket" if stat.S_ISSOCK(mode) else "neither a file nor a folder")
-    return f"a link to {kind}" if os.path.islink(path) and kind != "neither a file nor a folder" else kind
+            "a socket" if stat.S_ISSOCK(mode) else "a device" if stat.S_ISCHR(mode) or stat.S_ISBLK(mode) else
+            "a special file")
+    return f"a link to {kind}" if os.path.islink(path) else kind
 
 
 def _backup_of(path: Path, content: bytes) -> Tuple[Path, bool]:

@@ -7,6 +7,7 @@ said not to be a file, never waited on.
 
 import os
 import socket
+import stat
 import subprocess
 import sys
 import unittest
@@ -37,11 +38,13 @@ class SpecialFileTestCase(TeamTestCase):
         return proc
 
     def make(self, path, kind):
-        """At ``path``: a file, a named pipe or a socket."""
+        """At ``path``: a file, a named pipe, a socket or — as root — a device, as ``/dev/null`` is."""
         if kind == "file":
             path.write_bytes(b"notes\n")
         elif kind == "pipe":
             os.mkfifo(path)
+        elif kind == "device":
+            os.mknod(path, stat.S_IFCHR | 0o666, os.makedev(1, 3))
         else:
             with socket.socket(socket.AF_UNIX) as bound:
                 bound.bind(str(path))
@@ -160,6 +163,45 @@ class FolderToMakeTests(SpecialFileTestCase):
                         (root / name).unlink()
                         self.assert_ok(self.within(root, "init", *args))
                         self.assertTrue((root / name).is_dir())
+
+    def assert_said_as_it_is(self, name, kind, what):
+        """``cortex init``, where it makes the folder ``name``, refused: ``what`` is there, as ``kind``, or a link to
+        it — said once, and a link as a link; removed, init makes the folder."""
+        args = ("--workspace", "--service", "api/x") if name == "api" else ("--tool", "cursor")
+        for link in (False,) + ((True,) if os.name != "nt" else ()):
+            with self.subTest(kind=kind, link=link, name=name):
+                root = self.tmp / f"said-{kind}-{link}-{name}"
+                root.mkdir()
+                if link:
+                    self.make(self.tmp / f"{root.name}-target", kind)
+                    (root / name).symlink_to(self.tmp / f"{root.name}-target")
+                else:
+                    self.make(root / name, kind)
+                said = f"a link to {what}" if link else what
+                where = (f"--service api/x: {display(str(root / 'api'))}" if name == "api" else
+                         f"the instructions file {display(str(root / '.cursor' / 'rules' / 'cortex.mdc'))}: "
+                         f"{display(str(root / '.cursor'))}")
+                proc = self.within(root, "init", *args)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"{where} is {said}, not a folder\n", proc.err)
+                self.assertEqual(proc.err.count("folder"), 1, proc.err)
+                self.assertEqual(sorted(path.name for path in root.iterdir()), [name])
+                (root / name).unlink()
+                self.assert_ok(self.within(root, "init", *args))
+                self.assertTrue((root / name).is_dir())
+
+    @harness.outside_a_repository
+    def test_a_file_where_init_makes_a_folder_is_said_a_file_and_a_link_to_one_a_link(self):
+        for name in ("api", ".cursor"):
+            self.assert_said_as_it_is(name, "file", "a file")
+
+    # Root only, the reverse of the usual rule: only root can make a device.
+    @unittest.skipUnless(hasattr(os, "geteuid") and os.geteuid() == 0, "only root can make a device")
+    @harness.outside_a_repository
+    def test_a_device_where_init_makes_a_folder_is_said_a_device_and_a_link_to_one_a_link(self):
+        # A device was said to be "neither a file nor a folder, not a folder", and a link to one lost the word link.
+        for name in ("api", ".cursor"):
+            self.assert_said_as_it_is(name, "device", "a device")
 
 
 class ProjectFileTests(SpecialFileTestCase):
