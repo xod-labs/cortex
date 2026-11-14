@@ -603,6 +603,160 @@ class GitIgnoreTests(SyncTestCase):
         self.assertTrue(sync._named(["cortex.local.toml", "!*.d.ts"], {"cortex.local.toml"}, "cortex.local.toml",
                                     sync._stands_in("cortex.local.toml")))
 
+    @unittest.skipUnless(hasattr(os, "mkfifo") and shutil.which("git"), "needs git and a named pipe")
+    @harness.outside_a_repository
+    def test_git_waiting_on_an_ignore_file_above_is_asked_once_per_repository(self):
+        # A named pipe git reads as an ignore file above the project — the .gitignore of a folder above it, or
+        # info/exclude —: each check-ignore waited its whole timeout. The first that does not answer in time is the
+        # last asked of that repository, from any of its folders: .gitignore's own lines answer, as without git.
+        # Another repository is asked.
+        for where in (".gitignore", ".git/info/exclude"):
+            with self.subTest(where=where):
+                top = self.tmp / f"top-{where.replace('/', '-')}"
+                top.mkdir()
+                subprocess.run(["git", "init", "-q", str(top)], check=True)
+                (top / where).unlink(missing_ok=True)
+                os.mkfifo(top / where)
+                app = top / "app"
+                app.mkdir()
+                (app / ".gitignore").write_bytes(b"/cortex\n")
+                other = self.repository("*.local.toml\n", f"other-{where.replace('/', '-')}")
+                run = subprocess.run
+                with mock.patch.object(sync, "GIT_TIMEOUT", 0.5), mock.patch.object(sync, "_TIMED_OUT", set()), \
+                        mock.patch.object(sync.subprocess, "run", side_effect=run) as asked:
+                    self.assertFalse(sync.ignored(app, "cortex.local.toml"))
+                    self.assertTrue(sync.ignored(app, "cortex"))
+                    self.assertEqual(sync.add_to_gitignore(app, {"cortex.local.toml": "cortex.local.toml",
+                                                                 "/cortex": "cortex"}), ["cortex.local.toml"])
+                    (top / "lib").mkdir()                   # another folder of the same repository: not asked
+                    self.assertFalse(sync.ignored(top / "lib", "cortex.local.toml"))
+                    self.assertEqual(asked.call_count, 1)
+                    self.assertTrue(sync.ignored(other, "cortex.local.toml"))     # a pattern: git's answer
+                    self.assertEqual(asked.call_count, 2)
+                self.assertEqual((app / ".gitignore").read_bytes(), b"/cortex\ncortex.local.toml\n")
+
+    def test_a_copy_is_not_given_the_link_s_advice_about_the_final_slash(self):
+        # A copy is a directory, which `/cortex/` ignores too: the note names the `/cortex` line, without the link's
+        # reason. A .gitignore that is no file — a directory, a named pipe — or one without the line alike.
+        kinds = ["directory", "file"] + (["pipe"] if hasattr(os, "mkfifo") else [])
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                project = self.project(f"copy-{kind}")
+                (project / ".git").write_text("gitdir: ../nowhere\n", encoding="utf-8")     # git refuses it
+                if kind == "directory":
+                    (project / ".gitignore").mkdir()
+                elif kind == "pipe":
+                    os.mkfifo(project / ".gitignore")
+                else:
+                    (project / ".gitignore").write_bytes(b"cortex.local.toml\n")
+                advice = "add a `/cortex` line to .gitignore" if kind == "file" else \
+                    ".gitignore is not a file, which git cannot read: make it a file, with a `/cortex` line"
+                said = "note: git could not be asked whether it ignores cortex/, and Cortex cannot tell from .gitignore " \
+                    "that it does — "
+                proc = self.sync(project, "--copy")
+                self.assert_ok(proc)
+                self.assertIn(f"{said}{advice}\n", proc.err)
+                self.assertNotIn("final slash", proc.err)
+                proc = self.sync(project, "--link")
+                self.assert_ok(proc)
+                self.assertIn(f"{said}{advice}, without the final slash: a link is a file to git\n", proc.err)
+
+    def nested(self, root_lines, nested_lines, name):
+        """A repository git refuses — a worktree whose repository is gone —, with .gitignore holding ``root_lines``
+        and .claude/.gitignore ``nested_lines``; and one git takes, with the same files, when git is here."""
+        made = []
+        for kind in ("refused", "git") if shutil.which("git") else ("refused",):
+            project = self.project(f"{name}-{kind}")
+            if kind == "git":
+                subprocess.run(["git", "init", "-q", str(project)], check=True)
+            else:
+                (project / ".git").write_text("gitdir: ../nowhere\n", encoding="utf-8")
+            (project / ".gitignore").write_bytes(root_lines)
+            (project / ".claude").mkdir()
+            if nested_lines is not None:
+                (project / ".claude" / ".gitignore").write_bytes(nested_lines)
+            made.append(project)
+        return made
+
+    def test_without_git_a_folder_s_own_gitignore_outranks_the_root_s(self):
+        # git reads .claude/.gitignore after the root's: its negation takes the root's line back, its line ignores
+        # the file the root names not. Read without git as git reads it, the answer is git's.
+        for root_lines, nested_lines, expected in ((b".claude/settings.local.json\n", b"!settings.local.json\n", False),
+                                                   (b"", b"settings.local.json\n", True),
+                                                   (b"", b"/settings.local.json\n", True),
+                                                   (b".claude/settings.local.json\n", b"*.md\n", True)):
+            with self.subTest(root=root_lines, nested=nested_lines):
+                refused, *git = self.nested(root_lines, nested_lines, f"nested-{len(list(self.tmp.iterdir()))}")
+                self.assertEqual(sync.ignored(refused, ".claude/settings.local.json"), expected)
+                for project in git:
+                    self.assertEqual(self.check_ignore(project, ".claude/settings.local.json"), expected)
+
+    @harness.outside_a_repository
+    def test_without_git_a_name_with_no_slash_matches_at_any_depth_below_its_gitignore(self):
+        # git reads `foo` of a folder's .gitignore at any depth below it — `foo/` too, for a directory —, and a
+        # negation below takes it back there. Read only at the folder's own level, `.claude/x/foo` was not ignored.
+        for root_lines, nested_lines, name, expected in ((b"foo\n", None, ".claude/foo", True),
+                                                         (b"foo\n", None, ".claude/x/foo", True),
+                                                         (b"", b"foo\n", ".claude/x/foo", True),
+                                                         (b"", b"foo\n", ".claude/x/y/foo", True),
+                                                         (b"foo/\n", None, ".claude/x/foo/", True),
+                                                         (b"foo/\n", None, ".claude/x/foo", False),
+                                                         (b"foo\n", b"!foo\n", ".claude/x/foo", False),
+                                                         (b"/foo\n", None, ".claude/foo", False),
+                                                         (b"", b"x/foo\n", ".claude/y/x/foo", False)):
+            with self.subTest(root=root_lines, nested=nested_lines, name=name):
+                projects = self.nested(root_lines, nested_lines, f"depth-{len(list(self.tmp.iterdir()))}")
+                for project in projects:
+                    path = project / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.mkdir() if name.endswith("/") else path.touch()
+                refused, *git = projects
+                self.assertIs(sync.ignored(refused, name.rstrip("/")), expected)
+                for project in git:
+                    self.assertEqual(self.check_ignore(project, name.rstrip("/")), expected)
+
+    def test_without_git_a_path_out_of_the_project_is_not_read_up_there_but_a_name_with_dots_is(self):
+        # A `..` part leads out of the project, where a .gitignore is no longer its own: `../out/f.txt` and
+        # `a/../../out/f.txt` are not said ignored by out/.gitignore. `a..b` and `..foo` are names, no `..` part:
+        # the project's .gitignore says them ignored.
+        project = self.project("dots")
+        (project / ".git").write_text("gitdir: ../nowhere\n", encoding="utf-8")
+        (project / ".gitignore").write_bytes(b"a..b\n..foo\n")
+        (project / "a").mkdir()
+        (project / "a..b").touch()
+        (project / "..foo").touch()
+        (self.tmp / "out").mkdir()
+        (self.tmp / "out" / ".gitignore").write_bytes(b"f.txt\n")
+        (self.tmp / "out" / "f.txt").touch()
+        with mock.patch.object(sync, "git_ignores", return_value=None):
+            self.assertIs(sync.ignored(project, "../out/f.txt"), False)
+            self.assertIs(sync.ignored(project, "a/../../out/f.txt"), False)
+            self.assertIs(sync.ignored(project, "a..b"), True)
+            self.assertIs(sync.ignored(project, "..foo"), True)
+
+    @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
+    def test_without_git_a_folder_s_gitignore_that_is_a_link_is_not_read(self):
+        refused, *git = self.nested(b".claude/settings.local.json\n", None, "nested-link")
+        (self.tmp / "shared-ignore").write_bytes(b"!settings.local.json\n")
+        for project in (refused, *git):
+            try:
+                (project / ".claude" / ".gitignore").symlink_to(self.tmp / "shared-ignore")
+            except OSError:
+                self.skipTest("no symbolic link here")
+        self.assertTrue(sync.ignored(refused, ".claude/settings.local.json"))
+        for project in git:
+            self.assertTrue(self.check_ignore(project, ".claude/settings.local.json"))
+
+    def test_without_git_no_line_is_added_for_what_a_folder_s_gitignore_ignores(self):
+        # .claude/.gitignore ignores Claude Code's settings: git asked would say so, and nothing would be added — nor
+        # is it without git.
+        refused, *_ = self.nested(b"cortex.local.toml\n", b"settings.local.json\n", "nested-add")
+        proc = self.sync(refused, "--claude-access")
+        self.assert_ok(proc)
+        self.assertIn(".claude/settings.local.json: Claude Code reads ", proc.out)
+        self.assertNotIn(".gitignore:", proc.out)
+        self.assertEqual((refused / ".gitignore").read_bytes(), b"cortex.local.toml\n")
+
     @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
     def test_without_git_a_gitignore_that_is_a_link_is_not_read(self):
         # git reads no .gitignore that is a symbolic link: its lines ignore nothing — a note, never "ignored".

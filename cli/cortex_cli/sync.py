@@ -83,6 +83,12 @@ def not_a_file(path: Path) -> bool:
     return not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode) or is_link(path))
 
 
+def no_gitignore_file(path: Path) -> bool:
+    """Whether the .gitignore at ``path`` is no file a line can be written to, nor a link: what ``not_a_file`` says,
+    or a directory."""
+    return not_a_file(path) or (os.path.isdir(path) and not is_link(path))
+
+
 def link_target(path: Path) -> str:
     target = os.readlink(path)
     if target.startswith("\\\\?\\"):                        # how Windows spells a junction's target
@@ -1252,9 +1258,10 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
     endings. Without a repository to ask, a line is added unless it, or one that means the same,
     is there with no negation below it — and no .gitignore is created: it would keep nothing out of any commit. A
     .gitignore that is a symbolic link is never written through — git does not read it, and its target may be outside
-    the project, or none yet: the note names the link (``_notes``)."""
+    the project, or none yet: the note names the link (``_notes``) — nor is one that is no file: a named pipe, a
+    directory."""
     path = root / ".gitignore"
-    if is_link(path) or not_a_file(path):        # never written through, nor waited on: the note names it
+    if is_link(path) or no_gitignore_file(path):  # never written through, nor waited on: the note names it
         return []
     if not path.is_file() and ignored(root, config.LOCAL_FILE) is None:
         return []
@@ -1262,14 +1269,18 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
     lines = gitignore_lines(data.decode("utf-8", errors="replace"))
     missing = []
     for line, probe in entries.items():
+        glob = _stands_in(line)
         state = ignored(root, probe)
         if state is None:                       # no repository to ask
             name = probe.rstrip("/")
             state = _named(lines, {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if probe.endswith("/") else set()),
                            name)
-        # A line that is a pattern is asked of a name standing in for the paths it matches: a negation below it that
-        # is a pattern too, or names one of them, may take back another — `!/.cortex-sync-[0-9]*` the real ones.
-        if not state and not _named(lines, {line}, probe, _stands_in(line)):  # there, with no negation below: kept
+        # A line that is a pattern is asked of a name standing in for the paths it matches: a negation that is a
+        # pattern too, or names one of them, may take back another — `!/.cortex-sync-[0-9]*` the real ones, which
+        # git's answer for the name does not tell. The line, then, counts only there with no such negation below it.
+        elif state and glob is not None and _negations(lines, probe, glob):
+            state = False
+        if not state and not _named(lines, {line}, probe, glob):  # there, with no negation below: kept
             missing.append(line)
     if missing:
         newline = b"\r\n" if b"\r\n" in data else b"\n"
@@ -1427,15 +1438,38 @@ def _named(lines: List[str], wanted: Set[str], name: str, glob: Optional[Pattern
     return bool(found) and not _negations(lines[found[-1] + 1:], name, glob)
 
 
+# How long git is given to say what it ignores, and the repositories where it did not say it in time: it waits on an
+# ignore file Cortex does not check — a named pipe as the .gitignore of a folder above the project, as info/exclude
+# or core.excludesFile. Asked again, it would wait again: one wait per repository and command, then .gitignore's own
+# lines, as without git.
+GIT_TIMEOUT = 30
+_TIMED_OUT: Set[str] = set()
+
+
+def _repository_of(root: Path) -> str:
+    """The folder that holds the ``.git`` at ``root`` or above it, as written — ``root`` when there is none."""
+    for folder in (root, *root.parents):
+        if os.path.lexists(folder / ".git"):
+            return str(folder)
+    return str(root)
+
+
 def git_ignores(root: Path, name: str) -> Optional[bool]:
     """git's own answer, whether it ignores ``name`` in the project: ``None`` when there is no git to ask, or it
-    refuses the repository — its owner, say — or there is none, or it would wait on a .gitignore that is no file."""
+    refuses the repository — its owner, say — or there is none, or it would wait on a .gitignore that is no file, or
+    it did not answer in time, in this repository, once already."""
     git = shutil.which("git")
     if git is None or not_a_file(root / ".gitignore"):     # a named pipe there: git would wait on it
         return None
+    repository = _repository_of(Path(os.path.abspath(root)))
+    if repository in _TIMED_OUT:
+        return None
     try:
         proc = subprocess.run([git, "-C", str(root), "check-ignore", "-q", "--", name],
-                              capture_output=True, timeout=30, env=git_environment())
+                              capture_output=True, timeout=GIT_TIMEOUT, env=git_environment())
+    except subprocess.TimeoutExpired:
+        _TIMED_OUT.add(repository)
+        return None
     except (OSError, subprocess.SubprocessError):
         return None
     return proc.returncode == 0 if proc.returncode in (0, 1) else None
@@ -1444,7 +1478,8 @@ def git_ignores(root: Path, name: str) -> Optional[bool]:
 def ignored(root: Path, name: str) -> Optional[bool]:
     """Whether git ignores ``name`` in the project: asked of git when the project is a repository
     of it; ``None`` when there is no repository to ask about — no ``.git`` at the root or above it.
-    Without git's answer, ``True`` only for what Cortex can tell from the project's own .gitignore."""
+    Without git's answer, ``True`` only for what Cortex can tell from the project's own .gitignore, and those of
+    the folders between it and the path."""
     answer = git_ignores(root, name)
     if answer is not None:
         return answer
@@ -1452,17 +1487,33 @@ def ignored(root: Path, name: str) -> Optional[bool]:
         return None
     # No git to ask, or git refusing the repository: the project's own .gitignore, at the root of the repository or
     # in a subdirectory of it, read for a line that names the path as Cortex writes it — no pattern, no negation
-    # below it, no .gitignore of a folder above, which git would read too. A link is a file to git — `cortex/` does
+    # below it, no .gitignore of a folder above, which git would read too —, then the .gitignore of each folder
+    # between it and the path, whose lines outrank the root's, as git reads them: `!settings.local.json` in
+    # .claude/.gitignore takes back the root's `.claude/settings.local.json`. A link is a file to git — `cortex/` does
     # not match it. A .gitignore that is a link git does not read, nor does Cortex.
-    if is_link(root / ".gitignore"):
+    # A path out of the project, `../../out/f.txt` — a file a link leads out to —, is none of its .gitignore files' to
+    # tell: never read up there, where they are no longer the project's.
+    parts = name.split("/")
+    if ".." in parts:
         return False
     directory = (root / name).is_dir() and not is_link(root / name)
-    wanted = {name, f"/{name}"} | ({f"{name}/", f"/{name}/"} if directory else set())
-    try:
-        lines = gitignore_lines(cascade.read_file(str(root / ".gitignore")).decode("utf-8", errors="replace"))
-    except OSError:
-        return False
-    return _named(lines, wanted, name)
+    said = False
+    for depth in range(len(parts)):
+        gitignore = root.joinpath(*parts[:depth], ".gitignore")
+        if is_link(gitignore):                  # git does not read it
+            continue
+        try:
+            lines = gitignore_lines(cascade.read_file(str(gitignore)).decode("utf-8", errors="replace"))
+        except OSError:                         # none there, or no file: nothing to read
+            continue
+        rest = "/".join(parts[depth:])
+        # A name with no `/` but at its end matches at any depth below its .gitignore: `foo` there, `x/foo` too.
+        wanted = {rest, f"/{rest}", parts[-1]} | ({f"{rest}/", f"/{rest}/", f"{parts[-1]}/"} if directory else set())
+        if _named(lines, wanted, rest):
+            said = True
+        elif _negations(lines, rest):
+            said = False
+    return said
 
 
 def _not_ignored(root: Path, name: str, shown: str) -> Optional[str]:
@@ -1492,11 +1543,13 @@ def _notes(root: Path, mode: str, err: TextIO) -> None:
     # A .gitignore that is a symbolic link, which git does not read: no line added to it would count (#329).
     linked = ".gitignore is a symbolic link, which git does not read: make it a file, with " \
         if is_link(root / ".gitignore") else ".gitignore is not a file, which git cannot read: make it a file, with " \
-        if not_a_file(root / ".gitignore") else None
+        if no_gitignore_file(root / ".gitignore") else None
     said = _not_ignored(root, LINK, f"{LINK}/") if mode != "store" else None
     if said is not None:
         line = f"a `/{LINK}` line" + ("" if linked else " to .gitignore")
-        err.write(f"note: {said} — {linked or 'add '}{line}, without the final slash: a link is a file to git\n")
+        # The final slash is a link's matter: a copy is a directory, which a `/cortex/` line ignores too.
+        slash = "" if mode == "copy" else ", without the final slash: a link is a file to git"
+        err.write(f"note: {said} — {linked or 'add '}{line}{slash}\n")
     said = _not_ignored(root, config.LOCAL_FILE, f"{config.LOCAL_FILE}, which holds this machine's paths")
     if said is not None:
         err.write(f"note: {said} — {linked + 'a line for it' if linked else 'add it to .gitignore'}\n")

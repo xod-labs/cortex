@@ -3743,6 +3743,33 @@ class FourthCodeReviewTests(TeamTestCase):
                     self.assertNotIn("Traceback", proc.err)
                 self.assertTrue(stat.S_ISFIFO(os.lstat(root / ".gitignore").st_mode))
 
+    @harness.outside_a_repository
+    def test_a_directory_at_gitignore_is_said_not_a_file_and_never_written(self):
+        # A directory as .gitignore: `cortex init` wrote cortex.toml, cortex.local.toml and cortex.lock, then failed
+        # writing a line to it — `Is a directory` —, and `cortex sync` said to add a line to it. As a named pipe there:
+        # nothing is written to it, and a note says to make it a file — in a repository git refuses and one git takes.
+        kinds = ("refused",) + (("git",) if GIT is not None and os.name != "nt" else ())
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.tmp / f"dir-{kind}"
+                root.mkdir()
+                if kind == "git":
+                    self.git(root, "init", "-q")
+                else:
+                    (root / ".git").mkdir()
+                (root / ".gitignore").mkdir()
+                env = {"PATH": os.path.dirname(GIT), **GIT_ENV} if kind == "git" else {}
+                for args in (("init", "--tool", "claude", "--link"), ("sync",), ("sync", "--claude-access")):
+                    proc = self.cortex_within(root, *args, **env)
+                    self.assert_ok(proc)
+                    self.assertNotIn("Traceback", proc.err)
+                    self.assertNotIn(".gitignore:", proc.out)
+                    self.assertIn("— .gitignore is not a file, which git cannot read: make it a file, with a line for "
+                                  "it\n", proc.err)
+                    self.assertNotIn("add it to .gitignore", proc.err)
+                self.assertTrue((root / "CLAUDE.md").is_file())
+                self.assertEqual(os.listdir(root / ".gitignore"), [])
+
     @unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipe here")
     @harness.outside_a_repository
     def test_a_named_pipe_at_cortex_local_toml_holds_no_command_of_the_machine(self):
