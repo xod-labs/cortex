@@ -1350,6 +1350,22 @@ class CortexLockTests(SyncTestCase):
             proc = self.validate(root, "--strict")
             self.assertEqual(proc.returncode, 0, proc.out + proc.err)
 
+    def test_a_link_a_user_made_at_a_stored_version_is_never_made_read_only(self):
+        # #384: whole, what it leads to is stored as it is — the store changes no mode through a link.
+        project = self.project()
+        mine = self.tmp / "mine"
+        for tree in store.SPEC_TREES:
+            shutil.copytree(harness.REPO / tree, mine / tree)
+        modes = {path: os.stat(path).st_mode for path in [mine, *mine.rglob("*")]}
+        self.stored().parent.mkdir(parents=True)
+        try:
+            os.symlink(mine, self.stored(), target_is_directory=True)
+        except OSError as error:            # Windows without the privilege
+            self.skipTest(f"no symbolic link: {error}")
+        self.assert_ok(self.sync(project))
+        self.assertTrue(os.path.islink(self.stored()))
+        self.assertEqual({path: os.stat(path).st_mode for path in [mine, *mine.rglob("*")]}, modes)
+
     def test_a_link_a_user_made_at_a_stored_version_is_refused(self):
         # #384: the store repairs a folder of its own, never what a link a user made leads to.
         project = self.project()

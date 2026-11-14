@@ -446,7 +446,7 @@ class EmbeddedTests(StoreTestCase):
         is_link = store.is_link
 
         def removed_first(path):
-            if Path(path) == the_store.path(version) and os.path.lexists(path):
+            if Path(path) == the_store.path(version) and os.path.isfile(path):
                 os.unlink(path)
             return is_link(path)
         with mock.patch.object(store, "is_link", side_effect=removed_first):

@@ -255,8 +255,11 @@ def make_read_only(root: Path) -> None:
 
     POSIX: files ``0444``, directories ``0555`` — nothing is modified, created or removed. On
     Windows the read-only attribute protects files, not directories: a file of the spec cannot
-    be modified or deleted, but a new one can be created beside it (ADR-008 §9).
+    be modified or deleted, but a new one can be created beside it (ADR-008 §9). ``root`` a link —
+    a user's, at a version's name — is left as it is, and so is what it leads to.
     """
+    if is_link(root):
+        return
     for directory, _, files, _ in reversed(list(_walk(root))):     # from the deepest files up
         for name in files:
             os.chmod(os.path.join(directory, name), stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
@@ -294,7 +297,10 @@ def is_link(path: Union[Path, str]) -> bool:
 def make_writable(root: Path) -> None:
     """Give back the write permission under ``root``, ``root`` included — never through a link: a
     link found there is a user's, and what it leads to is none of the store's. A link's own
-    read-only attribute is cleared, on Windows, so that it can be removed."""
+    read-only attribute is cleared, on Windows, so that it can be removed — ``root`` a link too."""
+    if is_link(root):
+        _link_writable(root)
+        return
     if os.name != "nt":
         os.chmod(root, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
     for directory, subdirs, files, links in _walk(root):
