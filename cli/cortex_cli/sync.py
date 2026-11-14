@@ -1507,7 +1507,9 @@ def ignored(root: Path, name: str) -> Optional[bool]:
         except OSError:                         # none there, or no file: nothing to read
             continue
         rest = "/".join(parts[depth:])
-        if _named(lines, {rest, f"/{rest}"} | ({f"{rest}/", f"/{rest}/"} if directory else set()), rest):
+        # A name with no `/` but at its end matches at any depth below its .gitignore: `foo` there, `x/foo` too.
+        wanted = {rest, f"/{rest}", parts[-1]} | ({f"{rest}/", f"/{rest}/", f"{parts[-1]}/"} if directory else set())
+        if _named(lines, wanted, rest):
             said = True
         elif _negations(lines, rest):
             said = False

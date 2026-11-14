@@ -691,6 +691,30 @@ class GitIgnoreTests(SyncTestCase):
                 for project in git:
                     self.assertEqual(self.check_ignore(project, ".claude/settings.local.json"), expected)
 
+    @harness.outside_a_repository
+    def test_without_git_a_name_with_no_slash_matches_at_any_depth_below_its_gitignore(self):
+        # git reads `foo` of a folder's .gitignore at any depth below it — `foo/` too, for a directory —, and a
+        # negation below takes it back there. Read only at the folder's own level, `.claude/x/foo` was not ignored.
+        for root_lines, nested_lines, name, expected in ((b"foo\n", None, ".claude/foo", True),
+                                                         (b"foo\n", None, ".claude/x/foo", True),
+                                                         (b"", b"foo\n", ".claude/x/foo", True),
+                                                         (b"", b"foo\n", ".claude/x/y/foo", True),
+                                                         (b"foo/\n", None, ".claude/x/foo/", True),
+                                                         (b"foo/\n", None, ".claude/x/foo", False),
+                                                         (b"foo\n", b"!foo\n", ".claude/x/foo", False),
+                                                         (b"/foo\n", None, ".claude/foo", False),
+                                                         (b"", b"x/foo\n", ".claude/y/x/foo", False)):
+            with self.subTest(root=root_lines, nested=nested_lines, name=name):
+                projects = self.nested(root_lines, nested_lines, f"depth-{len(list(self.tmp.iterdir()))}")
+                for project in projects:
+                    path = project / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.mkdir() if name.endswith("/") else path.touch()
+                refused, *git = projects
+                self.assertIs(sync.ignored(refused, name.rstrip("/")), expected)
+                for project in git:
+                    self.assertEqual(self.check_ignore(project, name.rstrip("/")), expected)
+
     @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
     def test_without_git_a_folder_s_gitignore_that_is_a_link_is_not_read(self):
         refused, *git = self.nested(b".claude/settings.local.json\n", None, "nested-link")
