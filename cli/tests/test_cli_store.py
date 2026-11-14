@@ -387,6 +387,42 @@ class EmbeddedTests(StoreTestCase):
         self.assertTrue(os.path.islink(path))
         self.assertEqual(os.stat(mine).st_mode & 0o777, 0o555)
 
+    def before_it_is_opened(self, path, then):
+        """``os.open`` as the store calls it, on ``path``: ``path`` removed first, then ``then()``."""
+        opened = os.open
+
+        def removed_first(name, *args, **kwargs):
+            if name == path and os.path.isdir(path) and not os.path.islink(path):
+                with mock.patch.object(store.os, "open", opened):
+                    store.remove_tree(path)
+                then()
+            return opened(name, *args, **kwargs)
+        return mock.patch.object(store.os, "open", side_effect=removed_first)
+
+    @unittest.skipIf(os.name == "nt", "the mode of a directory is POSIX's")
+    def test_a_version_taken_away_before_it_is_opened_is_written(self):
+        # A prune between the look and the open: the open fails, and the store looks again — none there, it writes.
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        version = Version("2.0.0")
+        path = self.incomplete(the_store, version)
+        with self.before_it_is_opened(path, lambda: None):
+            self.assertEqual(the_store.ensure(version), "written")
+        self.assertTrue(the_store.has(version))
+        self.assertEqual(self.listing(), ["2.0.0"])
+
+    @unittest.skipIf(os.name == "nt", "the mode of a directory is POSIX's")
+    def test_a_file_put_in_its_place_before_it_is_opened_is_refused(self):
+        # A file took the folder's place between the look and the open: the store looks again, and names it.
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        version = Version("2.0.0")
+        path = self.incomplete(the_store, version)
+        with self.before_it_is_opened(path, lambda: path.write_text("mine\n", encoding="utf-8")), \
+                self.assertRaises(store.StoreError) as raised:
+            the_store.ensure(version)
+        self.assertEqual(str(raised.exception), f"{display(path)} is there, and is no folder of the store — a link "
+                         "or a file, which holds no complete spec: remove it, then run the command again")
+        self.assertEqual(path.read_text(encoding="utf-8"), "mine\n")
+
     def test_a_version_taken_away_meanwhile_is_written(self):
         # A prune, or another sync's repair, took it between the look and the rename: no refusal, no removal named.
         the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
