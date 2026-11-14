@@ -1491,9 +1491,13 @@ def ignored(root: Path, name: str) -> Optional[bool]:
     # between it and the path, whose lines outrank the root's, as git reads them: `!settings.local.json` in
     # .claude/.gitignore takes back the root's `.claude/settings.local.json`. A link is a file to git — `cortex/` does
     # not match it. A .gitignore that is a link git does not read, nor does Cortex.
+    # A path out of the project, `../../out/f.txt` — a file a link leads out to —, is none of its .gitignore files' to
+    # tell: never read up there, where they are no longer the project's.
+    parts = name.split("/")
+    if ".." in parts:
+        return False
     directory = (root / name).is_dir() and not is_link(root / name)
     said = False
-    parts = name.split("/")
     for depth in range(len(parts)):
         gitignore = root.joinpath(*parts[:depth], ".gitignore")
         if is_link(gitignore):                  # git does not read it

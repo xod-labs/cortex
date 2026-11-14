@@ -1273,6 +1273,20 @@ class IgnoredTimeoutTests(unittest.TestCase):
             self.assertEqual(upgrade._ignored(str(root), files), ["cortex.local.toml"])
             self.assertEqual(sum("check-ignore" in call.args[0] for call in asked.call_args_list), 1)
 
+    @unittest.skipUnless(shutil.which("git"), "needs git")
+    @harness.outside_a_repository
+    def test_a_file_out_of_the_repository_is_not_said_ignored_by_a_gitignore_out_there(self):
+        # git refuses a path out of its work tree (128): the fallback read the .gitignore files on the way up to it,
+        # out of the project, and said ignored a file a link leads out to.
+        tmp = Path(tempfile.mkdtemp(prefix="cortex-upgrade-")).resolve()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        subprocess.run(["git", "init", "-q", str(tmp / "repo")], check=True)
+        (tmp / "repo" / "p").mkdir()
+        (tmp / "out").mkdir()
+        (tmp / "out" / ".gitignore").write_bytes(b"f.txt\n")
+        (tmp / "out" / "f.txt").touch()
+        self.assertEqual(upgrade._ignored(str(tmp / "repo" / "p"), [tmp / "out" / "f.txt"]), [])
+
 
 if __name__ == "__main__":
     unittest.main()
