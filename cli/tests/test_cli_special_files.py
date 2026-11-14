@@ -264,6 +264,31 @@ class LocalFileTests(SpecialFileTestCase):
                 self.assert_ok(self.within(root, "upgrade", "--local", OWN))
                 self.assertIn(f'version = "{OWN}"', (root / "cortex.local.toml").read_text(encoding="utf-8"))
 
+    @harness.outside_a_repository
+    def test_validate_names_the_remedy_of_the_sync_for_a_cortex_local_toml_that_is_not_a_file(self):
+        # Read as none, it named no spec, and `run cortex sync` — which refuses it. The sync's own remedy is named,
+        # which, followed, lets validate run.
+        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', name=f"check-{kind}")
+                self.assert_ok(self.within(root, "sync"))
+                (root / "cortex.local.toml").unlink()
+                if kind == "directory":
+                    (root / "cortex.local.toml").mkdir()
+                else:
+                    os.mkfifo(root / "cortex.local.toml")
+                proc = self.within(root, "validate")
+                self.assertEqual(proc.returncode, 2, proc.out + proc.err)
+                self.assertEqual("cortex validate: cortex.local.toml is not a file — remove it, and `cortex sync` "
+                                 "writes it again\n", proc.err)
+                if kind == "directory":
+                    (root / "cortex.local.toml").rmdir()
+                else:
+                    (root / "cortex.local.toml").unlink()
+                self.assert_ok(self.within(root, "sync"))
+                self.assert_ok(self.within(root, "validate"))
+
 
 class RenamedTeamFolderTests(SpecialFileTestCase):
     """A team's folder ``cortex.toml`` renames, where something that is no folder is (``TEAM_FOLDER_MISSING``)."""

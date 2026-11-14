@@ -165,6 +165,10 @@ def roots_and_folder(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]], Op
             project = config.load(root)
         except config.ConfigError as error:
             raise RootsError(str(error))
+        local = config.local_not_a_file(root)
+        if local is not None:
+            # Read as none, it names no spec — but `cortex sync` refuses it: its own remedy is named (#358).
+            raise RootsError(local)
         base = project.spec_directory()
         if base is None:
             raise RootsError(f"{config.LOCAL_FILE} names no spec yet — run `cortex sync`")
