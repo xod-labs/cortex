@@ -257,7 +257,7 @@ def make_read_only(root: Path) -> None:
     Windows the read-only attribute protects files, not directories: a file of the spec cannot
     be modified or deleted, but a new one can be created beside it (ADR-008 §9).
     """
-    for directory, _, files, _ in reversed(list(_walk(root))):     # from the deepest files up
+    for directory, _, files, _ in ((d, s, f, []) for d, s, f in os.walk(root, topdown=False)):     # from the deepest files up
         for name in files:
             os.chmod(os.path.join(directory, name), stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
         if os.name != "nt":
