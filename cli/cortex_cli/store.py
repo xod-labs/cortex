@@ -9,7 +9,8 @@ the spec, through any project, fails instead of changing every project on that v
 A version is written beside its final place and renamed into it: an interrupted write never
 leaves a half-written version, and two syncs writing the same one at once both end with it. A
 version is there only when its three trees are, and read-only: one left writable by an interrupted
-sync is made read-only again, and a staging left behind for a day is removed.
+sync is made read-only again, and a staging left behind for a day is removed. A folder of the store
+that holds less is removed, as a prune removes one, and written again: never a link a user made.
 
 A download is checked against ``SHA256SUMS``, which comes from where the archive does: that
 proves it whole, not who published it. A built binary also carries the checksum of every spec
@@ -33,7 +34,7 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Dict, Iterator, Optional, Union
+from typing import Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 from cortex_core.project import DEFAULT_RELEASES_URL  # noqa: F401 — part of this module's API
 from cortex_core.project import FIRST_TEAM_VERSION, LOCAL_FILE, PROJECT_FILE, TEAM_FILE
@@ -249,13 +250,17 @@ def source_checkout() -> Optional[Path]:
 # --------------------------------------------------------------------------- #
 
 def make_read_only(root: Path) -> None:
-    """Remove every write permission under ``root``, ``root`` included.
+    """Remove every write permission under ``root``, ``root`` included — never through a link, nor
+    on one: a link found there is a user's, and so is what it leads to.
 
     POSIX: files ``0444``, directories ``0555`` — nothing is modified, created or removed. On
     Windows the read-only attribute protects files, not directories: a file of the spec cannot
-    be modified or deleted, but a new one can be created beside it (ADR-008 §9).
+    be modified or deleted, but a new one can be created beside it (ADR-008 §9). ``root`` a link —
+    a user's, at a version's name — is left as it is, and so is what it leads to.
     """
-    for directory, subdirs, files in os.walk(root, topdown=False):
+    if is_link(root):
+        return
+    for directory, _, files, _ in reversed(list(_walk(root))):     # from the deepest files up
         for name in files:
             os.chmod(os.path.join(directory, name), stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
         if os.name != "nt":
@@ -264,22 +269,68 @@ def make_read_only(root: Path) -> None:
 
 def _a_file_writable(root: Path) -> bool:
     return any(os.stat(os.path.join(directory, name)).st_mode & stat.S_IWUSR
-               for directory, _, files in os.walk(root) for name in files)
+               for directory, _, files, _ in _walk(root) for name in files)
+
+
+def _walk(root: Path) -> Iterator[Tuple[str, List[str], List[str], List[str]]]:
+    """``os.walk`` from the top down, which never enters a link: on Windows it enters a junction,
+    which ``os.path.islink`` does not see. Each folder comes with its folders, its files and its
+    links — a link is in none of the first two, nor is it walked into."""
+    for directory, subdirs, files in os.walk(root):
+        links = [name for name in subdirs + files if is_link(os.path.join(directory, name))]
+        subdirs[:] = [name for name in subdirs if name not in links]
+        yield directory, subdirs, [name for name in files if name not in links], links
+
+
+def is_link(path: Union[Path, str]) -> bool:
+    """A symbolic link, or a junction on Windows — a link a user made, which the store never follows."""
+    if os.path.islink(path):
+        return True
+    if hasattr(os.path, "isjunction"):                     # Python 3.12
+        return os.path.isjunction(path)
+    try:
+        return getattr(os.lstat(path), "st_reparse_tag", None) == getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", -1)
+    except OSError:
+        return False
 
 
 def make_writable(root: Path) -> None:
+    """Give back the write permission under ``root``, ``root`` included — never through a link: a
+    link found there is a user's, and what it leads to is none of the store's. A link's own
+    read-only attribute is cleared, on Windows, so that it can be removed — ``root`` a link too."""
+    if is_link(root):
+        _link_writable(root)
+        return
     if os.name != "nt":
         os.chmod(root, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
-    for directory, subdirs, files in os.walk(root):
+    for directory, subdirs, files, links in _walk(root):
         for name in subdirs:
             if os.name != "nt":
                 os.chmod(os.path.join(directory, name), stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
         for name in files:
             os.chmod(os.path.join(directory, name), stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        for name in links:
+            _link_writable(os.path.join(directory, name))
+
+
+def _link_writable(path: Union[Path, str]) -> None:
+    """Clear the read-only attribute of a link on Windows — its own, never its target's: Windows
+    refuses to remove a read-only link (``DeleteFileW``), as it does a read-only file. A link has
+    no attribute of its own on POSIX that its removal reads."""
+    if os.name != "nt" or not os.lstat(path).st_file_attributes & stat.FILE_ATTRIBUTE_READONLY:
+        return
+    if os.chmod in os.supports_follow_symlinks:    # Python 3.13 on: chmod follows a link unless told not to
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE, follow_symlinks=False)
+    else:                                           # Python 3.12: SetFileAttributesW, on the link itself
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
 
 
 def remove_tree(root: Path) -> None:
-    """Remove a tree the store, or sync, made read-only."""
+    """Remove a tree the store, or sync, made read-only — a link in its place is removed, not followed."""
+    if is_link(root):
+        _link_writable(root)
+        os.unlink(root) if os.path.islink(root) else os.rmdir(root)
+        return
     make_writable(root)
     shutil.rmtree(root)
 
@@ -298,12 +349,13 @@ def digest(directory: Path) -> str:
     version removed meanwhile — has no digest: the empty set's would be locked."""
     missing = [f"{tree}/" for tree in SPEC_TREES if not (directory / tree).is_dir()]
     if missing:
-        raise StoreError(f"{directory} holds no {', '.join(missing)} — no whole spec to take the digest of")
+        raise StoreError(f"{display(str(directory))} holds no {', '.join(missing)} — no whole spec to take the "
+                         "digest of")
     try:
         return digest_of(hashes(directory))
     except FileNotFoundError as error:
-        raise StoreError(f"{directory} lost {error.filename} while its digest was taken — no whole spec to take the "
-                         "digest of")
+        raise StoreError(f"{display(str(directory))} lost {display(str(error.filename))} while its digest was "
+                         "taken — no whole spec to take the digest of")
 
 
 def _files(directory: Path) -> Iterator[Path]:
@@ -440,6 +492,44 @@ class Store:
         """A version is there when its three trees are — an empty directory is none."""
         return all((self.path(version) / tree).is_dir() for tree in SPEC_TREES)
 
+    def _repair(self, version: Version) -> None:
+        """Take out of the store a version that holds no complete spec — a tree of it removed by hand,
+        say — as ``remove`` does, so that it is written again (#384): read-only, it is beyond a plain
+        removal for a user who is not root, and on Windows. Only a folder of the store: a link at its
+        name, or a file, is a user's, never followed nor removed — it is refused, and named, while it is
+        there. One taken away meanwhile — pruned, or repaired by another sync — is left to be written."""
+        path = self.path(version)
+        if is_link(path) or not path.is_dir():
+            if os.path.lexists(path):
+                raise StoreError(f"{display(str(path))} is there, and is no folder of the store — a link or a file, "
+                                 "which holds no complete spec: remove it, then run the command again")
+            return
+        if os.name != "nt":
+            # Its own directory writable — macOS renames no directory its owner may not write in. Opened without
+            # following a link: one put in its place meanwhile is left as it is.
+            try:
+                fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+            except OSError:
+                if is_link(path) or not path.is_dir():     # a link or a file in its place meanwhile, or none
+                    return self._repair(version)
+            else:
+                try:
+                    os.fchmod(fd, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+                finally:
+                    os.close(fd)
+        try:
+            aside = self._aside(version)
+        except FileNotFoundError:   # taken away meanwhile
+            return
+        if all((aside / tree).is_dir() for tree in SPEC_TREES):
+            # Whole: another sync put it in after this one found it incomplete. It goes back, or, taken, away.
+            try:
+                os.rename(aside, path)
+                return
+            except OSError:
+                pass
+        self._discard(aside)
+
     def _tidy(self, version: Version) -> None:
         """Make a stored version read-only again — a sync interrupted between the rename and the
         chmod left it writable — and remove the stagings older than a day. Every file tells, on
@@ -484,9 +574,15 @@ class Store:
                 pass
             if self.has(version):   # still: not removed meanwhile — pruned, or put in again — by another
                 return "stored"
-        if self.path(version).exists():
-            raise StoreError(f"{self.path(version)} is there, and holds no complete spec — remove it, "
-                             "then run the command again")
+        if os.path.lexists(self.path(version)):     # holds no complete spec: written again (#384)
+            self._repair(version)
+            if self.has(version):   # put in whole meanwhile, by another sync
+                try:
+                    self._tidy(version)
+                except FileNotFoundError:
+                    pass
+                if self.has(version):
+                    return "stored"
         self.versions.mkdir(parents=True, exist_ok=True)
         if version == self.own:
             if self.embedded is not None:

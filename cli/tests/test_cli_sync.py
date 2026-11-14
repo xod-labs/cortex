@@ -1298,22 +1298,94 @@ class CortexLockTests(SyncTestCase):
                 self.assert_ok(self.sync(project, mode))
                 store.make_writable(self.stored())
                 shutil.rmtree(self.stored() / "docs")
+                store.make_read_only(self.stored())         # #384: read-only, as the store holds every version
                 proc = self.validate(project)
                 self.assertEqual(proc.returncode, 0, proc.out + proc.err)
                 self.assertIn("LOCK_DIGEST", proc.out)
                 self.assertIn("holds no docs/ — no whole spec to take the digest of", proc.out)
                 self.assertNotIn("Traceback", proc.out + proc.err)
                 self.assertEqual(self.validate(project, "--strict").returncode, 1)
-                # #369: the removal first, then the sync — a sync alone is refused by the store, which holds it so.
-                self.assertIn(f'— remove "{display(self.stored())}", then run `cortex sync`', proc.out)
-                refused = self.sync(project)
-                self.assertEqual(refused.returncode, 1, refused.out + refused.err)
-                self.assertIn("holds no complete spec — remove it", refused.err)
-                shutil.rmtree(self.stored())                # the commands it names, in their order
-                self.assert_ok(self.sync(project))
+                # #384: the sync alone, which puts it in the store again — a removal by hand fails, read-only.
+                spec = self.stored() if mode == "--store" else project / "cortex"
+                self.assertIn(f"{display(spec)} holds no docs/ — no whole spec to take the digest of — run "
+                              "`cortex sync`, which puts it in the store again", proc.out)
+                self.assertNotIn("remove", proc.out)
+                self.assert_ok(self.sync(project))                  # the command it names, as a user runs it
                 proc = self.validate(project, "--strict")
                 self.assertEqual(proc.returncode, 0, proc.out + proc.err)
                 self.assertNotIn("LOCK_", proc.out)
+
+    def test_validate_names_no_removal_of_a_stored_version_gone_meanwhile(self):
+        # #384: pruned while validate read it — the path is gone, and only the sync is named, which runs.
+        from cortex_cli import config, validate
+        project = self.project()
+        self.assert_ok(self.sync(project))
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home)}):
+            loaded = config.load(str(project))
+            store.Store(self.home).remove(store.Version(OWN))
+            warnings = validate.lock_warnings(loaded, str(self.stored()), version=store.Version(OWN))
+        self.assertFalse(os.path.lexists(self.stored()))
+        self.assertEqual(warnings, [("cortex.lock", "LOCK_DIGEST", f"{display(self.stored())} holds no agents/, templates/, "
+                                     "docs/ — no whole spec to take the digest of — run `cortex sync`, which puts it "
+                                     "in the store again")])
+        self.assert_ok(self.sync(project))                          # the command it names
+        proc = self.validate(project, "--strict")
+        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+
+    @DOWNLOADS
+    def test_upgrade_writes_an_incomplete_stored_version_again(self):
+        # #384: every command that puts a version in the store does it as sync does — `cortex upgrade` too.
+        other = self.project(name="other", version="9.9.8")
+        self.assert_ok(self.sync(other))
+        stored = self.stored("9.9.8")
+        store.make_writable(stored)
+        shutil.rmtree(stored / "docs")
+        store.make_read_only(stored)                # read-only, as the store holds every version
+        project = self.project()
+        self.assert_ok(self.sync(project))
+        proc = harness.run("upgrade", "9.9.8", cwd=project, env=dict(self.env, CORTEX_NO_UPDATE_CHECK="1"))
+        self.assertEqual(proc.returncode, 0, proc.stdout.decode() + proc.stderr.decode())
+        self.assertTrue((stored / "docs").is_dir())
+        for root in (project, other):
+            proc = self.validate(root, "--strict")
+            self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+
+    def test_a_link_a_user_made_at_a_stored_version_is_never_made_read_only(self):
+        # #384: whole, what it leads to is stored as it is — the store changes no mode through a link.
+        project = self.project()
+        mine = self.tmp / "mine"
+        for tree in store.SPEC_TREES:
+            shutil.copytree(harness.REPO / tree, mine / tree)
+        modes = {path: os.stat(path).st_mode for path in [mine, *mine.rglob("*")]}
+        self.stored().parent.mkdir(parents=True)
+        try:
+            os.symlink(mine, self.stored(), target_is_directory=True)
+        except OSError as error:            # Windows without the privilege
+            self.skipTest(f"no symbolic link: {error}")
+        self.assert_ok(self.sync(project))
+        self.assertTrue(os.path.islink(self.stored()))
+        self.assertEqual({path: os.stat(path).st_mode for path in [mine, *mine.rglob("*")]}, modes)
+
+    def test_a_link_a_user_made_at_a_stored_version_is_refused(self):
+        # #384: the store repairs a folder of its own, never what a link a user made leads to.
+        project = self.project()
+        mine = self.tmp / "mine"
+        (mine / "agents").mkdir(parents=True)
+        (mine / "agents" / "notes.md").write_text("mine\n", encoding="utf-8")
+        self.stored().parent.mkdir(parents=True)
+        try:
+            os.symlink(mine, self.stored(), target_is_directory=True)
+        except OSError as error:            # Windows without the privilege
+            self.skipTest(f"no symbolic link: {error}")
+        proc = self.sync(project)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"{display(self.stored())} is there, and is no folder of the store — a link or a file, which "
+                      "holds no complete spec: remove it, then run the command again", proc.err)
+        self.assertTrue(os.path.islink(self.stored()))
+        self.assertEqual(sorted(p.name for p in mine.rglob("*")), ["agents", "notes.md"])
+        os.unlink(self.stored())                    # the remedy named, then the command again
+        self.assert_ok(self.sync(project))
+        self.assertEqual(self.validate(project, "--strict").returncode, 0)
 
     @DOWNLOADS
     def test_offline_a_stored_spec_the_lock_refuses_is_said_so(self):
