@@ -5,6 +5,7 @@ version, its embedded spec and its downloads given, to reach what a command line
 binary's embedded archive, a write interrupted, two writes of one version at once.
 """
 
+import errno
 import hashlib
 import io
 import os
@@ -319,6 +320,24 @@ class EmbeddedTests(StoreTestCase):
         self.assertFalse(os.path.lexists(path / "agents" / "theirs"))
         self.assertEqual((mine / "notes.md").read_text(encoding="utf-8"), "mine\n")
         self.assertFalse(os.stat(mine / "notes.md").st_mode & 0o222)
+
+    @unittest.skipIf(os.name == "nt", "the mode of a directory is POSIX's")
+    def test_a_version_is_made_writable_before_it_is_renamed(self):
+        # macOS renames no directory its owner may not write in — root neither: its mode alone is read.
+        the_store = store.Store(self.home, own_version="2.0.0", checkout=REPO, fetch=self.no_network)
+        version = Version("2.0.0")
+        path = self.incomplete(the_store, version)
+        self.assertFalse(os.stat(path).st_mode & 0o200)
+        rename = os.rename
+
+        def as_macos(source, *args, **kwargs):
+            if os.path.isdir(source) and not os.path.islink(source) and not os.stat(source).st_mode & 0o200:
+                raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(source))
+            return rename(source, *args, **kwargs)
+        with mock.patch.object(store.os, "rename", side_effect=as_macos):
+            self.assertEqual(the_store.ensure(version), "written")
+        self.assertTrue(the_store.has(version))
+        self.assertEqual(self.listing(), ["2.0.0"])
 
     def test_a_link_put_in_its_place_meanwhile_is_removed_not_followed(self):
         # Between the look and the rename, a link took the folder's place: the link goes, what it leads to stays.
