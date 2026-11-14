@@ -1107,11 +1107,10 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         if old is not None:
             raise SyncError(old)
     project = config.load(root, lenient=True)          # a synced it cannot read is its own to write again
-    local = os.path.join(root, config.LOCAL_FILE)
-    if os.path.exists(local) and not os.path.isfile(local):
+    local = config.local_not_a_file(root)
+    if local is not None:
         # Read as none, as `cortex config` reads it: the sync writes the file, which would fail half-way (#358).
-        raise SyncError(f"{config.LOCAL_FILE} is not a file — remove it, and `cortex sync` writes it again. Nothing of "
-                        "the project was changed")
+        raise SyncError(f"{local}. Nothing of the project was changed")
     against_locks(project, {"sync": mode, "claude_access": claude_access})
     if announce:
         out.write(f"Project: {display(root)}\n")

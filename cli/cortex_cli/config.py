@@ -830,6 +830,16 @@ def write_text(path: str, text: str) -> None:
         raise
 
 
+def local_not_a_file(root: str) -> Optional[str]:
+    """What to say of a ``cortex.local.toml`` at ``root`` that is not a file — a named pipe, a socket, a directory, or a
+    link to one, read as none — which a command that writes it would fail on, half-way, or write over (#358);
+    ``None`` for a file, or none there."""
+    path = os.path.join(root, LOCAL_FILE)
+    if os.path.exists(path) and not os.path.isfile(path):
+        return f"{LOCAL_FILE} is not a file — remove it, and `cortex sync` writes it again"
+    return None
+
+
 def write_local_text(root: str, text: str) -> None:
     write_text(os.path.join(root, LOCAL_FILE), text)
 

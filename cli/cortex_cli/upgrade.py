@@ -772,6 +772,10 @@ def local_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out:
     synced — no committed file written. At or below the team's version, the try changes nothing: its
     key is removed, and said (decision 28)."""
     root, project = _project(cwd)
+    local = config.local_not_a_file(root)
+    if local is not None:
+        # Said first, as `cortex sync` says it: the try is written there, which would fail half-way (#358).
+        raise UpgradeError(f"{local}. Nothing was changed")
     team = project.team_version
     if grammar.before_team(str(team)):
         raise UpgradeError(f"a try in {config.LOCAL_FILE} is read once the team's version is "

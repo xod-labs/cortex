@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import cli_harness as harness  # noqa: E402
-from test_cli_team import GIT, GIT_ENV, OWN, TeamTestCase, harness_path  # noqa: E402
+from test_cli_team import DOWNLOADS, GIT, GIT_ENV, OWN, TeamTestCase, harness_path  # noqa: E402
 
 from cortex_cli.paths import display  # noqa: E402
 
@@ -228,6 +228,41 @@ class LocalFileTests(SpecialFileTestCase):
                     (root / "cortex.local.toml").unlink()
                 self.assert_ok(self.within(root, "sync"))
                 self.assertTrue((root / "cortex.local.toml").is_file())
+
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_a_cortex_local_toml_that_is_not_a_file_is_said_before_upgrade_local_writes_the_try(self):
+        # The try written first, then synced: a directory there failed with a raw `Is a directory`, and a named pipe
+        # was written over. Said first, as the sync says it, and nothing changed — the store neither: its remedy,
+        # followed, lets the try be written.
+        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n', name=f"try-{kind}")
+                self.assert_ok(self.within(root, "sync"))
+                (root / "cortex.local.toml").unlink()
+                if kind == "directory":
+                    (root / "cortex.local.toml").mkdir()
+                else:
+                    os.mkfifo(root / "cortex.local.toml")
+                before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+                stored = sorted(os.listdir(self.home / "versions"))
+                for args in (("--local", OWN), ("--local", OWN, "--dry-run"), ("--local", "9.9.8")):
+                    proc = self.within(root, "upgrade", *args)
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertEqual("cortex upgrade: cortex.local.toml is not a file — remove it, and `cortex sync` "
+                                     "writes it again. Nothing was changed\n", proc.err)
+                    self.assertEqual({path: path.read_bytes() for path in root.rglob("*") if path.is_file()}, before)
+                    self.assertEqual(sorted(os.listdir(self.home / "versions")), stored)
+                    self.assertFalse((root / "cortex.local.toml").is_file())
+                if kind == "directory":
+                    (root / "cortex.local.toml").rmdir()
+                else:
+                    (root / "cortex.local.toml").unlink()
+                self.assert_ok(self.within(root, "sync"))
+                self.assertTrue((root / "cortex.local.toml").is_file())
+                self.assert_ok(self.within(root, "upgrade", "--local", OWN))
+                self.assertIn(f'version = "{OWN}"', (root / "cortex.local.toml").read_text(encoding="utf-8"))
 
 
 class RenamedTeamFolderTests(SpecialFileTestCase):
