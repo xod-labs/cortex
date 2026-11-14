@@ -715,6 +715,25 @@ class GitIgnoreTests(SyncTestCase):
                 for project in git:
                     self.assertEqual(self.check_ignore(project, name.rstrip("/")), expected)
 
+    def test_without_git_a_path_out_of_the_project_is_not_read_up_there_but_a_name_with_dots_is(self):
+        # A `..` part leads out of the project, where a .gitignore is no longer its own: `../out/f.txt` and
+        # `a/../../out/f.txt` are not said ignored by out/.gitignore. `a..b` and `..foo` are names, no `..` part:
+        # the project's .gitignore says them ignored.
+        project = self.project("dots")
+        (project / ".git").write_text("gitdir: ../nowhere\n", encoding="utf-8")
+        (project / ".gitignore").write_bytes(b"a..b\n..foo\n")
+        (project / "a").mkdir()
+        (project / "a..b").touch()
+        (project / "..foo").touch()
+        (self.tmp / "out").mkdir()
+        (self.tmp / "out" / ".gitignore").write_bytes(b"f.txt\n")
+        (self.tmp / "out" / "f.txt").touch()
+        with mock.patch.object(sync, "git_ignores", return_value=None):
+            self.assertIs(sync.ignored(project, "../out/f.txt"), False)
+            self.assertIs(sync.ignored(project, "a/../../out/f.txt"), False)
+            self.assertIs(sync.ignored(project, "a..b"), True)
+            self.assertIs(sync.ignored(project, "..foo"), True)
+
     @unittest.skipIf(os.name == "nt", "a symbolic link needs a privilege on Windows")
     def test_without_git_a_folder_s_gitignore_that_is_a_link_is_not_read(self):
         refused, *git = self.nested(b".claude/settings.local.json\n", None, "nested-link")
