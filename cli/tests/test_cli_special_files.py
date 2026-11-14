@@ -214,6 +214,28 @@ class FolderToMakeTests(SpecialFileTestCase):
         for name in ("api", ".cursor"):
             self.assert_said_as_it_is(name, "device", "a device")
 
+    @unittest.skipUnless(os.name != "nt" and os.path.exists("/dev/null"), "a link to /dev/null, which POSIX has")
+    @harness.outside_a_repository
+    def test_a_link_to_a_device_where_init_makes_a_folder_is_said_a_link_to_a_device_without_root(self):
+        # The device test makes its device, which only root may; CI runs as no root. /dev/null is a device anyone may
+        # link to, so a link to a device is said a link to one wherever the suite runs.
+        for name in ("api", ".cursor"):
+            with self.subTest(name=name):
+                args = ("--workspace", "--service", "api/x") if name == "api" else ("--tool", "cursor")
+                root = self.tmp / f"null-{name}"
+                root.mkdir()
+                (root / name).symlink_to("/dev/null")
+                where = (f"--service api/x: {display(str(root / 'api'))}" if name == "api" else
+                         f"the instructions file {display(str(root / '.cursor' / 'rules' / 'cortex.mdc'))}: "
+                         f"{display(str(root / '.cursor'))}")
+                proc = self.within(root, "init", *args)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn(f"{where} is a link to a device, not a folder\n", proc.err)
+                self.assertEqual(sorted(path.name for path in root.iterdir()), [name])
+                (root / name).unlink()
+                self.assert_ok(self.within(root, "init", *args))
+                self.assertTrue((root / name).is_dir())
+
 
 class ProjectFileTests(SpecialFileTestCase):
     """``cortex.toml``, which makes a directory a Cortex project."""
