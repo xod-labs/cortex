@@ -34,6 +34,7 @@ from cortex_core.project import (LOCAL_FILE, LOCK_FILE, MODES, PROJECT_FILE, TEA
                                   TEAM_LOCK_FILE)
 
 from . import store
+from .paths import display
 from .semver import Version
 
 PROJECT_HEADER = "# Written by `cortex init`. Committed: the Cortex version this project uses, and the team's theme.\n"
@@ -196,6 +197,22 @@ def find_project(start: str) -> Optional[str]:
         parent = os.path.dirname(current)
         if parent == current:
             return None
+        current = parent
+
+
+def no_project(cwd: str, hint: str = "") -> str:
+    """Why ``find_project`` found no project from ``cwd``: no ``cortex.toml`` there or above it — or, nearest, one
+    that is not a file, a named pipe, a socket or a directory, which was read as none (#358). ``hint`` follows the
+    first."""
+    current = cwd
+    while True:
+        path = os.path.join(current, PROJECT_FILE)
+        if os.path.exists(path) and not os.path.isfile(path):
+            return f"{display(path)} is not a file: remove it, then `cortex init` makes the directory a Cortex project"
+        parent = os.path.dirname(current)
+        if parent == current:
+            return (f"no {PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory a Cortex "
+                    f"project{hint}")
         current = parent
 
 
@@ -813,6 +830,16 @@ def write_text(path: str, text: str) -> None:
         raise
 
 
+def local_not_a_file(root: str) -> Optional[str]:
+    """What to say of a ``cortex.local.toml`` at ``root`` that is not a file — a named pipe, a socket, a directory, or a
+    link to one, read as none — which a command that writes it would fail on, half-way, or write over (#358);
+    ``None`` for a file, or none there."""
+    path = os.path.join(root, LOCAL_FILE)
+    if os.path.exists(path) and not os.path.isfile(path):
+        return f"{LOCAL_FILE} is not a file — remove it, and `cortex sync` writes it again"
+    return None
+
+
 def write_local_text(root: str, text: str) -> None:
     write_text(os.path.join(root, LOCAL_FILE), text)
 
@@ -834,10 +861,13 @@ def load_lock(root: str, name: str = LOCK_FILE, shown: Optional[str] = None, *,
     there is none. ``writer`` is the command a lock that is no lock is deleted for: the sync, or — the
     lock a try leaves — `cortex upgrade`."""
     path = os.path.join(root, name)
-    if not os.path.isfile(path):
-        return None
     again = f"delete it, and {writer} writes it again"     # a merge left conflict markers in it, say
     shown_name = shown or (TEAM_LOCK_NAME if name == TEAM_LOCK_FILE else name)
+    if os.path.exists(path) and not os.path.isfile(path):
+        # A named pipe, a socket, a directory, or a link to one: no lock to read, nor one to write over (#358).
+        raise ConfigError(f"{shown_name} is not a file — {again}")
+    if not os.path.isfile(path):
+        return None
     try:
         data = _read(path, shown_name)
         project.check_lock(data, shown_name)

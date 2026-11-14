@@ -38,6 +38,7 @@ import hashlib
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
@@ -453,8 +454,21 @@ def _refuse_a_file_on_the_way(path: Path, what: str) -> None:
     """A directory to create — ``path`` or one of its parents — that is a file already would stop
     the writes half-way: refused before any of them."""
     for directory in [*reversed(path.parents), path]:
-        if os.path.lexists(directory) and not directory.is_dir():   # a file, or a link that leads nowhere
-            raise InitError(f"{what}: {display(str(directory))} is a file, not a folder")
+        if os.path.lexists(directory) and not directory.is_dir():
+            raise InitError(f"{what}: {display(str(directory))} is {_no_folder(directory)}, not a folder")
+
+
+def _no_folder(path: Path) -> str:
+    """What is at ``path``, which is there and is no folder: a file, a named pipe, a socket, a device, a link to one, or
+    a link that leads nowhere — said as it is, never all a file (#358)."""
+    try:
+        mode = os.stat(path).st_mode
+    except OSError:
+        return "a link that leads nowhere"
+    kind = ("a file" if stat.S_ISREG(mode) else "a named pipe" if stat.S_ISFIFO(mode) else
+            "a socket" if stat.S_ISSOCK(mode) else "a device" if stat.S_ISCHR(mode) or stat.S_ISBLK(mode) else
+            "a special file")
+    return f"a link to {kind}" if os.path.islink(path) else kind
 
 
 def _backup_of(path: Path, content: bytes) -> Tuple[Path, bool]:
@@ -548,6 +562,11 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         instructions_file = root / TOOLS[tool] if tool else None
     if instructions_file is not None:
         _refuse_a_file_on_the_way(instructions_file.parent, f"the instructions file {display(str(instructions_file))}")
+        if os.path.exists(instructions_file) and not instructions_file.is_file():
+            # A named pipe, a socket, a directory, or a link to one: read as a file, a named pipe would hold the run
+            # with no limit (#358).
+            raise InitError(f"the instructions file {display(str(instructions_file))} is not a file: remove it, then "
+                            "run cortex init again, which writes it")
     if theme is not None and not is_theme(theme):
         raise InitError(f'--theme {theme}: no theme name — letters, digits, ".", "_" and "-"')
     services = _services(options, root, out, err) if options.workspace else []

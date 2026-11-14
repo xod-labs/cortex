@@ -744,8 +744,7 @@ def _ending(outcome: Outcome, out: TextIO) -> None:
 def _project(cwd: str) -> Tuple[str, config.Project]:
     root = config.find_project(cwd)
     if root is None:
-        raise UpgradeError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
-                           "a Cortex project")
+        raise UpgradeError(config.no_project(cwd))
     old = config.too_new(root, store.own_version())
     if old is not None and config.loose_pin(root)[0] == config.PROJECT_FILE:
         raise UpgradeError(old)
@@ -773,6 +772,10 @@ def local_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out:
     synced — no committed file written. At or below the team's version, the try changes nothing: its
     key is removed, and said (decision 28)."""
     root, project = _project(cwd)
+    local = config.local_not_a_file(root)
+    if local is not None:
+        # Said first, as `cortex sync` says it: the try is written there, which would fail half-way (#358).
+        raise UpgradeError(f"{local}. Nothing was changed")
     team = project.team_version
     if grammar.before_team(str(team)):
         raise UpgradeError(f"a try in {config.LOCAL_FILE} is read once the team's version is "
@@ -1256,8 +1259,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     file moved, its bootstrap compared with that version's templates (#348)."""
     root = config.find_project(cwd)
     if root is None:
-        raise UpgradeError(f"no {config.PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory "
-                           "a Cortex project")
+        raise UpgradeError(config.no_project(cwd))
     the_store = store.Store()
     pinned = config.loose_pin(root)
     refusal = config.team_refusal(root) if wanted is None and pinned is not None and pinned[1] > the_store.own \

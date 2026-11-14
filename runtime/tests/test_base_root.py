@@ -768,6 +768,67 @@ class TeamVersionTests(SyncedProjectTestCase):
             self.fail("read_pin waited on a named pipe at cortex.local.toml")
         self.assertEqual(read[0].version, "9.9.9")
 
+    @unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")
+    def test_a_loop_of_links_at_cortex_local_toml_is_none_said_once_in_the_log(self):
+        # #358: a stat that fails was read as no file, in silence — a mount that fails is said only when its stat
+        # succeeds. What cannot be told is a file is none, as the CLI reads it, and said once, as such a mount is.
+        import errno
+
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n')
+        local, other = self.project / "cortex.local.toml", self.project / "other.toml"
+        local.symlink_to(other)
+        other.symlink_to(local)
+        with self.assertLogs("cortex_runtime.base", "WARNING") as logged:
+            for _ in range(3):
+                self.assertEqual(pin().version, "9.9.9")
+        self.assertEqual([record.getMessage() for record in logged.records],
+                         [f"{local} cannot be read, and is not: {os.strerror(errno.ELOOP)}"])
+        host = self.cli("config")                                       # run with an empty environment
+        self.assertEqual((host.returncode, host.stderr), (0, b""), host.stdout + host.stderr)
+        self.assertRegex(host.stdout.decode(), r"(?m)^version +9\.9\.9 +cortex\.toml$")
+
+    def test_concurrent_requests_on_one_cortex_local_toml_that_cannot_be_opened_warn_once(self):
+        # #375: the error each file last gave is kept under a lock — requests run in threads. Each read of that record
+        # is held long enough here for every other request to reach it: without the lock, each would warn.
+        import errno
+        import threading
+        import time
+
+        from cortex_runtime import base
+
+        pin = self.files('version = "9.9.9"\ntheme = "h2g2"\n', local='spec = "cortex"\n')
+        local = self.project / "cortex.local.toml"
+        read_file = base.cascade.read_file
+
+        def failing(path):
+            if Path(path) == local:
+                raise OSError(errno.EIO, os.strerror(errno.EIO), path)
+            return read_file(path)
+
+        class Slow(dict):
+            def get(self, *args):
+                found = super().get(*args)
+                time.sleep(0.05)                    # what was read, held while the others read it too
+                return found
+
+        requests = 8
+        start = threading.Barrier(requests)
+        versions = []
+
+        def request():
+            start.wait()
+            versions.append(pin().version)
+
+        threads = [threading.Thread(target=request, daemon=True) for _ in range(requests)]
+        with mock.patch.object(base.cascade, "read_file", failing), mock.patch.object(base, "_UNREAD", Slow()), \
+                self.assertLogs("cortex_runtime.base", "WARNING") as logged:
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(30)
+        self.assertEqual(versions, ["9.9.9"] * requests)
+        self.assertEqual(len(logged.records), 1, logged.output)
+
     def test_cortex_theme_is_under_the_team_s_lock(self):
         self.files('version = "9.9.9"\n', team='theme = "h2g2"\nlocked = ["theme"]\n')
         self.assertIn("BASE-THEME", resolve_run(self.request(), self.project, theme="none").system_prompt)
