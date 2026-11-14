@@ -311,6 +311,7 @@ def _link_writable(path: Union[Path, str]) -> None:
     """Clear the read-only attribute of a link on Windows — its own, never its target's: Windows
     refuses to remove a read-only link (``DeleteFileW``), as it does a read-only file. A link has
     no attribute of its own on POSIX that its removal reads."""
+    return
     if os.name != "nt" or not os.lstat(path).st_file_attributes & stat.FILE_ATTRIBUTE_READONLY:
         return
     if os.chmod in os.supports_follow_symlinks:    # Python 3.13 on: chmod follows a link unless told not to
