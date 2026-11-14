@@ -7,7 +7,7 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
-## [1.8.5] - 2026-11-13 — In Much the Same Way That Bricks Don't _(Released)_
+## [1.8.5] - 2026-11-14 — In Much the Same Way That Bricks Don't _(Released)_
 [Full notes](changelog/1.8.5.md)
 
 ### Fixed
