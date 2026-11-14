@@ -1067,7 +1067,7 @@ class OptionTests(InitTestCase):
             (self.project / ".cursor").symlink_to(self.project / "gone")
             proc = self.init("--tool", "cursor")
             self.assertEqual(proc.returncode, 1)
-            self.assertIn("is a file, not a folder", proc.err)
+            self.assertIn("is a link that leads nowhere, not a folder", proc.err)
             self.assertEqual(sorted(p.name for p in self.project.iterdir()), [".cursor", "api"])
 
     def test_force_never_overwrites_a_backup(self):

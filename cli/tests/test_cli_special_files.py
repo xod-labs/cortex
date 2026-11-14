@@ -128,6 +128,40 @@ class InstructionsFileTests(SpecialFileTestCase):
                 self.assertTrue((root / "CLAUDE.md").is_file())
 
 
+class FolderToMakeTests(SpecialFileTestCase):
+    """A folder ``cortex init`` makes — a service's, the tool's — where something that is no folder is."""
+
+    @harness.outside_a_repository
+    def test_what_is_no_folder_where_init_makes_one_is_said_as_it_is(self):
+        # A named pipe or a socket there was said to be a file. It is named as it is — a link to one as a link — and
+        # refused before anything is written; removed, init makes the folder.
+        links = (False,) + ((True,) if os.name != "nt" else ())
+        for kind in SPECIALS:
+            for link in links:
+                for args, name in ((("--workspace", "--service", "api/x"), "api"), (("--tool", "cursor"), ".cursor")):
+                    with self.subTest(kind=kind, link=link, name=name):
+                        root = self.tmp / f"make-{kind}-{link}-{name}"
+                        root.mkdir()
+                        if link:
+                            self.make(self.tmp / f"{root.name}-target", kind)
+                            (root / name).symlink_to(self.tmp / f"{root.name}-target")
+                        else:
+                            self.make(root / name, kind)
+                        what = {"pipe": "a named pipe", "socket": "a socket"}[kind]
+                        what = f"a link to {what}" if link else what
+                        where = (f"--service api/x: {display(str(root / 'api'))}" if name == "api" else
+                                 f"the instructions file {display(str(root / '.cursor' / 'rules' / 'cortex.mdc'))}: "
+                                 f"{display(str(root / '.cursor'))}")
+                        proc = self.within(root, "init", *args)
+                        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                        self.assertIn(f"{where} is {what}, not a folder\n", proc.err)
+                        self.assertNotIn("is a file", proc.err)
+                        self.assertEqual(sorted(path.name for path in root.iterdir()), [name])
+                        (root / name).unlink()
+                        self.assert_ok(self.within(root, "init", *args))
+                        self.assertTrue((root / name).is_dir())
+
+
 class ProjectFileTests(SpecialFileTestCase):
     """``cortex.toml``, which makes a directory a Cortex project."""
 
