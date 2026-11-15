@@ -19,6 +19,7 @@ developer's (§3.3); the lock of a version is beside the file it comes from (§3
 from __future__ import annotations
 
 import dataclasses
+import errno
 import json
 import os
 import re
@@ -850,9 +851,23 @@ def local_not_a_file(root: str) -> Optional[str]:
     link to one, read as none — which a command that writes it would fail on, half-way, or write over (#358);
     ``None`` for a file, or none there."""
     path = os.path.join(root, LOCAL_FILE)
-    if os.path.exists(path) and not os.path.isfile(path):
+    if (os.path.exists(path) and not os.path.isfile(path)) or link_loop(path):
         return f"{LOCAL_FILE} is not a file — remove it, and `cortex sync` writes it again"
     return None
+
+
+def link_loop(path: str) -> bool:
+    """Whether ``path`` is a link that leads, through links, back to itself: no file, and none ever written through it
+    — read as none, a sync replaced it in silence, where it refuses what else is no file there (#386). A link that
+    leads nowhere is none of it: the file it names is not there yet."""
+    if not os.path.islink(path):
+        return False
+    try:
+        os.stat(path)
+    except OSError as error:
+        # ELOOP; Windows says ERROR_CANT_RESOLVE_FILENAME (1921) of a loop of links.
+        return error.errno == errno.ELOOP or getattr(error, "winerror", None) == 1921
+    return False
 
 
 def write_local_text(root: str, text: str) -> None:
