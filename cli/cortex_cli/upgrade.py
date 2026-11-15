@@ -1837,7 +1837,8 @@ def _ignore_files(root: str, top: str, files: List[Path]) -> List[str]:
         found.append(os.path.join(root, exclude.stdout.strip()))
     excludes = _git(root, "config", "--path", "--get", "core.excludesFile")
     if excludes.returncode == 0 and excludes.stdout.strip():
-        found.append(os.path.join(root, excludes.stdout.strip()))
+        # `--path` expands ~/ as git does; a path still relative, git reads from the top of the work tree.
+        found.append(os.path.join(top, excludes.stdout.strip()))
     elif excludes.returncode == 1:
         home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
         found.append(os.path.join(home, "git", "ignore"))

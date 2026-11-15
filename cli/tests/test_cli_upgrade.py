@@ -1304,11 +1304,19 @@ class IgnoredTimeoutTests(unittest.TestCase):
         files = [root / "cortex.toml"]
         environment = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "HOME": str(tmp / "home"),
                        "XDG_CONFIG_HOME": str(tmp / "xdg")}
-        cases = [(top / ".gitignore", True), (top / "sub" / ".gitignore", True), (root / ".gitignore", True),
-                 (top / ".git" / "info" / "exclude", True), (tmp / "xdg" / "git" / "ignore", True),
-                 (tmp / "home" / ".config" / "git" / "ignore", False), (tmp / "excludes", True),
-                 (tmp / "linked", True)]
-        for pipe, xdg in cases:
+        # The excludes file as core.excludesFile names it: absolute, relative — to the top of the work tree, where git
+        # reads it from, never the project's folder below it —, or from the home folder.
+        cases = [(top / ".gitignore", True, None), (top / "sub" / ".gitignore", True, None),
+                 (root / ".gitignore", True, None), (top / ".git" / "info" / "exclude", True, None),
+                 (tmp / "xdg" / "git" / "ignore", True, None), (tmp / "home" / ".config" / "git" / "ignore", False, None),
+                 (tmp / "excludes", True, str(tmp / "excludes")), (tmp / "linked", True, str(tmp / "linked")),
+                 (top / "myignore", True, "myignore"), (tmp / "home" / "tilde", True, "~/tilde")]
+        run = subprocess.run
+
+        def bounded(*args, **kwargs):           # a git that waits on a pipe fails the test, never holds it
+            return run(*args, **{**kwargs, "timeout": kwargs.get("timeout") or 20})
+
+        for pipe, xdg, excludes in cases:
             with self.subTest(pipe=pipe.relative_to(tmp).as_posix()):
                 pipe.parent.mkdir(parents=True, exist_ok=True)
                 if pipe.exists():
@@ -1318,9 +1326,9 @@ class IgnoredTimeoutTests(unittest.TestCase):
                     pipe.symlink_to(tmp / "aside")
                 else:
                     os.mkfifo(pipe)
-                if pipe.name in ("excludes", "linked"):
-                    subprocess.run(["git", "-C", str(top), "config", "core.excludesFile", str(pipe)], check=True)
-                with mock.patch.dict(os.environ, environment):
+                if excludes is not None:
+                    subprocess.run(["git", "-C", str(top), "config", "core.excludesFile", excludes], check=True)
+                with mock.patch.dict(os.environ, environment), mock.patch.object(subprocess, "run", bounded):
                     if not xdg:
                         del os.environ["XDG_CONFIG_HOME"]
                     with self.assertRaises(upgrade.IgnoreFileError) as said:
