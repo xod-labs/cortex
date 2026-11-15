@@ -1192,6 +1192,36 @@ class CommitTests(GitTestCase):
         self.assertEqual(self.changed(alpha), ["cortex.lock", "cortex.toml", "shared/assistant.md"])
         self.assertEqual(self.git(alpha, "status", "--porcelain"), "")
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipe here")
+    def test_an_ignore_file_that_is_a_named_pipe_above_the_project_is_named_never_waited_on(self):
+        # The .gitignore of a folder between the top of the work tree and the project: `git status`, asked what
+        # --commit is to commit, waited on it with no limit (#386). Named before git is asked, and before anything is
+        # written; the remedy, followed, lets the command move the project and commit it.
+        top = self.code
+        alpha = self.make("sub/alpha")
+        first = self.repository(top, ignore="cortex.local.toml\ncortex\n")
+        pipe = top / "sub" / ".gitignore"
+        os.mkfifo(pipe)
+        args = ("upgrade", "--commit", "--message", self.MESSAGE)
+        try:
+            proc = subprocess.run(harness.command(*args), cwd=alpha, env=self.env, stdin=subprocess.DEVNULL,
+                                  capture_output=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            self.fail("cortex upgrade --commit waits on the named pipe")
+        err = proc.stderr.decode()
+        self.assertEqual(proc.returncode, 1, err)
+        self.assertIn(f"cortex upgrade: {display(pipe)} is not a file, and git, reading it as an ignore file, would "
+                      "wait on it: remove it, then run the command again\n", err)
+        self.assertIn('version = "9.9.8"', self.pinned(alpha))
+        self.assertEqual(self.head(top), first)
+        pipe.unlink()
+        proc = self.run_cortex(alpha, *args)
+        self.assert_ok(proc)
+        self.assertNotIn(".gitignore", proc.err)
+        self.assert_moved(alpha)
+        self.assertEqual(self.git(top, "log", "-1", "--format=%s"), self.MESSAGE)
+        self.assertEqual(self.changed(top), ["sub/alpha/cortex.lock", "sub/alpha/cortex.toml"])
+
 
 @DOWNLOADS
 @NEEDS_GIT

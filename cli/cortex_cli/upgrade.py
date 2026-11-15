@@ -63,6 +63,10 @@ class UpgradeError(Exception):
     pass
 
 
+class IgnoreFileError(UpgradeError):
+    """An ignore file git would read that is no file: git would wait on it, as long as it is there (#386)."""
+
+
 @dataclass
 class Outcome:
     """What the upgrade of one project did — or, dry, would do: what ``--all`` says of it, and what
@@ -1799,9 +1803,50 @@ def _ignored(root: str, files: List[Path]) -> List[str]:
     return [path for path in _git_paths(root, files) if sync.ignored(Path(root), path) is True]
 
 
+def _waits(path: str) -> bool:
+    """Whether ``path`` is there as no file, nor a folder — a named pipe, a socket, a device — or a link to one: what
+    git, opening it as an ignore file, would wait on with no limit."""
+    for read in (os.lstat, os.stat):
+        try:
+            mode = read(path).st_mode
+        except OSError:
+            continue
+        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode)):
+            return True
+    return False
+
+
+def _ignore_files(root: str, top: str, files: List[Path]) -> List[str]:
+    """The ignore files `git status` reads to tell whether ``files`` are untracked, in the work tree of ``root``, whose
+    top is ``top``: the .gitignore of each folder from the top down to each file's, the repository's info/exclude,
+    and the user's core.excludesFile — its own default where it is not set."""
+    found = []
+    for path in files:
+        within = _within(top, path)
+        if within is None:
+            continue
+        folders = Path(within).parts[:-1]
+        found += [os.path.join(top, *folders[:depth], ".gitignore") for depth in range(len(folders) + 1)]
+    exclude = _git(root, "rev-parse", "--git-path", "info/exclude")
+    if exclude.returncode == 0 and exclude.stdout.strip():
+        found.append(os.path.join(root, exclude.stdout.strip()))
+    excludes = _git(root, "config", "--path", "--get", "core.excludesFile")
+    if excludes.returncode == 0 and excludes.stdout.strip():
+        found.append(os.path.join(root, excludes.stdout.strip()))
+    elif excludes.returncode == 1:
+        home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+        found.append(os.path.join(home, "git", "ignore"))
+    return list(dict.fromkeys(os.path.normpath(path) for path in found))
+
+
 def _changed(root: str, top: str, files: List[Path]) -> List[Path]:
     """Those of ``files`` git sees changed in the work tree of ``root``, whose top is ``top``: staged,
-    not staged, or untracked."""
+    not staged, or untracked. ``UpgradeError`` naming an ignore file git would read that is no file — a named pipe —,
+    before git is asked: git would wait on it, as long as it is there (#386)."""
+    for path in _ignore_files(root, top, files):
+        if _waits(path):
+            raise IgnoreFileError(f"{display(path)} is not a file, and git, reading it as an ignore file, would wait on "
+                               "it: remove it, then run the command again")
     proc = _git_ok(root, "status", "--porcelain", "-z", "--untracked-files=all", "--",
                    *_literal(_git_paths(root, files)), timeout=None)
     seen, fields = [], iter(proc.stdout.split("\0"))
@@ -1838,6 +1883,8 @@ def _before(root: str, top: str, files: List[Path]) -> Tuple[List[Path], Optiona
         return [], None
     try:
         return _changed(root, top, inside), None
+    except IgnoreFileError:
+        raise                   # refused before anything is written: the remedy, followed, lets the run commit
     except UpgradeError as error:
         return [], str(error)
 

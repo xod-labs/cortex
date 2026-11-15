@@ -1286,6 +1286,54 @@ class IgnoredTimeoutTests(unittest.TestCase):
             self.assertEqual(upgrade._ignored(str(root), files), ["cortex.local.toml"])
             self.assertEqual(sum("check-ignore" in call.args[0] for call in asked.call_args_list), 1)
 
+    @unittest.skipUnless(hasattr(os, "mkfifo") and shutil.which("git"), "needs git and a named pipe")
+    @harness.outside_a_repository
+    def test_each_ignore_file_git_status_reads_that_is_a_named_pipe_is_named_before_git_is_asked(self):
+        # `git status` reads the .gitignore of each folder from the top down to the file's, info/exclude, and the
+        # user's excludes file — set, or its default under XDG_CONFIG_HOME, else ~/.config: a named pipe at any of
+        # them held it with no limit (#386). Each is named; removed, git is asked.
+        tmp = Path(tempfile.mkdtemp(prefix="cortex-upgrade-")).resolve()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        top = tmp / "top"
+        root = top / "sub" / "app"
+        root.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(top)], check=True)
+        (root / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")
+        (tmp / "xdg" / "git").mkdir(parents=True)
+        (tmp / "home" / ".config" / "git").mkdir(parents=True)
+        files = [root / "cortex.toml"]
+        environment = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "HOME": str(tmp / "home"),
+                       "XDG_CONFIG_HOME": str(tmp / "xdg")}
+        cases = [(top / ".gitignore", True), (top / "sub" / ".gitignore", True), (root / ".gitignore", True),
+                 (top / ".git" / "info" / "exclude", True), (tmp / "xdg" / "git" / "ignore", True),
+                 (tmp / "home" / ".config" / "git" / "ignore", False), (tmp / "excludes", True),
+                 (tmp / "linked", True)]
+        for pipe, xdg in cases:
+            with self.subTest(pipe=pipe.relative_to(tmp).as_posix()):
+                pipe.parent.mkdir(parents=True, exist_ok=True)
+                if pipe.exists():
+                    pipe.unlink()
+                if pipe.name == "linked":           # a link to a named pipe, which git follows to read it
+                    os.mkfifo(tmp / "aside")
+                    pipe.symlink_to(tmp / "aside")
+                else:
+                    os.mkfifo(pipe)
+                if pipe.name in ("excludes", "linked"):
+                    subprocess.run(["git", "-C", str(top), "config", "core.excludesFile", str(pipe)], check=True)
+                with mock.patch.dict(os.environ, environment):
+                    if not xdg:
+                        del os.environ["XDG_CONFIG_HOME"]
+                    with self.assertRaises(upgrade.IgnoreFileError) as said:
+                        upgrade._changed(str(root), str(top), files)
+                    self.assertEqual(str(said.exception), f"{str(pipe).replace(os.sep, '/')} is not a file, and git, "
+                                     "reading it as an ignore file, would wait on it: remove it, then run the command "
+                                     "again")
+                    pipe.unlink()
+                    self.assertEqual(upgrade._changed(str(root), str(top), files), files)
+        (root / ".gitignore").mkdir()           # no file either, which git reads as none: never waited on
+        with mock.patch.dict(os.environ, environment):
+            self.assertEqual(upgrade._changed(str(root), str(top), files), files)
+
     @unittest.skipUnless(shutil.which("git"), "needs git")
     @harness.outside_a_repository
     def test_a_file_out_of_the_repository_is_not_said_ignored_by_a_gitignore_out_there(self):
