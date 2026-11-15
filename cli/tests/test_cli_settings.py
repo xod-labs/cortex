@@ -746,7 +746,8 @@ class DevelopmentBuildTests(SettingsTestCase):
         def head():
             return subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True).stdout
 
-        for n, setting in enumerate((["--unset", f"branch.{branch}.remote"],)):     # a branch it merges, no remote
+        for n, setting in enumerate((["--unset", f"branch.{branch}.remote"],      # a branch it merges, no remote
+                                     [f"branch.{branch}.remote", "."])):              # merged from this repository
             with self.subTest(setting=setting):
                 subprocess.run([*git, "config", *setting], check=True, capture_output=True)
                 before = head()

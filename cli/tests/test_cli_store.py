@@ -559,6 +559,9 @@ class CheckoutPullTests(unittest.TestCase):
                              (upstream + '[branch "main"]\nremote = upstream\nmerge = refs/heads/main\n', "pull"),
                              # A branch it merges, but no remote: git sees no upstream, a plain pull would fail.
                              (upstream + '[branch "main"]\nmerge = refs/heads/main\n', "pull upstream HEAD"),
+                             # Merged from this repository: a plain pull leaves the checkout behind.
+                             (upstream + '[branch "main"]\nremote = .\nmerge = refs/heads/main\n',
+                              "pull upstream HEAD"),
                              (f'[remote "{odd}"]\n\turl = /x\n', f"pull {paths.quote(odd)} HEAD")):
             with self.subTest(config=config):
                 self.assertEqual(store._pull(self.repository(config=config)), pull)
