@@ -329,12 +329,46 @@ class BumpTests(unittest.TestCase):
     def test_every_line_is_read_once_with_what_markdown_makes_of_it(self):
         text = "### Fixed\n- a\nlazy\n  - b\n  ```\n  x\n  ```\n- ```\n  y\n  ```\n\n<!--\nz\n-->\ntext\n"
         self.assertEqual([tuple(line) for line in markdown_lines.lines(text)], [
-            ("### Fixed", False, False, False), ("- a", False, False, True), ("lazy", False, True, False),
-            ("  - b", False, True, True), ("  ```", True, True, False), ("  x", True, True, False),
-            ("  ```", True, True, False), ("- ```", False, False, True), ("  y", True, True, False),
-            ("  ```", True, True, False), ("", False, True, False), ("<!--", True, False, False),
-            ("z", True, False, False), ("-->", True, False, False), ("text", False, False, False),
-            ("", False, False, False)])
+            ("### Fixed", False, False, False, False), ("- a", False, False, True, True),
+            ("lazy", False, True, False, True), ("  - b", False, True, True, True), ("  ```", True, True, False, False),
+            ("  x", True, True, False, False), ("  ```", True, True, False, False), ("- ```", False, False, True, False),
+            ("  y", True, True, False, False), ("  ```", True, True, False, False), ("", False, True, False, False),
+            ("<!--", True, False, False, False), ("z", True, False, False, False), ("-->", True, False, False, False),
+            ("text", False, False, False, True), ("", False, False, False, False)])
+
+    def test_indented_code_is_no_entry_s_text(self):
+        # #354: five spaces past the marker, or six below an empty one, the entry's text is code — no paragraph, and
+        # its 💥 marks nothing: the entry counts for its kind alone (commonmark.js 0.31.2).
+        for entry in ("-     💥 code\n", "-\n      💥 code\n", "-     💥 code\n  💥 not first\n"):
+            with self.subTest(entry=entry):
+                self.assertEqual(prepared(changelog(f"### Changed\n{entry}", "2.3.4")), "2.4.0")
+                self.assertEqual(devversion.unreleased(changelog(f"### Changed\n{entry}")), {"Changed": [""]})
+        # As indented as its content, the line below an empty marker is its paragraph's text: marked breaking, it is.
+        self.assertEqual(prepared(changelog("### Changed\n-\n     💥 text\n", "2.3.4")), "3.0.0")
+        self.assertEqual([line.paragraph for line in markdown_lines.lines("-     code\n-\n      code\n- text\n")],
+                         [False, False, False, True, False])
+
+    def test_an_item_s_line_that_holds_no_paragraph_is_continued_by_none(self):
+        # #354: past its marker, a heading, a thematic break or code holds no paragraph — an item nested on the line, a
+        # quote, neither, past their own marks: the line below is no lazy line of the entry, and the list ends there.
+        for line in ("- # Note", "- #", "- * * *", "- ***", "- ___", "- * # h", "- 1. * * *", "- > # x", "- *     code"):
+            with self.subTest(line=line):
+                self.assertEqual(prepared(changelog(f"### Fixed\n{line}\nlazy\n  - 💥 x\n", "2.3.4")), "3.0.0")
+        for line in ("- #tag", "- * x", "- > x", "- 1. x"):
+            with self.subTest(line=line):
+                self.assertEqual(prepared(changelog(f"### Fixed\n{line}\nlazy\n  - 💥 x\n", "2.3.4")), "2.3.5")
+        # An item nested on the line is one more: less indented than its content, a line of = is no underline of its
+        # paragraph — it continues it lazily, and the item below is the entry's.
+        self.assertEqual(prepared(changelog("### Fixed\n- * a\n  ===\nlazy\n  - 💥 b\n", "2.3.4")), "2.3.5")
+        # Its own text is none: the entry counts for its kind alone.
+        self.assertEqual(devversion.unreleased(changelog("### Changed\n- # 💥 a\n- * 💥 b\n- > 💥 c\n- d\n")),
+                         {"Changed": ["", "", "", "d"]})
+        self.assertEqual([line.paragraph for line in markdown_lines.lines("- # h\n- * x\n- x")], [False, False, True])
+        # Read once, however many items the line nests.
+        start = time.monotonic()
+        nested = "- " * 20000 + "x\n" + "lazy\n" * 20000
+        self.assertEqual(prepared(changelog(f"### Fixed\n{nested}", "2.3.4")), "2.3.5")
+        self.assertLess(time.monotonic() - start, 5)
 
     def test_a_section_heading_takes_a_tab(self):
         text = "## [Unreleased]\n\n### Fixed\n- a fix\n\n##\t[2.3.4] - 2026-11-01\n"
@@ -385,6 +419,34 @@ class BumpTests(unittest.TestCase):
         # An empty item ends at a blank line below it: what follows, indented as its content, is no item of it.
         self.assertEqual(prepared(changelog("### Fixed\n-\n\n  - 💥 b\n", "2.3.4")), "3.0.0")
 
+    def test_a_quote_s_line_is_read_with_what_its_lines_above_left_open(self):
+        # #354: a fence or a comment open in a quote holds its quoted lines below — no paragraph, which the line below
+        # the quote would go on with: that line starts one, which a line of - makes a heading, no entry.
+        for quote in ("> ```\n> x\n", "> ~~~\n>\n> x\n", "> <!--\n> x\n", "> - ```\n>   x\n", "> a\nlazy\n> ===\n",
+                      "> a\n> ===\n", "> 1. a\n>    b\n>    ===\n"):
+            with self.subTest(quote=quote):
+                self.assertEqual(prepared(changelog(f"### Changed\n{quote}text\n-\n", "2.3.4")), "2.3.5")
+        # A quoted line goes on with the quote's paragraph — indented as code, or an empty item, which interrupts none
+        # — and with its item's, past a blank quoted line; the line below goes on with it, and the item below is one.
+        for quote in ("> a\n>     x\n", "> a\n>     # x\n", "> a\n> *\n", "> - a\n>\n>     x\n", "> a\nlazy\n>     x\n",
+                      "> ```\n> ```\n> y\n", "> <!-- c -->\n> y\n"):
+            with self.subTest(quote=quote):
+                self.assertEqual(prepared(changelog(f"### Changed\n{quote}text\n-\n", "2.3.4")), "2.4.0")
+        # In an entry, as indented as its content, too: the line below its fence's lines ends the list.
+        for entry in ("- a\n  > ```\n  > x\n", "- > ```\n  > x\n"):
+            with self.subTest(entry=entry):
+                self.assertEqual(prepared(changelog(f"### Fixed\n{entry}lazy\n  - 💥 b\n", "2.3.4")), "3.0.0")
+        self.assertEqual(prepared(changelog("### Fixed\n- a\n  > b\n  >     x\nlazy\n  - 💥 b\n", "2.3.4")), "2.3.5")
+        # Read once, however many quotes and items its lines nest, and however many lines go on with them.
+        start = time.monotonic()
+        nested = "> " + "- " * 50000 + "x\n" + ">\n" * 50000 + (">\n>" + " " * 50000 + "y\n") * 50
+        self.assertEqual(prepared(changelog(f"### Changed\n{nested}text\n-\n", "2.3.4")), "2.4.0")
+        nested = "> " + "- " * 50000 + "x\n" + ">  y\n" * 50000
+        self.assertEqual(prepared(changelog(f"### Changed\n{nested}text\n-\n", "2.3.4")), "2.4.0")
+        self.assertEqual(prepared(changelog("### Changed\n" + ("> " * 1000 + "x\n") * 1000 + "text\n-\n", "2.3.4")),
+                         "2.4.0")
+        self.assertLess(time.monotonic() - start, 5)
+
     def test_a_heading_in_an_item_and_a_quote_s_heading_or_code_are_no_paragraph(self):
         # Bluspark's fourth pass: indented past three spaces, as far as an item's content, a heading is the item's —
         # the line below continues no paragraph, and the list ends there. CommonMark, as markdown-it reads it.
@@ -427,11 +489,40 @@ class BumpTests(unittest.TestCase):
         self.assertEqual(prepared(changelog(f"### Changed\n{nested}\ntext\n-\n", "2.3.4")), "2.4.0")
         self.assertLess(time.monotonic() - start, 2)
 
-    def test_an_html_block_other_than_a_comment_is_read_as_markdown(self):
-        # A limit the reader states: CommonMark holds no Markdown in a <pre>, which is read here — its section too.
-        text = changelog("### Fixed\n- a\n\n<pre>\n## [9.9.9]\n</pre>\n", "2.3.4")
-        self.assertIn("9.9.9", [label for label, _ in markdown_lines.sections(text)])
-        self.assertEqual(prepared(text), "9.9.10")
+    def test_an_html_block_holds_no_section_heading_nor_entry(self):
+        # #354: <pre>, <script>, <style> or <textarea>, in any case, holds what follows up to the end tag of any of them
+        # — on its own line too; a block element's tag, <div> or </details>, up to a blank line (commonmark.js 0.31.2).
+        for html in ("<pre>\n## [9.9.9]\n</pre>", '<PRE class="x">\n## [9.9.9]\n</Pre>', "<script>\n## [9.9.9]\n</style>",
+                     "<details>\n## [9.9.9]", "</div>\n## [9.9.9]", "<div/>\n## [9.9.9]", "<h1>\n## [9.9.9]",
+                     "<search>\n## [9.9.9]", "text\n<div>\n## [9.9.9]", "<textarea>\n### Removed\n- b\n</textarea>",
+                     "<div class='x'>\n### Removed\n- b\n\n### Fixed"):
+            with self.subTest(html=html):
+                text = changelog(f"### Fixed\n- a\n\n{html}\n", "2.3.4")
+                self.assertEqual(devversion.released(text), [Version("2.3.4")])
+                self.assertEqual(prepared(text), "2.3.5")
+        # Closed on its line, it holds that line only; a blank line ends a block element's, and what follows is read.
+        # A tag that only starts with pre's name is none of them: under a paragraph, it goes on with it.
+        for html in ("<pre>x</pre>\n## [9.9.9]\n</pre>", "<details>\n\n## [9.9.9]", "text\n<prex>\n## [9.9.9]\n</pre>"):
+            with self.subTest(html=html):
+                self.assertEqual(prepared(changelog(f"### Fixed\n- a\n\n{html}\n", "2.3.4")), "9.9.10")
+        # A block element's, to the end of the file when no blank line ends it — no line ending at its end either.
+        text = "## [Unreleased]\n### Fixed\n- a\n\n## [2.3.4] - x\n\n<div>\n## [9.9.9] - y"
+        self.assertEqual(devversion.released(text), [Version("2.3.4")])
+        # In an item, it ends with it; in a quote, with the quote, and the line below continues no paragraph.
+        self.assertEqual(devversion.released(changelog("### Fixed\n- <pre>\n  ## [9.9.9]\n  </pre>\n", "2.3.4")),
+                         [Version("2.3.4")])
+        self.assertEqual(prepared(changelog("### Fixed\n- a\n  <div>\n- 💥 b\n", "2.3.4")), "3.0.0")
+        for quote in ("> <pre>\n> x\n", "> <div>\n> x\n", "> a\n> <div>\n"):
+            with self.subTest(quote=quote):
+                self.assertEqual(prepared(changelog(f"### Changed\n{quote}text\n-\n", "2.3.4")), "2.3.5")
+        for quote in ("> <div>\n>\n> x\n", "> <pre>x</pre>\n> x\n"):
+            with self.subTest(quote=quote):
+                self.assertEqual(prepared(changelog(f"### Changed\n{quote}text\n-\n", "2.3.4")), "2.4.0")
+        # Never closed at the top level, <pre> hides nothing, as a fence; a tag of another kind alone on its line is
+        # read as Markdown — a limit the reader states, where CommonMark holds no Markdown up to a blank line.
+        for html in ("<pre>\n## [9.9.9]", "<span>\n## [9.9.9]", "<prex>\n## [9.9.9]"):
+            with self.subTest(html=html):
+                self.assertEqual(prepared(changelog(f"### Fixed\n- a\n\n{html}\n", "2.3.4")), "9.9.10")
 
     def test_unreleased_is_read_in_any_case(self):
         text = changelog("### Removed\n- a thing\n", "2.3.4").replace("[Unreleased]", "[unreleased]")
