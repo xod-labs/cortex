@@ -145,7 +145,7 @@ class GitFileTests(SpecialFileTestCase):
                     proc = self.within(root, *args)
                     self.assertEqual(proc.returncode, 1, proc.out + proc.err)
                     self.assertIn("cortex sync: cortex/ is a git submodule, which Cortex did not write.", proc.err)
-                    self.assertIn("cortex/.git is not a file, nor a folder, which git would wait on: remove it, then "
+                    self.assertIn("cortex/.git is not a file, nor a folder, and names no repository: remove it, then "
                                   "run the command again.\n", proc.err)
                     self.assertNotIn("git -C", proc.err)
                     self.assertEqual(os.listdir(root / "cortex"), [".git"])
