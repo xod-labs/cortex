@@ -735,6 +735,30 @@ class DevelopmentBuildTests(SettingsTestCase):
     @unittest.skipIf(harness.BINARY, "a source checkout's remedy")
     @NEEDS_GIT
     @harness.outside_a_repository
+    def test_a_branch_a_plain_pull_cannot_update_pulls_its_remote_s_default_branch(self):
+        # #379: a branch git sees no upstream for, or whose upstream no pull updates it from: a plain pull fails, or
+        # leaves it behind — its remote's default branch is pulled. Each time behind again, its remote back to origin.
+        checkout = self.behind()
+        git = [*self.GIT_ARGS, "-C", str(checkout)]
+        branch = subprocess.run([*git, "symbolic-ref", "--short", "HEAD"], check=True, capture_output=True,
+                                text=True).stdout.strip()
+
+        def head():
+            return subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True).stdout
+
+        for n, setting in enumerate((["--unset", f"branch.{branch}.remote"],)):     # a branch it merges, no remote
+            with self.subTest(setting=setting):
+                subprocess.run([*git, "config", *setting], check=True, capture_output=True)
+                before = head()
+                plain = subprocess.run([*git, "pull"], capture_output=True)
+                self.assertTrue(plain.returncode != 0 or head() == before, plain.stdout + plain.stderr)
+                self.told_to_pull(checkout, "pull origin HEAD", name=f"app{n}")
+                subprocess.run([*git, "reset", "-q", "--hard", "HEAD~1"], check=True, capture_output=True)
+                subprocess.run([*git, "config", f"branch.{branch}.remote", "origin"], check=True, capture_output=True)
+
+    @unittest.skipIf(harness.BINARY, "a source checkout's remedy")
+    @NEEDS_GIT
+    @harness.outside_a_repository
     def test_a_checkout_a_reftable_keeps_pulls_its_remote_s_default_branch(self):
         # #379: a reftable keeps HEAD, its HEAD file a stand-in: the default branch is pulled, on a branch or detached.
         probe = subprocess.run([*self.GIT_ARGS, "init", "-q", "--ref-format=reftable", str(self.tmp / "probe")],

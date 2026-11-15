@@ -533,9 +533,9 @@ class CheckoutPullTests(unittest.TestCase):
 
     def test_a_branch_with_an_upstream_is_pulled_plainly(self):
         self.assertEqual(store._pull(self.repository()), "pull")
-        # Its remote unset, git pulls origin's.
+        # Its remote unset, git sees no upstream — "There is no tracking information": a plain pull fails.
         self.assertEqual(store._pull(self.repository(config=ORIGIN + '[branch "main"]\nmerge = refs/heads/main\n')),
-                         "pull")
+                         "pull origin HEAD")
 
     def test_a_detached_head_pulls_its_remote_s_default_branch(self):
         for head in (OID, OID + "\n", OID + "0123456789abcdef01234567\n"):          # SHA-1's, SHA-256's
@@ -557,7 +557,7 @@ class CheckoutPullTests(unittest.TestCase):
                              (fork + ORIGIN + '[branch "main"]\nremote = fork\n', "pull fork HEAD"),     # the branch's
                              (fork + '[branch "main"]\nremote = gone\n', "pull fork HEAD"),
                              (upstream + '[branch "main"]\nremote = upstream\nmerge = refs/heads/main\n', "pull"),
-                             # Merged from origin, which is no remote here: a plain pull would fail.
+                             # A branch it merges, but no remote: git sees no upstream, a plain pull would fail.
                              (upstream + '[branch "main"]\nmerge = refs/heads/main\n', "pull upstream HEAD"),
                              (f'[remote "{odd}"]\n\turl = /x\n', f"pull {paths.quote(odd)} HEAD")):
             with self.subTest(config=config):
@@ -576,9 +576,10 @@ class CheckoutPullTests(unittest.TestCase):
                         shutil.rmtree(checkout)
 
     def test_the_config_is_read_as_git_reads_it(self):
-        for config, pull in (('[Remote "origin"]\n\tURL = /x\n[BRANCH "main"]\n\tMerge = refs/heads/main\n', "pull"),
+        for config, pull in (('[Remote "origin"]\n\tURL = /x\n[BRANCH "main"]\n\tMerge = refs/heads/main\n\tREMOTE = origin\n',
+                              "pull"),
                              ('[remote "Origin"]\n\turl = /x\n', "pull Origin HEAD"),      # a subsection keeps its case
-                             ('[remote.origin]\n\turl = /x\n[branch.main]\nmerge = refs/heads/main\n', "pull"),
+                             ('[remote.origin]\n\turl = /x\n[branch.main]\nmerge = refs/heads/main\nremote = origin\n', "pull"),
                              ('[remote.Up]\nurl = /x\n', "pull up HEAD"),                   # the old form: lower case
                              ('[remote "up"] url = /x\n', "pull up HEAD"),                  # a key after the section
                              ('# [remote "origin"]\n; url = /x\n[remote "up"]\nurl = /x # origin\n', "pull up HEAD"),
@@ -600,7 +601,7 @@ class CheckoutPullTests(unittest.TestCase):
                 self.assertEqual(store._pull(self.repository(config=config)), pull)
         # A quote, in a branch's name and in its section's.
         self.assertEqual(store._pull(self.repository(head='ref: refs/heads/a"b\n',
-                                                     config=ORIGIN + '[branch "a\\"b"]\nmerge = refs/heads/x\n')),
+                                                     config=ORIGIN + '[branch "a\\"b"]\nmerge = refs/heads/x\nremote = origin\n')),
                          "pull")
 
     def test_a_branch_a_reftable_keeps_pulls_its_remote_s_default_branch(self):
