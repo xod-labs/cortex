@@ -17,7 +17,8 @@ What is read, as CommonMark has it:
 - a list item — ``-``, ``*``, ``+``, or ``1.``, ``1)`` — holds the lines indented as far as its content, its first
   line's text after the marker, and the lines of a paragraph that continue it, lazily, indented less. A line in a
   list item is ``nested``; an item's own line is when it starts in another item. An item whose first line holds
-  only its marker ends at a blank line below it;
+  only its marker ends at a blank line below it. A line holds a ``paragraph``'s text, or none — an item's line, past
+  its marker: its own first line's;
 - a heading — one to six ``#``, indented up to three spaces — ends every list: a changelog's headings are its own,
   never an item's, even indented as far as one's content. Indented further, as far as an item's content, it is the
   item's: no paragraph, which the line below would continue;
@@ -57,6 +58,7 @@ class Line(NamedTuple):
     code: bool              # in a fenced code block or an HTML comment, its fence or delimiters included
     nested: bool            # in a list item — a list item's own line: in another one
     item: bool = False      # the line starts a list item
+    paragraph: bool = False  # it holds a paragraph's text — an item's line: its own, past its marker; not indented code
 
 
 def is_unreleased(label: str) -> bool:
@@ -108,9 +110,9 @@ def lines(text: str) -> List[Line]:
             del items[len(inner):]                                  # the items it is not indented into end
         # Otherwise, not indented into them, a line that opens nothing continues the paragraph lazily: still in them.
         if rest is None or not opens:
-            read.append(Line(line, False, bool(items)))
             quoted = quoted and paragraph                           # a block quote's paragraph, continued lazily
             paragraph, index = paragraph or rest is not None, index + 1   # indented code is no paragraph
+            read.append(Line(line, False, bool(items), paragraph=paragraph))
             continue
         quoted = quote
         if quote:
@@ -126,11 +128,11 @@ def lines(text: str) -> List[Line]:
             column, text_after = width + content, rest[content:]
             items.append(column)
             block = None if _blank(text_after) else _opens(text_after)
-            read.append(Line(line, False, nested, True))
+            # Its first line's text is a paragraph's — unless five spaces after the marker make it code.
+            paragraph = block is None and not _blank(text_after) and _indent(text_after) < 4
+            read.append(Line(line, False, nested, True, paragraph))
             if block is None:
-                # Its first line's text is a paragraph's — unless five spaces after the marker make it code.
-                paragraph, index = not _blank(text_after) and _indent(text_after) < 4, index + 1
-                empty = _blank(text_after)
+                index, empty = index + 1, _blank(text_after)
                 continue
             index = _block(raw, index, block, column, read, closers, first_line_read=True)
             paragraph = False
@@ -181,7 +183,7 @@ def _block(raw: List[str], index: int, block: Tuple[str, str], base: int, read: 
     if end is None:
         if not base:                                     # at the top level, never closed: it hides nothing
             if not first_line_read:
-                read.append(Line(raw[index], False, False))
+                read.append(Line(raw[index], False, False, paragraph=True))
             return index + 1
         end = len(raw)                                   # in an item, to the end of the file
     if first_line_read:

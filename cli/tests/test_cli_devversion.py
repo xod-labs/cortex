@@ -329,12 +329,24 @@ class BumpTests(unittest.TestCase):
     def test_every_line_is_read_once_with_what_markdown_makes_of_it(self):
         text = "### Fixed\n- a\nlazy\n  - b\n  ```\n  x\n  ```\n- ```\n  y\n  ```\n\n<!--\nz\n-->\ntext\n"
         self.assertEqual([tuple(line) for line in markdown_lines.lines(text)], [
-            ("### Fixed", False, False, False), ("- a", False, False, True), ("lazy", False, True, False),
-            ("  - b", False, True, True), ("  ```", True, True, False), ("  x", True, True, False),
-            ("  ```", True, True, False), ("- ```", False, False, True), ("  y", True, True, False),
-            ("  ```", True, True, False), ("", False, True, False), ("<!--", True, False, False),
-            ("z", True, False, False), ("-->", True, False, False), ("text", False, False, False),
-            ("", False, False, False)])
+            ("### Fixed", False, False, False, False), ("- a", False, False, True, True),
+            ("lazy", False, True, False, True), ("  - b", False, True, True, True), ("  ```", True, True, False, False),
+            ("  x", True, True, False, False), ("  ```", True, True, False, False), ("- ```", False, False, True, False),
+            ("  y", True, True, False, False), ("  ```", True, True, False, False), ("", False, True, False, False),
+            ("<!--", True, False, False, False), ("z", True, False, False, False), ("-->", True, False, False, False),
+            ("text", False, False, False, True), ("", False, False, False, False)])
+
+    def test_indented_code_is_no_entry_s_text(self):
+        # #354: five spaces past the marker, or six below an empty one, the entry's text is code — no paragraph, and
+        # its 💥 marks nothing: the entry counts for its kind alone (commonmark.js 0.31.2).
+        for entry in ("-     💥 code\n", "-\n      💥 code\n", "-     💥 code\n  💥 not first\n"):
+            with self.subTest(entry=entry):
+                self.assertEqual(prepared(changelog(f"### Changed\n{entry}", "2.3.4")), "2.4.0")
+                self.assertEqual(devversion.unreleased(changelog(f"### Changed\n{entry}")), {"Changed": [""]})
+        # As indented as its content, the line below an empty marker is its paragraph's text: marked breaking, it is.
+        self.assertEqual(prepared(changelog("### Changed\n-\n     💥 text\n", "2.3.4")), "3.0.0")
+        self.assertEqual([line.paragraph for line in markdown_lines.lines("-     code\n-\n      code\n- text\n")],
+                         [False, False, False, True, False])
 
     def test_a_section_heading_takes_a_tab(self):
         text = "## [Unreleased]\n\n### Fixed\n- a fix\n\n##\t[2.3.4] - 2026-11-01\n"

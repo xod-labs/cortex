@@ -15,9 +15,10 @@ run's number. ``X.Y.Z`` is the version the branch prepares, which ``CHANGELOG.md
   file: a heading or an entry may be indented up to three spaces, a space or a tab after its ``###``,
   an empty ``###`` naming no kind;
   an entry is an item of the section's own list, started with ``-``, ``*`` or ``+``, its text on
-  its line or below it — an item in an entry is its text; a fenced code block, an HTML comment or a
-  block quote holds no section, heading nor entry — one opened in a list item ends with it; a line
-  ends at a line feed or a carriage return alone; ``[Unreleased]`` is read in any case;
+  its line or below it, a paragraph's — indented code is none — and an item in an entry is its
+  text; a fenced code block, an HTML comment or a block quote holds no section, heading nor entry —
+  one opened in a list item ends with it; a line ends at a line feed or a carriage return alone;
+  ``[Unreleased]`` is read in any case;
 - a changelog that writes a pre-release's section — Cortex's does not (ADR-009 §3.7) — has it as
   a floor: above the base, ``3.1.0-rc.1`` makes the version the higher of its release and the
   bump's — ``3.1.0`` after a fix or an addition, ``4.0.0`` after a removal.
@@ -65,7 +66,7 @@ def unreleased(text: str) -> Dict[str, List[str]]:
     inside, kind = False, None
     below: Optional[List[str]] = None       # the kind's entries, the last one's marker alone on its line
     for read in lines(text):
-        if below is not None and read.nested and not read.item and not read.code and read.text.strip():
+        if below is not None and read.nested and not read.item and read.paragraph:
             below[-1] = read.text.strip()                       # its text, below it: the item's first line
         below = None
         if read.code:
@@ -85,7 +86,8 @@ def unreleased(text: str) -> Dict[str, List[str]]:
             continue
         entry = ENTRY.fullmatch(line) if read.item and not read.nested else None
         if entry and kind is not None:
-            entries.setdefault(kind, []).append(entry.group("text") or "")
+            # Its text is a paragraph's, or none: indented code — five spaces past the marker — is no text.
+            entries.setdefault(kind, []).append((entry.group("text") or "") if read.paragraph else "")
             below = entries[kind] if not entry.group("text") else None
     return entries
 
