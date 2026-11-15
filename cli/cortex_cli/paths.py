@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 
 
 def working_directory() -> str:
@@ -31,3 +32,11 @@ def display(path: str) -> str:
     """``path`` with ``/`` on every platform (ADR-008 §3.1) — Windows accepts it, and it is how
     paths are printed and written in ``cortex.local.toml``."""
     return path.replace(os.sep, "/") if os.sep != "/" else path
+
+
+def quote(path: str) -> str:
+    """A path as the shell the commands are shown for reads it: PowerShell on Windows — in single quotes, a quote
+    in it doubled —, a POSIX shell elsewhere, which expands no ``$`` nor backtick in what ``shlex.quote`` gives."""
+    if os.name == "nt":
+        return "'" + path.replace("'", "''") + "'"
+    return shlex.quote(path)

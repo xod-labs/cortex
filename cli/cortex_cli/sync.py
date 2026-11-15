@@ -28,7 +28,6 @@ import json
 import os
 import re
 import secrets
-import shlex
 import shutil
 import stat
 import subprocess
@@ -44,7 +43,7 @@ from cortex_core import cascade
 from cortex_core.validate import shown
 
 from . import claude, config, machine, registry, store
-from .paths import display, working_directory
+from .paths import display, quote, working_directory
 
 LINK = "cortex"
 MARKER = ".synced"
@@ -429,13 +428,6 @@ def kind_of(path: Path) -> str:
 def describe(path: Path) -> str:
     return {"worktree": "a git worktree", "submodule": "a git submodule", "clone": "a git clone",
             "directory": "a directory", "file": "a file"}[kind_of(path)]
-
-
-def quote(path: str) -> str:
-    """A path as the shell the commands are shown for reads it: PowerShell on Windows."""
-    if os.name == "nt":
-        return "'" + path.replace("'", "''") + "'"
-    return shlex.quote(path)
 
 
 def _word(text: str) -> str:
