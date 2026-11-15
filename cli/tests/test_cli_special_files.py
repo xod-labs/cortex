@@ -527,6 +527,39 @@ class LocalFileTests(SpecialFileTestCase):
                 self.assert_ok(self.within(root, "upgrade", "--local", OWN))
                 self.assertIn(f'version = "{OWN}"', (root / "cortex.local.toml").read_text(encoding="utf-8"))
 
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_a_cortex_local_toml_that_is_not_a_file_is_said_before_upgrade_writes_the_pin(self):
+        # The pin written, then the sync refused the file — and the pin put back, a file written twice, while the
+        # command said nothing of the project was changed (#386). Said first, the pin never written: its remedy,
+        # followed, lets the upgrade move the project.
+        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.project('version = "9.9.8"\ntheme = "h2g2"\n', name=f"pin-{kind}")
+                self.assert_ok(self.within(root, "sync"))
+                (root / "cortex.local.toml").unlink()
+                if kind == "directory":
+                    (root / "cortex.local.toml").mkdir()
+                else:
+                    os.mkfifo(root / "cortex.local.toml")
+                before = {path: (path.read_bytes(), os.stat(path).st_ino, os.stat(path).st_mtime_ns)
+                          for path in root.rglob("*") if path.is_file()}
+                for args in ((OWN,), (OWN, "--dry-run"), ()):
+                    proc = self.within(root, "upgrade", *args)
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertIn("cortex upgrade: cortex.local.toml is not a file — remove it, and `cortex sync` "
+                                  "writes it again. Nothing was changed\n", proc.err)
+                    self.assertEqual({path: (path.read_bytes(), os.stat(path).st_ino, os.stat(path).st_mtime_ns)
+                                      for path in root.rglob("*") if path.is_file()}, before)
+                if kind == "directory":
+                    (root / "cortex.local.toml").rmdir()
+                else:
+                    (root / "cortex.local.toml").unlink()
+                self.assert_ok(self.within(root, "sync"))
+                self.assert_ok(self.within(root, "upgrade", OWN))
+                self.assertIn(f'version = "{OWN}"', (root / "cortex.toml").read_text(encoding="utf-8"))
+
     def make_a_broken_link(self, root, kind):
         """At ``root``'s ``cortex.local.toml``: a link that leads nowhere — a loop of links is refused (#386)."""
         (root / "cortex.local.toml").symlink_to(root / f"{kind}.toml")

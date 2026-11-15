@@ -1264,9 +1264,14 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     root = config.find_project(cwd)
     if root is None:
         raise UpgradeError(config.no_project(cwd))
+    local = config.local_not_a_file(root)
+    if local is not None:
+        # Said first, as `cortex upgrade --local` says it: the sync refused it once the pin and the lock were written,
+        # and they were put back — written twice, where nothing was to change (#386).
+        raise UpgradeError(f"{local}. Nothing was changed")
     the_store = store.Store()
     pinned = config.loose_pin(root)
-    refusal = config.team_refusal(root) if wanted is None and pinned is not None and pinned[1] > the_store.own \
+    refusal =config.team_refusal(root) if wanted is None and pinned is not None and pinned[1] > the_store.own \
         else None
     if refusal is not None and refusal[1] and not store.development(pinned[1]):
         # A key of the team's file this cortex does not know, a later release may: updating is the move (§3.8).
