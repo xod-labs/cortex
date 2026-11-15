@@ -105,9 +105,10 @@ def _loosely(root: str, error: config.ConfigError) -> cascade.Resolution:
 
 def show(cwd: str, key: Optional[str], locked: bool, as_json: bool, out: TextIO) -> int:
     root = config.find_project(cwd)
-    if root is None and config.nearest_not_a_file(cwd) is not None:
+    said = config.nearest_not_a_file(cwd) if root is None else None
+    if said is not None:
         # Read as no project at all, it was said outside one, and the machine's keys printed (#386).
-        raise config.ConfigError(config.nearest_not_a_file(cwd))
+        raise config.ConfigError(said)
     loose = False
     try:
         found = resolution(root, locked)
