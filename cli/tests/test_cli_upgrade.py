@@ -1189,6 +1189,19 @@ class NewerReleaseTests(UpgradeTestCase):
         self.assert_ok(proc)
         self.assertNotIn("is out", proc.out)
 
+    def test_a_build_of_no_release_names_the_release_only_from_source(self):
+        # #379: from source, updated, this cortex is still a build of no release, which no plain upgrade moves to a
+        # release: the release is named. A CI build is a binary that self-updates to the release: a plain one does.
+        for archive, named in ((Path("cortex-spec.tar.gz"), ""), (None, " 99.0.0")):
+            with self.subTest(archive=archive), \
+                    mock.patch.object(self_update, "newer_release", return_value=Version("99.0.0")), \
+                    mock.patch.object(store, "embedded_archive", return_value=archive), \
+                    mock.patch.object(store, "update_command", return_value="UPDATE"):
+                out = io.StringIO()
+                upgrade._NewerRelease(Version("1.8.0-dev.3")).say(out)
+                self.assertEqual(out.getvalue(), "\nCortex 99.0.0 is out, and this cortex is 1.8.0-dev.3: `UPDATE`, "
+                                                 f"then `cortex upgrade{named}`, moves the project to it.\n")
+
 
 class NoticeTimeoutTests(unittest.TestCase):
     def test_the_notice_waits_a_few_seconds_at_most(self):
