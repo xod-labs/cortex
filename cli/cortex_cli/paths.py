@@ -37,9 +37,10 @@ def display(path: str) -> str:
 
 def quote(path: str) -> str:
     """A path as the shell the commands are shown for reads it: PowerShell on Windows — in single quotes, a quote
-    in it doubled —, a POSIX shell elsewhere, which expands no ``$`` nor backtick in what ``shlex.quote`` gives."""
+    in it doubled, the typographic ones too, which PowerShell takes for one —, a POSIX shell elsewhere, which expands
+    no ``$`` nor backtick in what ``shlex.quote`` gives."""
     if os.name == "nt":
-        return "'" + path.replace("'", "''") + "'"
+        return "'" + re.sub("(['\u2018\u2019\u201a\u201b])", r"\1\1", path) + "'"
     return shlex.quote(path)
 
 

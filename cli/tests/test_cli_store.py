@@ -11,6 +11,7 @@ import io
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -686,6 +687,38 @@ class CheckoutPullTests(unittest.TestCase):
                 os.mkfifo(checkout / name)
                 self.assertEqual(store._pull(checkout), pull)
                 shutil.rmtree(checkout)
+
+
+class ShellQuoteTests(unittest.TestCase):
+    """#379: a path as the shell the commands are shown for reads it — PowerShell on Windows."""
+
+    WORDS = ("plain", "a b", "it's", "it\u2019s \u2018a\u2019 \u201ab\u201b", "$HOME `id` ;&|<>(){}*?~#", "''")
+
+    def test_powershell_doubles_every_quote_it_reads(self):
+        with mock.patch.object(paths, "os", mock.Mock(wraps=os)):
+            paths.os.name = "nt"
+            self.assertEqual(paths.quote("it's"), "'it''s'")
+            self.assertEqual(paths.quote("it\u2019s \u2018a\u201a\u201b"),
+                             "'it\u2019\u2019s \u2018\u2018a\u201a\u201a\u201b\u201b'")
+
+    def test_the_shell_reads_back_what_was_quoted(self):
+        tmp = Path(tempfile.mkdtemp(prefix="cortex-quote-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        if os.name == "nt":
+            found = shutil.which("pwsh") or shutil.which("powershell")
+            if found is None:
+                self.skipTest("no PowerShell")
+        for n, text in enumerate(self.WORDS):
+            with self.subTest(text=text):
+                out = tmp / f"out-{n}"
+                if os.name == "nt":                         # no console code page in the way: a UTF-8 file
+                    line = f"[IO.File]::WriteAllText({paths.quote(str(out))}, {paths.quote(text)})"
+                    command = [found, "-NoProfile", "-NonInteractive", "-Command", line]
+                else:
+                    command = ["sh", "-c", f"printf %s {paths.quote(text)} > {paths.quote(str(out))}"]
+                ran = subprocess.run(command, capture_output=True, cwd=tmp)
+                self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                self.assertEqual(out.read_bytes().decode("utf-8"), text)
 
 
 class DownloadTests(StoreTestCase):
