@@ -8,7 +8,7 @@ release note under [`changelog/`](changelog/).
 ## [Unreleased]
 
 ### Fixed
-- **A checkout's development version reads its changelog as CommonMark does in a few more cases** ([#354](https://github.com/xod-labs/cortex/issues/354)). An entry whose text is indented code — five spaces past its marker, or six below a marker alone — was read marked breaking by a 💥 there, and the version a checkout reports, `X.Y.Z-dev`, went to the next major: the entry counts for its kind alone. A heading or a thematic break on an entry's line, `- # Note`, was read as a paragraph the line below went on, and an entry below that as the first one's text, whose 💥 asked no major.
+- **A checkout's development version reads its changelog as CommonMark does in a few more cases** ([#354](https://github.com/xod-labs/cortex/issues/354)). An entry whose text is indented code — five spaces past its marker, or six below a marker alone — was read marked breaking by a 💥 there, and the version a checkout reports, `X.Y.Z-dev`, went to the next major: the entry counts for its kind alone. A heading or a thematic break on an entry's line, `- # Note`, was read as a paragraph the line below went on, and an entry below that as the first one's text, whose 💥 asked no major. A block quote's line was read alone, not with what the lines above it left open in the quote: a line in a fence opened there, or a `> ===` that makes a heading, was a paragraph the line below the quote went on with, and a quoted line indented as code ended one — an entry below was read where none is, or none where one is.
 
 ## [1.8.5] - 2026-11-14 — In Much the Same Way That Bricks Don't _(Released)_
 [Full notes](changelog/1.8.5.md)

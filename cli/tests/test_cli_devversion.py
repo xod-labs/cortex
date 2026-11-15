@@ -419,6 +419,34 @@ class BumpTests(unittest.TestCase):
         # An empty item ends at a blank line below it: what follows, indented as its content, is no item of it.
         self.assertEqual(prepared(changelog("### Fixed\n-\n\n  - 💥 b\n", "2.3.4")), "3.0.0")
 
+    def test_a_quote_s_line_is_read_with_what_its_lines_above_left_open(self):
+        # #354: a fence or a comment open in a quote holds its quoted lines below — no paragraph, which the line below
+        # the quote would go on with: that line starts one, which a line of - makes a heading, no entry.
+        for quote in ("> ```\n> x\n", "> ~~~\n>\n> x\n", "> <!--\n> x\n", "> - ```\n>   x\n", "> a\nlazy\n> ===\n",
+                      "> a\n> ===\n", "> 1. a\n>    b\n>    ===\n"):
+            with self.subTest(quote=quote):
+                self.assertEqual(prepared(changelog(f"### Changed\n{quote}text\n-\n", "2.3.4")), "2.3.5")
+        # A quoted line goes on with the quote's paragraph — indented as code, or an empty item, which interrupts none
+        # — and with its item's, past a blank quoted line; the line below goes on with it, and the item below is one.
+        for quote in ("> a\n>     x\n", "> a\n>     # x\n", "> a\n> *\n", "> - a\n>\n>     x\n", "> a\nlazy\n>     x\n",
+                      "> ```\n> ```\n> y\n", "> <!-- c -->\n> y\n"):
+            with self.subTest(quote=quote):
+                self.assertEqual(prepared(changelog(f"### Changed\n{quote}text\n-\n", "2.3.4")), "2.4.0")
+        # In an entry, as indented as its content, too: the line below its fence's lines ends the list.
+        for entry in ("- a\n  > ```\n  > x\n", "- > ```\n  > x\n"):
+            with self.subTest(entry=entry):
+                self.assertEqual(prepared(changelog(f"### Fixed\n{entry}lazy\n  - 💥 b\n", "2.3.4")), "3.0.0")
+        self.assertEqual(prepared(changelog("### Fixed\n- a\n  > b\n  >     x\nlazy\n  - 💥 b\n", "2.3.4")), "2.3.5")
+        # Read once, however many quotes and items its lines nest, and however many lines go on with them.
+        start = time.monotonic()
+        nested = "> " + "- " * 50000 + "x\n" + ">\n" * 50000 + (">\n>" + " " * 50000 + "y\n") * 50
+        self.assertEqual(prepared(changelog(f"### Changed\n{nested}text\n-\n", "2.3.4")), "2.4.0")
+        nested = "> " + "- " * 50000 + "x\n" + ">  y\n" * 50000
+        self.assertEqual(prepared(changelog(f"### Changed\n{nested}text\n-\n", "2.3.4")), "2.4.0")
+        self.assertEqual(prepared(changelog("### Changed\n" + ("> " * 1000 + "x\n") * 1000 + "text\n-\n", "2.3.4")),
+                         "2.4.0")
+        self.assertLess(time.monotonic() - start, 5)
+
     def test_a_heading_in_an_item_and_a_quote_s_heading_or_code_are_no_paragraph(self):
         # Bluspark's fourth pass: indented past three spaces, as far as an item's content, a heading is the item's —
         # the line below continues no paragraph, and the list ends there. CommonMark, as markdown-it reads it.
