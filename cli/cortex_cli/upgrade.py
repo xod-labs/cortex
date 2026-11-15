@@ -1826,14 +1826,15 @@ def _waits(path: str, what: str) -> Optional[str]:
             continue
         if stat.S_ISFIFO(mode):
             return "pipe"
-        if what == ATTRIBUTES and (stat.S_ISCHR(mode) or stat.S_ISBLK(mode)) and not _null(path):
-            return "device"
+        if os.name != "nt" and what == ATTRIBUTES and (stat.S_ISCHR(mode) or stat.S_ISBLK(mode)) and not _null(path):
+            return "device"       # not on Windows, where every device would stat as nul's: git reads none of them there
     return None
 
 
 def _null(path: str) -> bool:
+    """Whether ``path`` is the null device — by its device number, which another node of it shares."""
     try:
-        return os.path.samefile(path, os.devnull)
+        return stat.S_ISCHR(os.stat(path).st_mode) and os.stat(path).st_rdev == os.stat(os.devnull).st_rdev
     except OSError:
         return False
 

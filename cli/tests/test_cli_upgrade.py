@@ -12,6 +12,7 @@ import io
 import os
 import shutil
 import socket
+import stat
 import signal
 import subprocess
 import sys
@@ -1430,6 +1431,9 @@ class IgnoredTimeoutTests(unittest.TestCase):
         self.assertIsNone(upgrade._waits("/dev/zero", "an ignore file"))
         self.assertEqual(upgrade._waits("/dev/zero", upgrade.ATTRIBUTES), "device")
         self.assertIsNone(upgrade._waits(os.devnull, upgrade.ATTRIBUTES))
+        if os.geteuid() == 0:                   # another node of the null device is the null device: only root makes one
+            os.mknod(tmp / "null", stat.S_IFCHR | 0o666, os.stat(os.devnull).st_rdev)
+            self.assertIsNone(upgrade._waits(str(tmp / "null"), upgrade.ATTRIBUTES))
         sock = socket.socket(socket.AF_UNIX)
         self.addCleanup(sock.close)
         here = os.getcwd()
