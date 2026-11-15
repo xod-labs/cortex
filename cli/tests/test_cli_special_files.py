@@ -298,6 +298,43 @@ class ProjectFileTests(SpecialFileTestCase):
                 for args in (("sync",), ("validate",)):
                     self.assert_ok(self.within(below, *args))
 
+    @harness.outside_a_repository
+    def test_config_and_project_add_say_a_cortex_toml_that_is_not_a_file_not_a_file(self):
+        # Read as no cortex.toml, `cortex config` printed the machine's keys as outside a project, and `cortex project
+        # add` said no cortex.toml (#386). What it is is said, with its remedy, which, followed, lets them run.
+        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.tmp / f"config-{kind}"
+                below = root / "src"
+                below.mkdir(parents=True)
+                if kind == "directory":
+                    (root / "cortex.toml").mkdir()
+                else:
+                    os.mkfifo(root / "cortex.toml")
+                said = (f"{display(str(root / 'cortex.toml'))} is not a file: remove it, then `cortex init` makes the "
+                        "directory a Cortex project\n")
+                for cwd, args in ((root, ("config",)), (below, ("config",)), (below, ("config", "version")),
+                                  (below, ("config", "--json")), (root, ("project", "add")),
+                                  (below, ("project", "add")), (self.tmp, ("project", "add", str(root)))):
+                    proc = self.within(cwd, *args, CORTEX_NO_REGISTER="")
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertEqual(f"cortex {' '.join(args[:2] if args[0] == 'project' else args[:1])}: {said}",
+                                     proc.err)
+                    self.assertEqual("", proc.out)
+                self.assertFalse((self.home / "projects.toml").exists())
+                if kind == "directory":
+                    (root / "cortex.toml").rmdir()
+                else:
+                    (root / "cortex.toml").unlink()
+                self.assert_ok(self.within(root, "init", "--tool", "claude"))
+                proc = self.within(below, "config", "version")
+                self.assert_ok(proc)
+                self.assertEqual(f"{OWN}\n", proc.out)
+                self.assert_ok(self.within(below, "project", "add", CORTEX_NO_REGISTER=""))
+                self.assertIn(harness_path(root), (self.home / "projects.toml").read_text(encoding="utf-8"))
+                (self.home / "projects.toml").unlink()
+
 
 class LockTests(SpecialFileTestCase):
     """``cortex.lock``, and the team's lock beside the team's file."""

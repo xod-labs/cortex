@@ -204,15 +204,30 @@ def no_project(cwd: str, hint: str = "") -> str:
     """Why ``find_project`` found no project from ``cwd``: no ``cortex.toml`` there or above it — or, nearest, one
     that is not a file, a named pipe, a socket or a directory, which was read as none (#358). ``hint`` follows the
     first."""
+    return nearest_not_a_file(cwd) or (f"no {PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a "
+                                       f"directory a Cortex project{hint}")
+
+
+def project_not_a_file(directory: str) -> Optional[str]:
+    """What to say of the ``cortex.toml`` in ``directory`` when it is there as no file — a named pipe, a socket, a
+    directory, or a link to one — which was read as none (#358); ``None`` for a file, or none there."""
+    path = os.path.join(directory, PROJECT_FILE)
+    if os.path.exists(path) and not os.path.isfile(path):
+        return f"{display(path)} is not a file: remove it, then `cortex init` makes the directory a Cortex project"
+    return None
+
+
+def nearest_not_a_file(cwd: str) -> Optional[str]:
+    """``project_not_a_file`` of the nearest ``cortex.toml`` there is from ``cwd`` up, which ``find_project`` passed
+    over — ``None`` when none is there that is not a file (#386)."""
     current = cwd
     while True:
-        path = os.path.join(current, PROJECT_FILE)
-        if os.path.exists(path) and not os.path.isfile(path):
-            return f"{display(path)} is not a file: remove it, then `cortex init` makes the directory a Cortex project"
+        said = project_not_a_file(current)
+        if said is not None:
+            return said
         parent = os.path.dirname(current)
         if parent == current:
-            return (f"no {PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory a Cortex "
-                    f"project{hint}")
+            return None
         current = parent
 
 
