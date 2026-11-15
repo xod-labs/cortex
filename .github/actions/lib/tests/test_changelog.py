@@ -81,6 +81,14 @@ class MarkdownTests(unittest.TestCase):
         # The section's body holds its example, as written.
         self.assertIn("  ## [9.9.9] - 2026-11-01", section_text(text, "Unreleased"))
 
+    def test_a_section_in_an_html_block_is_none(self):
+        # #354: <pre> and its kin up to an end tag, a block element's tag up to a blank line (CommonMark 0.31.2).
+        text = ("## [Unreleased]\n\n<pre>\n## [9.9.9] - 2026-11-01 — X _(Released)_\n</pre>\n\n"
+                "<details>\n## [9.9.8] - 2026-11-01 — X _(Released)_\n\n"
+                "## [1.4.0] - 2026-11-03 — A Name _(Released)_\n")
+        self.assertEqual([label for label, _ in headings(text)], ["Unreleased", "1.4.0"])
+        self.assertEqual(first_after_unreleased(text), "## [1.4.0] - 2026-11-03 — A Name _(Released)_")
+
     def test_an_indented_section_and_a_tab_after_its_hashes(self):
         for heading in (" ## [1.8.1] - 2026-11-03 — A Name _(Released)_",
                         "##\t[1.8.1] - 2026-11-03 — A Name _(Released)_"):

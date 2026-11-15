@@ -46,6 +46,7 @@ from typing import List, NamedTuple, Optional, TextIO, Tuple
 
 from cortex_core import cascade
 from cortex_core import project as grammar
+from cortex_core import resolver
 from cortex_core.project import is_theme
 
 from . import config, console, store, sync
@@ -865,6 +866,78 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         out.write("\ntip: Claude Code asks before it reads the spec in the store. `claude_access = true` in "
                   "cortex.toml lets it read without asking — for the team; `cortex sync --claude-access`, for you.\n")
     out.write(f"\nCortex {version} is ready in {display(str(root))}.\n")
+    hint = theme_hint(root, spec)
+    if hint is not None:
+        out.write(hint)
+
+
+# The mapping table of a theme's characters.md: a header whose first column is the role and one column is the
+# alias, its separator row, then a row per role — `role` in backticks, @Alias. A table of another form gives no hint.
+_TABLE_CELL = re.compile(r"^:?-+:?$")
+_ROLE_CELL = re.compile(r"^`([a-z0-9][a-z0-9-]*)`$")
+_ALIAS_CELL = re.compile(r"^@[A-Za-z0-9][A-Za-z0-9_.-]*$")
+HINT_ROLES = 4          # the experts the hint names, in the table's order
+
+
+def _cells(line: str) -> Optional[List[str]]:
+    line = line.strip()
+    if len(line) < 2 or not line.startswith("|") or not line.endswith("|"):
+        return None
+    return [cell.strip() for cell in line[1:-1].split("|")]
+
+
+def aliases(text: str) -> Optional[List[Tuple[str, str]]]:
+    """Each role of a theme's ``characters.md`` and its alias, in the order of its mapping table — ``None`` when the
+    file holds no table of that form, or a row departs from it: no hint is better than a wrong one (#149)."""
+    lines = text.splitlines()
+    for at, line in enumerate(lines):
+        header = _cells(line)
+        if header is None or not header[0].startswith("Role") or header.count("Alias") != 1:
+            continue
+        separator = _cells(lines[at + 1]) if at + 1 < len(lines) else None
+        if separator is None or len(separator) != len(header) or not all(_TABLE_CELL.match(c) for c in separator):
+            return None
+        column = header.index("Alias")
+        found: List[Tuple[str, str]] = []
+        for row in lines[at + 2:]:
+            cells = _cells(row)
+            if cells is None:
+                break
+            role = _ROLE_CELL.match(cells[0]) if len(cells) == len(header) else None
+            if role is None or not _ALIAS_CELL.match(cells[column]) or role.group(1) in dict(found):
+                return None
+            found.append((role.group(1), cells[column]))
+        roles = dict(found)
+        return found if "prompt-manager" in roles and len(found) > HINT_ROLES else None
+    return None
+
+
+def theme_hint(root: Path, spec: Path) -> Optional[str]:
+    """Whom to call, read from the active theme's ``characters.md`` as the bootstrap finds it — the spec's, else the
+    team's folder's own theme (#149): the prompt manager's alias, and a few experts'. ``None`` without a personality,
+    or when the file is not there, cannot be read, or holds no mapping table of its form."""
+    project = config.load(str(root))
+    theme = project.active_theme
+    if theme == "none":
+        return None
+    try:
+        found = resolver.resolve_layer("personalities", f"{theme}/characters.md", None, root, base_root=spec,
+                                       team_folder=Path(project.team_dir))
+    except OSError:     # a folder on the way this user cannot enter: no hint, and init, written, still succeeds
+        return None
+    if not found:
+        return None
+    try:
+        # characters.md is not overridable (ADR-001 §3.2): the first found is the one read.
+        table = aliases(found[0].read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
+    if table is None:
+        return None
+    roles = dict(table)
+    experts = [f"{alias} ({role})" for role, alias in table if role != "prompt-manager"][:HINT_ROLES]
+    return (f"Theme {theme}: {roles['prompt-manager']}, the prompt manager, takes every request and calls the expert "
+            f"it needs.\nOr call one yourself: {', '.join(experts)}.\nThe whole team: {display(str(found[0]))}\n")
 
 
 def _blank(root: Path) -> config.Project:

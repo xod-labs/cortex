@@ -11,6 +11,7 @@ import sys
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 BIN = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BIN))
@@ -29,6 +30,10 @@ SUMMARY = ("    if: always()\n"
            "          echo \"$RESULTS\" | jq -e 'all(.[]; . == \"success\" or . == \"skipped\")' > /dev/null")
 
 
+# GitHub's message for each refusal of a classic protection's required checks.
+MESSAGES = {404: "Branch not protected", 403: "Resource not accessible by integration", 500: "Server Error"}
+
+
 def github_matches(pattern, branch):
     """A ref pattern against a branch, as GitHub reads it: File.fnmatch with FNM_PATHNAME."""
     if pattern in ("~ALL", "~DEFAULT_BRANCH"):
@@ -41,7 +46,7 @@ class FakeGh(sr.Gh):
     """One repository's settings, as GitHub's API serves and takes them."""
 
     def __init__(self, owner_type="Organization", rulesets=None, immutable=False, delete_on_merge=False, branches=("main",),
-                 org_rulesets=None):
+                 org_rulesets=None, protections=None):
         self.owner_type = owner_type
         self.branches = list(branches)
         self.rulesets = {r["id"]: r for r in (rulesets or [])}
@@ -49,10 +54,21 @@ class FakeGh(sr.Gh):
         self.immutable = immutable
         self.delete_on_merge = delete_on_merge
         self.writes = []
+        # A classic branch protection's required checks, by branch: GitHub's answer, or the HTTP
+        # status of its refusal. A branch with none answers 404, as GitHub does.
+        self.protections = dict(protections or {})
+        self.read = []
 
     def api(self, path, method="GET", body=None):
         if method != "GET":
             self.writes.append((method, path))
+        self.read.append(path)
+        match = re.fullmatch(r"repos/o/r/branches/(.+)/protection/required_status_checks", path)
+        if match and method == "GET":
+            answer = self.protections.get(match.group(1), 404)
+            if isinstance(answer, int):
+                raise sr.GhError(f"GET {path}: gh: {MESSAGES[answer]} (HTTP {answer})", answer)
+            return copy.deepcopy(answer)
         if path == "repos/o/r" and method == "GET":
             return {"owner": {"type": self.owner_type}, "delete_branch_on_merge": self.delete_on_merge}
         if path == "repos/o/r" and method == "PATCH":
@@ -315,6 +331,99 @@ class SetupReleaseTests(unittest.TestCase):
         self.assertNotIn("all but the cycle", out)
         self.assertNotIn("no check", out)
         self.assertIn("4 setting(s) differ.", out)
+
+    def protection(self, *checks, legacy=False):
+        """GitHub's answer for a classic protection's required checks: `checks`, and `contexts` alone before apps."""
+        return {"strict": True, "contexts": list(checks),
+                "checks": [] if legacy else [{"context": c, "app_id": None} for c in checks]}
+
+    def test_a_classic_protection_that_requires_checks_is_reported_and_left(self):
+        # A repository that adopts the cycle with main's protection from before: an old CI job's
+        # name, which no workflow of the cycle reports (#235).
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                gh = FakeGh(protections={"main": self.protection("build (linux-x86_64)", "lint", legacy=legacy)})
+                code, out = run(gh)
+                self.assertEqual(code, 1)
+                self.assertIn("! the classic branch protection of 'main', which the cycle does not set: left to you"
+                              " — remove it by hand, in the Settings → Branches of the repository", out)
+                self.assertFalse([w for w in gh.writes if "/protection" in w[1]])
+                code, out = run(gh, "--check")
+                self.assertEqual(code, 1)
+                self.assertIn("✗ the classic branch protection of 'main', which the cycle does not set\n"
+                              "    it requires 2 check(s) of its own — build (linux-x86_64), lint", out)
+                self.assertIn("1 setting(s) differ.", out)
+                del gh.protections["main"]
+                self.assertEqual(run(gh, "--check")[0], 0)
+
+    def test_a_classic_protection_with_no_required_check_is_not_reported(self):
+        gh = FakeGh(protections={"main": self.protection()})
+        run(gh)
+        code, out = run(gh, "--check")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("classic", out)
+        self.assertIn("repos/o/r/branches/main/protection/required_status_checks", gh.read)
+
+    def test_a_404_is_no_classic_protection(self):
+        # GitHub answers 404 for a branch with no protection, and for one that requires no check.
+        gh = FakeGh()
+        run(gh)
+        code, out = run(gh, "--check")
+        self.assertEqual(code, 0, out)
+        self.assertIn("Every setting holds.", out)
+        self.assertIn("repos/o/r/branches/main/protection/required_status_checks", gh.read)
+
+    def test_gh_gives_the_status_of_a_refusal(self):
+        answer = '{"message":"Branch not protected","status":"404"}'
+        done = subprocess.CompletedProcess([], 1, stdout=answer, stderr="gh: Branch not protected (HTTP 404)\n")
+        with mock.patch.object(sr.subprocess, "run", return_value=done):
+            with self.assertRaises(sr.GhError) as raised:
+                sr.Gh().api("repos/o/r/branches/main/protection/required_status_checks")
+        self.assertEqual(raised.exception.status, 404)
+        self.assertIn("Branch not protected", str(raised.exception))
+        done = subprocess.CompletedProcess([], 1, stdout="", stderr="error connecting to api.github.com\n")
+        with mock.patch.object(sr.subprocess, "run", return_value=done):
+            with self.assertRaises(sr.GhError) as raised:
+                sr.Gh().api("repos/o/r")
+        self.assertIsNone(raised.exception.status)
+
+    def test_any_other_error_on_a_classic_protection_is_reported(self):
+        # A token that may not read it, or GitHub failing: never taken for no protection.
+        for status in (403, 500):
+            with self.subTest(status=status):
+                gh = FakeGh(protections={"main": status})
+                for args in ((), ("--check",)):
+                    err = io.StringIO()
+                    saved, sys.stderr = sys.stderr, err
+                    try:
+                        code, out = run(gh, *args)
+                    finally:
+                        sys.stderr = saved
+                    self.assertEqual(code, 2)
+                    self.assertIn("setup-release: GET repos/o/r/branches/main/protection/required_status_checks", err.getvalue())
+                    self.assertIn(f"(HTTP {status})", err.getvalue())
+                    self.assertNotIn("Every setting holds.", out)
+                    self.assertEqual(gh.writes, [])
+
+    def test_each_line_s_classic_protection_is_read(self):
+        # 0.x is a line too. A line not cut has no protection to read: a pattern's reaches it once it is.
+        gh = FakeGh(branches=["main", "0.x", "1.x", "release/1.4.0", "feature.x"],
+                    protections={"0.x": self.protection("ci"), "1.x": self.protection("old ci"),
+                                 "release/1.4.0": self.protection("ci"), "feature.x": self.protection("ci")})
+        run(gh)
+        code, out = run(gh, "--check")
+        self.assertEqual(code, 1)
+        self.assertIn("✗ the classic branch protection of '0.x', which the cycle does not set\n"
+                      "    it requires 1 check(s) of its own — ci", out)
+        self.assertIn("✗ the classic branch protection of '1.x', which the cycle does not set\n"
+                      "    it requires 1 check(s) of its own — old ci", out)
+        self.assertNotIn("release/1.4.0'", out)
+        self.assertNotIn("feature.x'", out)
+        self.assertIn("2 setting(s) differ.", out)
+        self.assertFalse([p for p in gh.read if "/protection" in p and not re.search(r"/branches/(main|0\.x|1\.x)/", p)])
+        gh.branches.append("2.x")
+        gh.protections["2.x"] = self.protection("ci")
+        self.assertIn("✗ the classic branch protection of '2.x'", run(gh, "--check")[1])
 
     def test_another_repositorys_checks(self):
         gh = FakeGh()

@@ -15,6 +15,7 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
@@ -2063,6 +2064,125 @@ class RegisterTests(InitTestCase):
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertIn(f"registered as project — {LISTS}\n", proc.out)
         self.assertEqual(self.entries(), [("project", display(self.project))])
+
+
+class ThemeHintTests(InitTestCase):
+    """Whom to call, read from the active theme's characters.md, at the end of `cortex init` (#149)."""
+
+    TABLE = ("# Ours\n\n| Role (`roles/`) | Character | Alias | File |\n|---|---|---|---|\n"
+             "| `prompt-manager` | Ann | @Ann | [📄](Ann.md) |\n| `architect` | Bob | @Bob | [📄](Bob.md) |\n"
+             "| `lead-backend` | Cid | @Cid | [📄](Cid.md) |\n| `dba` | Dee | @Dee | [📄](Dee.md) |\n"
+             "| `qa-automation` | Eve | @Eve | [📄](Eve.md) |\n| `tech-writer` | Fay | @Fay | [📄](Fay.md) |\n")
+
+    def setUp(self):
+        super().setUp()
+        self.project.mkdir(parents=True)
+
+    def own_theme(self, name, text):
+        folder = self.project / "agents" / "personalities" / name
+        folder.mkdir(parents=True)
+        (folder / "theme.md").write_text(f"# {name}\n", encoding="utf-8")
+        (folder / "characters.md").write_text(text, encoding="utf-8")
+        return folder / "characters.md"
+
+    def shipped(self, theme):
+        return display(self.home / "versions" / OWN / "agents" / "personalities" / theme / "characters.md")
+
+    def test_the_default_theme_names_its_prompt_manager_and_four_experts(self):
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertTrue(proc.out.endswith(
+            f"is ready in {display(self.project)}.\n"
+            "Theme h2g2: @Oolon, the prompt manager, takes every request and calls the expert it needs.\n"
+            "Or call one yourself: @Slartibartfast (architect), @Hactar (lead-backend), @Eddie (lead-frontend), "
+            "@Marvin (security-engineer).\n"
+            f"The whole team: {self.shipped('h2g2')}\n"), proc.out)
+
+    def test_a_folder_the_hint_cannot_enter_gives_no_hint_and_no_error(self):
+        # Looking for characters.md through a folder this user cannot enter raises on Python 3.12 (Path.is_file):
+        # `cortex init` has written everything by then, and must not end in an error for a hint.
+        self.assertEqual(self.init().returncode, 0)
+        spec = self.home / "versions" / OWN
+        self.assertIsNotNone(init_command.theme_hint(self.project, spec))
+        with mock.patch.object(init_command.resolver, "resolve_layer",
+                               side_effect=PermissionError(13, "Permission denied")):
+            self.assertIsNone(init_command.theme_hint(self.project, spec))
+
+    def test_another_shipped_theme_names_its_own(self):
+        proc = self.init("--theme", "breaking-bad")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertTrue(proc.out.endswith(
+            "Theme breaking-bad: @Saul, the prompt manager, takes every request and calls the expert it needs.\n"
+            "Or call one yourself: @Werner (architect), @Heisenberg (lead-backend), @Jesse (lead-frontend), "
+            "@Mike (security-engineer).\n"
+            f"The whole team: {self.shipped('breaking-bad')}\n"), proc.out)
+
+    def test_a_theme_of_the_workspace_s_own_is_read_in_the_team_s_folder(self):
+        path = self.own_theme("ours", self.TABLE)
+        proc = self.init("--workspace", "--theme", "ours")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertTrue(proc.out.endswith(
+            "Theme ours: @Ann, the prompt manager, takes every request and calls the expert it needs.\n"
+            "Or call one yourself: @Bob (architect), @Cid (lead-backend), @Dee (dba), @Eve (qa-automation).\n"
+            f"The whole team: {display(path)}\n"), proc.out)
+
+    def test_no_hint_without_a_personality(self):
+        self.own_theme("none", self.TABLE)       # a folder of that name is no theme: none is no personality
+        proc = self.init("--workspace", "--no-personality")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertTrue(proc.out.endswith(f"is ready in {display(self.project)}.\n"), proc.out)
+        self.assertNotIn("prompt manager", proc.out)
+
+    def test_no_hint_from_a_characters_md_without_the_table(self):
+        proc = self.init("--theme", "acme")      # the matrix's acme: a title, and no table
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertTrue(proc.out.endswith(f"is ready in {display(self.project)}.\n"), proc.out)
+
+    def test_no_hint_from_a_table_one_row_of_which_departs_from_its_form(self):
+        self.own_theme("ours", self.TABLE.replace("| @Cid |", "| Cid |"))
+        proc = self.init("--workspace", "--theme", "ours")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertTrue(proc.out.endswith(f"is ready in {display(self.project)}.\n"), proc.out)
+
+
+class AliasesTests(unittest.TestCase):
+    """The reader of a theme's mapping table (#149): the table's form, or nothing."""
+
+    TABLE = ThemeHintTests.TABLE
+
+    def test_a_prompt_manager_and_four_experts_are_the_least_a_table_reads_with(self):
+        # The hint names four experts: a table of fewer gives none. The prompt manager is a row of its own.
+        lines = self.TABLE.splitlines()          # title, blank, header, separator, then six rows
+        four = init_command.aliases("\n".join(lines[:9]))
+        self.assertEqual([role for role, _ in four],
+                         ["prompt-manager", "architect", "lead-backend", "dba", "qa-automation"])
+        self.assertIsNone(init_command.aliases("\n".join(lines[:8])))
+
+    def test_the_shipped_themes_read_whole(self):
+        for theme in ("h2g2", "breaking-bad"):
+            with self.subTest(theme=theme):
+                text = (harness.REPO / "agents" / "personalities" / theme / "characters.md").read_text(encoding="utf-8")
+                found = init_command.aliases(text)
+                self.assertEqual(len(found), text.count("\n| `"))
+                self.assertEqual(found[0][0], "prompt-manager")
+
+    def test_a_table_of_its_form(self):
+        self.assertEqual(init_command.aliases(self.TABLE)[:2], [("prompt-manager", "@Ann"), ("architect", "@Bob")])
+
+    def test_nothing_from_a_table_of_another_form(self):
+        cases = {
+            "no Alias column": self.TABLE.replace("| Alias |", "| Name |"),
+            "a row where the separator is": self.TABLE.replace(
+                "|---|---|---|---|\n", "| `support-engineer` | Gus | @Gus | [📄](Gus.md) |\n"),
+            "a role not in backticks": self.TABLE.replace("| `dba` |", "| dba |"),
+            "a row with a cell more": self.TABLE.replace("| [📄](Dee.md) |", "| [📄](Dee.md) | x |"),
+            "a role twice": self.TABLE.replace("`dba`", "`architect`"),
+            "no prompt manager": self.TABLE.replace("`prompt-manager`", "`support-engineer`"),
+            "too few experts": "\n".join(self.TABLE.splitlines()[:6]),
+        }
+        for name, text in cases.items():
+            with self.subTest(name):
+                self.assertIsNone(init_command.aliases(text))
 
 
 class BootstrapMarkerTests(unittest.TestCase):
