@@ -1384,8 +1384,15 @@ class IgnoredTimeoutTests(unittest.TestCase):
                        "XDG_CONFIG_HOME": str(tmp / "xdg")}
         run = subprocess.run
 
+        def capped():                           # nor fills the machine's memory reading /dev/zero, should it again
+            import resource                     # POSIX only, as the test
+            try:
+                resource.setrlimit(resource.RLIMIT_AS, (2 << 30, 2 << 30))
+            except (ValueError, OSError):       # macOS may not take it: the timeout still ends git
+                pass
+
         def bounded(*args, **kwargs):           # a git that never ends fails the test, never holds it
-            return run(*args, **{**kwargs, "timeout": kwargs.get("timeout") or 20})
+            return run(*args, **{**kwargs, "timeout": kwargs.get("timeout") or 20, "preexec_fn": capped})
 
         def config(*args):
             subprocess.run(["git", "-C", str(top), "config", *args], check=True)
