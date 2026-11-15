@@ -71,7 +71,7 @@ The command creates:
 - `project-overview.md` — to fill in: vision, stakeholders, business flows
 - `project-context.md` — to fill in: stack, conventions, tools
 
-A line goes to `.gitignore` only when git does not ignore its path yet, which Cortex asks git. Without git to ask — none on `PATH`, or git refusing the repository — Cortex reads each folder's `.gitignore` only for the exact line it would add: it matches no pattern (`*.toml`) and sees no folder ignored whole (`.claude/`). It may then add a line git would not need — harmless: git ignores that path already —, and never leaves out one git needs.
+A line goes to `.gitignore` only when git does not ignore its path yet, which Cortex asks git. Without git to ask — none on `PATH`, or git refusing the repository — Cortex reads each folder's `.gitignore` only for the exact line it would add: it matches no pattern (`*.toml`) and sees no folder ignored whole (`.claude/`). It may then add a line git would not need, and never leaves out one git needs. A line with a `/` — `/cortex`, `.claude/settings.local.json` — names only Cortex's own paths; `cortex.local.toml` has none, and matches at any depth: it also ignores a `cortex.local.toml` in a subfolder, a nested project's machine file, even one a negation of yours brought back.
 
 The two context files are written only when missing. Running `cortex init` again keeps the instructions file, and `cortex.toml` with its version: it changes only the keys an option names — `--theme` or `--no-personality`, `--link` or `--copy`, `--claude-access`. `--force` replaces the instructions file, and only it.
 

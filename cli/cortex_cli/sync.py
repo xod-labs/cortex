@@ -1299,11 +1299,12 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
     """Add to ``.gitignore`` each line of ``entries`` whose path — its value — git does not ignore
     yet, and return them. The file keeps its bytes: its encoding, its byte order mark, its line
     endings. Without git's answer, ``ignored`` reads .gitignore conservatively: a line git would not need may
-    be added, never one it needs left out. Without a repository to ask, a line is added unless it, or one that means
-    the same, is there with no negation below it — and no .gitignore is created: it would keep nothing out of any commit. A
-    .gitignore that is a symbolic link is never written through — git does not read it, and its target may be outside
-    the project, or none yet: the note names the link (``_notes``) — nor is one that is no file: a named pipe, a
-    directory."""
+    be added, never one it needs left out — one with a ``/`` names only Cortex's own paths, while ``cortex.local.toml``
+    matches at any depth: it also ignores one in a subfolder, even one a negation brought back (#391). Without a
+    repository to ask, a line is added unless it, or one that means the same, is there with no negation below it —
+    and no .gitignore is created: it would keep nothing out of any commit. A .gitignore that is a symbolic link is
+    never written through — git does not read it, and its target may be outside the project, or none yet: the note
+    names the link (``_notes``) — nor is one that is no file: a named pipe, a directory."""
     path = root / ".gitignore"
     if is_link(path) or no_gitignore_file(path):  # never written through, nor waited on: the note names it
         return []
@@ -1526,8 +1527,8 @@ def ignored(root: Path, name: str) -> Optional[bool]:
     the folders between it and the path — read for the exact lines Cortex would add, not as git matches (#391):
     a pattern (``*.log``, ``**/foo``) is never matched, a folder ignored whole (``.claude/``) is not seen to ignore what
     it holds, and a negation is matched on the path's last part even when anchored (``!/foo``). Each gap goes one way:
-    ``False`` where git may say ignored, never ``True`` where git does not — a line git would not need may be added,
-    for a path git ignores already; one git needs is never left out."""
+    ``False`` where git may say ignored, never ``True`` where git does not — a line git would not need may be added
+    (``add_to_gitignore``), one git needs is never left out."""
     answer = git_ignores(root, name)
     if answer is not None:
         return answer
