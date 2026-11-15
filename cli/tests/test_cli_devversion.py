@@ -445,7 +445,9 @@ class BumpTests(unittest.TestCase):
         self.assertEqual(prepared(changelog(f"### Changed\n{nested}text\n-\n", "2.3.4")), "2.4.0")
         self.assertEqual(prepared(changelog("### Changed\n" + ("> " * 1000 + "x\n") * 1000 + "text\n-\n", "2.3.4")),
                          "2.4.0")
-        self.assertLess(time.monotonic() - start, 5)
+        # About 2 s here, 5 s on a loaded runner replaying the suite through a binary; a reading again from each
+        # line's start, the regression this guards, takes a minute.
+        self.assertLess(time.monotonic() - start, 20)
 
     def test_a_heading_in_an_item_and_a_quote_s_heading_or_code_are_no_paragraph(self):
         # Bluspark's fourth pass: indented past three spaces, as far as an item's content, a heading is the item's —
