@@ -21,6 +21,11 @@ and `--check` reports every setting that differs, changing nothing, and exits no
   asks GitHub which rules it applies to each of those branches, an organisation's or an
   enterprise's included, and reports such a ruleset and leaves it: removing someone's ruleset is
   theirs to do, by hand.
+- No classic branch protection requiring checks of the default branch or of a line's: GitHub
+  requires those besides the rulesets' (#235). The script reads each of those branches that
+  exists, reports a protection that requires checks, and leaves it, as it leaves a ruleset. A
+  protection is set on a branch that exists: one written for a pattern, such as `*.x`, reaches a
+  line only once that branch is cut, and the script reads it then.
 
 Standard library only; GitHub through `gh api`.
 """
@@ -47,7 +52,9 @@ LINE = re.compile(r"(0|[1-9][0-9]*)\.x")
 
 
 class GhError(Exception):
-    pass
+    def __init__(self, message: str, status: Optional[int] = None):
+        super().__init__(message)
+        self.status = status   # the API's HTTP status, when it answered
 
 
 class Gh:
@@ -61,7 +68,9 @@ class Gh:
                              capture_output=True, text=True)
         if out.returncode != 0:
             # gh prints the API's answer on stdout — its `errors` say what failed — and its own line on stderr.
-            raise GhError(f"{method} {path}: {' '.join(part.strip() for part in (out.stdout, out.stderr) if part.strip())}")
+            status = re.search(r"\(HTTP ([0-9]{3})\)", out.stderr)
+            raise GhError(f"{method} {path}: {' '.join(part.strip() for part in (out.stdout, out.stderr) if part.strip())}",
+                          int(status.group(1)) if status else None)
         return json.loads(out.stdout) if out.stdout.strip() else None
 
     def all(self, path: str) -> List[Any]:
@@ -156,6 +165,7 @@ class Setting:
     name: str
     drift: List[str]
     apply: Optional[Callable[[], None]]   # None: the script reports it, and leaves it to be done by hand
+    where: str = "in the Settings → Rules of whoever owns it"   # where to do it by hand
 
 
 def ruleset_setting(gh: Gh, repository: str, name: str, desired: Dict[str, Any], found: List[Dict[str, Any]]) -> Setting:
@@ -199,6 +209,30 @@ def other_rulesets(gh: Gh, repository: str, found: List[Dict[str, Any]], default
     return result
 
 
+def classic_protections(gh: Gh, repository: str, default: str, lines: Sequence[str]) -> List[Setting]:
+    """Every classic branch protection that requires checks of the default branch or of a line's.
+
+    GitHub requires them besides the rulesets' (#235). A protection is set on a branch that exists,
+    so each one is read: a pattern's, such as `*.x`, reaches a line only once it is cut. A 404 is
+    a branch with no protection, or none requiring checks; any other error stops the script."""
+    result = []
+    for branch in dict.fromkeys([default, *sorted(lines)]):
+        try:
+            protection = gh.api(f"repos/{repository}/branches/{branch}/protection/required_status_checks") or {}
+        except GhError as error:
+            if error.status == 404:
+                continue
+            raise
+        contexts = [c.get("context") for c in protection.get("checks", [])]
+        contexts += [c for c in protection.get("contexts", []) if c not in contexts]
+        if not contexts:
+            continue    # a protection that names no check stands in no merge's way
+        result.append(Setting(f"the classic branch protection of {branch!r}, which the cycle does not set", [
+            f"it requires {len(contexts)} check(s) of its own — {', '.join(contexts)}: GitHub requires them "
+            "besides every ruleset's, so remove it by hand"], None, "in the Settings → Branches of the repository"))
+    return result
+
+
 def settings(gh: Gh, repository: str, checks: Sequence[str]) -> List[Setting]:
     repo = gh.api(f"repos/{repository}")
     found = gh.all(f"repos/{repository}/rulesets?includes_parents=false")
@@ -214,7 +248,9 @@ def settings(gh: Gh, repository: str, checks: Sequence[str]) -> List[Setting]:
                           lambda: gh.api(f"repos/{repository}/immutable-releases", "PUT")))
     result.append(Setting("head branches deleted on merge", [] if repo.get("delete_branch_on_merge") is True else ["they are kept"],
                           lambda: gh.api(f"repos/{repository}", "PATCH", {"delete_branch_on_merge": True})))
-    return result + other_rulesets(gh, repository, found, repo.get("default_branch", "main"), lines)
+    default = repo.get("default_branch", "main")
+    return (result + other_rulesets(gh, repository, found, default, lines)
+            + classic_protections(gh, repository, default, lines))
 
 
 def main(argv: Optional[Sequence[str]] = None, gh: Optional[Gh] = None) -> int:
@@ -258,7 +294,7 @@ def main(argv: Optional[Sequence[str]] = None, gh: Optional[Gh] = None) -> int:
     changed = len(drifted) - len(by_hand)
     print(f"{changed} setting(s) changed." if changed else "Nothing to change.")
     for setting in by_hand:
-        print(f"! {setting.name}: left to you — remove it by hand, in the Settings → Rules of whoever owns it")
+        print(f"! {setting.name}: left to you — remove it by hand, {setting.where}")
     return 1 if by_hand else 0
 
 
