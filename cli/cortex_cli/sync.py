@@ -143,9 +143,10 @@ def missing_files(copy: Path, marker: dict) -> List[str]:
 
 
 def _gitdir(path: Path) -> Optional[str]:
-    """The repository a ``.git`` file names — a submodule's, or a worktree's — absolute."""
+    """The repository a ``.git`` file names — a submodule's, or a worktree's — absolute. Read without blocking: a
+    named pipe there is no file, which names none, and never waited on (#386)."""
     try:
-        text = (path / ".git").read_text(encoding="utf-8").strip()
+        text = cascade.read_file(str(path / ".git")).decode("utf-8").strip()
     except (OSError, ValueError):
         return None
     if not text.startswith("gitdir:"):
@@ -456,6 +457,12 @@ def leaving(path: Path) -> str:
     """How to leave the submodule, the worktree or the clone at ``cortex/`` (ADR-008 §3.10): the
     commands, shown and never run — they rewrite the project's git state, and the developer should
     see them first. Every path in them is absolute: they run from any directory."""
+    dot_git = path / ".git"
+    if os.path.exists(dot_git) and not os.path.isfile(dot_git) and not os.path.isdir(dot_git):
+        # A named pipe, a socket, a device, or a link to one: no repository to name, and git, reading it, would wait on
+        # it (#386).
+        return (f"{LINK}/.git is not a file, nor a folder, which git would wait on: remove it, then run the command "
+                "again.")
     root = display(str(path.parent))
     kind = kind_of(path)
     if kind == "submodule" and in_index(path) is False:

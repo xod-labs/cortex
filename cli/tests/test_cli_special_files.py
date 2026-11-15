@@ -10,6 +10,7 @@ import socket
 import stat
 import subprocess
 import sys
+import threading
 import unittest
 from pathlib import Path
 
@@ -18,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cli_harness as harness  # noqa: E402
 from test_cli_team import DOWNLOADS, GIT, GIT_ENV, OWN, TeamTestCase, harness_path  # noqa: E402
 
+from cortex_cli import sync  # noqa: E402
 from cortex_cli.paths import display  # noqa: E402
 
 PIPES = unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipe here")
@@ -115,6 +117,61 @@ class GitmodulesTests(SpecialFileTestCase):
                     self.assertEqual(proc.returncode, 1, proc.out + proc.err)
                     self.assertIn(GitmodulesTests.NOTE, proc.err)
                     self.assertIn(f"cortex sync: cortex/ is a git {layout}, which Cortex did not write.", proc.err)
+
+
+class GitFileTests(SpecialFileTestCase):
+    """``cortex/.git``, which names a submodule's repository, or a worktree's."""
+
+    @PIPES
+    @LINKS
+    @harness.outside_a_repository
+    def test_a_named_pipe_at_cortex_git_is_said_not_a_file_never_waited_on(self):
+        # A submodule's cortex/ — .gitmodules names it — whose .git is a named pipe, or a link to one: read with a
+        # plain read_text for the repository it names, it held the sync with no limit (#386). Said what it is, with
+        # its remedy, which, followed, leaves the submodule to remove as any other.
+        for kind in ("pipe", "link to pipe"):
+            with self.subTest(kind=kind):
+                root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', name=f"dotgit-{kind.replace(' ', '-')}")
+                (root / ".gitmodules").write_text('[submodule "cortex"]\n\tpath = cortex\n\turl = x\n',
+                                                  encoding="utf-8")
+                (root / "cortex").mkdir()
+                if kind == "pipe":
+                    os.mkfifo(root / "cortex" / ".git")
+                else:
+                    os.mkfifo(self.tmp / "aside")
+                    (root / "cortex" / ".git").symlink_to(self.tmp / "aside")
+                for args in (("sync",), ("sync", "--link"), ("sync", "--copy")):
+                    proc = self.within(root, *args)
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertIn("cortex sync: cortex/ is a git submodule, which Cortex did not write.", proc.err)
+                    self.assertIn("cortex/.git is not a file, nor a folder, which git would wait on: remove it, then "
+                                  "run the command again.\n", proc.err)
+                    self.assertNotIn("git -C", proc.err)
+                    self.assertEqual(os.listdir(root / "cortex"), [".git"])
+                (root / "cortex" / ".git").unlink()
+                proc = self.within(root, "sync")
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn("cortex sync: cortex/ is a git submodule, which Cortex did not write.", proc.err)
+                self.assertIn("submodule deinit -f cortex", proc.err)
+                self.assertNotIn("cortex/.git", proc.err)
+                if kind != "pipe":
+                    (self.tmp / "aside").unlink()
+
+    @PIPES
+    def test_the_repository_a_named_pipe_at_cortex_git_names_is_none_never_waited_on(self):
+        # What every caller of it reads: a named pipe names no repository, and is never opened to wait for a writer.
+        folder = self.tmp / "cortex"
+        folder.mkdir()
+        os.mkfifo(folder / ".git")
+        found = []
+        reader = threading.Thread(target=lambda: found.append(sync._gitdir(folder)), daemon=True)
+        reader.start()
+        reader.join(10)
+        if reader.is_alive():
+            with open(folder / ".git", "w"):        # the reader that waits on it, let go
+                pass
+            self.fail("the .git a named pipe is waited on")
+        self.assertEqual(found, [None])
 
 
 class InstructionsFileTests(SpecialFileTestCase):
