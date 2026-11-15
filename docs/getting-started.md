@@ -71,6 +71,8 @@ The command creates:
 - `project-overview.md` — to fill in: vision, stakeholders, business flows
 - `project-context.md` — to fill in: stack, conventions, tools
 
+A line goes to `.gitignore` only when git does not ignore its path yet, which Cortex asks git. Without git to ask — none on `PATH`, or git refusing the repository — Cortex reads each folder's `.gitignore` only for the exact line it would add: it matches no pattern (`*.toml`) and sees no folder ignored whole (`.claude/`). It may then add a line git would not need — harmless: git ignores that path already —, and never leaves out one git needs.
+
 The two context files are written only when missing. Running `cortex init` again keeps the instructions file, and `cortex.toml` with its version: it changes only the keys an option names — `--theme` or `--no-personality`, `--link` or `--copy`, `--claude-access`. `--force` replaces the instructions file, and only it.
 
 The instructions file is in two parts ([ADR-012](adr/ADR-012-bootstrap-block.md)):
