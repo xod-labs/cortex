@@ -92,6 +92,7 @@ def lines(text: str) -> List[Line]:
     read: List[Line] = []
     items: List[int] = []           # the content column of each list item open, the outermost first
     paragraph = False               # the line before is a paragraph's, which a less indented line continues
+    start = 0                       # where in ``read`` that paragraph starts — a block quote's aside, never underlined
     quoted = False                  # that paragraph is a block quote's: no list item is refused for interrupting it
     empty = False                   # the line before opens an empty list item, which a blank line ends
     # The block quote the line before is in: how many items it is in, and what is open in it — ``_quoted``'s.
@@ -120,7 +121,7 @@ def lines(text: str) -> List[Line]:
         # the paragraph, which only some list items interrupt, or underline it.
         own = paragraph and not quoted and inner == len(items)
         if own and rest is not None and UNDERLINE.fullmatch(rest):
-            _heading(read)
+            _heading(read, start)
             read.append(Line(line, False, bool(items)))
             paragraph, index = False, index + 1
             continue
@@ -135,6 +136,7 @@ def lines(text: str) -> List[Line]:
         if rest is None or not opens:
             quoted = quoted and paragraph                           # a block quote's paragraph, continued lazily
             quote = held if quoted else None
+            start = start if paragraph else len(read)
             paragraph, index = paragraph or rest is not None, index + 1   # indented code is no paragraph
             read.append(Line(line, False, bool(items), paragraph=paragraph))
             continue
@@ -177,7 +179,7 @@ def lines(text: str) -> List[Line]:
                 if deeper is None:
                     break
                 at, first = at + deeper, False
-            read[-1] = read[-1]._replace(paragraph=first and text)
+            read[-1], start = read[-1]._replace(paragraph=first and text), len(read) - 1
             if block is None:
                 index, empty = index + 1, not char
                 continue
@@ -186,6 +188,7 @@ def lines(text: str) -> List[Line]:
             continue
         index = _block(raw, index, _opens(rest), base, read, closers)
         paragraph = not read[-1].code                               # a block never closed is a paragraph's line
+        start = len(read) - 1
     return read
 
 
@@ -199,15 +202,12 @@ def sections(text: str) -> List[Tuple[str, Line]]:
     return found
 
 
-def _heading(read: List[Line]) -> None:
-    """The paragraph that ends ``read``, which a line of ``=`` or ``-`` below it underlines: a heading — its lines, up
-    to the item's line it starts on, hold no paragraph's text. Each line is cleared once: the paragraph ends there."""
-    at = len(read)
-    while at and read[at - 1].paragraph:
-        at -= 1
+def _heading(read: List[Line], start: int) -> None:
+    """The paragraph that ends ``read``, from ``read[start]`` — an item's line, the first of its text, or a block's
+    never closed — which a line of ``=`` or ``-`` below it underlines: a heading, its lines hold no paragraph's text.
+    Each line is cleared once: the paragraph ends there."""
+    for at in range(start, len(read)):
         read[at] = read[at]._replace(paragraph=False)
-        if read[at].item:
-            break
 
 
 def _block(raw: List[str], index: int, block: Tuple[str, str], base: int, read: List[Line],

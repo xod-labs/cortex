@@ -370,6 +370,14 @@ class BumpTests(unittest.TestCase):
                       "- 💥 a\n- b\n  ===\n", "-\n  💥 a\n===\n"):
             with self.subTest(entry=entry):
                 self.assertEqual(prepared(changelog(f"### Fixed\n{entry}", "2.3.4")), "3.0.0")
+        # A block never closed at the top level is a paragraph's line of its own: underlined, it is the heading — never
+        # the entry above it, whose 💥 marks a major (commonmark.js hides the rest of the file in the block).
+        for block in ("```\n===\n", "<!--\n===\n", "~~~\n  ---\n", "<pre>\n===\n", "```\nb\n===\n"):
+            with self.subTest(block=block):
+                self.assertEqual(devversion.unreleased(changelog(f"### Fixed\n- 💥 a\n{block}")), {"Fixed": ["💥 a"]})
+                self.assertEqual(prepared(changelog(f"### Fixed\n- 💥 a\n{block}", "2.3.4")), "3.0.0")
+        self.assertEqual([line.paragraph for line in markdown_lines.lines("- a\n```\nb\n===\n")],
+                         [True, False, False, False, False])
 
     def test_an_item_s_line_that_holds_no_paragraph_is_continued_by_none(self):
         # #354: past its marker, a heading, a thematic break or code holds no paragraph — an item nested on the line, a
