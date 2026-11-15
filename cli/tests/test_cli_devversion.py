@@ -348,6 +348,28 @@ class BumpTests(unittest.TestCase):
         self.assertEqual([line.paragraph for line in markdown_lines.lines("-     code\n-\n      code\n- text\n")],
                          [False, False, False, True, False])
 
+    def test_an_item_s_line_that_holds_no_paragraph_is_continued_by_none(self):
+        # #354: past its marker, a heading, a thematic break or code holds no paragraph — an item nested on the line, a
+        # quote, neither, past their own marks: the line below is no lazy line of the entry, and the list ends there.
+        for line in ("- # Note", "- #", "- * * *", "- ***", "- ___", "- * # h", "- 1. * * *", "- > # x", "- *     code"):
+            with self.subTest(line=line):
+                self.assertEqual(prepared(changelog(f"### Fixed\n{line}\nlazy\n  - 💥 x\n", "2.3.4")), "3.0.0")
+        for line in ("- #tag", "- * x", "- > x", "- 1. x"):
+            with self.subTest(line=line):
+                self.assertEqual(prepared(changelog(f"### Fixed\n{line}\nlazy\n  - 💥 x\n", "2.3.4")), "2.3.5")
+        # An item nested on the line is one more: less indented than its content, a line of = is no underline of its
+        # paragraph — it continues it lazily, and the item below is the entry's.
+        self.assertEqual(prepared(changelog("### Fixed\n- * a\n  ===\nlazy\n  - 💥 b\n", "2.3.4")), "2.3.5")
+        # Its own text is none: the entry counts for its kind alone.
+        self.assertEqual(devversion.unreleased(changelog("### Changed\n- # 💥 a\n- * 💥 b\n- > 💥 c\n- d\n")),
+                         {"Changed": ["", "", "", "d"]})
+        self.assertEqual([line.paragraph for line in markdown_lines.lines("- # h\n- * x\n- x")], [False, False, True])
+        # Read once, however many items the line nests.
+        start = time.monotonic()
+        nested = "- " * 20000 + "x\n" + "lazy\n" * 20000
+        self.assertEqual(prepared(changelog(f"### Fixed\n{nested}", "2.3.4")), "2.3.5")
+        self.assertLess(time.monotonic() - start, 5)
+
     def test_a_section_heading_takes_a_tab(self):
         text = "## [Unreleased]\n\n### Fixed\n- a fix\n\n##\t[2.3.4] - 2026-11-01\n"
         self.assertEqual(devversion.released(text), [Version("2.3.4")])

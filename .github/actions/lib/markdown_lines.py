@@ -17,11 +17,12 @@ What is read, as CommonMark has it:
 - a list item — ``-``, ``*``, ``+``, or ``1.``, ``1)`` — holds the lines indented as far as its content, its first
   line's text after the marker, and the lines of a paragraph that continue it, lazily, indented less. A line in a
   list item is ``nested``; an item's own line is when it starts in another item. An item whose first line holds
-  only its marker ends at a blank line below it. A line holds a ``paragraph``'s text, or none — an item's line, past
-  its marker: its own first line's;
+  only its marker ends at a blank line below it. Past its marker, its first line is its content's first: an item
+  nested on it — ``- * x`` — is one more item, and a heading, a thematic break, a quote, a block or code there is no
+  paragraph of it. A line holds a ``paragraph``'s text, or none — an item's line, past its marker: its own;
 - a heading — one to six ``#``, indented up to three spaces — ends every list: a changelog's headings are its own,
-  never an item's, even indented as far as one's content. Indented further, as far as an item's content, it is the
-  item's: no paragraph, which the line below would continue;
+  never an item's, even indented as far as one's content. Indented further, as far as an item's content, or on an
+  item's line, past its marker, it is the item's: no paragraph, which the line below would continue;
 - a paragraph is interrupted by a list item, but not by an empty one nor an ordered one that does not start at 1, and
   not by a line indented as code: such a line continues it. Indented code — four spaces past its container's
   content — is no paragraph, which a less indented line would continue;
@@ -37,6 +38,7 @@ an entry in one is read. A blank line holds spaces and tabs only.
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 # Matched after the line's indentation, relative to its container.
@@ -50,6 +52,7 @@ COMMENT, COMMENT_END = "<!--", "-->"
 # a tab after its ##.
 SECTION = re.compile(r" {0,3}##[ \t]+\[(?P<label>[^\]]+)\].*")
 QUOTE = ">"
+SPACES = re.compile(r" *")
 UNDERLINE = re.compile(r"(?:=+|-+)[ \t]*")                # under a paragraph, it makes the paragraph a heading
 
 
@@ -91,12 +94,12 @@ def lines(text: str) -> List[Line]:
             read.append(Line(line, False, False))
             paragraph, index = False, index + 1
             continue
-        inner = [column for column in items if column <= width]     # the items this line is in, by its indent
-        base = inner[-1] if inner else 0
+        inner = bisect_right(items, width)                          # how many items this line is in, by its indent
+        base = items[inner - 1] if inner else 0
         rest = _expand(line)[width:] if width - base < 4 else None   # a block's start, or None: code or text
         # As indented as the innermost item's content, the line is in the paragraph's own container: it may continue
         # the paragraph, which only some list items interrupt, or underline it.
-        own = paragraph and not quoted and len(inner) == len(items)
+        own = paragraph and not quoted and inner == len(items)
         if own and rest is not None and UNDERLINE.fullmatch(rest):
             read.append(Line(line, False, bool(items)))
             paragraph, index = False, index + 1
@@ -106,8 +109,8 @@ def lines(text: str) -> List[Line]:
         heading = rest is not None and HEADING_TEXT.fullmatch(rest) is not None   # in an item, indented past three
         opens = rest is not None and (_opens(rest) is not None or BREAK.fullmatch(rest) is not None or quote or
                                       heading or content is not None)
-        if len(inner) < len(items) and (opens or not paragraph):
-            del items[len(inner):]                                  # the items it is not indented into end
+        if inner < len(items) and (opens or not paragraph):
+            del items[inner:]                                  # the items it is not indented into end
         # Otherwise, not indented into them, a line that opens nothing continues the paragraph lazily: still in them.
         if rest is None or not opens:
             quoted = quoted and paragraph                           # a block quote's paragraph, continued lazily
@@ -125,16 +128,34 @@ def lines(text: str) -> List[Line]:
             continue
         nested = bool(items)
         if content is not None:
-            column, text_after = width + content, rest[content:]
-            items.append(column)
-            block = None if _blank(text_after) else _opens(text_after)
-            # Its first line's text is a paragraph's — unless five spaces after the marker make it code.
-            paragraph = block is None and not _blank(text_after) and _indent(text_after) < 4
-            read.append(Line(line, False, nested, True, paragraph))
+            read.append(Line(line, False, nested, True))
+            at, first, breaks = content, True, {}
+            # Its text, past the marker, is read as its own container's first line: a block, an item nested in it — on
+            # the same line, `- * x` — or a paragraph's text. Its own text is a paragraph's only if it is none of them.
+            # Read once, from left to right, however many items it nests.
+            while True:
+                items.append(width + at)
+                lead = SPACES.match(rest, at).end() - at
+                char = rest[at + lead:at + lead + 1]
+                block = _opens(rest[at:]) if char and char in "`~<" else None
+                deeper, text = None, False
+                if not char or lead >= 4 or block is not None:
+                    paragraph = False                               # empty, code — five spaces after it — or a block
+                elif char == "#" and HEADING_TEXT.fullmatch(rest, at) or _break(rest, at, breaks):
+                    paragraph = False                               # a heading, a thematic break: no paragraph
+                elif char == QUOTE:
+                    quoted, paragraph = True, _paragraph(rest[at:])
+                else:
+                    deeper = _item(rest, at=at)
+                    paragraph = text = deeper is None
+                if deeper is None:
+                    break
+                at, first = at + deeper, False
+            read[-1] = read[-1]._replace(paragraph=first and text)
             if block is None:
-                index, empty = index + 1, _blank(text_after)
+                index, empty = index + 1, not char
                 continue
-            index = _block(raw, index, block, column, read, closers, first_line_read=True)
+            index = _block(raw, index, block, items[-1], read, closers, first_line_read=True)
             paragraph = False
             continue
         index = _block(raw, index, _opens(rest), base, read, closers)
@@ -229,18 +250,26 @@ def _paragraph(rest: str) -> bool:
             continue
         if char == "#" and HEADING_TEXT.fullmatch(rest, at):
             return False
-        if char in "-*_":
-            # A thematic break holds that character and spaces only, to the end of the line — three of it at least.
-            if char not in breaks:
-                breaks[char] = len(rest.rstrip(char + " "))
-            if at >= breaks[char] and rest.count(char, at) >= 3:
-                return False
+        if _break(rest, at, breaks):
+            return False
         if char in "`~<" and _opens(rest[at:]) is not None:
             return False
         item = _item(rest, at=at)
         if item is None:
             return True
         at += item                                  # the item's content, as its own container's
+
+
+def _break(rest: str, at: int, breaks: Dict[str, int]) -> bool:
+    """Whether ``rest`` — a line past its indentation, its tabs expanded — is a thematic break from ``at``: its
+    character, and that character and spaces only to the end of the line — three of it at least. ``breaks``: by a
+    break's character, where the line's run of it and spaces begins, measured once a line."""
+    char = rest[at:at + 1]
+    if not char or char not in "-*_":
+        return False
+    if char not in breaks:
+        breaks[char] = len(rest.rstrip(char + " "))
+    return at >= breaks[char] and rest.count(char, at) >= 3
 
 
 def _opens(rest: str) -> Optional[Tuple[str, str]]:
