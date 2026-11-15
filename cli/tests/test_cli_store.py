@@ -572,6 +572,13 @@ class CheckoutPullTests(unittest.TestCase):
                              (upstream + '[branch "main"]\nremote = https://example.invalid/c.git\nmerge = x\n', "pull"),
                              (upstream + '[branch "main"]\nremote = ../cortex\nmerge = x\n', "pull"),
                              (upstream + '[branch "main"]\nremote = host:cortex\nmerge = x\n', "pull"),
+                             # A name that opens with "-", which git pull would read as an option: never named.
+                             ('[remote "-fork"]\nurl = /x\n' + upstream, "pull upstream HEAD"),
+                             (upstream + '[remote "--upload-pack=touch"]\nurl = /x\n'
+                              '[branch "main"]\nremote = --upload-pack=touch\nmerge = refs/heads/main\n',
+                              "pull upstream HEAD"),
+                             (upstream + '[branch "main"]\nremote = --upload-pack=/bin/touch\nmerge = x\n',
+                              "pull upstream HEAD"),
                              (f'[remote "{odd}"]\n\turl = /x\n', f"pull {paths.quote(odd)} HEAD")):
             with self.subTest(config=config):
                 self.assertEqual(store._pull(self.repository(config=config)), pull)
@@ -642,7 +649,8 @@ class CheckoutPullTests(unittest.TestCase):
             with self.subTest(head=head):
                 self.assertIsNone(store._pull(self.repository(head=head)))
                 shutil.rmtree(self.tmp / "checkout")
-        for config in ("", '[branch "main"]\nmerge = refs/heads/main\n', None):
+        for config in ("", '[branch "main"]\nmerge = refs/heads/main\n', '[remote "-fork"]\nurl = /x\n',
+                       '[remote]\nurl = /x\n', None):
             with self.subTest(config=config):
                 self.assertIsNone(store._pull(self.repository(config=config)))
                 shutil.rmtree(self.tmp / "checkout")

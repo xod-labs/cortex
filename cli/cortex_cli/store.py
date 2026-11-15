@@ -168,8 +168,9 @@ def _pull(checkout: Path) -> Optional[str]:
     this repository, a pull leaves the checkout behind; with a remote not declared, it fails. A detached HEAD — a
     tag checked out, say —, a branch with no such upstream, or a branch a reftable keeps — its HEAD file the
     stand-in ``refs/heads/.invalid``, which no branch's section of the config names — pull the default branch of
-    the remote the branch names, else of ``origin``, else of the first the config declares. ``None`` with no
-    repository git reads — no ``.git``, as in an extracted source archive, or a HEAD git refuses — nor any remote."""
+    the remote the branch names, else of ``origin``, else of the first the config declares — never one whose name
+    opens with ``-``, which ``git pull`` would read as an option. ``None`` with no repository git reads — no
+    ``.git``, as in an extracted source archive, or a HEAD git refuses — nor any such remote."""
     git = checkout / ".git"
     try:
         if not git.is_dir():
@@ -186,9 +187,12 @@ def _pull(checkout: Path) -> Optional[str]:
         return None
     if head is None:
         return None
-    remotes = [name for (section, name, key), _ in config.items() if section == "remote" and key == "url"]
+    # A name that opens with "-" — git takes one: clone -o -fork — would be read as an option of git pull.
+    remotes = [name for (section, name, key), _ in config.items()
+               if section == "remote" and key == "url" and name is not None and not name.startswith("-")]
     branch = head[len("refs/heads/"):] if head.startswith("refs/heads/") else None
     named = config.get(("branch", branch, "remote")) if branch is not None else None
+    named = None if named is None or named.startswith("-") else named
     url = bool(named) and ("/" in named or ":" in named)                # a URL, or a path: no remote of the config
     if branch is not None and config.get(("branch", branch, "merge")) and (named in remotes or url):
         return "pull"
