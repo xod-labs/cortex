@@ -540,10 +540,18 @@ class CheckoutPullTests(unittest.TestCase):
 
     def test_a_detached_head_pulls_its_remote_s_default_branch(self):
         # SHA-1's, SHA-256's; in capitals, or followed by a space and anything: git reads them all.
-        for head in (OID, OID + "\n", OID + "0123456789abcdef01234567\n", OID.upper() + "\n", OID + " x\n",
+        for head in (OID, OID + "\n", OID.upper() + "\n", OID + " x\n",
                      OID + "\tfoo\n", OID + "\r\n", OID + "\n\nmore\n", (OID + " \xff\n").encode("latin-1")):
             with self.subTest(head=head):
                 self.assertEqual(store._pull(self.repository(head=head)), "pull origin HEAD")
+
+    def test_a_sha_256_repository_s_detached_head_holds_64_digits(self):
+        config = ORIGIN + "[extensions]\n\tobjectFormat = sha256\n"
+        for head, pull in ((OID + "0123456789abcdef01234567\n", "pull origin HEAD"), (OID + "\n", None),
+                           (OID + "0123456789abcdef012345678\n", None)):
+            with self.subTest(head=head):
+                self.assertEqual(store._pull(self.repository(head=head, config=config)), pull)
+                shutil.rmtree(self.tmp / "checkout")
 
     def test_a_branch_with_no_upstream_pulls_its_remote_s_default_branch(self):
         for config in (ORIGIN, ORIGIN + '[branch "main"]\n\tremote = origin\n'):
@@ -645,7 +653,11 @@ class CheckoutPullTests(unittest.TestCase):
         self.assertIsNone(store._pull(self.tmp / "archive"))
         for head in (b"", b"\n", b"\x00", b"\x00\n", b"\xef\xbb\xbfref: refs/heads/main\n", b"\xff\n",
                      OID[:-1].encode(), (OID + "0").encode(), (OID + "x\n").encode(), (OID + "0" * 23).encode(),
-                     (" " + OID).encode(), b"ref: heads/main\n", b"refs/heads/main\n", None):
+                     (" " + OID).encode(), b"ref: heads/main\n", b"refs/heads/main\n", None,
+                     # Spaces git's isspace does not read, as Python's does: a vertical tab, a form feed, no-break.
+                     (OID + "\vx\n").encode(), (OID + "\fx\n").encode(), OID.encode() + b"\xc2\xa0x\n",
+                     (OID + "\x1cx\n").encode(), (OID + "\v").encode(),
+                     (OID + "0123456789abcdef01234567\n").encode()):          # SHA-256's, in a SHA-1 repository
             with self.subTest(head=head):
                 self.assertIsNone(store._pull(self.repository(head=head)))
                 shutil.rmtree(self.tmp / "checkout")

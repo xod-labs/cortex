@@ -155,11 +155,6 @@ def update_command(version: Union[Version, str, None] = None) -> str:
     return "cortex self-update" if version is None else f"cortex self-update {version}"
 
 
-# A detached HEAD: the object id it opens with, SHA-1's or SHA-256's, in either case, then a space or its end —
-# what git reads there besides a ``ref:``, whatever follows the space.
-_OBJECT_ID = re.compile(r"[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?(?:\s|$)")
-
-
 def _pull(checkout: Path) -> Optional[str]:
     """The ``git pull`` that updates ``checkout`` — read from its files: a source run needs no git on ``PATH``. Its
     ``.git`` is the repository, or a file that names it — a worktree's, a submodule's —, whose HEAD git reads: a
@@ -178,11 +173,12 @@ def _pull(checkout: Path) -> Optional[str]:
             if not text.startswith("gitdir:"):
                 return None
             git = checkout / text[len("gitdir:"):].strip()
-        head = _head(git / "HEAD")
         common = git
         if (git / "commondir").is_file():                       # a worktree's: the config is the repository's
             common = git / read_file(str(git / "commondir")).decode("utf-8").strip()
         config = _git_config(read_file(str(common / "config")).decode("utf-8"))
+        sha256 = config.get(("extensions", None, "objectformat")) == "sha256"
+        head = _head(git / "HEAD", 64 if sha256 else 40)
     except (OSError, ValueError):
         return None
     if head is None:
@@ -200,10 +196,12 @@ def _pull(checkout: Path) -> Optional[str]:
     return None if remote is None else f"pull {word(remote)} HEAD"
 
 
-def _head(path: Path) -> Optional[str]:
-    """What the HEAD at ``path`` names — a ref, or ``""`` for an object id, detached — or ``None`` where git refuses
-    it: empty, or anything but a ``ref:`` into ``refs/`` or an object id — a byte order mark before it, say, or a
-    hex digit too many. Bytes no UTF-8 reads may follow an object id, as git takes them. A link
+def _head(path: Path, digits: int = 40) -> Optional[str]:
+    """What the HEAD at ``path`` names — a ref, or ``""`` for an object id of ``digits`` hex digits, SHA-1's or
+    SHA-256's as the repository's object format says, detached — or ``None`` where git refuses it: empty, or anything
+    but a ``ref:`` into ``refs/`` or such an object id — a byte order mark before it, say, a hex digit more or less,
+    or anything after it but a space, a tab, a line ending, as git's ``isspace`` reads them. Whatever follows that
+    space git ignores, bytes no UTF-8 reads included. A link
     into ``refs/`` is the ref it leads to, as git has written HEAD before."""
     if path.is_symlink():
         target = os.readlink(path)
@@ -212,7 +210,7 @@ def _head(path: Path) -> Optional[str]:
     if text.startswith("ref:"):
         ref = text[len("ref:"):].strip()
         return ref if ref.startswith("refs/") else None
-    return "" if _OBJECT_ID.match(text) else None
+    return "" if re.match(rf"[0-9a-fA-F]{{{digits}}}(?:[ \t\n\r]|$)", text) else None
 
 
 def _git_config(text: str) -> Dict[Tuple[str, Optional[str], str], str]:
