@@ -1847,7 +1847,7 @@ def _files_git_reads(root: str, top: str, files: List[Path]) -> List[Tuple[str, 
             # `--path` expands ~/ as git does; a path still relative, git reads from the top of the work tree.
             found.append((os.path.join(top, users.stdout.strip()), what))
         elif users.returncode == 1:
-            found.append((os.path.join(home, "git", default), what))
+            found.append((os.path.join(top, home, "git", default), what))      # a relative home: from the top too
     return list(dict.fromkeys((os.path.normpath(path), what) for path, what in found))
 
 

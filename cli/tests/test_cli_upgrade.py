@@ -1312,6 +1312,8 @@ class IgnoredTimeoutTests(unittest.TestCase):
                  (root / ".gitignore", True, ignore, None), (top / ".git" / "info" / "exclude", True, ignore, None),
                  (tmp / "xdg" / "git" / "ignore", True, ignore, None),
                  (tmp / "home" / ".config" / "git" / "ignore", False, ignore, None),
+                 # A relative XDG_CONFIG_HOME, which git reads from the top of the work tree too.
+                 (top / "xdgrel" / "git" / "ignore", "xdgrel", ignore, None),
                  (tmp / "excludes", True, ignore, str(tmp / "excludes")),
                  (tmp / "linked", True, ignore, str(tmp / "linked")), (top / "myignore", True, ignore, "myignore"),
                  (tmp / "home" / "tilde", True, ignore, "~/tilde"),
@@ -1321,6 +1323,7 @@ class IgnoredTimeoutTests(unittest.TestCase):
                  (top / ".git" / "info" / "attributes", True, attributes, None),
                  (tmp / "xdg" / "git" / "attributes", True, attributes, None),
                  (tmp / "home" / ".config" / "git" / "attributes", False, attributes, None),
+                 (top / "xdgrel" / "git" / "attributes", "xdgrel", attributes, None),
                  (top / "myattributes", True, attributes, "myattributes"),
                  (tmp / "home" / "tilde-attributes", True, attributes, "~/tilde-attributes")]
         run = subprocess.run
@@ -1341,8 +1344,10 @@ class IgnoredTimeoutTests(unittest.TestCase):
                 if named is not None:
                     subprocess.run(["git", "-C", str(top), "config", key, named], check=True)
                 with mock.patch.dict(os.environ, environment), mock.patch.object(subprocess, "run", bounded):
-                    if not xdg:
+                    if xdg is False:
                         del os.environ["XDG_CONFIG_HOME"]
+                    elif xdg is not True:
+                        os.environ["XDG_CONFIG_HOME"] = xdg
                     with self.assertRaises(upgrade.IgnoreFileError) as said:
                         upgrade._changed(str(root), str(top), files)
                     self.assertEqual(str(said.exception), f"{str(pipe).replace(os.sep, '/')} is not a file, and git, "
