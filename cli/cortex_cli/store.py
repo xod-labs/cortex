@@ -163,11 +163,11 @@ def _pull(checkout: Path) -> Optional[str]:
     """The ``git pull`` that updates ``checkout`` — read from its files: a source run needs no git on ``PATH``. Its
     ``.git`` is the repository, or a file that names it — a worktree's, a submodule's —, whose HEAD git reads: a
     ``ref:`` into ``refs/``, or an object id. A branch with an upstream is pulled plainly — the branch it merges and
-    its remote both set: with no remote, git sees none; with ``.``, this repository, a pull leaves the checkout
-    behind. A detached HEAD — a tag checked out, say —, a branch with no such upstream, or a branch a reftable keeps
-    — its HEAD file the stand-in
-    ``refs/heads/.invalid``, which no branch's section of the config names — pull the default branch of the
-    remote the branch names, else of ``origin``, else of the first the config declares. ``None`` with no
+    its remote both set, to a remote the config declares or to a URL — with none, git sees no upstream; with ``.``,
+    this repository, a pull leaves the checkout behind; with a remote not declared, it fails. A detached HEAD — a
+    tag checked out, say —, a branch with no such upstream, or a branch a reftable keeps — its HEAD file the
+    stand-in ``refs/heads/.invalid``, which no branch's section of the config names — pull the default branch of
+    the remote the branch names, else of ``origin``, else of the first the config declares. ``None`` with no
     repository git reads — no ``.git``, as in an extracted source archive, or a HEAD git refuses — nor any remote."""
     git = checkout / ".git"
     try:
@@ -188,7 +188,8 @@ def _pull(checkout: Path) -> Optional[str]:
     remotes = [name for (section, name, key), _ in config.items() if section == "remote" and key == "url"]
     branch = head[len("refs/heads/"):] if head.startswith("refs/heads/") else None
     named = config.get(("branch", branch, "remote")) if branch is not None else None
-    if branch is not None and config.get(("branch", branch, "merge")) and named and named != ".":
+    url = bool(named) and ("/" in named or ":" in named)                # a URL, or a path: no remote of the config
+    if branch is not None and config.get(("branch", branch, "merge")) and (named in remotes or url):
         return "pull"
     remote = named if named in remotes else "origin" if "origin" in remotes else remotes[0] if remotes else None
     return None if remote is None else f"pull {word(remote)} HEAD"

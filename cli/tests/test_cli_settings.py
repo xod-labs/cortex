@@ -747,7 +747,8 @@ class DevelopmentBuildTests(SettingsTestCase):
             return subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True).stdout
 
         for n, setting in enumerate((["--unset", f"branch.{branch}.remote"],      # a branch it merges, no remote
-                                     [f"branch.{branch}.remote", "."])):              # merged from this repository
+                                     [f"branch.{branch}.remote", "."],                # merged from this repository
+                                     [f"branch.{branch}.remote", "gone"])):           # from a remote not declared
             with self.subTest(setting=setting):
                 subprocess.run([*git, "config", *setting], check=True, capture_output=True)
                 before = head()
@@ -756,6 +757,10 @@ class DevelopmentBuildTests(SettingsTestCase):
                 self.told_to_pull(checkout, "pull origin HEAD", name=f"app{n}")
                 subprocess.run([*git, "reset", "-q", "--hard", "HEAD~1"], check=True, capture_output=True)
                 subprocess.run([*git, "config", f"branch.{branch}.remote", "origin"], check=True, capture_output=True)
+        # Merged from a path — no remote of the config —, a plain pull fetches it.
+        subprocess.run([*git, "config", f"branch.{branch}.remote", str(self.tmp / "upstream")], check=True,
+                       capture_output=True)
+        self.told_to_pull(checkout, "pull", name="app-path")
 
     @unittest.skipIf(harness.BINARY, "a source checkout's remedy")
     @NEEDS_GIT

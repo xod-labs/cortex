@@ -562,6 +562,13 @@ class CheckoutPullTests(unittest.TestCase):
                              # Merged from this repository: a plain pull leaves the checkout behind.
                              (upstream + '[branch "main"]\nremote = .\nmerge = refs/heads/main\n',
                               "pull upstream HEAD"),
+                             # Merged from a remote the config does not declare: a plain pull would fail.
+                             (upstream + '[branch "main"]\nremote = gone\nmerge = refs/heads/main\n',
+                              "pull upstream HEAD"),
+                             # Merged from a URL, or a path: a plain pull fetches it.
+                             (upstream + '[branch "main"]\nremote = https://example.invalid/c.git\nmerge = x\n', "pull"),
+                             (upstream + '[branch "main"]\nremote = ../cortex\nmerge = x\n', "pull"),
+                             (upstream + '[branch "main"]\nremote = host:cortex\nmerge = x\n', "pull"),
                              (f'[remote "{odd}"]\n\turl = /x\n', f"pull {paths.quote(odd)} HEAD")):
             with self.subTest(config=config):
                 self.assertEqual(store._pull(self.repository(config=config)), pull)
