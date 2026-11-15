@@ -43,7 +43,7 @@ from cortex_core import cascade
 from cortex_core.validate import shown
 
 from . import claude, config, machine, registry, store
-from .paths import display, quote, working_directory
+from .paths import display, quote, word, working_directory
 
 LINK = "cortex"
 MARKER = ".synced"
@@ -430,11 +430,6 @@ def describe(path: Path) -> str:
             "directory": "a directory", "file": "a file"}[kind_of(path)]
 
 
-def _word(text: str) -> str:
-    """``text`` as one word of the shell the commands are shown for, quoted only when it needs it."""
-    return text if re.fullmatch(r"[\w./-]+", text) else quote(text)
-
-
 def _remove_command(path: str) -> str:
     return f"Remove-Item -Recurse -Force {quote(path)}" if os.name == "nt" else f"rm -rf {quote(path)}"
 
@@ -474,7 +469,7 @@ def leaving(path: Path) -> str:
         name = submodule_name(path)
         section = _git(root, "config", "--local", "--get-regexp", rf"^submodule\.{re.escape(name)}\.")
         if section is not None and section.returncode == 0 and section.stdout.strip():
-            commands.append(f"git -C {quote(root)} config --remove-section {_word(f'submodule.{name}')}")
+            commands.append(f"git -C {quote(root)} config --remove-section {word(f'submodule.{name}')}")
         commands.append(_remove_command(display(str(path))))
         if modules:
             commands.append(_remove_command(display(gitdir)))

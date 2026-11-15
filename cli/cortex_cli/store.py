@@ -42,7 +42,7 @@ from cortex_core.cascade import read_file
 from cortex_core.project import FIRST_TEAM_VERSION, LOCAL_FILE, PROJECT_FILE, TEAM_FILE
 
 from . import machine, net
-from .paths import display, quote
+from .paths import display, quote, word
 from .semver import FIRST_SPEC_ARCHIVE, Version
 from .version import VERSION
 
@@ -189,7 +189,7 @@ def _pull(checkout: Path) -> Optional[str]:
     if branch is not None and config.get(("branch", branch, "merge")) and (named or "origin" in remotes):
         return "pull"
     remote = named if named in remotes else "origin" if "origin" in remotes else remotes[0] if remotes else None
-    return None if remote is None else f"pull {quote(remote)} HEAD"
+    return None if remote is None else f"pull {word(remote)} HEAD"
 
 
 def _head(path: Path) -> Optional[str]:

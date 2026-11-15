@@ -563,6 +563,18 @@ class CheckoutPullTests(unittest.TestCase):
             with self.subTest(config=config):
                 self.assertEqual(store._pull(self.repository(config=config)), pull)
 
+    def test_a_remote_is_quoted_only_when_it_needs_it(self):
+        # In PowerShell's quotes too — on Windows a path is always quoted —, a plain name stays bare.
+        for system in ("posix", "nt"):
+            with self.subTest(system=system), mock.patch.object(paths, "os", mock.Mock(wraps=os, name=system)):
+                paths.os.name = system
+                for name, shown in (("origin", "origin"), ("my.fork-2", "my.fork-2"), ("team/fork", "team/fork"),
+                                    ("a b", "'a b'"), ("it's", "'it''s'" if system == "nt" else "'it'\"'\"'s'")):
+                    with self.subTest(name=name):
+                        checkout = self.repository(head=OID, config=f'[remote "{name}"]\nurl = /x\n')
+                        self.assertEqual(store._pull(checkout), f"pull {shown} HEAD")
+                        shutil.rmtree(checkout)
+
     def test_the_config_is_read_as_git_reads_it(self):
         for config, pull in (('[Remote "origin"]\n\tURL = /x\n[BRANCH "main"]\n\tMerge = refs/heads/main\n', "pull"),
                              ('[remote "Origin"]\n\turl = /x\n', "pull Origin HEAD"),      # a subsection keeps its case

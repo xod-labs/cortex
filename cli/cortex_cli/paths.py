@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 
 
@@ -40,3 +41,8 @@ def quote(path: str) -> str:
     if os.name == "nt":
         return "'" + path.replace("'", "''") + "'"
     return shlex.quote(path)
+
+
+def word(text: str) -> str:
+    """``text`` as one word of the shell the commands are shown for, quoted only when it needs it."""
+    return text if re.fullmatch(r"[\w./-]+", text) else quote(text)
