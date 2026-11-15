@@ -467,8 +467,8 @@ def leaving(path: Path) -> str:
     see them first. Every path in them is absolute: they run from any directory."""
     dot_git = path / ".git"
     if os.path.exists(dot_git) and not os.path.isfile(dot_git) and not os.path.isdir(dot_git):
-        # A named pipe, a socket, a device, or a link to one: it names no repository — git refuses it as no .git file
-        # — and the commands that leave a submodule or a clone have none to act on (#386).
+        # A named pipe, a socket, a device, or a link to one: it names no repository — git passes over it to the
+        # repository around cortex/ — and the commands that leave a submodule or a clone have none to act on (#386).
         return (f"{LINK}/.git is not a file, nor a folder, and names no repository: remove it, then run the command "
                 "again.")
     root = display(str(path.parent))
