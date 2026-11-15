@@ -25,6 +25,8 @@ from test_cli_format3 import remove_store  # noqa: E402
 
 PIPES = unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipe here")
 LINKS = unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")
+# What is no file at a file's path, as a test makes it here: a directory, a named pipe, a loop of links.
+NO_FILES = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ()) + (("loop",) if os.name != "nt" else ())
 # What is no file and no folder, as a test makes it here: a named pipe, a socket.
 SPECIALS = (("pipe",) if hasattr(os, "mkfifo") else ()) + (("socket",) if hasattr(socket, "AF_UNIX") else ())
 
@@ -39,6 +41,15 @@ class SpecialFileTestCase(TeamTestCase):
             self.fail(f"cortex {' '.join(args)} did not end: it waits on a named pipe")
         proc.out, proc.err = proc.stdout.decode(), proc.stderr.decode()
         return proc
+
+    def no_file(self, path, kind):
+        """At ``path``: a directory, a named pipe, or a link to itself — a loop of links, no file either (#386)."""
+        if kind == "directory":
+            path.mkdir()
+        elif kind == "pipe":
+            os.mkfifo(path)
+        else:
+            path.symlink_to(path)
 
     def make(self, path, kind):
         """At ``path``: a file, a named pipe, a socket or — as root — a device, as ``/dev/null`` is."""
@@ -302,15 +313,12 @@ class ProjectFileTests(SpecialFileTestCase):
     def test_a_cortex_toml_that_is_not_a_file_is_said_not_a_file_never_missing(self):
         # Read as no cortex.toml at all, it was said missing, and `cortex init` named — which keeps it. What it is
         # is said, with its remedy, which, followed, lets the commands run.
-        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        kinds = NO_FILES
         for kind in kinds:
             with self.subTest(kind=kind):
                 root = self.tmp / f"project-{kind}"
                 root.mkdir()
-                if kind == "directory":
-                    (root / "cortex.toml").mkdir()
-                else:
-                    os.mkfifo(root / "cortex.toml")
+                self.no_file(root / "cortex.toml", kind)
                 said = (f"{display(str(root / 'cortex.toml'))} is not a file: remove it, then `cortex init` makes the "
                         "directory a Cortex project\n")
                 for args in (("sync",), ("validate",), ("upgrade",), ("upgrade", OWN), ("upgrade", "--local", OWN),
@@ -319,10 +327,7 @@ class ProjectFileTests(SpecialFileTestCase):
                     self.assertNotEqual(proc.returncode, 0, proc.out + proc.err)
                     self.assertIn(f"cortex {args[0]}: {said}", proc.err)
                     self.assertNotIn("no cortex.toml", proc.err)
-                if kind == "directory":
-                    (root / "cortex.toml").rmdir()
-                else:
-                    (root / "cortex.toml").unlink()
+                (os.rmdir if kind == "directory" else os.unlink)(root / "cortex.toml")
                 self.assert_ok(self.within(root, "init", "--tool", "claude"))
                 for args in (("sync",), ("validate",)):
                     self.assert_ok(self.within(root, *args))
@@ -331,16 +336,13 @@ class ProjectFileTests(SpecialFileTestCase):
     def test_a_cortex_toml_that_is_not_a_file_above_the_folder_a_command_runs_in_is_said_not_a_file(self):
         # Looked for from a folder of the project, as a project is found: the nearest cortex.toml above it, not a
         # file, is named where it is — and its remedy, followed, lets the commands run from that folder.
-        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        kinds = NO_FILES
         for kind in kinds:
             with self.subTest(kind=kind):
                 root = self.tmp / f"above-{kind}"
                 below = root / "src" / "app"
                 below.mkdir(parents=True)
-                if kind == "directory":
-                    (root / "cortex.toml").mkdir()
-                else:
-                    os.mkfifo(root / "cortex.toml")
+                self.no_file(root / "cortex.toml", kind)
                 said = (f"{display(str(root / 'cortex.toml'))} is not a file: remove it, then `cortex init` makes the "
                         "directory a Cortex project\n")
                 for args in (("sync",), ("validate",), ("upgrade",), ("upgrade", "--local", OWN)):
@@ -348,10 +350,7 @@ class ProjectFileTests(SpecialFileTestCase):
                     self.assertNotEqual(proc.returncode, 0, proc.out + proc.err)
                     self.assertIn(f"cortex {args[0]}: {said}", proc.err)
                     self.assertNotIn("no cortex.toml", proc.err)
-                if kind == "directory":
-                    (root / "cortex.toml").rmdir()
-                else:
-                    (root / "cortex.toml").unlink()
+                (os.rmdir if kind == "directory" else os.unlink)(root / "cortex.toml")
                 self.assert_ok(self.within(root, "init", "--tool", "claude"))
                 for args in (("sync",), ("validate",)):
                     self.assert_ok(self.within(below, *args))
@@ -360,16 +359,13 @@ class ProjectFileTests(SpecialFileTestCase):
     def test_config_and_project_add_say_a_cortex_toml_that_is_not_a_file_not_a_file(self):
         # Read as no cortex.toml, `cortex config` printed the machine's keys as outside a project, and `cortex project
         # add` said no cortex.toml (#386). What it is is said, with its remedy, which, followed, lets them run.
-        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        kinds = NO_FILES
         for kind in kinds:
             with self.subTest(kind=kind):
                 root = self.tmp / f"config-{kind}"
                 below = root / "src"
                 below.mkdir(parents=True)
-                if kind == "directory":
-                    (root / "cortex.toml").mkdir()
-                else:
-                    os.mkfifo(root / "cortex.toml")
+                self.no_file(root / "cortex.toml", kind)
                 said = (f"{display(str(root / 'cortex.toml'))} is not a file: remove it, then `cortex init` makes the "
                         "directory a Cortex project\n")
                 for cwd, args in ((root, ("config",)), (below, ("config",)), (below, ("config", "version")),
@@ -381,10 +377,7 @@ class ProjectFileTests(SpecialFileTestCase):
                                      proc.err)
                     self.assertEqual("", proc.out)
                 self.assertFalse((self.home / "projects.toml").exists())
-                if kind == "directory":
-                    (root / "cortex.toml").rmdir()
-                else:
-                    (root / "cortex.toml").unlink()
+                (os.rmdir if kind == "directory" else os.unlink)(root / "cortex.toml")
                 self.assert_ok(self.within(root, "init", "--tool", "claude"))
                 proc = self.within(below, "config", "version")
                 self.assert_ok(proc)
@@ -397,15 +390,12 @@ class ProjectFileTests(SpecialFileTestCase):
     def test_init_refuses_a_cortex_toml_that_is_not_a_file_before_it_writes_anything(self):
         # A directory there failed init half-way, with a raw `Is a directory`, and a named pipe was written over
         # (#386). Said first, with its remedy, which, followed, lets init write it.
-        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        kinds = NO_FILES
         for kind in kinds:
             with self.subTest(kind=kind):
                 root = self.tmp / f"init-{kind}"
                 root.mkdir()
-                if kind == "directory":
-                    (root / "cortex.toml").mkdir()
-                else:
-                    os.mkfifo(root / "cortex.toml")
+                self.no_file(root / "cortex.toml", kind)
                 stored = sorted(os.listdir(self.home))
                 for args in (("init", "--tool", "claude"), ("init", "--tool", "claude", "--force"), ("init",)):
                     proc = self.within(root, *args)
@@ -415,10 +405,7 @@ class ProjectFileTests(SpecialFileTestCase):
                     self.assertNotIn(".tmp", proc.err)
                     self.assertEqual(sorted(path.name for path in root.iterdir()), ["cortex.toml"])
                     self.assertEqual(sorted(os.listdir(self.home)), stored)
-                if kind == "directory":
-                    (root / "cortex.toml").rmdir()
-                else:
-                    (root / "cortex.toml").unlink()
+                (os.rmdir if kind == "directory" else os.unlink)(root / "cortex.toml")
                 self.assert_ok(self.within(root, "init", "--tool", "claude"))
                 self.assertTrue((root / "cortex.toml").is_file())
                 self.assert_ok(self.within(root, "validate"))
@@ -431,7 +418,7 @@ class LockTests(SpecialFileTestCase):
     def test_a_lock_that_is_not_a_file_is_said_not_a_file_never_missing(self):
         # Read as no lock, it was said missing — LOCK_MISSING, `--locked: no cortex.lock` — and a sync wrote over a
         # named pipe. What it is is said, with its remedy, which, followed, lets the sync write it again.
-        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        kinds = NO_FILES
         for kind in kinds:
             for lock in ("cortex.lock", "agents/cortex.team.lock"):
                 with self.subTest(kind=kind, lock=lock):
@@ -441,10 +428,7 @@ class LockTests(SpecialFileTestCase):
                                         team=pin if team else None, name=f"lock-{kind}-{team}")
                     self.assert_ok(self.within(root, "sync"))
                     (root / lock).unlink()
-                    if kind == "directory":
-                        (root / lock).mkdir()
-                    else:
-                        os.mkfifo(root / lock)
+                    self.no_file(root / lock, kind)
                     said = f"{lock} is not a file — delete it, and `cortex sync` writes it again"
                     proc = self.within(root, "validate")
                     self.assert_ok(proc)
@@ -454,10 +438,7 @@ class LockTests(SpecialFileTestCase):
                         proc = self.within(root, *args)
                         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
                         self.assertIn(f"cortex sync: {said}\n", proc.err)
-                    if kind == "directory":
-                        (root / lock).rmdir()
-                    else:
-                        (root / lock).unlink()
+                    (os.rmdir if kind == "directory" else os.unlink)(root / lock)
                     self.assert_ok(self.within(root, "sync"))
                     self.assertTrue((root / lock).is_file())
                     self.assertNotIn("LOCK_", self.within(root, "validate").out)

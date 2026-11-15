@@ -211,9 +211,10 @@ def no_project(cwd: str, hint: str = "") -> str:
 
 def project_not_a_file(directory: str) -> Optional[str]:
     """What to say of the ``cortex.toml`` in ``directory`` when it is there as no file — a named pipe, a socket, a
-    directory, or a link to one — which was read as none (#358); ``None`` for a file, or none there."""
+    directory, a link to one, or a loop of links — which was read as none (#358, #386); ``None`` for a file, or none
+    there."""
     path = os.path.join(directory, PROJECT_FILE)
-    if os.path.exists(path) and not os.path.isfile(path):
+    if (os.path.exists(path) and not os.path.isfile(path)) or link_loop(path):
         return f"{display(path)} is not a file: remove it, then `cortex init` makes the directory a Cortex project"
     return None
 
@@ -893,8 +894,9 @@ def load_lock(root: str, name: str = LOCK_FILE, shown: Optional[str] = None, *,
     path = os.path.join(root, name)
     again = f"delete it, and {writer} writes it again"     # a merge left conflict markers in it, say
     shown_name = shown or (TEAM_LOCK_NAME if name == TEAM_LOCK_FILE else name)
-    if os.path.exists(path) and not os.path.isfile(path):
-        # A named pipe, a socket, a directory, or a link to one: no lock to read, nor one to write over (#358).
+    if (os.path.exists(path) and not os.path.isfile(path)) or link_loop(path):
+        # A named pipe, a socket, a directory, a link to one, or a loop of links: no lock to read, nor one to write
+        # over (#358, #386).
         raise ConfigError(f"{shown_name} is not a file — {again}")
     if not os.path.isfile(path):
         return None
