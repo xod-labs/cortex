@@ -1362,33 +1362,84 @@ class IgnoredTimeoutTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix" and shutil.which("git"), "needs git and /dev")
     @harness.outside_a_repository
-    def test_a_device_or_a_socket_git_reads_is_no_file_it_waits_on(self):
-        # `core.excludesFile = /dev/null` turns the user's excludes off, a common idiom: git reads a device without
-        # waiting — /dev/zero too —, and fails at once on a socket. Only a named pipe holds it: no other is refused.
+    def test_a_device_git_reads_as_ignores_is_read_at_once_and_as_attributes_named(self):
+        # git reads an ignore file by its size, which a device gives as 0: `core.excludesFile = /dev/null`, a common
+        # idiom, and /dev/zero are read at once — refusing them named /dev/null to remove. An attributes file is read
+        # line by line to its end: /dev/zero fills git's memory, /dev/tty waits for a key; only the null device ends.
+        # A socket fails git at once. The project's file is tracked, and changed as an upgrade changes it: git reads
+        # no attributes for a file it does not track.
         tmp = Path(tempfile.mkdtemp(prefix="cortex-upgrade-")).resolve()
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         top = tmp / "top"
         top.mkdir()
+        git = ["git", "-c", "user.name=Cortex Tests", "-c", "user.email=tests@example.invalid", "-C", str(top)]
         subprocess.run(["git", "init", "-q", str(top)], check=True)
-        (top / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")
+        (top / "cortex.toml").write_text('version = "1.8.6"\n', encoding="utf-8")
+        subprocess.run([*git, "add", "cortex.toml"], check=True)
+        subprocess.run([*git, "commit", "-q", "-m", "pin"], check=True)
+        (top / "cortex.toml").write_text('version = "1.8.7"\n', encoding="utf-8")
         files = [top / "cortex.toml"]
-        environment = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "HOME": str(tmp)}
-        for key in ("core.excludesFile", "core.attributesFile"):
-            for device in ("/dev/null", "/dev/zero"):
-                with self.subTest(key=key, device=device), mock.patch.dict(os.environ, environment):
-                    subprocess.run(["git", "-C", str(top), "config", key, device], check=True)
-                    self.assertFalse(upgrade._waits(device))
+        environment = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "HOME": str(tmp),
+                       "XDG_CONFIG_HOME": str(tmp / "xdg")}
+        run = subprocess.run
+
+        def bounded(*args, **kwargs):           # a git that never ends fails the test, never holds it
+            return run(*args, **{**kwargs, "timeout": kwargs.get("timeout") or 20})
+
+        def config(*args):
+            subprocess.run(["git", "-C", str(top), "config", *args], check=True)
+
+        with mock.patch.dict(os.environ, environment), mock.patch.object(subprocess, "run", bounded):
+            for key, device in (("core.excludesFile", "/dev/null"), ("core.excludesFile", "/dev/zero"),
+                                ("core.attributesFile", "/dev/null")):
+                with self.subTest(key=key, device=device):
+                    config(key, device)
                     self.assertEqual(upgrade._changed(str(top), str(top), files), files)
-                    subprocess.run(["git", "-C", str(top), "config", "--unset", key], check=True)
+                    run([*git, "add", "--dry-run", "cortex.toml"], check=True, capture_output=True, timeout=20)
+                    config("--unset", key)
+            # A device the user's core.attributesFile names: no file to remove — another file is named in its place.
+            config("core.attributesFile", "/dev/zero")
+            with self.assertRaises(upgrade.IgnoreFileError) as said:
+                upgrade._changed(str(top), str(top), files)
+            self.assertEqual(str(said.exception), "/dev/zero is a device, which git, reading it as an attributes file, "
+                             "would read with no end: set core.attributesFile to another file, or to /dev/null, then "
+                             "run the command again")
+            config("core.attributesFile", "/dev/null")                                  # the remedy it names
+            self.assertEqual(upgrade._changed(str(top), str(top), files), files)
+            config("--unset", "core.attributesFile")
+            # A link to one, in the repository: the link is removed.
+            link = top / ".git" / "info" / "attributes"
+            link.parent.mkdir(exist_ok=True)
+            link.symlink_to("/dev/zero")
+            with self.assertRaises(upgrade.IgnoreFileError) as said:
+                upgrade._changed(str(top), str(top), files)
+            self.assertEqual(str(said.exception), f"{str(link).replace(os.sep, '/')} is a device, which git, reading "
+                             "it as an attributes file, would read with no end: remove it, then run the command again")
+            link.unlink()                                                               # the remedy it names
+            self.assertEqual(upgrade._changed(str(top), str(top), files), files)
+            # A link to one out of the repository — git's default attributes file, under XDG_CONFIG_HOME: removed too.
+            link = tmp / "xdg" / "git" / "attributes"
+            link.parent.mkdir(parents=True)
+            link.symlink_to("/dev/zero")
+            with self.assertRaises(upgrade.IgnoreFileError) as said:
+                upgrade._changed(str(top), str(top), files)
+            self.assertEqual(str(said.exception), f"{str(link).replace(os.sep, '/')} is a device, which git, reading "
+                             "it as an attributes file, would read with no end: remove it, then run the command again")
+            link.unlink()                                                               # the remedy it names
+            self.assertEqual(upgrade._changed(str(top), str(top), files), files)
+        self.assertIsNone(upgrade._waits("/dev/zero", "an ignore file"))
+        self.assertEqual(upgrade._waits("/dev/zero", upgrade.ATTRIBUTES), "device")
+        self.assertIsNone(upgrade._waits(os.devnull, upgrade.ATTRIBUTES))
         sock = socket.socket(socket.AF_UNIX)
         self.addCleanup(sock.close)
         here = os.getcwd()
         os.chdir(tmp)                           # a short path: macOS's TMPDIR makes an AF_UNIX path too long
         self.addCleanup(os.chdir, here)
         sock.bind("s")
-        self.assertFalse(upgrade._waits(str(tmp / "s")))
-        os.mkfifo(tmp / "p")
-        self.assertTrue(upgrade._waits(str(tmp / "p")))
+        for what in ("an ignore file", upgrade.ATTRIBUTES):
+            self.assertIsNone(upgrade._waits(str(tmp / "s"), what))
+            os.mkfifo(tmp / ("p" + what[3]))
+            self.assertEqual(upgrade._waits(str(tmp / ("p" + what[3])), what), "pipe")
 
     @unittest.skipUnless(shutil.which("git"), "needs git")
     @harness.outside_a_repository

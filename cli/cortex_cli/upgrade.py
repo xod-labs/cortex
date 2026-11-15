@@ -1809,18 +1809,33 @@ def _ignored(root: str, files: List[Path]) -> List[str]:
     return [path for path in _git_paths(root, files) if sync.ignored(Path(root), path) is True]
 
 
-def _waits(path: str) -> bool:
-    """Whether ``path`` is a named pipe, or a link to one: what git, opening it as an ignore or an attributes file,
-    would wait on with no limit. Only that: git reads a device without waiting — ``core.excludesFile = /dev/null``
-    turns the user's excludes off, a common idiom —, and fails at once on a socket."""
+ATTRIBUTES = "an attributes file"
+
+
+def _waits(path: str, what: str) -> Optional[str]:
+    """What git, reading ``path`` as ``what`` — an ignore or an attributes file —, would never be done with, or
+    ``None``: ``"pipe"`` for a named pipe, or a link to one, which git waits on with no limit; ``"device"`` for a
+    device other than the null device read as an attributes file, which git reads line by line with no end —
+    /dev/zero fills its memory, /dev/tty waits for a key. An ignore file is read by its size, which a device gives as
+    0: ``core.excludesFile = /dev/null``, a common idiom, and any other device are read at once. A socket fails git at
+    once."""
     for read in (os.lstat, os.stat):
         try:
             mode = read(path).st_mode
         except OSError:
             continue
         if stat.S_ISFIFO(mode):
-            return True
-    return False
+            return "pipe"
+        if what == ATTRIBUTES and (stat.S_ISCHR(mode) or stat.S_ISBLK(mode)) and not _null(path):
+            return "device"
+    return None
+
+
+def _null(path: str) -> bool:
+    try:
+        return os.path.samefile(path, os.devnull)
+    except OSError:
+        return False
 
 
 def _files_git_reads(root: str, top: str, files: List[Path]) -> List[Tuple[str, str]]:
@@ -1837,10 +1852,10 @@ def _files_git_reads(root: str, top: str, files: List[Path]) -> List[Tuple[str, 
         folders = Path(within).parts[:-1]
         for depth in range(len(folders) + 1):
             found += [(os.path.join(top, *folders[:depth], ".gitignore"), "an ignore file"),
-                      (os.path.join(top, *folders[:depth], ".gitattributes"), "an attributes file")]
+                      (os.path.join(top, *folders[:depth], ".gitattributes"), ATTRIBUTES)]
     home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
     for info, key, default, what in (("info/exclude", "core.excludesFile", "ignore", "an ignore file"),
-                                     ("info/attributes", "core.attributesFile", "attributes", "an attributes file")):
+                                     ("info/attributes", "core.attributesFile", "attributes", ATTRIBUTES)):
         local = _git(root, "rev-parse", "--git-path", info)
         if local.returncode == 0 and local.stdout.strip():
             found.append((os.path.join(root, local.stdout.strip()), what))
@@ -1856,11 +1871,21 @@ def _files_git_reads(root: str, top: str, files: List[Path]) -> List[Tuple[str, 
 def _changed(root: str, top: str, files: List[Path]) -> List[Path]:
     """Those of ``files`` git sees changed in the work tree of ``root``, whose top is ``top``: staged,
     not staged, or untracked. ``IgnoreFileError`` naming an ignore or attributes file git would read that is no file
-    — a named pipe —, before git is asked: git would wait on it, as long as it is there (#386)."""
+    — a named pipe, or a device read as attributes (``_waits``) —, before git is asked: git would never be done with
+    it, as long as it is there (#386)."""
     for path, what in _files_git_reads(root, top, files):
-        if _waits(path):
+        why = _waits(path, what)
+        if why == "pipe":
             raise IgnoreFileError(f"{display(path)} is not a file, and git, reading it as {what}, would wait on it: "
                                   "remove it, then run the command again")
+        if why == "device":
+            # A device the user's core.attributesFile names is no file to remove: /dev/zero. A link to one is, and one
+            # in the work tree or the repository.
+            inside = os.path.normcase(os.path.abspath(path)).startswith(os.path.normcase(os.path.abspath(top)) + os.sep)
+            remedy = ("remove it" if os.path.islink(path) or inside else
+                      "set core.attributesFile to another file, or to /dev/null")
+            raise IgnoreFileError(f"{display(path)} is a device, which git, reading it as {what}, would read with no "
+                                  f"end: {remedy}, then run the command again")
     proc = _git_ok(root, "status", "--porcelain", "-z", "--untracked-files=all", "--",
                    *_literal(_git_paths(root, files)), timeout=None)
     seen, fields = [], iter(proc.stdout.split("\0"))
