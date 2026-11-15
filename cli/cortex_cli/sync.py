@@ -1300,7 +1300,8 @@ def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
     yet, and return them. The file keeps its bytes: its encoding, its byte order mark, its line
     endings. Without git's answer, ``ignored`` reads .gitignore conservatively: a line git would not need may
     be added, never one it needs left out — one with a ``/`` names only Cortex's own paths, while ``cortex.local.toml``
-    matches at any depth: it also ignores one in a subfolder, even one a negation brought back (#391). Without a
+    matches at any depth: it also ignores one in a subfolder, even one a negation above it in the root .gitignore
+    brought back; one in the subfolder's own .gitignore still wins (#391). Without a
     repository to ask, a line is added unless it, or one that means the same, is there with no negation below it —
     and no .gitignore is created: it would keep nothing out of any commit. A .gitignore that is a symbolic link is
     never written through — git does not read it, and its target may be outside the project, or none yet: the note
