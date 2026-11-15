@@ -7,6 +7,9 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+## [1.8.7] - 2026-11-15 — Almost, but Not Quite, Entirely Unlike Tea _(Released)_
+[Full notes](changelog/1.8.7.md)
+
 ### Fixed
 - **A `cortex.toml` that is not a file is said so by `cortex config`, `cortex project add` and `cortex init` too** ([#386](https://github.com/xod-labs/cortex/issues/386)). A named pipe or a directory at `cortex.toml` was read as no `cortex.toml`: `cortex config` printed the machine's keys as if outside a project, and `cortex project add` said there was no project. Both now say it is not a file, and name its removal. `cortex init` refuses it before it writes anything, where a pipe was written over and a directory failed half-way with `Is a directory`. A loop of links at `cortex.toml`, `cortex.lock` or the team's lock is now said not to be a file too, by every command, where it was read as missing.
 - **A loop of links at `cortex.local.toml` is refused, never replaced** ([#386](https://github.com/xod-labs/cortex/issues/386)). `cortex sync` replaced it in silence, where a directory or a named pipe there is refused since 1.8.5; it is now refused with the same message. A link that leads nowhere is still replaced.
