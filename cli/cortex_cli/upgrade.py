@@ -1826,7 +1826,8 @@ def _files_git_reads(root: str, top: str, files: List[Path]) -> List[Tuple[str, 
     """The ignore and attributes files `git status` and `git add` read for ``files``, in the work tree of ``root``, whose
     top is ``top`` — each with what git reads it as: the .gitignore and the .gitattributes of each folder from the top
     down to each file's; the repository's info/exclude and info/attributes; the user's core.excludesFile and
-    core.attributesFile — their own defaults where they are not set."""
+    core.attributesFile — their own defaults where they are not set. The system's attributes file, $(prefix)/etc/
+    gitattributes (`git var GIT_ATTR_SYSTEM`), is not checked: only an administrator writes it."""
     found = []
     for path in files:
         within = _within(top, path)
