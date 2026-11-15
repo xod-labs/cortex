@@ -64,7 +64,8 @@ class UpgradeError(Exception):
 
 
 class IgnoreFileError(UpgradeError):
-    """An ignore file git would read that is no file: git would wait on it, as long as it is there (#386)."""
+    """An ignore or attributes file git would read that is no file: git would wait on it, as long as it is there
+    (#386)."""
 
 
 @dataclass
@@ -1810,7 +1811,7 @@ def _ignored(root: str, files: List[Path]) -> List[str]:
 
 def _waits(path: str) -> bool:
     """Whether ``path`` is there as no file, nor a folder — a named pipe, a socket, a device — or a link to one: what
-    git, opening it as an ignore file, would wait on with no limit."""
+    git, opening it as an ignore or an attributes file, would wait on with no limit."""
     for read in (os.lstat, os.stat):
         try:
             mode = read(path).st_mode
@@ -1821,38 +1822,43 @@ def _waits(path: str) -> bool:
     return False
 
 
-def _ignore_files(root: str, top: str, files: List[Path]) -> List[str]:
-    """The ignore files `git status` reads to tell whether ``files`` are untracked, in the work tree of ``root``, whose
-    top is ``top``: the .gitignore of each folder from the top down to each file's, the repository's info/exclude,
-    and the user's core.excludesFile — its own default where it is not set."""
+def _files_git_reads(root: str, top: str, files: List[Path]) -> List[Tuple[str, str]]:
+    """The ignore and attributes files `git status` and `git add` read for ``files``, in the work tree of ``root``, whose
+    top is ``top`` — each with what git reads it as: the .gitignore and the .gitattributes of each folder from the top
+    down to each file's; the repository's info/exclude and info/attributes; the user's core.excludesFile and
+    core.attributesFile — their own defaults where they are not set."""
     found = []
     for path in files:
         within = _within(top, path)
         if within is None:
             continue
         folders = Path(within).parts[:-1]
-        found += [os.path.join(top, *folders[:depth], ".gitignore") for depth in range(len(folders) + 1)]
-    exclude = _git(root, "rev-parse", "--git-path", "info/exclude")
-    if exclude.returncode == 0 and exclude.stdout.strip():
-        found.append(os.path.join(root, exclude.stdout.strip()))
-    excludes = _git(root, "config", "--path", "--get", "core.excludesFile")
-    if excludes.returncode == 0 and excludes.stdout.strip():
-        # `--path` expands ~/ as git does; a path still relative, git reads from the top of the work tree.
-        found.append(os.path.join(top, excludes.stdout.strip()))
-    elif excludes.returncode == 1:
-        home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-        found.append(os.path.join(home, "git", "ignore"))
-    return list(dict.fromkeys(os.path.normpath(path) for path in found))
+        for depth in range(len(folders) + 1):
+            found += [(os.path.join(top, *folders[:depth], ".gitignore"), "an ignore file"),
+                      (os.path.join(top, *folders[:depth], ".gitattributes"), "an attributes file")]
+    home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    for info, key, default, what in (("info/exclude", "core.excludesFile", "ignore", "an ignore file"),
+                                     ("info/attributes", "core.attributesFile", "attributes", "an attributes file")):
+        local = _git(root, "rev-parse", "--git-path", info)
+        if local.returncode == 0 and local.stdout.strip():
+            found.append((os.path.join(root, local.stdout.strip()), what))
+        users = _git(root, "config", "--path", "--get", key)
+        if users.returncode == 0 and users.stdout.strip():
+            # `--path` expands ~/ as git does; a path still relative, git reads from the top of the work tree.
+            found.append((os.path.join(top, users.stdout.strip()), what))
+        elif users.returncode == 1:
+            found.append((os.path.join(home, "git", default), what))
+    return list(dict.fromkeys((os.path.normpath(path), what) for path, what in found))
 
 
 def _changed(root: str, top: str, files: List[Path]) -> List[Path]:
     """Those of ``files`` git sees changed in the work tree of ``root``, whose top is ``top``: staged,
-    not staged, or untracked. ``UpgradeError`` naming an ignore file git would read that is no file — a named pipe —,
-    before git is asked: git would wait on it, as long as it is there (#386)."""
-    for path in _ignore_files(root, top, files):
+    not staged, or untracked. ``IgnoreFileError`` naming an ignore or attributes file git would read that is no file
+    — a named pipe —, before git is asked: git would wait on it, as long as it is there (#386)."""
+    for path, what in _files_git_reads(root, top, files):
         if _waits(path):
-            raise IgnoreFileError(f"{display(path)} is not a file, and git, reading it as an ignore file, would wait on "
-                               "it: remove it, then run the command again")
+            raise IgnoreFileError(f"{display(path)} is not a file, and git, reading it as {what}, would wait on it: "
+                                  "remove it, then run the command again")
     proc = _git_ok(root, "status", "--porcelain", "-z", "--untracked-files=all", "--",
                    *_literal(_git_paths(root, files)), timeout=None)
     seen, fields = [], iter(proc.stdout.split("\0"))
