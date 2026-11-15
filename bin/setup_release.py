@@ -214,7 +214,9 @@ def classic_protections(gh: Gh, repository: str, default: str, lines: Sequence[s
 
     GitHub requires them besides the rulesets' (#235). A protection is set on a branch that exists,
     so each one is read: a pattern's, such as `*.x`, reaches a line only once it is cut. A 404 is
-    a branch with no protection, or none requiring checks; any other error stops the script."""
+    a branch with no protection, or none requiring checks; any other error stops the script and
+    says why, never read as no protection. A token without administration rights may be refused
+    here or at a read before this one: `--check` then stops at the first refusal."""
     result = []
     for branch in dict.fromkeys([default, *sorted(lines)]):
         try:
