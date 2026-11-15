@@ -335,6 +335,36 @@ class ProjectFileTests(SpecialFileTestCase):
                 self.assertIn(harness_path(root), (self.home / "projects.toml").read_text(encoding="utf-8"))
                 (self.home / "projects.toml").unlink()
 
+    @harness.outside_a_repository
+    def test_init_refuses_a_cortex_toml_that_is_not_a_file_before_it_writes_anything(self):
+        # A directory there failed init half-way, with a raw `Is a directory`, and a named pipe was written over
+        # (#386). Said first, with its remedy, which, followed, lets init write it.
+        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.tmp / f"init-{kind}"
+                root.mkdir()
+                if kind == "directory":
+                    (root / "cortex.toml").mkdir()
+                else:
+                    os.mkfifo(root / "cortex.toml")
+                stored = sorted(os.listdir(self.home))
+                for args in (("init", "--tool", "claude"), ("init", "--tool", "claude", "--force"), ("init",)):
+                    proc = self.within(root, *args)
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertEqual(f"cortex init: {display(str(root / 'cortex.toml'))} is not a file: remove it, "
+                                     "then run cortex init again, which writes it\n", proc.err)
+                    self.assertNotIn(".tmp", proc.err)
+                    self.assertEqual(sorted(path.name for path in root.iterdir()), ["cortex.toml"])
+                    self.assertEqual(sorted(os.listdir(self.home)), stored)
+                if kind == "directory":
+                    (root / "cortex.toml").rmdir()
+                else:
+                    (root / "cortex.toml").unlink()
+                self.assert_ok(self.within(root, "init", "--tool", "claude"))
+                self.assertTrue((root / "cortex.toml").is_file())
+                self.assert_ok(self.within(root, "validate"))
+
 
 class LockTests(SpecialFileTestCase):
     """``cortex.lock``, and the team's lock beside the team's file."""
