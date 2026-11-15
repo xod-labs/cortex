@@ -16,9 +16,9 @@ run's number. ``X.Y.Z`` is the version the branch prepares, which ``CHANGELOG.md
   an empty ``###`` naming no kind;
   an entry is an item of the section's own list, started with ``-``, ``*`` or ``+``, its text on
   its line or below it, a paragraph's — indented code is none — and an item in an entry is its
-  text; a fenced code block, an HTML comment or a block quote holds no section, heading nor entry —
-  one opened in a list item ends with it; a line ends at a line feed or a carriage return alone;
-  ``[Unreleased]`` is read in any case;
+  text; a fenced code block, an HTML block — a comment, ``<pre>``, ``<div>`` — or a block quote
+  holds no section, heading nor entry — one opened in a list item ends with it; a line ends at a
+  line feed or a carriage return alone; ``[Unreleased]`` is read in any case;
 - a changelog that writes a pre-release's section — Cortex's does not (ADR-009 §3.7) — has it as
   a floor: above the base, ``3.1.0-rc.1`` makes the version the higher of its release and the
   bump's — ``3.1.0`` after a fix or an addition, ``4.0.0`` after a removal.

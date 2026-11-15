@@ -489,11 +489,40 @@ class BumpTests(unittest.TestCase):
         self.assertEqual(prepared(changelog(f"### Changed\n{nested}\ntext\n-\n", "2.3.4")), "2.4.0")
         self.assertLess(time.monotonic() - start, 2)
 
-    def test_an_html_block_other_than_a_comment_is_read_as_markdown(self):
-        # A limit the reader states: CommonMark holds no Markdown in a <pre>, which is read here — its section too.
-        text = changelog("### Fixed\n- a\n\n<pre>\n## [9.9.9]\n</pre>\n", "2.3.4")
-        self.assertIn("9.9.9", [label for label, _ in markdown_lines.sections(text)])
-        self.assertEqual(prepared(text), "9.9.10")
+    def test_an_html_block_holds_no_section_heading_nor_entry(self):
+        # #354: <pre>, <script>, <style> or <textarea>, in any case, holds what follows up to the end tag of any of them
+        # — on its own line too; a block element's tag, <div> or </details>, up to a blank line (commonmark.js 0.31.2).
+        for html in ("<pre>\n## [9.9.9]\n</pre>", '<PRE class="x">\n## [9.9.9]\n</Pre>', "<script>\n## [9.9.9]\n</style>",
+                     "<details>\n## [9.9.9]", "</div>\n## [9.9.9]", "<div/>\n## [9.9.9]", "<h1>\n## [9.9.9]",
+                     "<search>\n## [9.9.9]", "text\n<div>\n## [9.9.9]", "<textarea>\n### Removed\n- b\n</textarea>",
+                     "<div class='x'>\n### Removed\n- b\n\n### Fixed"):
+            with self.subTest(html=html):
+                text = changelog(f"### Fixed\n- a\n\n{html}\n", "2.3.4")
+                self.assertEqual(devversion.released(text), [Version("2.3.4")])
+                self.assertEqual(prepared(text), "2.3.5")
+        # Closed on its line, it holds that line only; a blank line ends a block element's, and what follows is read.
+        # A tag that only starts with pre's name is none of them: under a paragraph, it goes on with it.
+        for html in ("<pre>x</pre>\n## [9.9.9]\n</pre>", "<details>\n\n## [9.9.9]", "text\n<prex>\n## [9.9.9]\n</pre>"):
+            with self.subTest(html=html):
+                self.assertEqual(prepared(changelog(f"### Fixed\n- a\n\n{html}\n", "2.3.4")), "9.9.10")
+        # A block element's, to the end of the file when no blank line ends it — no line ending at its end either.
+        text = "## [Unreleased]\n### Fixed\n- a\n\n## [2.3.4] - x\n\n<div>\n## [9.9.9] - y"
+        self.assertEqual(devversion.released(text), [Version("2.3.4")])
+        # In an item, it ends with it; in a quote, with the quote, and the line below continues no paragraph.
+        self.assertEqual(devversion.released(changelog("### Fixed\n- <pre>\n  ## [9.9.9]\n  </pre>\n", "2.3.4")),
+                         [Version("2.3.4")])
+        self.assertEqual(prepared(changelog("### Fixed\n- a\n  <div>\n- 💥 b\n", "2.3.4")), "3.0.0")
+        for quote in ("> <pre>\n> x\n", "> <div>\n> x\n", "> a\n> <div>\n"):
+            with self.subTest(quote=quote):
+                self.assertEqual(prepared(changelog(f"### Changed\n{quote}text\n-\n", "2.3.4")), "2.3.5")
+        for quote in ("> <div>\n>\n> x\n", "> <pre>x</pre>\n> x\n"):
+            with self.subTest(quote=quote):
+                self.assertEqual(prepared(changelog(f"### Changed\n{quote}text\n-\n", "2.3.4")), "2.4.0")
+        # Never closed at the top level, <pre> hides nothing, as a fence; a tag of another kind alone on its line is
+        # read as Markdown — a limit the reader states, where CommonMark holds no Markdown up to a blank line.
+        for html in ("<pre>\n## [9.9.9]", "<span>\n## [9.9.9]", "<prex>\n## [9.9.9]"):
+            with self.subTest(html=html):
+                self.assertEqual(prepared(changelog(f"### Fixed\n- a\n\n{html}\n", "2.3.4")), "9.9.10")
 
     def test_unreleased_is_read_in_any_case(self):
         text = changelog("### Removed\n- a thing\n", "2.3.4").replace("[Unreleased]", "[unreleased]")

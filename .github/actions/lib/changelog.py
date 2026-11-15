@@ -10,7 +10,8 @@ are inputs of the actions: another project names them its own way.
 
 Its sections are read as Markdown has them, and as the version a build of no release prepares reads
 them (``markdown_lines``, the same file as the CLI's): a heading indented up to three spaces, a tab
-after its ``##``, none in a fenced code block or an HTML comment; ``[Unreleased]`` in any case.
+after its ``##``, none in a fenced code block or an HTML block — a comment, ``<pre>``, ``<div>``;
+``[Unreleased]`` in any case.
 """
 
 from __future__ import annotations
