@@ -118,12 +118,20 @@ def read_marker(copy: Path) -> Optional[dict]:
     """The ``.synced`` marker of a copy sync made — ``None`` when it is none: the version it copied
     (``None`` for a checkout), the checkout (``from``), and the digest of every file it wrote."""
     try:
-        marker = json.loads((copy / MARKER).read_text(encoding="utf-8"))
+        # Read without blocking: a named pipe there is no marker, never waited on (#386).
+        marker = json.loads(cascade.read_file(str(copy / MARKER)).decode("utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(marker, dict) or not isinstance(marker.get("files"), dict):
         return None
     return marker
+
+
+def marker_not_a_file(copy: Path) -> bool:
+    """Whether the ``.synced`` in ``copy`` is there as no file — a named pipe, a socket, a directory, or a link to one
+    — which names no version, and is never read (#386)."""
+    path = copy / MARKER
+    return os.path.exists(path) and not os.path.isfile(path)
 
 
 def synced_version(copy: Path) -> Optional[str]:
@@ -566,6 +574,9 @@ def existing_entry(target: Path, the_store: store.Store, project: config.Project
                             f"store moved or deleted since it was linked. {again}.")
         raise SyncError(f"{LINK}/ is a link to {shown(display(pointed))}, which Cortex did not make. Move or remove it, "
                         "then run the command again.")
+    if target.is_dir() and not (target / ".git").exists() and marker_not_a_file(target):
+        raise SyncError(f"{LINK}/{MARKER} is not a file, which Cortex cannot read: Cortex did not write this directory. "
+                        f"Move or remove {LINK}/, then run the command again.")
     if target.is_dir() and not (target / ".git").exists() and (target / MARKER).is_file():
         marker = read_marker(target)
         if marker is None:

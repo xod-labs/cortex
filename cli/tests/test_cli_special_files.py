@@ -21,6 +21,7 @@ from test_cli_team import DOWNLOADS, GIT, GIT_ENV, OWN, TeamTestCase, harness_pa
 
 from cortex_cli import sync  # noqa: E402
 from cortex_cli.paths import display  # noqa: E402
+from test_cli_format3 import remove_store  # noqa: E402
 
 PIPES = unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipe here")
 LINKS = unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")
@@ -620,6 +621,34 @@ class LocalFileTests(SpecialFileTestCase):
                     (root / "cortex.local.toml").unlink()
                 self.assert_ok(self.within(root, "sync"))
                 self.assert_ok(self.within(root, "validate"))
+
+
+class MarkerTests(SpecialFileTestCase):
+    """``cortex/.synced``, the marker of the copy ``cortex sync --copy`` makes."""
+
+    @PIPES
+    @harness.outside_a_repository
+    def test_a_named_pipe_at_the_copy_s_marker_is_said_not_a_file_never_waited_on(self):
+        # Read with no limit, it held validate, and the commands that ask the copy its version (#386). Said by the
+        # sync, never read, and its remedy, followed, lets the sync copy the spec again.
+        root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', name="marker")
+        self.assert_ok(self.within(root, "sync", "--copy"))
+        os.chmod(root / "cortex", 0o700)
+        (root / "cortex" / ".synced").unlink()
+        os.mkfifo(root / "cortex" / ".synced")
+        said = ("cortex/.synced is not a file, which Cortex cannot read: Cortex did not write this directory. Move or "
+                "remove cortex/, then run the command again.\n")
+        for args in (("sync",), ("sync", "--copy"), ("upgrade",), ("upgrade", OWN)):
+            proc = self.within(root, *args)
+            self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+            self.assertIn(f"cortex {args[0]}: {said}", proc.err)
+        for args in (("validate",), ("config",)):
+            self.assert_ok(self.within(root, *args))
+        self.assertTrue(stat.S_ISFIFO(os.lstat(root / "cortex" / ".synced").st_mode))
+        remove_store(root / "cortex")
+        self.assert_ok(self.within(root, "sync", "--copy"))
+        self.assertTrue((root / "cortex" / ".synced").is_file())
+        self.assert_ok(self.within(root, "validate"))
 
 
 class RenamedTeamFolderTests(SpecialFileTestCase):
