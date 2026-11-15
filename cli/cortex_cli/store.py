@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import stat
 import sys
@@ -37,10 +38,11 @@ from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 from cortex_core.project import DEFAULT_RELEASES_URL  # noqa: F401 — part of this module's API
+from cortex_core.cascade import read_file
 from cortex_core.project import FIRST_TEAM_VERSION, LOCAL_FILE, PROJECT_FILE, TEAM_FILE
 
 from . import machine, net
-from .paths import display
+from .paths import display, quote
 from .semver import FIRST_SPEC_ARCHIVE, Version
 from .version import VERSION
 
@@ -142,33 +144,107 @@ def update_command(version: Union[Version, str, None] = None) -> str:
     named: a build of no release has none, and its pin is moved to a release instead (``pin_command``, ADR-009 §9).
     With no ``version``, the latest release's: what reads a format newer than this cortex's, say.
     From a source checkout that says its own version — no ``CORTEX_SOURCE_VERSION`` naming the one its tests stand
-    for —, which no self-update replaces: the checkout updated — on a detached HEAD, to its remote's default branch —,
-    or, with none to name, the release installed."""
+    for —, which no self-update replaces: the checkout's own pull (``_pull``), or, with none to name — no repository
+    git reads, no remote to pull from —, the release installed."""
     if embedded_archive() is None and not os.environ.get("CORTEX_SOURCE_VERSION"):
         checkout = source_checkout()
-        if checkout is None:
+        pull = None if checkout is None else _pull(checkout)
+        if pull is None:
             return install_command(version if isinstance(version, Version) else None)
-        shown = display(str(checkout))
-        quoted = f'"{shown}"' if any(c.isspace() for c in shown) else shown
-        # A detached HEAD — a tag checked out, say — has no branch to pull: the clone's remote's default branch is.
-        return f"git -C {quoted} pull" + (" origin HEAD" if _detached(checkout) else "")
+        return f"git -C {quote(display(str(checkout)))} {pull}"
     return "cortex self-update" if version is None else f"cortex self-update {version}"
 
 
-def _detached(checkout: Path) -> bool:
-    """Whether ``checkout``'s HEAD is detached — read from its files: a source run needs no git on ``PATH``. Its
-    ``.git`` is the repository, or a file that names it — a worktree's, a submodule's."""
+# A detached HEAD: the object id it holds, SHA-1's or SHA-256's — what git reads there besides a ``ref:``.
+_OBJECT_ID = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
+
+
+def _pull(checkout: Path) -> Optional[str]:
+    """The ``git pull`` that updates ``checkout`` — read from its files: a source run needs no git on ``PATH``. Its
+    ``.git`` is the repository, or a file that names it — a worktree's, a submodule's —, whose HEAD git reads: a
+    ``ref:`` into ``refs/``, or an object id. A branch with an upstream is pulled plainly; a detached HEAD — a tag
+    checked out, say —, a branch with no upstream, or a branch a reftable keeps — its HEAD file the stand-in
+    ``refs/heads/.invalid``, which no branch's section of the config names — pull the default branch of the
+    remote the branch names, else of ``origin``, else of the first the config declares. ``None`` with no
+    repository git reads — no ``.git``, as in an extracted source archive, or a HEAD git refuses — nor any remote."""
     git = checkout / ".git"
     try:
-        if git.is_file():
-            text = git.read_text(encoding="utf-8").strip()
+        if not git.is_dir():
+            text = read_file(str(git)).decode("utf-8").strip()
             if not text.startswith("gitdir:"):
-                return False
+                return None
             git = checkout / text[len("gitdir:"):].strip()
-        head = (git / "HEAD").read_text(encoding="utf-8").strip()
+        head = _head(git / "HEAD")
+        common = git
+        if (git / "commondir").is_file():                       # a worktree's: the config is the repository's
+            common = git / read_file(str(git / "commondir")).decode("utf-8").strip()
+        config = _git_config(read_file(str(common / "config")).decode("utf-8"))
     except (OSError, ValueError):
-        return False
-    return bool(head) and not head.startswith("ref:")
+        return None
+    if head is None:
+        return None
+    remotes = [name for (section, name, key), _ in config.items() if section == "remote" and key == "url"]
+    branch = head[len("refs/heads/"):] if head.startswith("refs/heads/") else None
+    named = config.get(("branch", branch, "remote")) if branch is not None else None
+    if branch is not None and config.get(("branch", branch, "merge")) and (named or "origin" in remotes):
+        return "pull"
+    remote = named if named in remotes else "origin" if "origin" in remotes else remotes[0] if remotes else None
+    return None if remote is None else f"pull {quote(remote)} HEAD"
+
+
+def _head(path: Path) -> Optional[str]:
+    """What the HEAD at ``path`` names — a ref, or ``""`` for an object id, detached — or ``None`` where git refuses
+    it: empty, or anything but a ``ref:`` into ``refs/`` or an object id — a byte order mark before it, say. A link
+    into ``refs/`` is the ref it leads to, as git has written HEAD before."""
+    if path.is_symlink():
+        target = os.readlink(path)
+        return target if target.startswith("refs/") else None
+    text = read_file(str(path)).decode("utf-8")
+    if text.startswith("ref:"):
+        ref = text[len("ref:"):].strip()
+        return ref if ref.startswith("refs/") else None
+    return "" if _OBJECT_ID.fullmatch(text.rstrip("\n")) else None
+
+
+def _git_config(text: str) -> Dict[Tuple[str, Optional[str], str], str]:
+    """The keys of a git config file: (section, subsection, key) — section and key in lower case, as git reads
+    them — to the last value given, in the order they are first declared. A key with no value, which git refuses
+    for the keys read here, is left out, and so is what the file includes."""
+    found: Dict[Tuple[str, Optional[str], str], str] = {}
+    section: Tuple[str, Optional[str]] = ("", None)
+    for line in re.sub(r"\\\r?\n", "", text).splitlines():
+        line = line.strip()
+        header = re.match(r'\[\s*([A-Za-z0-9.-]+?)(?:\s+"((?:[^"\\]|\\.)*)")?\s*\](.*)', line)
+        if header:
+            name, sub, line = header.group(1), header.group(2), header.group(3).strip()
+            if sub is not None:
+                section = (name.lower(), re.sub(r"\\(.)", r"\1", sub))
+            elif "." in name:                                   # [branch.main], deprecated: in lower case
+                section = (name.split(".", 1)[0].lower(), name.split(".", 1)[1].lower())
+            else:
+                section = (name.lower(), None)
+        entry = re.match(r"([A-Za-z][A-Za-z0-9-]*)\s*=(.*)$", line)
+        if entry:
+            found[(section[0], section[1], entry.group(1).lower())] = _config_value(entry.group(2))
+    return found
+
+
+def _config_value(raw: str) -> str:
+    """A value of a git config file: its quotes and escapes read, a comment after it dropped."""
+    value, quoted, i = "", False, 0
+    while i < len(raw):
+        c = raw[i]
+        if c == "\\" and i + 1 < len(raw):
+            value += {"n": "\n", "t": "\t", "b": "\b"}.get(raw[i + 1], raw[i + 1])
+            i += 1
+        elif c == '"':
+            quoted = not quoted
+        elif c in "#;" and not quoted:
+            break
+        else:
+            value += c
+        i += 1
+    return value.strip()
 
 
 def update_first(command: str, block: bool = False) -> str:

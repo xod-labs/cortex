@@ -46,6 +46,19 @@ def display(path):
     return str(path).replace(os.sep, "/")
 
 
+def quote(path):
+    """A path as the commands are shown for the shell: PowerShell on Windows."""
+    return "'" + path.replace("'", "''") + "'" if os.name == "nt" else shlex.quote(path)
+
+
+def shell():
+    """The shell the commands are shown for — PowerShell on Windows —, as a command that runs one line, or ``None``."""
+    if os.name != "nt":
+        return ["sh", "-c"]
+    found = shutil.which("pwsh") or shutil.which("powershell")
+    return [found, "-NoProfile", "-NonInteractive", "-Command"] if found else None
+
+
 def snapshot(root):
     return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
 
@@ -590,25 +603,31 @@ class DevelopmentBuildTests(SettingsTestCase):
     GIT_ARGS = [GIT, "-c", "user.name=Cortex Tests", "-c", "user.email=tests@example.invalid", "-c", "core.autocrlf=false"]
     BEHIND = b"# Changelog\n\n## [Unreleased]\n\n## [1.7.0] - 2026-01-01\n"      # a changelog a release behind
 
-    def checkout(self, behind=None, ahead=None, name="checkout"):
+    def checkout(self, behind=None, ahead=None, name="checkout", clone=()):
         """A clone of a copy of this checkout, with ``behind`` — {path: bytes} — written over it, one commit behind
-        its upstream, whose next commit writes ``ahead`` there."""
+        its upstream, whose next commit writes ``ahead`` there — cloned with the options ``clone``."""
         git = self.GIT_ARGS
-        upstream = self.tmp / "upstream"
-        for tree in ("cli/cortex_cli", "core/cortex_core", "agents", "templates", "docs"):
-            shutil.copytree(harness.REPO / tree, upstream / tree, ignore=shutil.ignore_patterns("__pycache__"))
-        shutil.copyfile(harness.REPO / "CHANGELOG.md", upstream / "CHANGELOG.md")
-        for path, data in (behind or {}).items():
-            (upstream / path).write_bytes(data)
+        upstream = self.source(behind)
         subprocess.run([*git, "init", "-q", str(upstream)], check=True, capture_output=True)
         subprocess.run([*git, "-C", str(upstream), "add", "-A"], check=True, capture_output=True)
         subprocess.run([*git, "-C", str(upstream), "commit", "-q", "-m", "behind"], check=True, capture_output=True)
         checkout = self.tmp / name
-        subprocess.run([*git, "clone", "-q", str(upstream), str(checkout)], check=True, capture_output=True)
+        subprocess.run([*git, "clone", "-q", *clone, str(upstream), str(checkout)], check=True, capture_output=True)
         for path, data in (ahead or {}).items():
             (upstream / path).write_bytes(data)
         subprocess.run([*git, "-C", str(upstream), "commit", "-q", "-am", "ahead"], check=True, capture_output=True)
         return checkout
+
+    def source(self, behind=None, name="upstream"):
+        """A copy of this checkout's source, with no .git — as a source archive extracts it —, with ``behind`` —
+        {path: bytes} — written over it."""
+        source = self.tmp / name
+        for tree in ("cli/cortex_cli", "core/cortex_core", "agents", "templates", "docs"):
+            shutil.copytree(harness.REPO / tree, source / tree, ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copyfile(harness.REPO / "CHANGELOG.md", source / "CHANGELOG.md")
+        for path, data in (behind or {}).items():
+            (source / path).write_bytes(data)
+        return source
 
     def from_checkout(self, checkout, cwd, *args, **env):
         """``cortex ARGS`` run from ``checkout``'s code, in ``cwd`` — no bytecode written: a file pulled within the
@@ -641,7 +660,7 @@ class DevelopmentBuildTests(SettingsTestCase):
         proc = self.from_checkout(checkout, project, "sync", CORTEX_RELEASES_URL=release.url)
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertIn(f"newer than this cortex, {development(self.BEHIND.decode())} — update it:\n"
-                      f"    git -C {display(checkout)} pull\n", proc.err)
+                      f"    git -C {quote(display(checkout))} pull\n", proc.err)
         self.assertNotIn("self-update", proc.err)
         self.run_update(proc.err, checkout)                                                 # the command it names
         self.assert_ok(self.from_checkout(checkout, project, "sync", CORTEX_RELEASES_URL=release.url))
@@ -669,29 +688,126 @@ class DevelopmentBuildTests(SettingsTestCase):
                 proc = self.from_checkout(tree, project, "sync", CORTEX_RELEASES_URL=release.url)
                 self.assertEqual(proc.returncode, 1, proc.out + proc.err)
                 self.assertIn(f"newer than this cortex, {development(self.BEHIND.decode())} — update it:\n"
-                              f"    git -C {display(tree)} pull origin HEAD\n", proc.err)
+                              f"    git -C {quote(display(tree))} pull origin HEAD\n", proc.err)
                 self.run_update(proc.err, tree)                                             # the command it names
                 self.assert_ok(self.from_checkout(tree, project, "sync", CORTEX_RELEASES_URL=release.url))
                 self.assertEqual(config.load(str(project)).synced["reads"], pinned)
 
+    def told_to_pull(self, checkout, pull, pinned="1.8.0", name="app"):
+        """A sync from ``checkout``, behind the release ``pinned``, names ``pull``, its own update: run, it serves it."""
+        release = FakeRelease((pinned,))
+        self.addCleanup(release.close)
+        project = self.project(pinned, name=name)
+        proc = self.from_checkout(checkout, project, "sync", CORTEX_RELEASES_URL=release.url)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"newer than this cortex, {development(self.BEHIND.decode())} — update it:\n"
+                      f"    git -C {quote(display(checkout))} {pull}\n", proc.err)
+        self.run_update(proc.err, checkout)                                                 # the command it names
+        self.assert_ok(self.from_checkout(checkout, project, "sync", CORTEX_RELEASES_URL=release.url))
+        self.assertEqual(config.load(str(project)).synced["reads"], pinned)
+
+    def behind(self, **options):
+        return self.checkout(behind={"CHANGELOG.md": self.BEHIND},
+                             ahead={"CHANGELOG.md": (harness.REPO / "CHANGELOG.md").read_bytes()}, **options)
+
     @unittest.skipIf(harness.BINARY, "a source checkout's remedy")
     @NEEDS_GIT
     @harness.outside_a_repository
-    def test_a_checkout_whose_path_holds_a_space_is_told_to_update_itself_quoted(self):
-        # #374: the checkout's path is quoted, so that a shell takes it whole — on a branch, then on a detached HEAD.
+    def test_a_checkout_whose_remote_is_not_origin_pulls_its_own(self):
+        # #379: cloned with -o upstream, a detached HEAD pulls the default branch of the remote the config declares.
+        checkout = self.behind(clone=("-o", "upstream"))
+        subprocess.run([*self.GIT_ARGS, "-C", str(checkout), "checkout", "-q", "--detach"], check=True,
+                       capture_output=True)
+        self.told_to_pull(checkout, "pull upstream HEAD")
+
+    @unittest.skipIf(harness.BINARY, "a source checkout's remedy")
+    @NEEDS_GIT
+    @harness.outside_a_repository
+    def test_a_branch_with_no_upstream_pulls_its_remote_s_default_branch(self):
+        # #379: a plain pull fails on a branch with no upstream — a branch of one's own, say.
+        checkout = self.behind()
+        subprocess.run([*self.GIT_ARGS, "-C", str(checkout), "checkout", "-q", "-b", "mine"], check=True,
+                       capture_output=True)
+        self.assertNotEqual(subprocess.run([*self.GIT_ARGS, "-C", str(checkout), "pull"],
+                                           capture_output=True).returncode, 0)
+        self.told_to_pull(checkout, "pull origin HEAD")
+
+    @unittest.skipIf(harness.BINARY, "a source checkout's remedy")
+    @NEEDS_GIT
+    @harness.outside_a_repository
+    def test_a_checkout_a_reftable_keeps_pulls_its_remote_s_default_branch(self):
+        # #379: a reftable keeps HEAD, its HEAD file a stand-in: the default branch is pulled, on a branch or detached.
+        probe = subprocess.run([*self.GIT_ARGS, "init", "-q", "--ref-format=reftable", str(self.tmp / "probe")],
+                               capture_output=True)
+        if probe.returncode != 0:
+            self.skipTest("a git that writes no reftable")
+        checkout = self.behind(clone=("--ref-format=reftable",))
+        self.assertEqual((checkout / ".git" / "HEAD").read_bytes(), b"ref: refs/heads/.invalid\n")
+        self.told_to_pull(checkout, "pull origin HEAD")
+        subprocess.run([*self.GIT_ARGS, "-C", str(checkout), "checkout", "-q", "--detach", "HEAD~1"], check=True,
+                       capture_output=True)
+        self.told_to_pull(checkout, "pull origin HEAD", name="detached")
+
+    @unittest.skipIf(harness.BINARY, "a source checkout's remedy")
+    @NEEDS_GIT
+    @harness.outside_a_repository
+    def test_a_source_git_cannot_pull_is_told_to_install_a_release(self):
+        # #379: no .git — a source archive extracted —, or a HEAD git refuses: no git -C … pull is named, which would
+        # fail — the install script is, as from a binary that cannot update itself.
         pinned = "1.8.0"
-        checkout = self.checkout(behind={"CHANGELOG.md": self.BEHIND},
-                                 ahead={"CHANGELOG.md": (harness.REPO / "CHANGELOG.md").read_bytes()},
-                                 name="my checkout")
+        refused = self.behind()
+        (refused / ".git" / "HEAD").write_bytes(b"\xef\xbb\xbfref: refs/heads/main\n")      # a byte order mark
+        self.assertNotEqual(subprocess.run([*self.GIT_ARGS, "-C", str(refused), "pull"], capture_output=True)
+                            .returncode, 0)
         release = FakeRelease((pinned,))
         self.addCleanup(release.close)
         project = self.project(pinned)
+        for source in (self.source({"CHANGELOG.md": self.BEHIND}, name="archive"), refused):
+            with self.subTest(source=source.name):
+                proc = self.from_checkout(source, project, "sync", CORTEX_RELEASES_URL=release.url)
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertNotIn("git -C", proc.err)
+                named = re.search(r" — update it:\n    (.+)\n", proc.err).group(1)
+                self.assertEqual(named, store.install_command(Version(pinned)))
+                if os.name == "nt" or not (shutil.which("curl") or shutil.which("wget")):
+                    continue                      # install.ps1's run is test_install_ps1's
+                # The command named, run: the repository's install script, of the release pinned.
+                fetch, run = named.split(" | ")
+                self.assertEqual(fetch, "curl -fsSL https://raw.githubusercontent.com/xod-labs/cortex/main/install.sh")
+                home = self.tmp / f"home-{source.name}"
+                with open(harness.REPO / "install.sh", "rb") as script:
+                    ran = subprocess.run(shlex.split(run), stdin=script, capture_output=True,
+                                         env={"HOME": str(home), "CORTEX_HOME": str(home / ".cortex"),
+                                              "CORTEX_RELEASES_URL": release.url, "PATH": "/usr/bin:/bin"})
+                self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                self.assertEqual(subprocess.run([str(home / ".cortex" / "bin" / "cortex"), "--version"],
+                                                capture_output=True, text=True).stdout, f"cortex {pinned}\n")
+
+    @unittest.skipIf(harness.BINARY, "a source checkout's remedy")
+    @NEEDS_GIT
+    @harness.outside_a_repository
+    def test_a_checkout_whose_path_a_shell_would_expand_is_told_to_update_itself_quoted(self):
+        # #374, #379: the checkout's path is quoted, so that the shell takes it whole and expands nothing in it — a
+        # space, a $, a backtick, a quote. The command named is run by that shell: on a branch, then on a detached HEAD.
+        run = shell()
+        if run is None:
+            self.skipTest("no PowerShell to run the command named")
+        pinned = "1.8.0"
+        checkout = self.checkout(behind={"CHANGELOG.md": self.BEHIND},
+                                 ahead={"CHANGELOG.md": (harness.REPO / "CHANGELOG.md").read_bytes()},
+                                 name="my $HOME `id` it's")
+        release = FakeRelease((pinned,))
+        self.addCleanup(release.close)
+        project = self.project(pinned)
+        env = {**os.environ, "PATH": os.path.dirname(GIT)}
         for pull in ("pull", "pull origin HEAD"):
             with self.subTest(pull=pull):
                 proc = self.from_checkout(checkout, project, "sync", CORTEX_RELEASES_URL=release.url)
                 self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-                self.assertIn(f'— update it:\n    git -C "{display(checkout)}" {pull}\n', proc.err)
-                self.run_update(proc.err, checkout)                                         # the command it names
+                self.assertIn(f'— update it:\n    git -C {quote(display(checkout))} {pull}\n', proc.err)
+                line = re.search(r"\n    (git -C .+)\n", proc.err).group(1)
+                ran = subprocess.run([*run, line], capture_output=True, env=env, cwd=self.tmp)   # the command it names
+                self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
                 self.assert_ok(self.from_checkout(checkout, project, "sync", CORTEX_RELEASES_URL=release.url))
                 # Behind again, its HEAD detached there: a tag of a release before, say.
                 subprocess.run([*self.GIT_ARGS, "-C", str(checkout), "checkout", "-q", "--detach", "HEAD~1"],
@@ -721,7 +837,7 @@ class DevelopmentBuildTests(SettingsTestCase):
         proc = self.from_checkout(checkout, project, "sync", CORTEX_RELEASES_URL=release.url)
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertIn("cortex.lock: format 2 is written by a later Cortex — this one reads format 1: this cortex is "
-                      f"older than the project's — update it:\n    git -C {display(checkout)} pull\n", proc.err)
+                      f"older than the project's — update it:\n    git -C {quote(display(checkout))} pull\n", proc.err)
         self.assertNotIn("self-update", proc.err)
         self.run_update(proc.err, checkout)                                                 # the command it names
         self.assert_ok(self.from_checkout(checkout, project, "sync", CORTEX_RELEASES_URL=release.url))
@@ -737,7 +853,7 @@ class DevelopmentBuildTests(SettingsTestCase):
         proc = self.from_checkout(checkout, self.tmp, "project", "list")
         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
         self.assertIn(f"{display(registry)}: format 2 is written by a later Cortex — this one reads format 1: this "
-                      f"cortex is older than the one that wrote it — update it:\n    git -C {display(checkout)} pull\n",
+                      f"cortex is older than the one that wrote it — update it:\n    git -C {quote(display(checkout))} pull\n",
                       proc.err)
         self.assertNotIn("self-update", proc.err)
         self.run_update(proc.err, checkout)                                                 # the command it names
@@ -762,7 +878,7 @@ class DevelopmentBuildTests(SettingsTestCase):
         env = {"CORTEX_RELEASES_URL": release.url}
         proc = self.from_checkout(checkout, project, "upgrade", **env)
         self.assert_ok(proc)
-        self.assertIn(f"Cortex {latest} is out, and this cortex is {own}: `git -C {display(checkout)} pull`, then "
+        self.assertIn(f"Cortex {latest} is out, and this cortex is {own}: `git -C {quote(display(checkout))} pull`, then "
                       f"`cortex upgrade {latest}`, moves the project to it.\n", proc.out)
         self.assertNotIn("self-update", proc.out + proc.err)
         self.run_update(proc.out, checkout, r": `git (-C .+ pull)`, then `cortex upgrade ")     # the commands it names

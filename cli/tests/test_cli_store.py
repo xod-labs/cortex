@@ -20,7 +20,7 @@ from unittest import mock
 
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core"),
                 str(Path(__file__).resolve().parent)]
-from cortex_cli import net, store  # noqa: E402
+from cortex_cli import net, paths, store  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
 from release_fixture import FakeRelease, spec_archive  # noqa: E402
 
@@ -124,15 +124,17 @@ class EmbeddedTests(StoreTestCase):
         # with none, the release installed.
         with mock.patch.dict(os.environ):
             os.environ.pop("CORTEX_SOURCE_VERSION", None)
-            shown = f'"{display(REPO)}"' if " " in display(REPO) else display(REPO)
-            with mock.patch.object(store, "_detached", return_value=False):
-                self.assertEqual(store.update_command(Version("1.8.0-rc.1")), f"git -C {shown} pull")
-            with mock.patch.object(store, "_detached", return_value=True):          # #374: no branch to pull
-                self.assertEqual(store.update_command(Version("1.8.0-rc.1")), f"git -C {shown} pull origin HEAD")
-            with mock.patch.object(store, "source_checkout", return_value=None):
-                self.assertEqual(store.update_command(Version("1.8.0-rc.1")),
-                                 store.install_command(Version("1.8.0-rc.1")))
-                self.assertEqual(store.update_command(), store.install_command())
+            shown = paths.quote(display(REPO))
+            for pull in ("pull", "pull origin HEAD"):
+                with mock.patch.object(store, "_pull", return_value=pull):
+                    self.assertEqual(store.update_command(Version("1.8.0-rc.1")), f"git -C {shown} {pull}")
+            for checkout, pull in ((None, "pull"), (REPO, None)):       # #379: no checkout, or no pull to name
+                with mock.patch.object(store, "source_checkout", return_value=checkout), \
+                        mock.patch.object(store, "_pull", return_value=pull):
+                    self.assertEqual(store.update_command(Version("1.8.0-rc.1")),
+                                     store.install_command(Version("1.8.0-rc.1")))
+                    self.assertEqual(store.update_command("VERSION"), store.install_command())
+                    self.assertEqual(store.update_command(), store.install_command())
 
     @unittest.skipIf(AS_ROOT, "root writes any file")
     def test_it_is_read_only_once_written(self):
@@ -502,6 +504,163 @@ class EmbeddedTests(StoreTestCase):
     @staticmethod
     def no_network(url, limit):
         raise AssertionError(f"no download expected, got {url}")
+
+
+OID = "0123456789abcdef0123456789abcdef01234567"
+ORIGIN = '[remote "origin"]\n\turl = https://example.invalid/cortex.git\n'
+TRACKED = '[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n'
+
+
+class CheckoutPullTests(unittest.TestCase):
+    """#379: the pull a source checkout names, read from its files — its HEAD and its config, never git. The pulls
+    named here are run against real repositories in test_cli_settings."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="cortex-pull-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def repository(self, head="ref: refs/heads/main\n", config=ORIGIN + TRACKED, at=None):
+        """A checkout whose ``.git`` holds ``head`` and ``config`` — bytes or text, ``None`` for none — or, ``at``,
+        whose repository is there."""
+        checkout = self.tmp / "checkout"
+        checkout.mkdir(exist_ok=True)
+        git = at if at is not None else checkout / ".git"
+        git.mkdir(parents=True, exist_ok=True)
+        for name, data in (("HEAD", head), ("config", config)):
+            if data is not None:
+                (git / name).write_bytes(data if isinstance(data, bytes) else data.encode("utf-8"))
+        return checkout
+
+    def test_a_branch_with_an_upstream_is_pulled_plainly(self):
+        self.assertEqual(store._pull(self.repository()), "pull")
+        # Its remote unset, git pulls origin's.
+        self.assertEqual(store._pull(self.repository(config=ORIGIN + '[branch "main"]\nmerge = refs/heads/main\n')),
+                         "pull")
+
+    def test_a_detached_head_pulls_its_remote_s_default_branch(self):
+        for head in (OID, OID + "\n", OID + "0123456789abcdef01234567\n"):          # SHA-1's, SHA-256's
+            with self.subTest(head=head):
+                self.assertEqual(store._pull(self.repository(head=head)), "pull origin HEAD")
+
+    def test_a_branch_with_no_upstream_pulls_its_remote_s_default_branch(self):
+        for config in (ORIGIN, ORIGIN + '[branch "main"]\n\tremote = origin\n'):
+            with self.subTest(config=config):
+                self.assertEqual(store._pull(self.repository(config=config)), "pull origin HEAD")
+
+    def test_the_remote_is_read_from_the_config(self):
+        upstream = '[remote "upstream"]\n\turl = /somewhere\n'
+        fork = '[remote "fork"]\n\turl = /elsewhere\n'
+        odd = "it's $HOME `id`"
+        for config, pull in ((upstream, "pull upstream HEAD"),                             # cloned with -o upstream
+                             (fork + upstream, "pull fork HEAD"),                           # the first declared
+                             (fork + ORIGIN, "pull origin HEAD"),                           # origin, of several
+                             (fork + ORIGIN + '[branch "main"]\nremote = fork\n', "pull fork HEAD"),     # the branch's
+                             (fork + '[branch "main"]\nremote = gone\n', "pull fork HEAD"),
+                             (upstream + '[branch "main"]\nremote = upstream\nmerge = refs/heads/main\n', "pull"),
+                             # Merged from origin, which is no remote here: a plain pull would fail.
+                             (upstream + '[branch "main"]\nmerge = refs/heads/main\n', "pull upstream HEAD"),
+                             (f'[remote "{odd}"]\n\turl = /x\n', f"pull {paths.quote(odd)} HEAD")):
+            with self.subTest(config=config):
+                self.assertEqual(store._pull(self.repository(config=config)), pull)
+
+    def test_the_config_is_read_as_git_reads_it(self):
+        for config, pull in (('[Remote "origin"]\n\tURL = /x\n[BRANCH "main"]\n\tMerge = refs/heads/main\n', "pull"),
+                             ('[remote "Origin"]\n\turl = /x\n', "pull Origin HEAD"),      # a subsection keeps its case
+                             ('[remote.origin]\n\turl = /x\n[branch.main]\nmerge = refs/heads/main\n', "pull"),
+                             ('[remote.Up]\nurl = /x\n', "pull up HEAD"),                   # the old form: lower case
+                             ('[remote "up"] url = /x\n', "pull up HEAD"),                  # a key after the section
+                             ('# [remote "origin"]\n; url = /x\n[remote "up"]\nurl = /x # origin\n', "pull up HEAD"),
+                             ('[remote "up"]\nfetch = +refs/heads/*:refs/remotes/up/*\n', None),       # no url
+                             ('url = /x\n', None),                                          # in no section
+                             ('[branch "main"]\nurl = /x\n[core "x"]\nurl = /x\n', None),   # no remote's url
+                             ('[remote "up"]\nurl\n[remote "fork"]\nurl = /y\n', "pull fork HEAD"),   # no value
+                             ('[remote "up"]\nurl = /x\n[branch "main"]\nremote = "o;r\\"g"\n'
+                              '[remote "o;r\\"g"]\nurl = /y\n', f"pull {paths.quote('o;r' + chr(34) + 'g')} HEAD"),
+                             ('[remote "up"]\nurl = /x\n[remote "fork"]\nurl = /y\n[branch "main"]\nremote = fork ; up\n',
+                              "pull fork HEAD"),
+                             ('[remote "up"]\nurl = /x\n[branch "main"]\nremote = fo\\\nrk\n'
+                              '[remote "fork"]\nurl = /y\n', "pull fork HEAD"),             # a line continued
+                             ('[remote "up"]\nurl = /x\n[remote "fork"]\nurl = /y\n[branch "main"]\nremote = up\n'
+                              '[branch "main"]\nremote = fork\n', "pull fork HEAD"),        # the last value
+                             ('[remote "up"]\r\nurl = /x\r\n[branch "main"]\r\nremote = fo\\\r\nrk\r\n'
+                              '[remote "fork"]\r\nurl = /y\r\n', "pull fork HEAD")):
+            with self.subTest(config=config):
+                self.assertEqual(store._pull(self.repository(config=config)), pull)
+        # A quote, in a branch's name and in its section's.
+        self.assertEqual(store._pull(self.repository(head='ref: refs/heads/a"b\n',
+                                                     config=ORIGIN + '[branch "a\\"b"]\nmerge = refs/heads/x\n')),
+                         "pull")
+
+    def test_a_branch_a_reftable_keeps_pulls_its_remote_s_default_branch(self):
+        # Its HEAD file is a stand-in, whatever HEAD is: the default branch is pulled, which works on any.
+        config = ORIGIN + "[extensions]\n\trefStorage = reftable\n" + TRACKED
+        self.assertEqual(store._pull(self.repository(head="ref: refs/heads/.invalid\n", config=config)),
+                         "pull origin HEAD")
+
+    def test_a_head_on_no_branch_pulls_its_remote_s_default_branch(self):
+        # A ref outside refs/heads/ is no branch, whatever the branch of its name says — nor is a section of no name.
+        fork = '[remote "fork"]\nurl = /y\n'
+        for head, config in (("ref: refs/notes/main\n", ORIGIN + TRACKED),
+                             (OID, ORIGIN + fork + "[branch]\nremote = fork\nmerge = refs/heads/main\n")):
+            with self.subTest(head=head):
+                self.assertEqual(store._pull(self.repository(head=head, config=config)), "pull origin HEAD")
+                shutil.rmtree(self.tmp / "checkout")
+
+    def test_nothing_git_reads_names_no_pull(self):
+        # The install script is named in its place: an extracted source archive, a HEAD git refuses, no remote.
+        (self.tmp / "archive").mkdir()
+        self.assertIsNone(store._pull(self.tmp / "archive"))
+        for head in (b"", b"\n", b"\x00", b"\x00\n", b"\xef\xbb\xbfref: refs/heads/main\n", b"\xff\n",
+                     OID[:-1].encode(), OID.upper().encode(), (OID + " x").encode(), (OID + "0").encode(),
+                     (" " + OID).encode(), b"ref: heads/main\n", b"refs/heads/main\n", None):
+            with self.subTest(head=head):
+                self.assertIsNone(store._pull(self.repository(head=head)))
+                shutil.rmtree(self.tmp / "checkout")
+        for config in ("", '[branch "main"]\nmerge = refs/heads/main\n', None):
+            with self.subTest(config=config):
+                self.assertIsNone(store._pull(self.repository(config=config)))
+                shutil.rmtree(self.tmp / "checkout")
+        self.assertEqual(store._pull(self.repository(head=b"ref:refs/heads/main")), "pull")      # as git reads it
+
+    def test_a_git_file_names_the_repository(self):
+        # A worktree's: its HEAD in a directory of its own, the config in the repository's, commondir naming it.
+        common = self.tmp / "main" / ".git"
+        checkout = self.repository(head=OID + "\n", config=None, at=common / "worktrees" / "wt")
+        (common / "config").write_text(ORIGIN, encoding="utf-8")
+        (common / "worktrees" / "wt" / "commondir").write_text("../..\n", encoding="utf-8")
+        for named in (f"gitdir: {common / 'worktrees' / 'wt'}\n", "gitdir: ../main/.git/worktrees/wt\n"):
+            with self.subTest(named=named):
+                (checkout / ".git").write_text(named, encoding="utf-8")
+                self.assertEqual(store._pull(checkout), "pull origin HEAD")
+        # A submodule's: no commondir, the config beside its HEAD.
+        module = common / "modules" / "cortex"
+        self.repository(at=module)
+        (checkout / ".git").write_text(f"gitdir: {module}\n", encoding="utf-8")
+        self.assertEqual(store._pull(checkout), "pull")
+        (checkout / ".git").write_text(f"{module}\n", encoding="utf-8")
+        self.assertIsNone(store._pull(checkout))
+
+    @unittest.skipIf(os.name == "nt", "a HEAD that is a link, as git wrote it on POSIX")
+    def test_a_head_that_links_into_refs_is_that_ref(self):
+        checkout = self.repository(head=None)
+        os.symlink("refs/heads/main", checkout / ".git" / "HEAD")
+        self.assertEqual(store._pull(checkout), "pull")
+        os.remove(checkout / ".git" / "HEAD")
+        (checkout / ".git" / "elsewhere").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        os.symlink("elsewhere", checkout / ".git" / "HEAD")
+        self.assertIsNone(store._pull(checkout))
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipe here")
+    def test_a_named_pipe_is_never_waited_on(self):
+        for name, pull in ((".git", None), (".git/HEAD", None), (".git/config", None), (".git/commondir", "pull")):
+            with self.subTest(name=name):
+                checkout = self.repository()
+                if name == ".git":
+                    shutil.rmtree(checkout / ".git")
+                (checkout / name).unlink(missing_ok=True)
+                os.mkfifo(checkout / name)
+                self.assertEqual(store._pull(checkout), pull)
+                shutil.rmtree(checkout)
 
 
 class DownloadTests(StoreTestCase):
