@@ -1831,6 +1831,15 @@ def _waits(path: str, what: str) -> Optional[str]:
     return None
 
 
+def _below(path: str, top: str) -> bool:
+    """Whether ``path`` is below ``top`` — a root at / or C:\\ too —, whatever its case where the system ignores it."""
+    path, top = (os.path.normcase(os.path.abspath(p)) for p in (path, top))
+    try:
+        return path != top and os.path.commonpath([path, top]) == top
+    except ValueError:                  # another drive
+        return False
+
+
 def _null(path: str) -> bool:
     """Whether ``path`` is the null device — by its device number, which another node of it shares."""
     try:
@@ -1882,7 +1891,7 @@ def _changed(root: str, top: str, files: List[Path]) -> List[Path]:
         if why == "device":
             # A device the user's core.attributesFile names is no file to remove: /dev/zero. A link to one is, and one
             # in the work tree or the repository.
-            inside = os.path.normcase(os.path.abspath(path)).startswith(os.path.normcase(os.path.abspath(top)) + os.sep)
+            inside = _below(path, top)
             remedy = ("remove it" if os.path.islink(path) or inside else
                       "set core.attributesFile to another file, or to /dev/null")
             raise IgnoreFileError(f"{display(path)} is a device, which git, reading it as {what}, would read with no "
