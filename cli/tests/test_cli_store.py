@@ -538,7 +538,9 @@ class CheckoutPullTests(unittest.TestCase):
                          "pull origin HEAD")
 
     def test_a_detached_head_pulls_its_remote_s_default_branch(self):
-        for head in (OID, OID + "\n", OID + "0123456789abcdef01234567\n"):          # SHA-1's, SHA-256's
+        # SHA-1's, SHA-256's; in capitals, or followed by a space and anything: git reads them all.
+        for head in (OID, OID + "\n", OID + "0123456789abcdef01234567\n", OID.upper() + "\n", OID + " x\n",
+                     OID + "\tfoo\n", OID + "\r\n", OID + "\n\nmore\n", (OID + " \xff\n").encode("latin-1")):
             with self.subTest(head=head):
                 self.assertEqual(store._pull(self.repository(head=head)), "pull origin HEAD")
 
@@ -634,7 +636,7 @@ class CheckoutPullTests(unittest.TestCase):
         (self.tmp / "archive").mkdir()
         self.assertIsNone(store._pull(self.tmp / "archive"))
         for head in (b"", b"\n", b"\x00", b"\x00\n", b"\xef\xbb\xbfref: refs/heads/main\n", b"\xff\n",
-                     OID[:-1].encode(), OID.upper().encode(), (OID + " x").encode(), (OID + "0").encode(),
+                     OID[:-1].encode(), (OID + "0").encode(), (OID + "x\n").encode(), (OID + "0" * 23).encode(),
                      (" " + OID).encode(), b"ref: heads/main\n", b"refs/heads/main\n", None):
             with self.subTest(head=head):
                 self.assertIsNone(store._pull(self.repository(head=head)))

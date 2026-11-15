@@ -713,6 +713,17 @@ class DevelopmentBuildTests(SettingsTestCase):
     @unittest.skipIf(harness.BINARY, "a source checkout's remedy")
     @NEEDS_GIT
     @harness.outside_a_repository
+    def test_a_head_git_reads_as_detached_pulls_its_remote_s_default_branch(self):
+        # #379: an object id in capitals, followed by a space and more, is a detached HEAD to git, which pulls there.
+        checkout = self.behind()
+        oid = subprocess.run([*self.GIT_ARGS, "-C", str(checkout), "rev-parse", "HEAD"], check=True,
+                             capture_output=True, text=True).stdout.strip()
+        (checkout / ".git" / "HEAD").write_bytes(oid.upper().encode() + b" written by hand\n")
+        self.told_to_pull(checkout, "pull origin HEAD")
+
+    @unittest.skipIf(harness.BINARY, "a source checkout's remedy")
+    @NEEDS_GIT
+    @harness.outside_a_repository
     def test_a_checkout_whose_remote_is_not_origin_pulls_its_own(self):
         # #379: cloned with -o upstream, a detached HEAD pulls the default branch of the remote the config declares.
         checkout = self.behind(clone=("-o", "upstream"))

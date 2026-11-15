@@ -155,8 +155,9 @@ def update_command(version: Union[Version, str, None] = None) -> str:
     return "cortex self-update" if version is None else f"cortex self-update {version}"
 
 
-# A detached HEAD: the object id it holds, SHA-1's or SHA-256's — what git reads there besides a ``ref:``.
-_OBJECT_ID = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
+# A detached HEAD: the object id it opens with, SHA-1's or SHA-256's, in either case, then a space or its end —
+# what git reads there besides a ``ref:``, whatever follows the space.
+_OBJECT_ID = re.compile(r"[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?(?:\s|$)")
 
 
 def _pull(checkout: Path) -> Optional[str]:
@@ -197,16 +198,17 @@ def _pull(checkout: Path) -> Optional[str]:
 
 def _head(path: Path) -> Optional[str]:
     """What the HEAD at ``path`` names — a ref, or ``""`` for an object id, detached — or ``None`` where git refuses
-    it: empty, or anything but a ``ref:`` into ``refs/`` or an object id — a byte order mark before it, say. A link
+    it: empty, or anything but a ``ref:`` into ``refs/`` or an object id — a byte order mark before it, say, or a
+    hex digit too many. Bytes no UTF-8 reads may follow an object id, as git takes them. A link
     into ``refs/`` is the ref it leads to, as git has written HEAD before."""
     if path.is_symlink():
         target = os.readlink(path)
         return target if target.startswith("refs/") else None
-    text = read_file(str(path)).decode("utf-8")
+    text = read_file(str(path)).decode("utf-8", "surrogateescape")
     if text.startswith("ref:"):
         ref = text[len("ref:"):].strip()
         return ref if ref.startswith("refs/") else None
-    return "" if _OBJECT_ID.fullmatch(text.rstrip("\n")) else None
+    return "" if _OBJECT_ID.match(text) else None
 
 
 def _git_config(text: str) -> Dict[Tuple[str, Optional[str], str], str]:
