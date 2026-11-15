@@ -53,8 +53,9 @@ def quote(path):
 
 def shell():
     """The shell the commands are shown for — PowerShell on Windows —, as a command that runs one line, or ``None``."""
-    if os.name != "nt":
-        return ["sh", "-c"]
+    if os.name != "nt":   # by its path: the line is run with git's folder alone on PATH, and macOS has sh in /bin
+        found = shutil.which("sh")
+        return [found, "-c"] if found else None
     found = shutil.which("pwsh") or shutil.which("powershell")
     return [found, "-NoProfile", "-NonInteractive", "-Command"] if found else None
 
@@ -613,6 +614,9 @@ class DevelopmentBuildTests(SettingsTestCase):
         subprocess.run([*git, "-C", str(upstream), "commit", "-q", "-m", "behind"], check=True, capture_output=True)
         checkout = self.tmp / name
         subprocess.run([*git, "clone", "-q", *clone, str(upstream), str(checkout)], check=True, capture_output=True)
+        # In its config, not on a command line: the command named is run as a user runs it, and git's own default on
+        # Windows, core.autocrlf=true, would write the pulled files with CRLF — changes the next checkout refuses.
+        subprocess.run([*git, "-C", str(checkout), "config", "core.autocrlf", "false"], check=True, capture_output=True)
         for path, data in (ahead or {}).items():
             (upstream / path).write_bytes(data)
         subprocess.run([*git, "-C", str(upstream), "commit", "-q", "-am", "ahead"], check=True, capture_output=True)
@@ -832,7 +836,7 @@ class DevelopmentBuildTests(SettingsTestCase):
         # space, a $, a backtick, a quote. The command named is run by that shell: on a branch, then on a detached HEAD.
         run = shell()
         if run is None:
-            self.skipTest("no PowerShell to run the command named")
+            self.skipTest("no shell to run the command named")
         pinned = "1.8.0"
         checkout = self.checkout(behind={"CHANGELOG.md": self.BEHIND},
                                  ahead={"CHANGELOG.md": (harness.REPO / "CHANGELOG.md").read_bytes()},
