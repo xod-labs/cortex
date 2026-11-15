@@ -1810,14 +1810,15 @@ def _ignored(root: str, files: List[Path]) -> List[str]:
 
 
 def _waits(path: str) -> bool:
-    """Whether ``path`` is there as no file, nor a folder — a named pipe, a socket, a device — or a link to one: what
-    git, opening it as an ignore or an attributes file, would wait on with no limit."""
+    """Whether ``path`` is a named pipe, or a link to one: what git, opening it as an ignore or an attributes file,
+    would wait on with no limit. Only that: git reads a device without waiting — ``core.excludesFile = /dev/null``
+    turns the user's excludes off, a common idiom —, and fails at once on a socket."""
     for read in (os.lstat, os.stat):
         try:
             mode = read(path).st_mode
         except OSError:
             continue
-        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode)):
+        if stat.S_ISFIFO(mode):
             return True
     return False
 

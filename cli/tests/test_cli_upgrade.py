@@ -11,6 +11,7 @@ import hashlib
 import io
 import os
 import shutil
+import socket
 import signal
 import subprocess
 import sys
@@ -1358,6 +1359,36 @@ class IgnoredTimeoutTests(unittest.TestCase):
         (root / ".gitattributes").mkdir()
         with mock.patch.dict(os.environ, environment):
             self.assertEqual(upgrade._changed(str(root), str(top), files), files)
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("git"), "needs git and /dev")
+    @harness.outside_a_repository
+    def test_a_device_or_a_socket_git_reads_is_no_file_it_waits_on(self):
+        # `core.excludesFile = /dev/null` turns the user's excludes off, a common idiom: git reads a device without
+        # waiting — /dev/zero too —, and fails at once on a socket. Only a named pipe holds it: no other is refused.
+        tmp = Path(tempfile.mkdtemp(prefix="cortex-upgrade-")).resolve()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        top = tmp / "top"
+        top.mkdir()
+        subprocess.run(["git", "init", "-q", str(top)], check=True)
+        (top / "cortex.toml").write_text('theme = "h2g2"\n', encoding="utf-8")
+        files = [top / "cortex.toml"]
+        environment = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "HOME": str(tmp)}
+        for key in ("core.excludesFile", "core.attributesFile"):
+            for device in ("/dev/null", "/dev/zero"):
+                with self.subTest(key=key, device=device), mock.patch.dict(os.environ, environment):
+                    subprocess.run(["git", "-C", str(top), "config", key, device], check=True)
+                    self.assertFalse(upgrade._waits(device))
+                    self.assertEqual(upgrade._changed(str(top), str(top), files), files)
+                    subprocess.run(["git", "-C", str(top), "config", "--unset", key], check=True)
+        sock = socket.socket(socket.AF_UNIX)
+        self.addCleanup(sock.close)
+        here = os.getcwd()
+        os.chdir(tmp)                           # a short path: macOS's TMPDIR makes an AF_UNIX path too long
+        self.addCleanup(os.chdir, here)
+        sock.bind("s")
+        self.assertFalse(upgrade._waits(str(tmp / "s")))
+        os.mkfifo(tmp / "p")
+        self.assertTrue(upgrade._waits(str(tmp / "p")))
 
     @unittest.skipUnless(shutil.which("git"), "needs git")
     @harness.outside_a_repository
