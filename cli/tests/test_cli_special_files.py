@@ -651,6 +651,42 @@ class MarkerTests(SpecialFileTestCase):
         self.assert_ok(self.within(root, "validate"))
 
 
+class RegistryFileTests(SpecialFileTestCase):
+    """The machine's ``projects.toml``, which lists its projects."""
+
+    @harness.outside_a_repository
+    def test_a_projects_toml_that_is_not_a_file_is_said_not_a_file_never_waited_on(self):
+        # A named pipe there, read with no limit, held every command that reads it (#386). Said what it is, nothing
+        # written over it, and its remedy, followed, lets `cortex project add` write it again.
+        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', name=f"registry-{kind}")
+                registry = self.home / "projects.toml"
+                if kind == "directory":
+                    registry.mkdir()
+                else:
+                    os.mkfifo(registry)
+                said = f"{display(str(registry))} is not a file — remove it, and `cortex project add` writes it again"
+                for args in (("project", "list"), ("project", "add"), ("project", "remove", root.name)):
+                    proc = self.within(root, *args, CORTEX_NO_REGISTER="")
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertEqual(f"cortex {args[0]} {args[1]}: {said}\n", proc.err)
+                proc = self.within(root, "sync", CORTEX_NO_REGISTER="")
+                self.assert_ok(proc)
+                self.assertIn(f"is not registered — {said}\n", proc.err)
+                self.assertEqual(stat.S_ISDIR(os.lstat(registry).st_mode), kind == "directory")
+                if kind == "directory":
+                    registry.rmdir()
+                else:
+                    registry.unlink()
+                self.assert_ok(self.within(root, "project", "add", CORTEX_NO_REGISTER=""))
+                proc = self.within(root, "project", "list")
+                self.assert_ok(proc)
+                self.assertIn(root.name, proc.out)
+                registry.unlink()
+
+
 class RenamedTeamFolderTests(SpecialFileTestCase):
     """A team's folder ``cortex.toml`` renames, where something that is no folder is (``TEAM_FOLDER_MISSING``)."""
 

@@ -89,8 +89,12 @@ def registry_path() -> Path:
 
 
 def _read(path: Path) -> List[Entry]:
+    if os.path.exists(path) and not os.path.isfile(path):
+        # A named pipe, a socket, a directory, or a link to one: never waited on, nor written over (#386).
+        raise RegistryError(f"{display(str(path))} is not a file — remove it, and `cortex project add` writes it "
+                            "again")
     try:
-        text = path.read_bytes().decode("utf-8-sig")
+        text = cascade.read_file(str(path)).decode("utf-8-sig")
     except FileNotFoundError:
         return []
     except UnicodeDecodeError:
