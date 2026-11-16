@@ -715,6 +715,141 @@ class GitIgnoreTests(SyncTestCase):
                 for project in git:
                     self.assertEqual(self.check_ignore(project, name.rstrip("/")), expected)
 
+    # What Cortex reads of .gitignore without git — each folder's own .gitignore, for the exact lines it would add — is
+    # conservative (#391): it may say a path not ignored where git ignores it, and add a line git would not need, never
+    # the reverse. These cases are the known ones, Cortex's answer pinned: a change to it is noticed, and weighed.
+    KNOWN_OVER_ADDITIONS = (
+        (b"*.log\n", None, "a.log"),                                    # a pattern, never matched
+        (b"*.log\n", None, ".claude/a.log"),
+        (b"*.log\n", None, ".claude/x/a.log"),
+        (b"**/foo\n", None, ".claude/foo"),
+        (b".claude\n", None, ".claude/settings.local.json"),           # a folder ignored whole
+        (b".claude/\n", None, ".claude/settings.local.json"),
+        (b"foo/\n", None, ".claude/foo/bar"),
+        (b"foo\n", b"!/foo\n", ".claude/y/foo"),                        # an anchored negation, read on the last part
+    )
+
+    @harness.outside_a_repository
+    def test_without_git_the_known_over_additions_are_ignored_by_git_and_not_said_so(self):
+        for root_lines, nested_lines, name in self.KNOWN_OVER_ADDITIONS:
+            with self.subTest(root=root_lines, nested=nested_lines, name=name):
+                projects = self.nested(root_lines, nested_lines, f"known-{len(list(self.tmp.iterdir()))}")
+                for project in projects:
+                    (project / name).parent.mkdir(parents=True, exist_ok=True)
+                    (project / name).touch()
+                refused, *git = projects
+                self.assertIs(sync.ignored(refused, name), False)
+                for project in git:
+                    self.assertTrue(self.check_ignore(project, name))
+
+    @unittest.skipIf(shutil.which("git") is None, "needs git")
+    @harness.outside_a_repository
+    def test_without_git_cortex_never_says_ignored_what_git_does_not_ignore(self):
+        # Each root .gitignore with each .claude/.gitignore, each path asked of git and of Cortex without git: Cortex
+        # says ignored only what git ignores. One repository, its .gitignore files written again for each case.
+        roots = ("", "foo", "/foo", "foo/", "*.log", "**/foo", ".claude", ".claude/", ".claude/foo", "x/foo",
+                 ".claude/settings.local.json", "settings.local.json", "foo\n!foo", "*.json\n!settings.local.json",
+                 ".claude/settings.local.json\n!.claude/*.json", "cortex.local.toml", "/*.toml",
+                 "*.toml\n!sub/cortex.local.toml", "/cortex", "cort*")
+        nested = (None, "foo", "/foo", "!foo", "!/foo", "foo/", "y/foo", "*.log", "!settings.local.json",
+                  "settings.local.json")
+        # .claude/x/.gitignore, a level deeper, one for each case in turn: as many git calls, more combinations met.
+        deeper = (None, "foo", "!foo", "!/foo", "cortex.local.toml", "!cortex.local.toml")
+        names = ("foo", "x/foo", "a.log", ".claude/foo", ".claude/foo/bar", ".claude/x/foo", ".claude/y/foo",
+                 ".claude/a.log", ".claude/settings.local.json", "cortex", "cortex.local.toml",
+                 "sub/cortex.local.toml", ".claude/x/cortex.local.toml")
+        project = self.repository("", "fuzz")
+        for name in sorted(names, key=lambda name: -name.count("/")):     # .claude/foo/bar makes .claude/foo
+            (project / name).parent.mkdir(parents=True, exist_ok=True)
+            if not (project / name).exists():
+                (project / name).touch()
+        cases, said, missed = 0, 0, 0
+        for at, root_lines in enumerate(roots):
+            for turn, nested_lines in enumerate(nested):
+                deeper_lines = deeper[(at + turn) % len(deeper)]
+                (project / ".gitignore").write_bytes(f"{root_lines}\n".encode("utf-8"))
+                for folder, lines in ((".claude", nested_lines), (".claude/x", deeper_lines)):
+                    (project / folder / ".gitignore").unlink(missing_ok=True)
+                    if lines is not None:
+                        (project / folder / ".gitignore").write_bytes(f"{lines}\n".encode("utf-8"))
+                said_by_git = set(subprocess.run(["git", "-C", str(project), "check-ignore", "--", *names],
+                                                 capture_output=True, text=True).stdout.split())
+                with mock.patch.object(sync, "git_ignores", return_value=None):
+                    for name in names:
+                        cases += 1
+                        if sync.ignored(project, name):
+                            self.assertIn(name, said_by_git,
+                                          f"root {root_lines!r}, .claude {nested_lines!r}, .claude/x {deeper_lines!r}")
+                            said += 1
+                        elif name in said_by_git:
+                            missed += 1                 # a line git would not need: the safe side
+        self.assertEqual(cases, len(roots) * len(nested) * len(names))
+        self.assertGreater(said, 0)                     # both answers met: the table tells something
+        self.assertGreater(missed, 0)
+
+    @harness.outside_a_repository
+    def test_without_git_a_line_git_does_not_need_changes_nothing_it_ignores(self):
+        # `.claude/` ignores Claude Code's settings, which Cortex cannot tell without git: it adds their line, once.
+        # The line is harmless: git ignores exactly what it ignored before.
+        refused, *git = self.nested(b".claude/\ncortex.local.toml\n", None, "harmless")
+        proc = self.sync(refused, "--claude-access")
+        self.assert_ok(proc)
+        self.assertIn(".gitignore: .claude/settings.local.json\n", proc.out)
+        written = (refused / ".gitignore").read_bytes()
+        self.assertEqual(written, b".claude/\ncortex.local.toml\n.claude/settings.local.json\n")
+        proc = self.sync(refused, "--claude-access")
+        self.assert_ok(proc)
+        self.assertNotIn(".gitignore:", proc.out)
+        self.assertEqual((refused / ".gitignore").read_bytes(), written)
+        for project in git:
+            for path in (refused / ".claude").rglob("*"):
+                if path.is_file():
+                    (project / path.relative_to(refused)).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(path, project / path.relative_to(refused))
+            (project / "notes.md").touch()
+
+            def status():
+                return subprocess.run(["git", "-C", str(project), "status", "--porcelain", "--ignored",
+                                       "--untracked-files=all"], capture_output=True, check=True).stdout
+
+            before = status()
+            self.assertIn(b"!! .claude/settings.local.json\n", before)
+            (project / ".gitignore").write_bytes(written)
+            self.assertEqual(status(), before)
+
+    @harness.outside_a_repository
+    def test_without_git_cortex_local_toml_s_line_also_ignores_it_in_subfolders(self):
+        # A line git would not need, added without git, as the docs say: `cortex.local.toml` has no `/`, and matches at
+        # any depth — it also ignores a nested project's, even one a negation of the developer's brought back. A line
+        # with a `/` names only Cortex's own paths: git ignores nothing more.
+        paths = ("cortex.local.toml", "sub/cortex.local.toml", "sub/x/cortex.local.toml", "cortex", "sub/cortex",
+                 ".claude/settings.local.json")
+        cases = ((b"/*.toml\n", "cortex.local.toml", {"sub/cortex.local.toml", "sub/x/cortex.local.toml"}),
+                 (b"*.toml\n!sub/cortex.local.toml\n", "cortex.local.toml", {"sub/cortex.local.toml"}),
+                 (b"*.local.toml\n!/sub/*.toml\n", "cortex.local.toml", {"sub/cortex.local.toml"}),
+                 (b"/cort*\n", "/cortex", set()),
+                 (b".claude/\n", ".claude/settings.local.json", set()))
+        for root_lines, line, newly in cases:
+            with self.subTest(root=root_lines, line=line):
+                refused, *git = self.nested(root_lines, None, f"wider-{len(list(self.tmp.iterdir()))}")
+                for project in (refused, *git):
+                    for path in paths:
+                        (project / path).parent.mkdir(parents=True, exist_ok=True)
+                        (project / path).touch()
+                probe = line.lstrip("/")
+                self.assertEqual(sync.add_to_gitignore(refused, {line: probe}), [line])
+                self.assertEqual((refused / ".gitignore").read_bytes(), root_lines + f"{line}\n".encode("utf-8"))
+                for project in git:
+                    def said():
+                        return set(subprocess.run(["git", "-C", str(project), "check-ignore", "--", *paths],
+                                                  capture_output=True, text=True).stdout.split())
+                    before = said()
+                    self.assertIn(probe, before)            # git ignored it already: a line it did not need
+                    (project / ".gitignore").write_bytes((refused / ".gitignore").read_bytes())
+                    after = said()
+                    self.assertEqual(after - before, newly)
+                    self.assertEqual(before - after, set())
+
     def test_without_git_a_path_out_of_the_project_is_not_read_up_there_but_a_name_with_dots_is(self):
         # A `..` part leads out of the project, where a .gitignore is no longer its own: `../out/f.txt` and
         # `a/../../out/f.txt` are not said ignored by out/.gitignore. `a..b` and `..foo` are names, no `..` part:

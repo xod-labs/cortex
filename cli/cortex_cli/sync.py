@@ -28,7 +28,6 @@ import json
 import os
 import re
 import secrets
-import shlex
 import shutil
 import stat
 import subprocess
@@ -44,7 +43,7 @@ from cortex_core import cascade
 from cortex_core.validate import shown
 
 from . import claude, config, machine, registry, store
-from .paths import display, working_directory
+from .paths import display, quote, word, working_directory
 
 LINK = "cortex"
 MARKER = ".synced"
@@ -119,12 +118,20 @@ def read_marker(copy: Path) -> Optional[dict]:
     """The ``.synced`` marker of a copy sync made — ``None`` when it is none: the version it copied
     (``None`` for a checkout), the checkout (``from``), and the digest of every file it wrote."""
     try:
-        marker = json.loads((copy / MARKER).read_text(encoding="utf-8"))
+        # Read without blocking: a named pipe there is no marker, never waited on (#386).
+        marker = json.loads(cascade.read_file(str(copy / MARKER)).decode("utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(marker, dict) or not isinstance(marker.get("files"), dict):
         return None
     return marker
+
+
+def marker_not_a_file(copy: Path) -> bool:
+    """Whether the ``.synced`` in ``copy`` is there as no file — a named pipe, a socket, a directory, or a link to one
+    — which names no version, and is never read (#386)."""
+    path = copy / MARKER
+    return os.path.exists(path) and not os.path.isfile(path)
 
 
 def synced_version(copy: Path) -> Optional[str]:
@@ -144,9 +151,10 @@ def missing_files(copy: Path, marker: dict) -> List[str]:
 
 
 def _gitdir(path: Path) -> Optional[str]:
-    """The repository a ``.git`` file names — a submodule's, or a worktree's — absolute."""
+    """The repository a ``.git`` file names — a submodule's, or a worktree's — absolute. Read without blocking: a
+    named pipe there is no file, which names none, and never waited on (#386)."""
     try:
-        text = (path / ".git").read_text(encoding="utf-8").strip()
+        text = cascade.read_file(str(path / ".git")).decode("utf-8").strip()
     except (OSError, ValueError):
         return None
     if not text.startswith("gitdir:"):
@@ -431,18 +439,6 @@ def describe(path: Path) -> str:
             "directory": "a directory", "file": "a file"}[kind_of(path)]
 
 
-def quote(path: str) -> str:
-    """A path as the shell the commands are shown for reads it: PowerShell on Windows."""
-    if os.name == "nt":
-        return "'" + path.replace("'", "''") + "'"
-    return shlex.quote(path)
-
-
-def _word(text: str) -> str:
-    """``text`` as one word of the shell the commands are shown for, quoted only when it needs it."""
-    return text if re.fullmatch(r"[\w./-]+", text) else quote(text)
-
-
 def _remove_command(path: str) -> str:
     return f"Remove-Item -Recurse -Force {quote(path)}" if os.name == "nt" else f"rm -rf {quote(path)}"
 
@@ -469,6 +465,12 @@ def leaving(path: Path) -> str:
     """How to leave the submodule, the worktree or the clone at ``cortex/`` (ADR-008 §3.10): the
     commands, shown and never run — they rewrite the project's git state, and the developer should
     see them first. Every path in them is absolute: they run from any directory."""
+    dot_git = path / ".git"
+    if os.path.exists(dot_git) and not os.path.isfile(dot_git) and not os.path.isdir(dot_git):
+        # A named pipe, a socket, a device, or a link to one: it names no repository — git passes over it to the
+        # repository around cortex/ — and the commands that leave a submodule or a clone have none to act on (#386).
+        return (f"{LINK}/.git is not a file, nor a folder, and names no repository: remove it, then run the command "
+                "again.")
     root = display(str(path.parent))
     kind = kind_of(path)
     if kind == "submodule" and in_index(path) is False:
@@ -482,7 +484,7 @@ def leaving(path: Path) -> str:
         name = submodule_name(path)
         section = _git(root, "config", "--local", "--get-regexp", rf"^submodule\.{re.escape(name)}\.")
         if section is not None and section.returncode == 0 and section.stdout.strip():
-            commands.append(f"git -C {quote(root)} config --remove-section {_word(f'submodule.{name}')}")
+            commands.append(f"git -C {quote(root)} config --remove-section {word(f'submodule.{name}')}")
         commands.append(_remove_command(display(str(path))))
         if modules:
             commands.append(_remove_command(display(gitdir)))
@@ -572,6 +574,9 @@ def existing_entry(target: Path, the_store: store.Store, project: config.Project
                             f"store moved or deleted since it was linked. {again}.")
         raise SyncError(f"{LINK}/ is a link to {shown(display(pointed))}, which Cortex did not make. Move or remove it, "
                         "then run the command again.")
+    if target.is_dir() and not (target / ".git").exists() and marker_not_a_file(target):
+        raise SyncError(f"{LINK}/{MARKER} is not a file, which Cortex cannot read: Cortex did not write this directory. "
+                        f"Move or remove {LINK}/, then run the command again.")
     if target.is_dir() and not (target / ".git").exists() and (target / MARKER).is_file():
         marker = read_marker(target)
         if marker is None:
@@ -1293,11 +1298,14 @@ def _claude(root: Path, project: config.Project, spec: Optional[Path], out: Text
 def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
     """Add to ``.gitignore`` each line of ``entries`` whose path — its value — git does not ignore
     yet, and return them. The file keeps its bytes: its encoding, its byte order mark, its line
-    endings. Without a repository to ask, a line is added unless it, or one that means the same,
-    is there with no negation below it — and no .gitignore is created: it would keep nothing out of any commit. A
-    .gitignore that is a symbolic link is never written through — git does not read it, and its target may be outside
-    the project, or none yet: the note names the link (``_notes``) — nor is one that is no file: a named pipe, a
-    directory."""
+    endings. Without git's answer, ``ignored`` reads .gitignore conservatively: a line git would not need may
+    be added, never one it needs left out — one with a ``/`` names only Cortex's own paths, while ``cortex.local.toml``
+    matches at any depth: it also ignores one in a subfolder, even one a negation above it in the root .gitignore
+    brought back; one in the subfolder's own .gitignore still wins (#391). Without a
+    repository to ask, a line is added unless it, or one that means the same, is there with no negation below it —
+    and no .gitignore is created: it would keep nothing out of any commit. A .gitignore that is a symbolic link is
+    never written through — git does not read it, and its target may be outside the project, or none yet: the note
+    names the link (``_notes``) — nor is one that is no file: a named pipe, a directory."""
     path = root / ".gitignore"
     if is_link(path) or no_gitignore_file(path):  # never written through, nor waited on: the note names it
         return []
@@ -1517,7 +1525,11 @@ def ignored(root: Path, name: str) -> Optional[bool]:
     """Whether git ignores ``name`` in the project: asked of git when the project is a repository
     of it; ``None`` when there is no repository to ask about — no ``.git`` at the root or above it.
     Without git's answer, ``True`` only for what Cortex can tell from the project's own .gitignore, and those of
-    the folders between it and the path."""
+    the folders between it and the path — read for the exact lines Cortex would add, not as git matches (#391):
+    a pattern (``*.log``, ``**/foo``) is never matched, a folder ignored whole (``.claude/``) is not seen to ignore what
+    it holds, and a negation is matched on the path's last part even when anchored (``!/foo``). Each gap goes one way:
+    ``False`` where git may say ignored, never ``True`` where git does not — a line git would not need may be added
+    (``add_to_gitignore``), one git needs is never left out."""
     answer = git_ignores(root, name)
     if answer is not None:
         return answer

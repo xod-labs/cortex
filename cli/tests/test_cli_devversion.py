@@ -348,6 +348,37 @@ class BumpTests(unittest.TestCase):
         self.assertEqual([line.paragraph for line in markdown_lines.lines("-     code\n-\n      code\n- text\n")],
                          [False, False, False, True, False])
 
+    def test_an_underlined_entry_s_text_is_a_heading(self):
+        # #398: a line of = or - below an entry's text, as indented as its content or up to three spaces more — a tab
+        # too — makes that text a heading in the item, its lines below and lazy ones with it: its 💥 marks nothing, and
+        # the entry counts for its kind alone (commonmark.js 0.31.2).
+        for entry in ("- 💥 a\n  ===\n", "- 💥 a\n  ---\n", "- 💥 a\n  -\n", "- 💥 a\n     ===\n", "- 💥 a\n\t===\n",
+                      "- 💥 a\n  b\n  ===\n", "- 💥 a\nlazy\n  ---\n", "-\n  💥 a\n  ===\n", "-\n  💥 a\nlazy\n  ===\n",
+                      "*   💥 a\n    ---\n", "- b\n- 💥 a\n  ===\n"):
+            with self.subTest(entry=entry):
+                self.assertEqual(prepared(changelog(f"### Fixed\n{entry}", "2.3.4")), "2.3.5")
+        self.assertEqual(devversion.unreleased(changelog("### Fixed\n- b\n- 💥 a\n  ===\n")), {"Fixed": ["b", ""]})
+        self.assertEqual([line.paragraph for line in markdown_lines.lines("- a\n- b\nc\n  ===\n- d\n")],
+                         [True, False, False, False, True, False])
+        # Less indented than its content, a line of = goes on with it lazily, and one of - is a break: indented four
+        # spaces more, it goes on with it too. Not underlined in the item's own paragraph — below a blank line, a
+        # heading, an item or a quote in it, or with a space in its run — the entry's 💥 marks a major; a paragraph
+        # below a blank line in it is underlined alone.
+        for entry in ("- 💥 a\n ===\n", "- 💥 a\n---\n", "- 💥 a\n      ===\n", "- 💥 a\n\n  ===\n",
+                      "- 💥 a\n  # h\n  ===\n", "- 💥 a\n\n  b\n  ===\n",
+                      "- 💥 a\n  - b\n  ===\n", "- 💥 a\n  > b\n  ===\n", "- 💥 a\n  = =\n", "- 💥 a\n  - - -\n",
+                      "- 💥 a\n- b\n  ===\n", "-\n  💥 a\n===\n"):
+            with self.subTest(entry=entry):
+                self.assertEqual(prepared(changelog(f"### Fixed\n{entry}", "2.3.4")), "3.0.0")
+        # A block never closed at the top level is a paragraph's line of its own: underlined, it is the heading — never
+        # the entry above it, whose 💥 marks a major (commonmark.js hides the rest of the file in the block).
+        for block in ("```\n===\n", "<!--\n===\n", "~~~\n  ---\n", "<pre>\n===\n", "```\nb\n===\n"):
+            with self.subTest(block=block):
+                self.assertEqual(devversion.unreleased(changelog(f"### Fixed\n- 💥 a\n{block}")), {"Fixed": ["💥 a"]})
+                self.assertEqual(prepared(changelog(f"### Fixed\n- 💥 a\n{block}", "2.3.4")), "3.0.0")
+        self.assertEqual([line.paragraph for line in markdown_lines.lines("- a\n```\nb\n===\n")],
+                         [True, False, False, False, False])
+
     def test_an_item_s_line_that_holds_no_paragraph_is_continued_by_none(self):
         # #354: past its marker, a heading, a thematic break or code holds no paragraph — an item nested on the line, a
         # quote, neither, past their own marks: the line below is no lazy line of the entry, and the list ends there.
