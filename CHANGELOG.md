@@ -7,7 +7,7 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
-## [1.8.7] - 2026-11-16 — Almost, but Not Quite, Entirely Unlike Tea _(Released)_
+## [1.8.7] - 2026-11-17 — Almost, but Not Quite, Entirely Unlike Tea _(Released)_
 [Full notes](changelog/1.8.7.md)
 
 ### Fixed
