@@ -19,6 +19,7 @@ developer's (§3.3); the lock of a version is beside the file it comes from (§3
 from __future__ import annotations
 
 import dataclasses
+import errno
 import json
 import os
 import re
@@ -204,15 +205,31 @@ def no_project(cwd: str, hint: str = "") -> str:
     """Why ``find_project`` found no project from ``cwd``: no ``cortex.toml`` there or above it — or, nearest, one
     that is not a file, a named pipe, a socket or a directory, which was read as none (#358). ``hint`` follows the
     first."""
+    return nearest_not_a_file(cwd) or (f"no {PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a "
+                                       f"directory a Cortex project{hint}")
+
+
+def project_not_a_file(directory: str) -> Optional[str]:
+    """What to say of the ``cortex.toml`` in ``directory`` when it is there as no file — a named pipe, a socket, a
+    directory, a link to one, or a loop of links — which was read as none (#358, #386); ``None`` for a file, or none
+    there."""
+    path = os.path.join(directory, PROJECT_FILE)
+    if (os.path.exists(path) and not os.path.isfile(path)) or link_loop(path):
+        return f"{display(path)} is not a file: remove it, then `cortex init` makes the directory a Cortex project"
+    return None
+
+
+def nearest_not_a_file(cwd: str) -> Optional[str]:
+    """``project_not_a_file`` of the nearest ``cortex.toml`` there is from ``cwd`` up, which ``find_project`` passed
+    over — ``None`` when none is there that is not a file (#386)."""
     current = cwd
     while True:
-        path = os.path.join(current, PROJECT_FILE)
-        if os.path.exists(path) and not os.path.isfile(path):
-            return f"{display(path)} is not a file: remove it, then `cortex init` makes the directory a Cortex project"
+        said = project_not_a_file(current)
+        if said is not None:
+            return said
         parent = os.path.dirname(current)
         if parent == current:
-            return (f"no {PROJECT_FILE} in {display(cwd)} or above it — `cortex init` makes a directory a Cortex "
-                    f"project{hint}")
+            return None
         current = parent
 
 
@@ -835,9 +852,23 @@ def local_not_a_file(root: str) -> Optional[str]:
     link to one, read as none — which a command that writes it would fail on, half-way, or write over (#358);
     ``None`` for a file, or none there."""
     path = os.path.join(root, LOCAL_FILE)
-    if os.path.exists(path) and not os.path.isfile(path):
+    if (os.path.exists(path) and not os.path.isfile(path)) or link_loop(path):
         return f"{LOCAL_FILE} is not a file — remove it, and `cortex sync` writes it again"
     return None
+
+
+def link_loop(path: str) -> bool:
+    """Whether ``path`` is a link that leads, through links, back to itself: no file, and none ever written through it
+    — read as none, a sync replaced it in silence, where it refuses what else is no file there (#386). A link that
+    leads nowhere is none of it: the file it names is not there yet."""
+    if not os.path.islink(path):
+        return False
+    try:
+        os.stat(path)
+    except OSError as error:
+        # ELOOP; Windows says ERROR_CANT_RESOLVE_FILENAME (1921) of a loop of links.
+        return error.errno == errno.ELOOP or getattr(error, "winerror", None) == 1921
+    return False
 
 
 def write_local_text(root: str, text: str) -> None:
@@ -863,8 +894,9 @@ def load_lock(root: str, name: str = LOCK_FILE, shown: Optional[str] = None, *,
     path = os.path.join(root, name)
     again = f"delete it, and {writer} writes it again"     # a merge left conflict markers in it, say
     shown_name = shown or (TEAM_LOCK_NAME if name == TEAM_LOCK_FILE else name)
-    if os.path.exists(path) and not os.path.isfile(path):
-        # A named pipe, a socket, a directory, or a link to one: no lock to read, nor one to write over (#358).
+    if (os.path.exists(path) and not os.path.isfile(path)) or link_loop(path):
+        # A named pipe, a socket, a directory, a link to one, or a loop of links: no lock to read, nor one to write
+        # over (#358, #386).
         raise ConfigError(f"{shown_name} is not a file — {again}")
     if not os.path.isfile(path):
         return None

@@ -89,8 +89,12 @@ def registry_path() -> Path:
 
 
 def _read(path: Path) -> List[Entry]:
+    if os.path.exists(path) and not os.path.isfile(path):
+        # A named pipe, a socket, a directory, or a link to one: never waited on, nor written over (#386).
+        raise RegistryError(f"{display(str(path))} is not a file — remove it, and `cortex project add` writes it "
+                            "again")
     try:
-        text = path.read_bytes().decode("utf-8-sig")
+        text = cascade.read_file(str(path)).decode("utf-8-sig")
     except FileNotFoundError:
         return []
     except UnicodeDecodeError:
@@ -233,8 +237,8 @@ def add(root: str, name: Optional[str] = None, warn: Optional[TextIO] = None) ->
     whose work is done, that the registry must not fail."""
     try:
         if not _has_project(root):
-            raise RegistryError(f"{display(root)} holds no {config.PROJECT_FILE} — `cortex init` makes a directory a "
-                                "Cortex project")
+            raise RegistryError(config.project_not_a_file(root) or f"{display(root)} holds no {config.PROJECT_FILE} — "
+                                "`cortex init` makes a directory a Cortex project")
         if name is not None and not project.is_project_name(name):
             raise RegistryError(f"{shown(name)} is no project name — {project.PROJECT_NAME_RULE}")
         path = registry_path()
@@ -427,8 +431,7 @@ def _add(options: argparse.Namespace, out: TextIO) -> int:
     if options.path is None:
         root = config.find_project(cwd)
         if root is None:
-            return sync.failed("cortex project add", f"no {config.PROJECT_FILE} in {display(cwd)} or above it — "
-                               "`cortex init` makes a directory a Cortex project")
+            return sync.failed("cortex project add", config.no_project(cwd))
     else:
         root = os.path.abspath(os.path.join(cwd, options.path))       # an absolute one stays
         if not os.path.isdir(root):

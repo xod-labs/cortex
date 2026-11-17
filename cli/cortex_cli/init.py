@@ -548,6 +548,11 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     # its services, its theme, its cortex.toml, what is at cortex/ — and that no file stands where
     # a directory is to be made.
     _refuse_a_file_on_the_way(root, "the project root")
+    if config.project_not_a_file(str(root)) is not None:
+        # A directory, a named pipe, a socket, or a link to one: read as no cortex.toml, a new one was written over it
+        # — or, over a directory, failed half-way (#386).
+        raise InitError(f"{display(str(root / config.PROJECT_FILE))} is not a file: remove it, then run cortex init "
+                        "again, which writes it")
     tool_named = options.tool is not None
     known_before = [name for name, rel in TOOLS.items() if (root / rel).is_file()]
     tool = _tool(options, root)

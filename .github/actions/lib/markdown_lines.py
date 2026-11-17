@@ -28,7 +28,8 @@ What is read, as CommonMark has it:
 - a paragraph is interrupted by a list item, but not by an empty one nor an ordered one that does not start at 1, and
   not by a line indented as code: such a line continues it. Indented code — four spaces past its container's
   content — is no paragraph, which a less indented line would continue;
-- a line of ``=`` or ``-`` under a paragraph, in its container, makes it a heading — never a list item;
+- a line of ``=`` or ``-`` under a paragraph, in its container, makes it a heading — never a list item — whose lines
+  hold no paragraph's text: an item's own, underlined as far as its content, or up to three spaces further, is none;
 - a block quote's line, ``>``, is text: it ends the lists it is not indented into — no list item's line continues
   in it lazily — and holds no entry nor section. The line below continues it lazily only when it holds a paragraph's
   text — not a heading, a fence, an HTML block, a thematic break nor indented code, quoted. Each of its lines is read
@@ -91,6 +92,7 @@ def lines(text: str) -> List[Line]:
     read: List[Line] = []
     items: List[int] = []           # the content column of each list item open, the outermost first
     paragraph = False               # the line before is a paragraph's, which a less indented line continues
+    start = 0                       # where in ``read`` that paragraph starts — a block quote's aside, never underlined
     quoted = False                  # that paragraph is a block quote's: no list item is refused for interrupting it
     empty = False                   # the line before opens an empty list item, which a blank line ends
     # The block quote the line before is in: how many items it is in, and what is open in it — ``_quoted``'s.
@@ -119,6 +121,7 @@ def lines(text: str) -> List[Line]:
         # the paragraph, which only some list items interrupt, or underline it.
         own = paragraph and not quoted and inner == len(items)
         if own and rest is not None and UNDERLINE.fullmatch(rest):
+            _heading(read, start)
             read.append(Line(line, False, bool(items)))
             paragraph, index = False, index + 1
             continue
@@ -133,6 +136,7 @@ def lines(text: str) -> List[Line]:
         if rest is None or not opens:
             quoted = quoted and paragraph                           # a block quote's paragraph, continued lazily
             quote = held if quoted else None
+            start = start if paragraph else len(read)
             paragraph, index = paragraph or rest is not None, index + 1   # indented code is no paragraph
             read.append(Line(line, False, bool(items), paragraph=paragraph))
             continue
@@ -175,7 +179,7 @@ def lines(text: str) -> List[Line]:
                 if deeper is None:
                     break
                 at, first = at + deeper, False
-            read[-1] = read[-1]._replace(paragraph=first and text)
+            read[-1], start = read[-1]._replace(paragraph=first and text), len(read) - 1
             if block is None:
                 index, empty = index + 1, not char
                 continue
@@ -184,6 +188,7 @@ def lines(text: str) -> List[Line]:
             continue
         index = _block(raw, index, _opens(rest), base, read, closers)
         paragraph = not read[-1].code                               # a block never closed is a paragraph's line
+        start = len(read) - 1
     return read
 
 
@@ -195,6 +200,14 @@ def sections(text: str) -> List[Tuple[str, Line]]:
         if match:
             found.append((match.group("label"), line))
     return found
+
+
+def _heading(read: List[Line], start: int) -> None:
+    """The paragraph that ends ``read``, from ``read[start]`` — an item's line, the first of its text, or a block's
+    never closed — which a line of ``=`` or ``-`` below it underlines: a heading, its lines hold no paragraph's text.
+    Each line is cleared once: the paragraph ends there."""
+    for at in range(start, len(read)):
+        read[at] = read[at]._replace(paragraph=False)
 
 
 def _block(raw: List[str], index: int, block: Tuple[str, str], base: int, read: List[Line],

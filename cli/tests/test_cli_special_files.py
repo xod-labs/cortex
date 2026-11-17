@@ -10,6 +10,7 @@ import socket
 import stat
 import subprocess
 import sys
+import threading
 import unittest
 from pathlib import Path
 
@@ -18,10 +19,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cli_harness as harness  # noqa: E402
 from test_cli_team import DOWNLOADS, GIT, GIT_ENV, OWN, TeamTestCase, harness_path  # noqa: E402
 
+from cortex_cli import sync  # noqa: E402
 from cortex_cli.paths import display  # noqa: E402
+from test_cli_format3 import remove_store  # noqa: E402
 
 PIPES = unittest.skipUnless(hasattr(os, "mkfifo"), "no named pipe here")
 LINKS = unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")
+# What is no file at a file's path, as a test makes it here: a directory, a named pipe, a loop of links.
+NO_FILES = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ()) + (("loop",) if os.name != "nt" else ())
 # What is no file and no folder, as a test makes it here: a named pipe, a socket.
 SPECIALS = (("pipe",) if hasattr(os, "mkfifo") else ()) + (("socket",) if hasattr(socket, "AF_UNIX") else ())
 
@@ -36,6 +41,15 @@ class SpecialFileTestCase(TeamTestCase):
             self.fail(f"cortex {' '.join(args)} did not end: it waits on a named pipe")
         proc.out, proc.err = proc.stdout.decode(), proc.stderr.decode()
         return proc
+
+    def no_file(self, path, kind):
+        """At ``path``: a directory, a named pipe, or a link to itself — a loop of links, no file either (#386)."""
+        if kind == "directory":
+            path.mkdir()
+        elif kind == "pipe":
+            os.mkfifo(path)
+        else:
+            path.symlink_to(path)
 
     def make(self, path, kind):
         """At ``path``: a file, a named pipe, a socket or — as root — a device, as ``/dev/null`` is."""
@@ -115,6 +129,61 @@ class GitmodulesTests(SpecialFileTestCase):
                     self.assertEqual(proc.returncode, 1, proc.out + proc.err)
                     self.assertIn(GitmodulesTests.NOTE, proc.err)
                     self.assertIn(f"cortex sync: cortex/ is a git {layout}, which Cortex did not write.", proc.err)
+
+
+class GitFileTests(SpecialFileTestCase):
+    """``cortex/.git``, which names a submodule's repository, or a worktree's."""
+
+    @PIPES
+    @LINKS
+    @harness.outside_a_repository
+    def test_a_named_pipe_at_cortex_git_is_said_not_a_file_never_waited_on(self):
+        # A submodule's cortex/ — .gitmodules names it — whose .git is a named pipe, or a link to one: read with a
+        # plain read_text for the repository it names, it held the sync with no limit (#386). Said what it is, with
+        # its remedy, which, followed, leaves the submodule to remove as any other.
+        for kind in ("pipe", "link to pipe"):
+            with self.subTest(kind=kind):
+                root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', name=f"dotgit-{kind.replace(' ', '-')}")
+                (root / ".gitmodules").write_text('[submodule "cortex"]\n\tpath = cortex\n\turl = x\n',
+                                                  encoding="utf-8")
+                (root / "cortex").mkdir()
+                if kind == "pipe":
+                    os.mkfifo(root / "cortex" / ".git")
+                else:
+                    os.mkfifo(self.tmp / "aside")
+                    (root / "cortex" / ".git").symlink_to(self.tmp / "aside")
+                for args in (("sync",), ("sync", "--link"), ("sync", "--copy")):
+                    proc = self.within(root, *args)
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertIn("cortex sync: cortex/ is a git submodule, which Cortex did not write.", proc.err)
+                    self.assertIn("cortex/.git is not a file, nor a folder, and names no repository: remove it, then "
+                                  "run the command again.\n", proc.err)
+                    self.assertNotIn("git -C", proc.err)
+                    self.assertEqual(os.listdir(root / "cortex"), [".git"])
+                (root / "cortex" / ".git").unlink()
+                proc = self.within(root, "sync")
+                self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                self.assertIn("cortex sync: cortex/ is a git submodule, which Cortex did not write.", proc.err)
+                self.assertIn("submodule deinit -f cortex", proc.err)
+                self.assertNotIn("cortex/.git", proc.err)
+                if kind != "pipe":
+                    (self.tmp / "aside").unlink()
+
+    @PIPES
+    def test_the_repository_a_named_pipe_at_cortex_git_names_is_none_never_waited_on(self):
+        # What every caller of it reads: a named pipe names no repository, and is never opened to wait for a writer.
+        folder = self.tmp / "cortex"
+        folder.mkdir()
+        os.mkfifo(folder / ".git")
+        found = []
+        reader = threading.Thread(target=lambda: found.append(sync._gitdir(folder)), daemon=True)
+        reader.start()
+        reader.join(10)
+        if reader.is_alive():
+            with open(folder / ".git", "w"):        # the reader that waits on it, let go
+                pass
+            self.fail("the .git a named pipe is waited on")
+        self.assertEqual(found, [None])
 
 
 class InstructionsFileTests(SpecialFileTestCase):
@@ -244,15 +313,12 @@ class ProjectFileTests(SpecialFileTestCase):
     def test_a_cortex_toml_that_is_not_a_file_is_said_not_a_file_never_missing(self):
         # Read as no cortex.toml at all, it was said missing, and `cortex init` named — which keeps it. What it is
         # is said, with its remedy, which, followed, lets the commands run.
-        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        kinds = NO_FILES
         for kind in kinds:
             with self.subTest(kind=kind):
                 root = self.tmp / f"project-{kind}"
                 root.mkdir()
-                if kind == "directory":
-                    (root / "cortex.toml").mkdir()
-                else:
-                    os.mkfifo(root / "cortex.toml")
+                self.no_file(root / "cortex.toml", kind)
                 said = (f"{display(str(root / 'cortex.toml'))} is not a file: remove it, then `cortex init` makes the "
                         "directory a Cortex project\n")
                 for args in (("sync",), ("validate",), ("upgrade",), ("upgrade", OWN), ("upgrade", "--local", OWN),
@@ -261,10 +327,7 @@ class ProjectFileTests(SpecialFileTestCase):
                     self.assertNotEqual(proc.returncode, 0, proc.out + proc.err)
                     self.assertIn(f"cortex {args[0]}: {said}", proc.err)
                     self.assertNotIn("no cortex.toml", proc.err)
-                if kind == "directory":
-                    (root / "cortex.toml").rmdir()
-                else:
-                    (root / "cortex.toml").unlink()
+                (os.rmdir if kind == "directory" else os.unlink)(root / "cortex.toml")
                 self.assert_ok(self.within(root, "init", "--tool", "claude"))
                 for args in (("sync",), ("validate",)):
                     self.assert_ok(self.within(root, *args))
@@ -273,16 +336,13 @@ class ProjectFileTests(SpecialFileTestCase):
     def test_a_cortex_toml_that_is_not_a_file_above_the_folder_a_command_runs_in_is_said_not_a_file(self):
         # Looked for from a folder of the project, as a project is found: the nearest cortex.toml above it, not a
         # file, is named where it is — and its remedy, followed, lets the commands run from that folder.
-        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        kinds = NO_FILES
         for kind in kinds:
             with self.subTest(kind=kind):
                 root = self.tmp / f"above-{kind}"
                 below = root / "src" / "app"
                 below.mkdir(parents=True)
-                if kind == "directory":
-                    (root / "cortex.toml").mkdir()
-                else:
-                    os.mkfifo(root / "cortex.toml")
+                self.no_file(root / "cortex.toml", kind)
                 said = (f"{display(str(root / 'cortex.toml'))} is not a file: remove it, then `cortex init` makes the "
                         "directory a Cortex project\n")
                 for args in (("sync",), ("validate",), ("upgrade",), ("upgrade", "--local", OWN)):
@@ -290,13 +350,65 @@ class ProjectFileTests(SpecialFileTestCase):
                     self.assertNotEqual(proc.returncode, 0, proc.out + proc.err)
                     self.assertIn(f"cortex {args[0]}: {said}", proc.err)
                     self.assertNotIn("no cortex.toml", proc.err)
-                if kind == "directory":
-                    (root / "cortex.toml").rmdir()
-                else:
-                    (root / "cortex.toml").unlink()
+                (os.rmdir if kind == "directory" else os.unlink)(root / "cortex.toml")
                 self.assert_ok(self.within(root, "init", "--tool", "claude"))
                 for args in (("sync",), ("validate",)):
                     self.assert_ok(self.within(below, *args))
+
+    @harness.outside_a_repository
+    def test_config_and_project_add_say_a_cortex_toml_that_is_not_a_file_not_a_file(self):
+        # Read as no cortex.toml, `cortex config` printed the machine's keys as outside a project, and `cortex project
+        # add` said no cortex.toml (#386). What it is is said, with its remedy, which, followed, lets them run.
+        kinds = NO_FILES
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.tmp / f"config-{kind}"
+                below = root / "src"
+                below.mkdir(parents=True)
+                self.no_file(root / "cortex.toml", kind)
+                said = (f"{display(str(root / 'cortex.toml'))} is not a file: remove it, then `cortex init` makes the "
+                        "directory a Cortex project\n")
+                for cwd, args in ((root, ("config",)), (below, ("config",)), (below, ("config", "version")),
+                                  (below, ("config", "--json")), (root, ("project", "add")),
+                                  (below, ("project", "add")), (self.tmp, ("project", "add", str(root)))):
+                    proc = self.within(cwd, *args, CORTEX_NO_REGISTER="")
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertEqual(f"cortex {' '.join(args[:2] if args[0] == 'project' else args[:1])}: {said}",
+                                     proc.err)
+                    self.assertEqual("", proc.out)
+                self.assertFalse((self.home / "projects.toml").exists())
+                (os.rmdir if kind == "directory" else os.unlink)(root / "cortex.toml")
+                self.assert_ok(self.within(root, "init", "--tool", "claude"))
+                proc = self.within(below, "config", "version")
+                self.assert_ok(proc)
+                self.assertEqual(f"{OWN}\n", proc.out)
+                self.assert_ok(self.within(below, "project", "add", CORTEX_NO_REGISTER=""))
+                self.assertIn(harness_path(root), (self.home / "projects.toml").read_text(encoding="utf-8"))
+                (self.home / "projects.toml").unlink()
+
+    @harness.outside_a_repository
+    def test_init_refuses_a_cortex_toml_that_is_not_a_file_before_it_writes_anything(self):
+        # A directory there failed init half-way, with a raw `Is a directory`, and a named pipe was written over
+        # (#386). Said first, with its remedy, which, followed, lets init write it.
+        kinds = NO_FILES
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.tmp / f"init-{kind}"
+                root.mkdir()
+                self.no_file(root / "cortex.toml", kind)
+                stored = sorted(os.listdir(self.home))
+                for args in (("init", "--tool", "claude"), ("init", "--tool", "claude", "--force"), ("init",)):
+                    proc = self.within(root, *args)
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertEqual(f"cortex init: {display(str(root / 'cortex.toml'))} is not a file: remove it, "
+                                     "then run cortex init again, which writes it\n", proc.err)
+                    self.assertNotIn(".tmp", proc.err)
+                    self.assertEqual(sorted(path.name for path in root.iterdir()), ["cortex.toml"])
+                    self.assertEqual(sorted(os.listdir(self.home)), stored)
+                (os.rmdir if kind == "directory" else os.unlink)(root / "cortex.toml")
+                self.assert_ok(self.within(root, "init", "--tool", "claude"))
+                self.assertTrue((root / "cortex.toml").is_file())
+                self.assert_ok(self.within(root, "validate"))
 
 
 class LockTests(SpecialFileTestCase):
@@ -306,7 +418,7 @@ class LockTests(SpecialFileTestCase):
     def test_a_lock_that_is_not_a_file_is_said_not_a_file_never_missing(self):
         # Read as no lock, it was said missing — LOCK_MISSING, `--locked: no cortex.lock` — and a sync wrote over a
         # named pipe. What it is is said, with its remedy, which, followed, lets the sync write it again.
-        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        kinds = NO_FILES
         for kind in kinds:
             for lock in ("cortex.lock", "agents/cortex.team.lock"):
                 with self.subTest(kind=kind, lock=lock):
@@ -316,10 +428,7 @@ class LockTests(SpecialFileTestCase):
                                         team=pin if team else None, name=f"lock-{kind}-{team}")
                     self.assert_ok(self.within(root, "sync"))
                     (root / lock).unlink()
-                    if kind == "directory":
-                        (root / lock).mkdir()
-                    else:
-                        os.mkfifo(root / lock)
+                    self.no_file(root / lock, kind)
                     said = f"{lock} is not a file — delete it, and `cortex sync` writes it again"
                     proc = self.within(root, "validate")
                     self.assert_ok(proc)
@@ -329,10 +438,7 @@ class LockTests(SpecialFileTestCase):
                         proc = self.within(root, *args)
                         self.assertEqual(proc.returncode, 1, proc.out + proc.err)
                         self.assertIn(f"cortex sync: {said}\n", proc.err)
-                    if kind == "directory":
-                        (root / lock).rmdir()
-                    else:
-                        (root / lock).unlink()
+                    (os.rmdir if kind == "directory" else os.unlink)(root / lock)
                     self.assert_ok(self.within(root, "sync"))
                     self.assertTrue((root / lock).is_file())
                     self.assertNotIn("LOCK_", self.within(root, "validate").out)
@@ -402,17 +508,49 @@ class LocalFileTests(SpecialFileTestCase):
                 self.assert_ok(self.within(root, "upgrade", "--local", OWN))
                 self.assertIn(f'version = "{OWN}"', (root / "cortex.local.toml").read_text(encoding="utf-8"))
 
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_a_cortex_local_toml_that_is_not_a_file_is_said_before_upgrade_writes_the_pin(self):
+        # The pin written, then the sync refused the file — and the pin put back, a file written twice, while the
+        # command said nothing of the project was changed (#386). Said first, the pin never written: its remedy,
+        # followed, lets the upgrade move the project.
+        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.project('version = "9.9.8"\ntheme = "h2g2"\n', name=f"pin-{kind}")
+                self.assert_ok(self.within(root, "sync"))
+                (root / "cortex.local.toml").unlink()
+                if kind == "directory":
+                    (root / "cortex.local.toml").mkdir()
+                else:
+                    os.mkfifo(root / "cortex.local.toml")
+                before = {path: (path.read_bytes(), os.stat(path).st_ino, os.stat(path).st_mtime_ns)
+                          for path in root.rglob("*") if path.is_file()}
+                for args in ((OWN,), (OWN, "--dry-run"), ()):
+                    proc = self.within(root, "upgrade", *args)
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertIn("cortex upgrade: cortex.local.toml is not a file — remove it, and `cortex sync` "
+                                  "writes it again. Nothing was changed\n", proc.err)
+                    self.assertEqual({path: (path.read_bytes(), os.stat(path).st_ino, os.stat(path).st_mtime_ns)
+                                      for path in root.rglob("*") if path.is_file()}, before)
+                if kind == "directory":
+                    (root / "cortex.local.toml").rmdir()
+                else:
+                    (root / "cortex.local.toml").unlink()
+                self.assert_ok(self.within(root, "sync"))
+                self.assert_ok(self.within(root, "upgrade", OWN))
+                self.assertIn(f'version = "{OWN}"', (root / "cortex.toml").read_text(encoding="utf-8"))
+
     def make_a_broken_link(self, root, kind):
-        """At ``root``'s ``cortex.local.toml``: a link that leads nowhere, or a link to itself."""
-        local = root / "cortex.local.toml"
-        local.symlink_to(root / "nowhere.toml" if kind == "nowhere" else local)
+        """At ``root``'s ``cortex.local.toml``: a link that leads nowhere — a loop of links is refused (#386)."""
+        (root / "cortex.local.toml").symlink_to(root / f"{kind}.toml")
 
     @LINKS
     @harness.outside_a_repository
-    def test_a_cortex_local_toml_link_that_leads_nowhere_or_to_itself_is_replaced_by_the_sync(self):
+    def test_a_cortex_local_toml_link_that_leads_nowhere_is_replaced_by_the_sync(self):
         # No file there, read as none: the sync writes the file in its place, never refused as not a file, and never
         # through the link.
-        for kind in ("nowhere", "loop"):
+        for kind in ("nowhere",):
             with self.subTest(kind=kind):
                 root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', name=f"broken-{kind}")
                 self.make_a_broken_link(root, kind)
@@ -426,9 +564,9 @@ class LocalFileTests(SpecialFileTestCase):
     @LINKS
     @DOWNLOADS
     @harness.outside_a_repository
-    def test_a_cortex_local_toml_link_that_leads_nowhere_or_to_itself_is_replaced_by_upgrade_local(self):
+    def test_a_cortex_local_toml_link_that_leads_nowhere_is_replaced_by_upgrade_local(self):
         # As the sync does: the try is written in its place, never refused as not a file.
-        for kind in ("nowhere", "loop"):
+        for kind in ("nowhere",):
             with self.subTest(kind=kind):
                 root = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n', name=f"broken-try-{kind}")
                 self.assert_ok(self.within(root, "sync"))
@@ -440,6 +578,38 @@ class LocalFileTests(SpecialFileTestCase):
                 self.assertFalse((root / "cortex.local.toml").is_symlink())
                 self.assertIn(f'version = "{OWN}"', (root / "cortex.local.toml").read_text(encoding="utf-8"))
                 self.assertFalse((root / "nowhere.toml").exists())
+
+    @LINKS
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_a_loop_of_links_at_cortex_local_toml_is_refused_as_not_a_file(self):
+        # Read as none, the sync replaced it in silence, where it refuses a directory or a named pipe there (#386). A
+        # link to itself, or two that lead to each other: said not a file by sync, upgrade --local and validate,
+        # nothing written — and the remedy, followed, lets the sync write it.
+        for kind in ("itself", "each other"):
+            with self.subTest(kind=kind):
+                root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', name=f"loop-{kind.replace(' ', '-')}")
+                local = root / "cortex.local.toml"
+                if kind == "itself":
+                    local.symlink_to(local)
+                else:
+                    local.symlink_to(root / "other.toml")
+                    (root / "other.toml").symlink_to(local)
+                before = sorted(path.name for path in root.iterdir())
+                said = "cortex.local.toml is not a file — remove it, and `cortex sync` writes it again"
+                for args, exit_code, end in ((("sync",), 1, ". Nothing of the project was changed\n"),
+                                             (("upgrade", "--local", OWN), 1, ". Nothing was changed\n"),
+                                             (("validate",), 2, "\n")):
+                    proc = self.within(root, *args)
+                    self.assertEqual(proc.returncode, exit_code, proc.out + proc.err)
+                    self.assertIn(f"cortex {args[0]}: {said}{end}", proc.err)
+                    self.assertEqual(sorted(path.name for path in root.iterdir()), before)
+                    self.assertTrue(local.is_symlink())
+                local.unlink()
+                self.assert_ok(self.within(root, "sync"))
+                self.assertFalse(local.is_symlink())
+                self.assertTrue(local.is_file())
+                self.assert_ok(self.within(root, "validate"))
 
     @harness.outside_a_repository
     def test_validate_names_the_remedy_of_the_sync_for_a_cortex_local_toml_that_is_not_a_file(self):
@@ -465,6 +635,70 @@ class LocalFileTests(SpecialFileTestCase):
                     (root / "cortex.local.toml").unlink()
                 self.assert_ok(self.within(root, "sync"))
                 self.assert_ok(self.within(root, "validate"))
+
+
+class MarkerTests(SpecialFileTestCase):
+    """``cortex/.synced``, the marker of the copy ``cortex sync --copy`` makes."""
+
+    @PIPES
+    @harness.outside_a_repository
+    def test_a_named_pipe_at_the_copy_s_marker_is_said_not_a_file_never_waited_on(self):
+        # Read with no limit, it held validate, and the commands that ask the copy its version (#386). Said by the
+        # sync, never read, and its remedy, followed, lets the sync copy the spec again.
+        root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', name="marker")
+        self.assert_ok(self.within(root, "sync", "--copy"))
+        os.chmod(root / "cortex", 0o700)
+        (root / "cortex" / ".synced").unlink()
+        os.mkfifo(root / "cortex" / ".synced")
+        said = ("cortex/.synced is not a file, which Cortex cannot read: Cortex did not write this directory. Move or "
+                "remove cortex/, then run the command again.\n")
+        for args in (("sync",), ("sync", "--copy"), ("upgrade",), ("upgrade", OWN)):
+            proc = self.within(root, *args)
+            self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+            self.assertIn(f"cortex {args[0]}: {said}", proc.err)
+        for args in (("validate",), ("config",)):
+            self.assert_ok(self.within(root, *args))
+        self.assertTrue(stat.S_ISFIFO(os.lstat(root / "cortex" / ".synced").st_mode))
+        remove_store(root / "cortex")
+        self.assert_ok(self.within(root, "sync", "--copy"))
+        self.assertTrue((root / "cortex" / ".synced").is_file())
+        self.assert_ok(self.within(root, "validate"))
+
+
+class RegistryFileTests(SpecialFileTestCase):
+    """The machine's ``projects.toml``, which lists its projects."""
+
+    @harness.outside_a_repository
+    def test_a_projects_toml_that_is_not_a_file_is_said_not_a_file_never_waited_on(self):
+        # A named pipe there, read with no limit, held every command that reads it (#386). Said what it is, nothing
+        # written over it, and its remedy, followed, lets `cortex project add` write it again.
+        kinds = ("directory",) + (("pipe",) if hasattr(os, "mkfifo") else ())
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                root = self.project(f'version = "{OWN}"\ntheme = "h2g2"\n', name=f"registry-{kind}")
+                registry = self.home / "projects.toml"
+                if kind == "directory":
+                    registry.mkdir()
+                else:
+                    os.mkfifo(registry)
+                said = f"{display(str(registry))} is not a file — remove it, and `cortex project add` writes it again"
+                for args in (("project", "list"), ("project", "add"), ("project", "remove", root.name)):
+                    proc = self.within(root, *args, CORTEX_NO_REGISTER="")
+                    self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+                    self.assertEqual(f"cortex {args[0]} {args[1]}: {said}\n", proc.err)
+                proc = self.within(root, "sync", CORTEX_NO_REGISTER="")
+                self.assert_ok(proc)
+                self.assertIn(f"is not registered — {said}\n", proc.err)
+                self.assertEqual(stat.S_ISDIR(os.lstat(registry).st_mode), kind == "directory")
+                if kind == "directory":
+                    registry.rmdir()
+                else:
+                    registry.unlink()
+                self.assert_ok(self.within(root, "project", "add", CORTEX_NO_REGISTER=""))
+                proc = self.within(root, "project", "list")
+                self.assert_ok(proc)
+                self.assertIn(root.name, proc.out)
+                registry.unlink()
 
 
 class RenamedTeamFolderTests(SpecialFileTestCase):

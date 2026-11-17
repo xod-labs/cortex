@@ -15,7 +15,8 @@ run's number. ``X.Y.Z`` is the version the branch prepares, which ``CHANGELOG.md
   file: a heading or an entry may be indented up to three spaces, a space or a tab after its ``###``,
   an empty ``###`` naming no kind;
   an entry is an item of the section's own list, started with ``-``, ``*`` or ``+``, its text on
-  its line or below it, a paragraph's — indented code is none — and an item in an entry is its
+  its line or below it, a paragraph's — indented code is none, nor a heading's, underlined with
+  ``=`` or ``-`` as far as its content — and an item in an entry is its
   text; a fenced code block, an HTML block — a comment, ``<pre>``, ``<div>`` — or a block quote
   holds no section, heading nor entry — one opened in a list item ends with it; a line ends at a
   line feed or a carriage return alone; ``[Unreleased]`` is read in any case;
