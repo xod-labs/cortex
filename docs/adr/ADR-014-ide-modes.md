@@ -167,4 +167,18 @@ Execution order **1 → 2 → 3**, in one release, 1.9.0, stacked on #408 (the m
 
 ## 9. Amendments
 
-None yet.
+### While the phases were implemented
+
+- **2026-11-18, phase 1** (§3.1 to §3.4, §3.6, §3.7). What the text left to the code, chosen by the contributor who implemented the phase:
+  - **The marker** carries the digest after the format, then the values: `<!-- cortex:bootstrap layout=single format=4 digest=… version=1.9.0 theme=h2g2 -->`. The digest covers the values, as it covers the rest of the block: a value changed by hand is a team's change. A marker of format 4 names no folder and no character; a block whose folder or character differs from the resolution is told behind by its text, against the team's version's template.
+  - **The template holds every word.** Its values are placeholders — `{{version}}`, `{{theme}}`, `{{folder}}`, `{{character}}`, `{{card}}` — and the lines that name the Prompt Manager sit between `<!-- cortex:character -->` and `<!-- cortex:character end -->`, which the rendering removes. A binary renders a later version's template with no text of its own. A template of format 3 has no placeholder: it is written byte for byte, whatever the binary.
+  - **No character is named** where the theme's `characters.md` holds no row for `prompt-manager` with a 📄 link to a card of the theme that is there: those lines are left out, and the step finds the character in `characters.md`, as format 3 had it. A guessed name is worse than none.
+  - **The card** is the team's folder's when it holds one — an overlay, or a theme of the team's own — else the spec's: `agents/personalities/h2g2/Oolon-Colluphid.md`, or `cortex/agents/personalities/h2g2/Oolon-Colluphid.md`. Paths are from the project root, the workspace root in a workspace.
+  - **The developer's theme is rule 3 of §3.2, in the personality step**, not in *Where the spec is*: it replaces a theme only where the team has one. A team on `none` has no personality step, as in format 3. *Where the spec is* keeps three rules.
+  - **A key refused** runs `cortex self-update`, then `cortex sync`, once each, then tells the user: the block orders no version, and a binary that refuses a key of a project of 1.9.0 is older than it.
+  - **The developer's own bootstrap** — git ignores it, or the root is in no repository — is rendered from the full resolution, a try's version and the developer's theme, as ADR-013 §3.10 writes it from that version. Decision 31 is of the committed block; this one is not committed.
+  - **Behind** is told from the marker first: a block of format 4 whose marker names another version or theme than the team's resolution is behind, with no spec read — `cortex validate` tells it without the store. Otherwise the block is compared with what the team's version's template renders.
+  - **Said once** is one note per file and per run of `cortex sync` and `cortex validate`, only where a changed block's marker names other values than the resolution's. It is a note, not a warning: a changed block is never behind (ADR-013 §3.10), and `--strict` does not fail on it. `cortex upgrade` says a changed block kept when its values are not the target's, at the same version too. `cortex init` says it of a kept file whose marker's values are not the resolution's, naming `cortex upgrade` with the team's version.
+  - **Which format a version writes** is its spec's templates' own: no binary compares a version with 1.9.0 to choose it. A project kept on 1.8.x reads format 3 from its spec, and a binary of 1.9.0 writes it byte for byte.
+  - **The README's table** of what the assistant does is rewritten for format 4 in phase 1, not phase 3: §3.7 checks it against the template's table.
+  - **The runtime** reads no bootstrap marker: §3.4's last sentence asks nothing of it.
