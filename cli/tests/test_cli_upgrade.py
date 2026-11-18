@@ -40,6 +40,11 @@ PERSONAL = (b"# Cortex AI Team\n\n<!-- PERSONALITY:BEGIN -->\nBe a character.\n<
             b"Written by 9.9.8: read cortex.local.toml first.\n")
 OLD_WORKSPACE = b"# Cortex AI Team \xe2\x80\x94 Workspace Mode\n\nWritten by 9.9.8: read cortex.local.toml first.\n"
 TEMPLATE = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes()
+# 1.8.x's template, of format 3: what a project kept there reads, byte for byte (ADR-014 §3.4).
+FORMAT_3 = (harness.FORMAT_3 / "bootstrap-instructions.md").read_bytes()
+# What this cortex's template, of format 4, writes for a project on its version, the theme h2g2 (ADR-014 §3.1).
+OWN_TEXT = harness.text(TEMPLATE, OWN)
+FORMAT_3_TEXT = init.instructions(FORMAT_3, True)
 END = b"<!-- cortex:bootstrap end -->"
 OVERLAY = ("<!-- OVERLAY\n     Base: cortex/agents/roles/engineering/architect.md\n     Scope: workspace\n"
            "     Semantic: additive\n-->\n\n# Architect — our rules\n")
@@ -216,13 +221,13 @@ class UpgradeTests(UpgradeTestCase):
         project = self.project(OWN)
         team = self.tmp / "team"
         (team / ".git").mkdir(parents=True)
-        older = TEMPLATE.replace(b"\n\n", b"\n\nAn older wording.\n\n", 1)
+        older = FORMAT_3.replace(b"\n\n", b"\n\nAn older wording.\n\n", 1)
         self.assertNotEqual(older, TEMPLATE)
         (team / "CLAUDE.md").write_bytes(init.stamped(init.instructions(older, True)))
         (project / "CLAUDE.md").symlink_to(team / "CLAUDE.md")
         proc = self.upgrade(project)
         self.assert_ok(proc)
-        self.assertEqual((team / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)))
+        self.assertEqual((team / "CLAUDE.md").read_bytes(), init.stamped(OWN_TEXT))
         where = os.path.realpath(team / "CLAUDE.md").replace(os.sep, "/")
         self.assertTrue(proc.out.endswith(f"\n{where} — outside its git work tree: commit it where it is.\n"), proc.out)
         self.assertNotIn("committed nowhere", proc.out)
@@ -234,7 +239,7 @@ class UpgradeTests(UpgradeTestCase):
         proc = self.upgrade(project)
         self.assert_ok(proc)
         self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s template — no one changed it", proc.out)
-        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(OWN_TEXT))
         self.assertIn("Written: cortex.toml, cortex.lock and CLAUDE.md — in no git work tree", proc.out)
 
     def test_a_bootstrap_checked_out_with_crlf_is_still_nobodys_change(self):
@@ -243,7 +248,7 @@ class UpgradeTests(UpgradeTestCase):
         (project / "CLAUDE.md").write_bytes(init.instructions(OLD_BOOTSTRAP, True).replace(b"\n", b"\r\n"))
         self.assert_ok(self.upgrade(project))
         self.assertEqual((project / "CLAUDE.md").read_bytes(),
-                         init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n"))
+                         init.stamped(OWN_TEXT).replace(b"\n", b"\r\n"))
 
     def test_a_dry_run_says_the_bootstrap_too_when_the_overlays_stop_it(self):
         project = self.project("9.9.8")
@@ -327,6 +332,12 @@ class DigestTests(UpgradeTestCase):
         self.release.replace_spec(version, {f"templates/{name}": template})
         return init.stamped(init.instructions(template, True))
 
+    def alike(self):
+        """9.9.8 and 9.9.7 writing the same text — 1.8.x's format 3, which no value of the project's changes — and the
+        file 9.9.8 writes: a target that writes alike is 9.9.7 (ADR-014 §3.4)."""
+        self.marked(version="9.9.7", template=FORMAT_3)
+        return self.marked(template=FORMAT_3)
+
     @harness.outside_a_repository
     def test_an_untouched_bootstrap_of_the_same_format_is_written_again(self):
         written = self.marked()
@@ -334,14 +345,14 @@ class DigestTests(UpgradeTestCase):
         (project / "CLAUDE.md").write_bytes(written)
         proc = self.upgrade(project)
         self.assert_ok(proc)
-        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(OWN_TEXT))
         self.assertIn("Written: cortex.toml, cortex.lock and CLAUDE.md — in no git work tree", proc.out)
 
     def test_an_untouched_bootstrap_the_target_writes_alike_is_left_as_it_is(self):
-        written = self.marked(template=TEMPLATE)
+        written = self.alike()
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(written)
-        proc = self.upgrade(project)
+        proc = self.upgrade(project, "9.9.7")
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), written)
         self.assertNotIn("CLAUDE.md", proc.out + proc.err)
@@ -356,15 +367,15 @@ class DigestTests(UpgradeTestCase):
     def test_a_cursor_rule_is_written_again_with_the_frontmatter_that_applies_it(self):
         # Written before 1.6.0 with no frontmatter: read, by inference from Cursor's documentation, only where a
         # chat mentions it (#306; #137 is to see it in a real conversation).
-        written = self.marked(template=TEMPLATE)        # the target writes the same text: the frontmatter alone is new
+        written = self.alike()        # the target writes the same text: the frontmatter alone is new
         project = self.project("9.9.8")
         rule = self.cursor_rule(project, written)
-        proc = self.upgrade(project)
+        proc = self.upgrade(project, "9.9.7")
         self.assert_ok(proc)
-        wanted = init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True))
+        wanted = init.stamped(init.CURSOR_RULE + FORMAT_3_TEXT)
         self.assertEqual(rule.read_bytes(), wanted)
         self.assertIn("Written: cortex.toml, cortex.lock and .cursor/rules/cortex.mdc — in no git work tree", proc.out)
-        proc = self.upgrade(project)
+        proc = self.upgrade(project, "9.9.7")
         self.assert_ok(proc)
         self.assertEqual(rule.read_bytes(), wanted)
         self.assertNotIn("cortex.mdc", proc.out + proc.err)
@@ -378,15 +389,15 @@ class DigestTests(UpgradeTestCase):
                 project = self.project("9.9.8")
                 rule = self.cursor_rule(project, kept)
                 self.assert_ok(self.upgrade(project))
-                self.assertEqual(rule.read_bytes(), init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True)))
+                self.assertEqual(rule.read_bytes(), init.stamped(init.CURSOR_RULE + OWN_TEXT))
                 shutil.rmtree(project)
 
     @harness.outside_a_repository
     def test_a_cursor_rule_a_team_changed_is_kept_and_said_to_apply_only_where_mentioned(self):
-        ours = self.marked(template=TEMPLATE).replace(END, b"## Our own rules\n\n" + END)   # above it: Cortex's block
+        ours = self.alike().replace(END, b"## Our own rules\n\n" + END)   # above it: Cortex's block
         project = self.project("9.9.8")
         rule = self.cursor_rule(project, ours)
-        proc = self.upgrade(project)
+        proc = self.upgrade(project, "9.9.7")
         self.assert_ok(proc)
         self.assertEqual(rule.read_bytes(), ours)
         self.assertIn(".cursor/rules/cortex.mdc is not what Cortex wrote — you changed it — and it has no `alwaysApply: "
@@ -409,11 +420,11 @@ class DigestTests(UpgradeTestCase):
                       "Cortex keeps them\n", proc.err)
 
     def test_a_cursor_rule_a_team_changed_that_applies_always_is_kept_unsaid(self):
-        ours = init.stamped(init.CURSOR_RULE + init.instructions(TEMPLATE, True)).replace(END, b"## Our own rules\n\n" + END)
-        self.marked(template=TEMPLATE)                          # the target writes the same text
+        ours = init.stamped(init.CURSOR_RULE + FORMAT_3_TEXT).replace(END, b"## Our own rules\n\n" + END)
+        self.alike()                          # the target writes the same text
         project = self.project("9.9.8")
         rule = self.cursor_rule(project, ours)
-        proc = self.upgrade(project)
+        proc = self.upgrade(project, "9.9.7")
         self.assert_ok(proc)
         self.assertEqual(rule.read_bytes(), ours)
         self.assertNotIn("cortex.mdc", proc.out + proc.err)
@@ -421,7 +432,7 @@ class DigestTests(UpgradeTestCase):
     def test_a_downgrade_writes_an_untouched_bootstrap_again(self):
         self.marked()
         project = self.project(OWN)
-        (project / "CLAUDE.md").write_bytes(init.stamped(init.instructions(TEMPLATE, True)))
+        (project / "CLAUDE.md").write_bytes(init.stamped(OWN_TEXT))
         proc = self.upgrade(project, "9.9.8")
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(MARKED, True)))
@@ -430,7 +441,7 @@ class DigestTests(UpgradeTestCase):
         # A template of format 1 has no end marker: written, the team's part would end up inside Cortex's block.
         self.marked()
         project = self.project(OWN)
-        kept = init.stamped(init.instructions(TEMPLATE, True)) + b"## Our own rules\n"
+        kept = init.stamped(OWN_TEXT) + b"## Our own rules\n"
         (project / "CLAUDE.md").write_bytes(kept)
         proc = self.upgrade(project, "9.9.8")
         self.assert_ok(proc)
@@ -442,7 +453,7 @@ class DigestTests(UpgradeTestCase):
         # Spaces are text: written after a block of format 1, they would make a team's change of it.
         self.marked()
         project = self.project(OWN)
-        kept = init.stamped(init.instructions(TEMPLATE, True)) + b"   \n"
+        kept = init.stamped(OWN_TEXT) + b"   \n"
         (project / "CLAUDE.md").write_bytes(kept)
         self.assert_ok(self.upgrade(project, "9.9.8"))
         self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
@@ -452,14 +463,14 @@ class DigestTests(UpgradeTestCase):
         project = self.project(OWN)
         for blank in (b"\n\n", b"\r\n\r\n", b"\r\r\n"):
             with self.subTest(blank=blank):
-                (project / "CLAUDE.md").write_bytes(init.stamped(init.instructions(TEMPLATE, True)) + blank)
+                (project / "CLAUDE.md").write_bytes(init.stamped(OWN_TEXT) + blank)
                 self.assert_ok(self.upgrade(project, "9.9.8"))
                 self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(MARKED, True)) + blank)
                 self.assert_ok(self.upgrade(project, OWN))                  # back up, for the next case
 
     def test_line_endings_the_digest_reads_as_one_write_a_file_with_no_team_s_part(self):
         # Nothing to lose: CR CR LF in a file of format 1 nobody changed, or of format 2 with no team's part.
-        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        older = FORMAT_3.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
         for template in (MARKED, older):
             with self.subTest(template=template[:40]):
                 kept = self.marked(template=template).replace(b"\n", b"\r\r\n")
@@ -469,22 +480,22 @@ class DigestTests(UpgradeTestCase):
                 proc = self.upgrade(project)
                 self.assert_ok(proc)
                 self.assertEqual((project / "CLAUDE.md").read_bytes(),
-                                 init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n"))
+                                 init.stamped(OWN_TEXT).replace(b"\n", b"\r\n"))
                 self.assertNotIn("line endings", proc.err)
 
     def test_without_a_digest_a_block_of_the_pinned_version_is_read_whatever_the_team_s_part(self):
-        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        older = FORMAT_3.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
         self.marked(template=older)
         team = b"## Our own rules\n"
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(init.instructions(older, True) + team)     # its marker, with no digest
         self.assert_ok(self.upgrade(project))
-        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)) + team)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(OWN_TEXT) + team)
 
     def test_any_run_of_crs_before_a_line_feed_is_one_line_break_to_the_digest_and_the_split(self):
         # CR CR LF, as a Windows script that writes text over CRLF leaves it, or more CRs: read as one line break
         # by the digest and by the split alike, so the block is written again and the team's part stays.
-        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        older = FORMAT_3.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
         for crs in (b"\r\r", b"\r\r\r", b"\r\r\r\r"):
             with self.subTest(crs=crs):
                 shutil.rmtree(self.tmp / "app", ignore_errors=True)       # each case its own project
@@ -495,27 +506,27 @@ class DigestTests(UpgradeTestCase):
                 proc = self.upgrade(project)
                 self.assert_ok(proc)
                 self.assertEqual((project / "CLAUDE.md").read_bytes(),
-                                 init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n") + team)
+                                 init.stamped(OWN_TEXT).replace(b"\n", b"\r\n") + team)
 
     def test_crs_the_target_writes_alike_leave_the_file(self):
-        written = self.marked(template=TEMPLATE)
+        written = self.alike()
         project = self.project("9.9.8")
         kept = written.replace(b"\n", b"\r\r\n") + b"## Our own rules\r\r\n"
         (project / "CLAUDE.md").write_bytes(kept)
-        proc = self.upgrade(project)
+        proc = self.upgrade(project, "9.9.7")
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
         self.assertNotIn("CLAUDE.md", proc.out + proc.err)
 
     def test_crs_without_a_digest_read_the_pinned_version_s_block(self):
-        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        older = FORMAT_3.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
         self.marked(template=older)
         team = b"## Our own rules\r\r\n"
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(init.instructions(older, True).replace(b"\n", b"\r\r\n") + team)
         self.assert_ok(self.upgrade(project))
         self.assertEqual((project / "CLAUDE.md").read_bytes(),
-                         init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n") + team)
+                         init.stamped(OWN_TEXT).replace(b"\n", b"\r\n") + team)
 
     def test_crs_on_the_marker_line_hide_no_layout(self):
         # The marker of a workspace read with its line break, however many CRs: written again in its own layout.
@@ -526,7 +537,7 @@ class DigestTests(UpgradeTestCase):
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(written.replace(marker + b"\n", marker + b"\r\r\r\n"))
         self.assert_ok(self.upgrade(project))
-        self.assertEqual(init.markers((project / "CLAUDE.md").read_bytes()), [("workspace", 3)])
+        self.assertEqual(init.markers((project / "CLAUDE.md").read_bytes()), [("workspace", 4)])
 
     @harness.outside_a_repository
     def test_one_a_team_changed_is_kept_and_said_when_the_target_writes_another(self):
@@ -541,10 +552,10 @@ class DigestTests(UpgradeTestCase):
                       proc.err)
 
     def test_one_a_team_changed_is_not_said_when_the_target_writes_the_same(self):
-        changed = self.marked(template=TEMPLATE).replace(END, b"## Our own rules\n\n" + END)   # above it: Cortex's block
+        changed = self.alike().replace(END, b"## Our own rules\n\n" + END)   # above it: Cortex's block
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(changed)
-        proc = self.upgrade(project)
+        proc = self.upgrade(project, "9.9.7")
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), changed)
         self.assertNotIn("CLAUDE.md", proc.err)
@@ -555,12 +566,12 @@ class DigestTests(UpgradeTestCase):
         (project / "CLAUDE.md").write_bytes(b"\xef\xbb\xbf" + written.replace(b"\n", b"\r\n"))
         self.assert_ok(self.upgrade(project))
         self.assertEqual((project / "CLAUDE.md").read_bytes(),
-                         b"\xef\xbb\xbf" + init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n"))
+                         b"\xef\xbb\xbf" + init.stamped(OWN_TEXT).replace(b"\n", b"\r\n"))
 
     @harness.outside_a_repository
     def test_the_team_s_part_follows_the_target_s_block_byte_for_byte(self):
         # ADR-012 §3.4: Cortex's block as Cortex wrote it is written again; what is below the end marker stays.
-        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        older = FORMAT_3.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
         written = self.marked(template=older)
         team = b"## Our own rules\r\n\r\nRun the linter first.\r\n<!-- cortex:bootstrap end -->\r\nStill ours."
         project = self.project("9.9.8")
@@ -568,28 +579,28 @@ class DigestTests(UpgradeTestCase):
         proc = self.upgrade(project)
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(),
-                         init.BOM + init.stamped(init.instructions(TEMPLATE, True)).replace(b"\n", b"\r\n") + team)
+                         init.BOM + init.stamped(OWN_TEXT).replace(b"\n", b"\r\n") + team)
         self.assertIn("Written: cortex.toml, cortex.lock and CLAUDE.md — in no git work tree", proc.out)
 
     def test_a_team_s_part_under_a_block_the_target_writes_alike_is_left_as_it_is(self):
-        written = self.marked(template=TEMPLATE) + b"## Our own rules\n"
+        written = self.alike() + b"## Our own rules\n"
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(written)
-        proc = self.upgrade(project)
+        proc = self.upgrade(project, "9.9.7")
         self.assert_ok(proc)
         self.assertEqual((project / "CLAUDE.md").read_bytes(), written)
         self.assertNotIn("CLAUDE.md", proc.out + proc.err)
 
     def test_the_block_keeps_its_own_line_endings_whatever_the_team_s_part_has(self):
-        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        older = FORMAT_3.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
         team = b"## Our own rules\r\nWritten on Windows.\r\n"
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(self.marked(template=older) + team)
         self.assert_ok(self.upgrade(project))
-        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)) + team)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(OWN_TEXT) + team)
 
     def test_a_dry_run_says_the_team_s_part_stays_and_writes_nothing(self):
-        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        older = FORMAT_3.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
         kept = self.marked(template=older) + b"## Our own rules\n"
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(kept)
@@ -600,7 +611,7 @@ class DigestTests(UpgradeTestCase):
         self.assertEqual((project / "CLAUDE.md").read_bytes(), kept)
 
     def test_a_file_written_again_with_a_team_s_part_says_its_part_stays(self):
-        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        older = FORMAT_3.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(self.marked(template=older) + b"## Our own rules\n")
         proc = self.upgrade(project)
@@ -610,7 +621,7 @@ class DigestTests(UpgradeTestCase):
 
     def test_already_on_it_a_block_is_written_again_and_the_team_s_part_stays(self):
         # On the pinned version (an upgrade cut short, a pin moved by hand): the same split, the same words.
-        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        older = FORMAT_3.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
         team = b"## Our own rules\n"
         kept = self.marked(template=older) + team
         project = self.project(OWN)
@@ -623,11 +634,11 @@ class DigestTests(UpgradeTestCase):
         proc = self.upgrade(project)
         self.assert_ok(proc)
         self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s {words}", proc.out)
-        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)) + team)
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(OWN_TEXT) + team)
 
     @harness.outside_a_repository
     def test_a_block_a_team_changed_is_kept_and_said_where_its_rules_go(self):
-        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        older = FORMAT_3.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
         changed = self.marked(template=older).replace(END, b"## Our own rules\n\n" + END)
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(changed)
@@ -643,7 +654,7 @@ class DigestTests(UpgradeTestCase):
     def test_the_note_names_the_tool_where_several_instructions_files_are(self):
         # `cortex init --force` without --tool is refused where several instructions files are: the note names the
         # tool, and the command it names writes that file again, the team's kept as .bak.
-        older = TEMPLATE.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
+        older = FORMAT_3.replace(b"## Where the spec is", b"## Where the spec is, in 9.9.8", 1)
         changed = self.marked(template=older).replace(END, b"## Our own rules\n\n" + END)
         project = self.project("9.9.8")
         (project / "CLAUDE.md").write_bytes(changed)
@@ -678,7 +689,7 @@ class DigestTests(UpgradeTestCase):
         older = MARKED.replace(b"Written by 9.9.8", b"Written by 9.9.7")
         self.marked(version="9.9.7", template=older)
         self.marked()
-        newer = init.stamped(init.instructions(TEMPLATE, True)).replace(END, b"## Our own rules\n\n" + END)
+        newer = init.stamped(OWN_TEXT).replace(END, b"## Our own rules\n\n" + END)
         kept = " — so it is kept, and the target's template is not written: cortex init --tool claude --force, at the project root, writes it again, and " \
                "keeps yours as .bak\n"
         cases = (
@@ -687,7 +698,7 @@ class DigestTests(UpgradeTestCase):
             ("9.9.8", b"# Cortex AI Team\n\nWritten by an older Cortex: read cortex.local.toml first.\n",
              "CLAUDE.md is a bootstrap without the marker, not what Cortex 9.9.8 writes — you changed it, or an older "
              "Cortex wrote it — so it is kept: cortex init --tool claude --force, at the project root, writes it again, and keeps yours as .bak\n"),
-            (OWN, newer, "CLAUDE.md is of format 3, which Cortex 1.8.0 or later reads, and not what Cortex wrote" + kept),
+            (OWN, newer, "CLAUDE.md is of format 4, which Cortex 1.9.0 or later reads, and not what Cortex wrote" + kept),
         )
         for pinned, content, note in cases:
             with self.subTest(pinned=pinned):
@@ -769,7 +780,7 @@ class DigestTests(UpgradeTestCase):
         self.assertIn(f"Cortex {OWN}: already on it — nothing to move", proc.out)
         self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s template — no one changed it", proc.out)
         self.assertIn("\nCommit CLAUDE.md.\n", proc.out)
-        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(OWN_TEXT))
 
     @harness.outside_a_repository
     def test_without_a_digest_and_the_pinned_version_it_is_not_checked_and_said_so(self):
@@ -791,7 +802,7 @@ class DigestTests(UpgradeTestCase):
         (project / "CLAUDE.md").symlink_to("AGENTS.md")       # one file for two tools, as teams do
         self.assert_ok(self.upgrade(project))
         self.assertTrue((project / "CLAUDE.md").is_symlink())
-        self.assertEqual((project / "AGENTS.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)))
+        self.assertEqual((project / "AGENTS.md").read_bytes(), init.stamped(OWN_TEXT))
 
     def test_on_the_pinned_version_not_in_the_store_the_bootstrap_is_not_checked_and_said_so(self):
         project = self.project("9.9.8")
@@ -857,7 +868,7 @@ class DigestTests(UpgradeTestCase):
         (project / "CLAUDE.md").write_bytes(init.instructions(PERSONAL, False))
         proc = self.upgrade(project)
         self.assert_ok(proc)
-        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, False)))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), harness.written(TEMPLATE, OWN, theme="none"))
         self.assertNotIn(b"PERSONALITY:BEGIN", (project / "CLAUDE.md").read_bytes())
 
     def test_a_workspace_bootstrap_without_the_marker_is_known_by_its_template(self):
@@ -866,51 +877,54 @@ class DigestTests(UpgradeTestCase):
         (project / "AGENTS.md").write_bytes(init.instructions(OLD_WORKSPACE, True))
         self.assert_ok(self.upgrade(project))
         workspace = (harness.REPO / "templates" / "bootstrap-instructions-workspace.md").read_bytes()
-        self.assertEqual((project / "AGENTS.md").read_bytes(), init.stamped(init.instructions(workspace, True)))
+        self.assertEqual((project / "AGENTS.md").read_bytes(), harness.written(workspace, OWN))
 
 
 class StampTests(unittest.TestCase):
     """The digest a bootstrap carries in its marker (ADR-010 §3.1), of Cortex's block (ADR-012 §3.2)."""
 
     def test_it_is_the_digest_of_the_file_with_its_marker_plain(self):
-        written = init.stamped(init.instructions(TEMPLATE, True))
-        digest = hashlib.sha256(init.instructions(TEMPLATE, True)).hexdigest()[:16]
-        self.assertIn(f"<!-- cortex:bootstrap layout=single format=3 digest={digest} -->\n".encode(), written)
-        self.assertEqual(init.markers(written), [("single", 3)])
+        written = init.stamped(OWN_TEXT)
+        digest = hashlib.sha256(OWN_TEXT).hexdigest()[:16]
+        self.assertIn(f"<!-- cortex:bootstrap layout=single format=4 digest={digest} version={OWN} theme=h2g2 -->\n"
+                      .encode(), written)
+        self.assertEqual(init.markers(written), [("single", 4)])
+        self.assertEqual(init.marker_values(written), {"version": OWN, "theme": "h2g2"})
         self.assertIs(init.untouched(written), True)
         self.assertEqual(init.stamped(written), written)
 
     def test_what_git_and_editors_do_to_a_file_is_no_change(self):
-        written = init.stamped(init.instructions(TEMPLATE, True))
+        written = init.stamped(OWN_TEXT)
         for kept in (written.replace(b"\n", b"\r\n"), b"\xef\xbb\xbf" + written, written.rstrip(b"\n"),
                      written + b"\n\n", written.replace(b"\n", b"\r\r\r\r\n")):    # any run of CRs is one line break
             with self.subTest(kept=kept[:8] + kept[-4:]):
                 self.assertIs(init.untouched(kept), True)
 
     def test_a_change_in_cortex_s_block_is_one(self):
-        written = init.stamped(init.instructions(TEMPLATE, True))
+        written = init.stamped(OWN_TEXT)
         end = b"<!-- cortex:bootstrap end -->\n"
         for kept in (written.replace(b"Cortex", b"Kortex", 1), written.replace(end, b"## Ours\n" + end),
                      written.replace(end, b"") + b"## Ours\n",        # the end marker gone: all of it is the block
-                     written.replace(b"format=3 digest=", b"format=4 digest="),
+                     written.replace(b"format=4 digest=", b"format=5 digest="),
+                     written.replace(b" theme=h2g2 -->", b" theme=other -->"),     # the values are the block's too
                      written.replace(b"layout=single", b"layout=workspace")):
             with self.subTest(kept=kept[-40:]):
                 self.assertIs(init.untouched(kept), False)
 
     def test_the_team_s_part_is_no_change(self):
-        written = init.stamped(init.instructions(TEMPLATE, True))
+        written = init.stamped(OWN_TEXT)
         for team in (b"## Ours\n", b"## Ours\r\n\r\nRun the linter first.",
                      b"<!-- cortex:bootstrap layout=workspace format=9 digest=0123456789abcdef -->\n"
                      b"<!-- cortex:bootstrap end -->\n"):          # quoted by the team: its own text
             with self.subTest(team=team):
                 self.assertIs(init.untouched(written + team), True)
-                self.assertEqual(init.markers(written + team), [("single", 3)])
+                self.assertEqual(init.markers(written + team), [("single", 4)])
                 self.assertEqual(init.parts(written + team), (written, team))
 
     def test_no_digest_tells_nothing(self):
-        written = init.stamped(init.instructions(TEMPLATE, True))
+        written = init.stamped(OWN_TEXT)
         twice = written.replace(b"<!-- cortex:bootstrap end -->", written.split(b"\n")[2] + b"\n<!-- cortex:bootstrap end -->")
-        for kept in (init.instructions(TEMPLATE, True), OLD_BOOTSTRAP, twice):
+        for kept in (OWN_TEXT, OLD_BOOTSTRAP, twice):
             with self.subTest(kept=kept[:40]):
                 self.assertIsNone(init.untouched(kept))
         self.assertEqual(init.stamped(OLD_BOOTSTRAP), OLD_BOOTSTRAP)
@@ -1005,7 +1019,7 @@ class KilledTests(UpgradeTestCase):
             config.write_local_text = die       # the lock written, cortex/ swapped: then the machine dies
         """)
         self.assertIn(f'version = "{OWN}"', self.pinned(project))
-        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(init.instructions(TEMPLATE, True)))
+        self.assertEqual((project / "CLAUDE.md").read_bytes(), init.stamped(OWN_TEXT))
         proc = self.upgrade(project)
         self.assert_ok(proc)
         self.assertIn(f"this machine reads Cortex 9.9.8, and cortex.toml pins Cortex {OWN} — an upgrade cut short, or a "

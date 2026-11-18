@@ -6,6 +6,9 @@ follows the version this machine reads: ``cortex sync`` writes an untouched one 
 that has a team's file, ``cortex upgrade --local`` whenever it sets a try, and below 1.8.0 an
 untouched format 3 one goes back to its version's format. The team's bootstrap follows the team's
 version: ``cortex sync`` and ``cortex validate`` say when an untouched one is behind it.
+
+The templates of format 3 are 1.8.x's, kept in ``fixtures/format-3``: a project kept on 1.8.x reads them from its own
+spec. This cortex's own templates write format 4 (``test_cli_format4``, ADR-014).
 """
 
 import errno
@@ -25,8 +28,11 @@ import cli_harness as harness  # noqa: E402
 from cortex_cli import config, init, store, upgrade  # noqa: E402
 from test_cli_team import DOWNLOADS, OWN, TEAM, TeamTestCase  # noqa: E402
 
-TEMPLATE = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes()
-WORKSPACE = (harness.REPO / "templates" / "bootstrap-instructions-workspace.md").read_bytes()
+# The templates of format 3, as 1.8.x ships them (ADR-014 §3.4); this cortex's own write format 4.
+TEMPLATE = (harness.FORMAT_3 / "bootstrap-instructions.md").read_bytes()
+WORKSPACE = (harness.FORMAT_3 / "bootstrap-instructions-workspace.md").read_bytes()
+OWN_TEMPLATE = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes()
+OWN_WRITTEN = harness.written(OWN_TEMPLATE, OWN)
 # A template of format 2 with its end marker — what 1.7.0 writes, and the fixture's 1.7.0 and 9.9.8.
 FORMAT_2 = TEMPLATE.replace(b"format=3", b"format=2").replace(b"## Where the spec is", b"## Where the spec is, in 2", 1)
 OURS = b"\n## Ours\n\nRun the linter first.\n"
@@ -161,7 +167,7 @@ class OwnBootstrapTests(TeamTestCase):
                     self.assertIn(f"CLAUDE.md is behind: Cortex {OWN}, the team's version, writes another — "
                                   f"`cortex upgrade {OWN}` writes it again", proc.err)
                 else:
-                    self.assertEqual((root / "CLAUDE.md").read_bytes(), written(TEMPLATE) + OURS)
+                    self.assertEqual((root / "CLAUDE.md").read_bytes(), OWN_WRITTEN + OURS)
                     self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s template — your own bootstrap follows "
                                   "the version this machine reads", proc.out)
                     self.assert_ok(again := self.cortex(root, "sync"))
@@ -222,7 +228,7 @@ class OwnBootstrapTests(TeamTestCase):
         (root / "CLAUDE.md").write_bytes(written(FORMAT_2) + OURS)
         proc = self.cortex(root, "upgrade", "--local", OWN)
         self.assert_ok(proc)
-        self.assertEqual((root / "CLAUDE.md").read_bytes(), written(TEMPLATE) + OURS)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), OWN_WRITTEN + OURS)
         proc = self.cortex(root, "upgrade", "--local", "9.9.8")            # the try removed: the team's again
         self.assert_ok(proc)
         self.assertEqual((root / "CLAUDE.md").read_bytes(), written(FORMAT_2) + OURS)
@@ -286,7 +292,7 @@ class OwnBootstrapTests(TeamTestCase):
                       "project root, writes it again, and keeps yours as .bak — your own rules go below its end "
                       "marker", proc.err)
         # Changed after Cortex wrote this version's: nothing new to say.
-        (root / "CLAUDE.md").write_bytes(written(TEMPLATE).replace(b"Cortex AI Team\n", b"Cortex AI Team, ours\n", 1))
+        (root / "CLAUDE.md").write_bytes(OWN_WRITTEN.replace(b"Cortex AI Team\n", b"Cortex AI Team, ours\n", 1))
         proc = self.cortex(root, "sync")
         self.assert_ok(proc)
         self.assertNotIn("CLAUDE.md", proc.out + proc.err)
@@ -323,7 +329,7 @@ class OwnBootstrapTests(TeamTestCase):
                 stale = written(template).replace(b"Cortex AI Team", b"Cortex AI Team, ours", 1)
                 (root / "CLAUDE.md").write_bytes(stale)
                 if other is not None:
-                    (root / other).write_bytes(written(TEMPLATE))
+                    (root / other).write_bytes(OWN_WRITTEN)
                 proc = self.cortex(root, "sync")
                 self.assert_ok(proc)
                 self.assertIn(f"kept, and Cortex {OWN}'s template is not written: cortex init --tool claude --force, "
@@ -333,7 +339,7 @@ class OwnBootstrapTests(TeamTestCase):
                 self.assert_ok(proc)
                 self.assertEqual((root / "CLAUDE.md.bak").read_bytes(), stale)
                 self.assertEqual(init.markers((root / "CLAUDE.md").read_bytes()),
-                                 [("single" if other else "workspace", 3)])
+                                 [("single" if other else "workspace", 4)])
                 self.assertFalse((root / "agents" / "project-context.md").exists())
                 self.assertNotIn("CLAUDE.md", self.cortex(root, "sync").err)          # nothing more to say
 
@@ -387,16 +393,16 @@ class TryTests(TeamTestCase):
 
     def assert_own(self, root, proc, before):
         self.assert_ok(proc)
-        self.assertEqual((root / "CLAUDE.md").read_bytes(), written(TEMPLATE) + OURS)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), OWN_WRITTEN + OURS)
         self.assertNotRegex(proc.out, r"Commit [^\n]*CLAUDE\.md|CLAUDE\.md in the project")
-        if before != written(TEMPLATE) + OURS:
+        if before != OWN_WRITTEN + OURS:
             self.assertIn(f"CLAUDE.md: written again from Cortex {OWN}'s template — your own bootstrap follows the "
                           "version this machine reads", proc.out)
         else:
             self.assertNotIn("CLAUDE.md", proc.out)
 
     def test_a_move_leaves_the_developer_s_own_bootstrap_to_the_try(self):
-        for before in (written(TEMPLATE) + OURS, written(self.f97) + OURS):
+        for before in (OWN_WRITTEN + OURS, written(self.f97) + OURS):
             with self.subTest(before=before[:60]):
                 root = self.tried(f"move-{len(before)}")
                 (root / "CLAUDE.md").write_bytes(before)
@@ -404,14 +410,14 @@ class TryTests(TeamTestCase):
                 self.assertIn('version = "9.9.8"', (root / "cortex.toml").read_text(encoding="utf-8"))
 
     def test_a_resume_leaves_the_developer_s_own_bootstrap_to_the_try(self):
-        for before in (written(TEMPLATE) + OURS, written(FORMAT_2) + OURS):
+        for before in (OWN_WRITTEN + OURS, written(FORMAT_2) + OURS):
             with self.subTest(before=before[:60]):
                 root = self.tried(f"resume-{len(before)}", toml='version = "9.9.8"\ntheme = "h2g2"\n')
                 (root / "CLAUDE.md").write_bytes(before)
                 self.assert_own(root, self.cortex(root, "upgrade", "9.9.8"), before)
 
     def test_a_team_move_leaves_a_follower_s_own_bootstrap_to_the_try(self):
-        for before in (written(TEMPLATE) + OURS, written(self.f97) + OURS):
+        for before in (OWN_WRITTEN + OURS, written(self.f97) + OURS):
             with self.subTest(before=before[:60]):
                 root = self.tried(f"team-{len(before)}", toml='theme = "h2g2"\n', team='version = "9.9.7"\n')
                 (root / "CLAUDE.md").write_bytes(before)
@@ -516,7 +522,7 @@ class TryTests(TeamTestCase):
         proc = self.cortex(root, "upgrade", "9.9.8", CORTEX_RELEASES_URL="http://127.0.0.1:9")
         self.assert_ok(proc)
         self.assertNotIn("not in the store", proc.err)
-        self.assertEqual((root / "CLAUDE.md").read_bytes(), written(TEMPLATE) + OURS)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), OWN_WRITTEN + OURS)
 
     def test_a_resume_names_the_try_s_version_it_cannot_find(self):
         root = self.project(toml='version = "9.9.7"\ntheme = "h2g2"\n', local='version = "9.9.8"\n', name="try-gone")
@@ -541,7 +547,7 @@ class TryTests(TeamTestCase):
         root = self.tried("init", toml='version = "9.9.8"\ntheme = "h2g2"\n')
         proc = self.cortex(root, "init", "--tool", "claude")
         self.assert_ok(proc)
-        self.assertEqual((root / "CLAUDE.md").read_bytes(), written(TEMPLATE))
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), OWN_WRITTEN)
         root = self.tried("init-theirs", toml='version = "9.9.8"\ntheme = "h2g2"\n', ignored=False)
         self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
         self.assertEqual((root / "CLAUDE.md").read_bytes(), written(FORMAT_2))
@@ -549,7 +555,7 @@ class TryTests(TeamTestCase):
         root = self.tried("init-copilot", toml='version = "9.9.8"\ntheme = "h2g2"\n', ignored=False)
         (root / ".gitignore").write_text(".github/copilot-instructions.md\ncortex.local.toml\n", encoding="utf-8")
         self.assert_ok(self.cortex(root, "init", "--tool", "copilot"))
-        self.assertEqual((root / ".github" / "copilot-instructions.md").read_bytes(), written(TEMPLATE))
+        self.assertEqual((root / ".github" / "copilot-instructions.md").read_bytes(), OWN_WRITTEN)
         # The theme too: a local theme of none writes the developer's own file without the personality block.
         root = self.project(toml='version = "9.9.8"\ntheme = "h2g2"\n', local='theme = "none"\n', name="init-none")
         (root / ".gitignore").write_text("CLAUDE.md\ncortex.local.toml\n", encoding="utf-8")
@@ -674,7 +680,7 @@ class BehindTests(TeamTestCase):
         self.assert_ok(proc)
         self.assertIn("BOOTSTRAP_BEHIND", proc.out + proc.err)
         self.assertNotEqual(self.cortex(root, "validate", "--strict").returncode, 0)
-        (root / "CLAUDE.md").write_bytes(written(TEMPLATE))                # in step: nothing said
+        (root / "CLAUDE.md").write_bytes(OWN_WRITTEN)                       # in step: nothing said
         proc = self.cortex(root, "validate", "--strict")
         self.assert_ok(proc)
         self.assertNotIn("BOOTSTRAP_BEHIND", proc.out + proc.err)
