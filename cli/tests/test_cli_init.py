@@ -37,8 +37,9 @@ def quote(path):
 def remove(path):
     return f"Remove-Item -Recurse -Force {quote(path)}" if os.name == "nt" else f"rm -rf {quote(path)}"
 
-EXPECTED = json.loads(matrix.EXPECTED.read_text(encoding="utf-8"))
 OWN = harness.EXPECTED_VERSION if harness.BINARY else "9.9.9"
+EXPECTED = {case: dict(entry, files=matrix.at_version(entry["files"], OWN))
+            for case, entry in json.loads(matrix.EXPECTED.read_text(encoding="utf-8")).items()}
 HAS_GIT = shutil.which("git") is not None
 LISTS = "`cortex project list` lists this machine's projects"
 
