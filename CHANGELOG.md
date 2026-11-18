@@ -7,6 +7,11 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+### Changed
+- **The bootstrap names the team's version, theme, Prompt Manager and folder: format 4** ([ADR-014](docs/adr/ADR-014-ide-modes.md), [#409](https://github.com/xod-labs/cortex/issues/409)). `cortex init` and `cortex upgrade` render Cortex's block from the team's resolution — the version and the theme its files resolve to, the Prompt Manager's character and the path of its card, the team's folder — and its marker carries the version and the theme: `<!-- cortex:bootstrap layout=single format=4 digest=… version=1.9.0 theme=h2g2 -->`. The assistant no longer resolves them: it reads `cortex.local.toml` for the spec's path, compares `pinned` in `synced` with the version the block names, and takes a developer's own `theme` over the block's. *Where the spec is* has three rules, and the personality step a fourth, where format 3 had eleven: the rules for a version before 1.8.0, the team's folder compared, and the reading of a `cortex/` link are gone, with the two actions a link to a checkout had ([#378](https://github.com/xod-labs/cortex/issues/378)) and the link's target PowerShell prints otherwise ([#376](https://github.com/xod-labs/cortex/issues/376)). A developer's try and theme never reach the committed block; the developer's own bootstrap, one git ignores, is rendered from theirs.
+- **A theme or a version the team changes leaves the committed bootstrap behind** ([ADR-014](docs/adr/ADR-014-ide-modes.md) §3.3). `cortex sync` says so, naming `cortex upgrade` with the team's version, which writes an untouched block again at the same version too; `cortex validate` warns, and fails `--strict`. A block the team changed is kept: `cortex sync` and `cortex validate` say it is not rendered from the team's resolution, with the command that writes it again.
+- **A project kept on 1.8.x keeps format 3, byte for byte** ([ADR-014](docs/adr/ADR-014-ide-modes.md) §3.4). Format 4's templates ship in the spec of 1.9.0: a project reads the format of its version, and `cortex upgrade` to 1.9.0 moves an untouched block of format 3 to format 4, the team's part below its end marker kept.
+
 ## [1.8.7] - 2026-11-17 — Almost, but Not Quite, Entirely Unlike Tea _(Released)_
 [Full notes](changelog/1.8.7.md)
 
