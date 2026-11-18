@@ -787,10 +787,11 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             and console.stdin_is_terminal():
         claude_access = ask(out, "Let Claude Code read the Cortex spec without asking for permission — "
                                  "claude_access = true in cortex.toml? [y/N] ")
-    # VS Code's Copilot asks too, in store and link (ADR-014 §3.5): the same offer, for --tool copilot.
+    # VS Code's Copilot asks too, in store and link (ADR-014 §3.5): the same offer, for --tool copilot named —
+    # not for the default tool, which every init would then ask about.
     copilot_access = options.copilot_access
-    if copilot_access is None and options.tool == "copilot" and project is None and spec_mode != "copy" \
-            and console.stdin_is_terminal():
+    if copilot_access is None and options.tool == "copilot" and tool_named and project is None \
+            and spec_mode != "copy" and console.stdin_is_terminal():
         copilot_access = ask(out, "Let VS Code's Copilot read the Cortex spec without asking for permission — "
                                   "copilot_access = true in cortex.toml? [y/N] ")
 
@@ -1020,7 +1021,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             and not config.load(str(root)).active_claude_access:
         out.write("\ntip: Claude Code asks before it reads the spec in the store. `claude_access = true` in "
                   "cortex.toml lets it read without asking — for the team; `cortex sync --claude-access`, for you.\n")
-    if options.tool == "copilot" and copilot_access is None and spec_mode != "copy" \
+    if options.tool == "copilot" and tool_named and copilot_access is None and spec_mode != "copy" \
             and not config.load(str(root)).active_copilot_access:
         out.write("\ntip: VS Code's Copilot asks before it reads the spec in the store. `copilot_access = true` in "
                   "cortex.toml lets it read without asking — for the team; `cortex sync --copilot-access`, for you.\n")

@@ -457,6 +457,12 @@ class CommandTests(unittest.TestCase):
         proc = self.run_cortex("init", "--tool", "cursor")
         self.assertNotIn("Copilot", proc.out)
 
+    def test_init_with_the_default_tool_says_nothing_of_copilot(self):
+        # Copilot is the default tool of a new project: only --tool copilot, named, brings the offer.
+        proc = self.run_cortex("init")
+        self.assertTrue((self.project / ".github" / "copilot-instructions.md").is_file())
+        self.assertNotIn("Copilot asks", proc.out)
+
     def on_a_terminal(self, answer, *args):
         import pty
 
