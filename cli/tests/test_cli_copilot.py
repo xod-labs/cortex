@@ -431,6 +431,63 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn("does not reach cortex/", proc.err)
         self.assertIn("The spec is read where it is", proc.out)
 
+    def test_init_writes_the_teams_setting(self):
+        proc = self.run_cortex("init", "--tool", "copilot", "--copilot-access")
+        self.assertIn("copilot_access = true", (self.project / "cortex.toml").read_text(encoding="utf-8"))
+        self.assertEqual(self.allowed(), [self.entry])
+        self.assertNotIn("tip: VS Code's Copilot", proc.out)
+
+    def test_a_second_init_keeps_copilot_access_but_for_the_option_given(self):
+        self.run_cortex("init", "--tool", "copilot", "--copilot-access")
+        self.run_cortex("init", "--tool", "copilot", "--force")
+        self.assertIn("copilot_access = true", (self.project / "cortex.toml").read_text(encoding="utf-8"))
+        self.run_cortex("init", "--tool", "copilot", "--no-copilot-access")
+        self.assertIn("copilot_access = false", (self.project / "cortex.toml").read_text(encoding="utf-8"))
+        self.assertEqual(self.allowed(), [])
+
+    def test_init_unattended_says_how(self):
+        proc = self.run_cortex("init", "--tool", "copilot")
+        self.assertIn("tip: VS Code's Copilot asks before it reads the spec", proc.out)
+        self.assertNotIn("copilot_access", (self.project / "cortex.toml").read_text(encoding="utf-8"))
+        self.assertIsNone(self.allowed())
+        proc = self.run_cortex("sync", "--copilot-access")      # the command the tip names
+        self.assertEqual(self.allowed(), [self.entry])
+
+    def test_init_for_another_tool_says_nothing_of_copilot(self):
+        proc = self.run_cortex("init", "--tool", "cursor")
+        self.assertNotIn("Copilot", proc.out)
+
+    def on_a_terminal(self, answer, *args):
+        import pty
+
+        shutil.rmtree(self.project)
+        self.project.mkdir()
+        primary, secondary = pty.openpty()
+        try:
+            os.write(primary, answer)
+            return self.run_cortex("init", "--tool", "copilot", *args, stdin=secondary)
+        finally:
+            os.close(primary)
+            os.close(secondary)
+
+    @unittest.skipIf(os.name == "nt", "a pseudo-terminal is POSIX's")
+    def test_init_on_a_terminal_asks_and_no_is_the_default(self):
+        for answer, expected in ((b"y\n", True), (b"\n", False), (b"n\n", False), (b"\x04", False)):
+            with self.subTest(answer=answer):
+                proc = self.on_a_terminal(answer)
+                self.assertIn("copilot_access = true in cortex.toml? [y/N]", proc.out)
+                self.assertEqual("copilot_access = true" in (self.project / "cortex.toml").read_text(encoding="utf-8"),
+                                 expected)
+
+    @unittest.skipIf(os.name == "nt", "a pseudo-terminal is POSIX's")
+    def test_init_on_a_terminal_with_an_option_or_a_copy_does_not_ask(self):
+        for args in (("--copilot-access",), ("--no-copilot-access",), ("--copy",)):
+            with self.subTest(args=args):
+                proc = self.on_a_terminal(b"y\n", *args)
+                self.assertNotIn("Let VS Code's Copilot read", proc.out)
+                self.assertEqual("copilot_access = true" in (self.project / "cortex.toml").read_text(encoding="utf-8"),
+                                 args == ("--copilot-access",))
+
 
 if __name__ == "__main__":
     unittest.main()
