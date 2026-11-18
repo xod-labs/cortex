@@ -83,7 +83,8 @@ class AgentsTextTests(unittest.TestCase):
         self.assertIn('/h/config.toml: "agents" is set in cortex.toml only', warnings[0])
 
     def test_an_unknown_key_s_message_is_1_7_0_s_before_1_8_0(self):
-        old, new = "cortex.toml takes version, theme, sync and claude_access", "cortex.toml takes version, theme, sync, claude_access and agents"
+        old = "cortex.toml takes version, theme, sync and claude_access"
+        new = "cortex.toml takes version, theme, sync, claude_access, copilot_access and agents"
         for version, said in (("1.7.0", old), ("1.7", old), ("1.8.0", new), (None, new)):
             data = {**TEAM, "version": version, "verison": "1.8.0"} if version else {"theme": "h2g2", "verison": "1"}
             with self.subTest(version=version), self.assertRaises(project.ProjectFileError) as caught:
@@ -94,7 +95,7 @@ class AgentsTextTests(unittest.TestCase):
         self.assertIn("cortex.local.toml takes theme, spec, claude_access and claude_entry", str(caught.exception))
         with self.assertRaises(project.ProjectFileError) as caught:
             project.check_local({"foo": "x"}, project.lists_1_7_0({"version": "1.8.0"}))
-        self.assertIn("claude_entry and synced", str(caught.exception))
+        self.assertIn("copilot_entry and synced", str(caught.exception))
         with self.assertRaises(project.ProjectFileError) as caught:            # quoted as written
             project.check_agents(".//x")
         self.assertIn('agents ".//x"', str(caught.exception))
