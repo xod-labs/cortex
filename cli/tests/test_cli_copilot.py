@@ -246,5 +246,191 @@ class SettingsFileTests(unittest.TestCase):
         self.assertEqual(json.loads(dotfiles.read_text(encoding="utf-8")), {KEY: [ENTRY]})
 
 
+class CommandTests(unittest.TestCase):
+    """``cortex sync`` and ``cortex init``, with a home of the test's own that has a VS Code server."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="cortex-copilot-")).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.home = self.tmp / "cortex-home"
+        self.user = self.tmp / "user"
+        (self.user / ".vscode-server").mkdir(parents=True)
+        self.env = harness.environment(CORTEX_HOME=str(self.home), CORTEX_SOURCE_VERSION=OWN, HOME=str(self.user),
+                                       USERPROFILE=str(self.user))
+        self.project = self.tmp / "project"
+        self.project.mkdir()
+        self.settings = self.user / ".vscode-server" / "data" / "Machine" / "settings.json"
+        self.entry = display(self.home / "versions")
+
+    def run_cortex(self, *args, cwd=None, stdin=subprocess.DEVNULL, code=0):
+        proc = harness.run(*args, cwd=cwd or self.project, env=self.env, stdin=stdin)
+        proc.out, proc.err = proc.stdout.decode(), proc.stderr.decode()
+        self.assertEqual(proc.returncode, code, proc.err)
+        return proc
+
+    def allowed(self, path=None):
+        path = path or self.settings
+        if not path.exists():
+            return None
+        return vscode.entries(path.read_bytes().decode("utf-8"))
+
+    def local(self, project=None):
+        path = (project or self.project) / "cortex.local.toml"
+        return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    def toml(self, extra="", project=None):
+        (project or self.project).mkdir(exist_ok=True)
+        ((project or self.project) / "cortex.toml").write_text(f'version = "{OWN}"\ntheme = "h2g2"\n{extra}',
+                                                               encoding="utf-8")
+
+    def test_the_teams_setting_allows_the_store(self):
+        self.toml("copilot_access = true\n")
+        proc = self.run_cortex("sync")
+        self.assertEqual(self.allowed(), [self.entry])
+        self.assertIn(f"Copilot reads {self.entry} without asking", proc.out)
+        self.assertIn(f'copilot_entry = "{self.entry}"', self.local())
+        self.run_cortex("sync")
+        self.assertEqual(self.allowed(), [self.entry])          # once
+
+    def test_off_by_default_and_never_set_it_leaves_the_settings_alone(self):
+        self.toml()
+        mine = f'{{\n  // mine\n  "{KEY}": ["{self.entry}"]\n}}\n'
+        self.settings.parent.mkdir(parents=True)
+        self.settings.write_text(mine, encoding="utf-8")
+        self.run_cortex("sync")
+        self.assertEqual(self.settings.read_text(encoding="utf-8"), mine)
+        self.assertNotIn("copilot_", self.local())
+
+    def test_the_desktops_settings_without_a_server(self):
+        shutil.rmtree(self.user / ".vscode-server")
+        desktop = self.user / ".config" / "Code"
+        if sys.platform == "darwin":
+            desktop = self.user / "Library" / "Application Support" / "Code"
+        elif os.name == "nt":
+            desktop = self.user / "AppData" / "Roaming" / "Code"
+        desktop.mkdir(parents=True)
+        self.toml("copilot_access = true\n")
+        self.run_cortex("sync")
+        self.assertEqual(self.allowed(desktop / "User" / "settings.json"), [self.entry])
+
+    def test_no_vs_code_writes_nothing_and_says_so_when_asked(self):
+        shutil.rmtree(self.user / ".vscode-server")
+        self.toml()
+        proc = self.run_cortex("sync", "--copilot-access")
+        self.assertIn("no VS Code settings on this machine", proc.err)
+        self.assertNotIn("copilot_entry", self.local())
+        self.assertIn("copilot_access = true", self.local())
+        self.assertNotIn("no VS Code settings", self.run_cortex("sync").err)
+
+    def test_the_developer_turns_it_on_and_off_for_themself(self):
+        self.toml()
+        self.run_cortex("sync", "--copilot-access")
+        self.assertIn("copilot_access = true", self.local())
+        self.assertEqual(self.allowed(), [self.entry])
+        proc = self.run_cortex("sync", "--no-copilot-access")
+        self.assertIn("Copilot no longer reads the store without asking", proc.out)
+        self.assertIn("copilot_access = false", self.local())
+        self.assertNotIn("copilot_entry", self.local())
+        self.assertEqual(self.allowed(), [])
+        self.run_cortex("sync")                     # the choice is kept
+        self.assertEqual(self.allowed(), [])
+
+    def test_the_key_removed_removes_the_entry_and_no_other(self):
+        self.settings.parent.mkdir(parents=True)
+        self.settings.write_text(f'{{\n  "{KEY}": [\n    "/opt/docs" // mine\n  ]\n}}\n', encoding="utf-8")
+        self.toml("copilot_access = true\n")
+        self.run_cortex("sync")
+        self.assertEqual(self.allowed(), ["/opt/docs", self.entry])
+        self.toml()
+        self.run_cortex("sync")
+        self.assertEqual(self.settings.read_text(encoding="utf-8"),
+                         f'{{\n  "{KEY}": [\n    "/opt/docs" // mine\n  ]\n}}\n')
+
+    def test_turned_off_with_an_entry_of_the_developers_it_says_what_still_allows(self):
+        self.settings.parent.mkdir(parents=True)
+        self.settings.write_text(f'{{"{KEY}": ["{self.entry}"]}}', encoding="utf-8")
+        self.toml()
+        proc = self.run_cortex("sync", "--no-copilot-access")
+        self.assertIn("has an entry of your own that lets Copilot read", proc.err)
+        self.assertEqual(self.allowed(), [self.entry])
+
+    def test_a_file_it_cannot_read_is_a_warning_naming_the_line(self):
+        self.settings.parent.mkdir(parents=True)
+        broken = '{\n  "a": 1\n  "b": 2\n}\n'
+        self.settings.write_text(broken, encoding="utf-8")
+        self.toml("copilot_access = true\n")
+        proc = self.run_cortex("sync")
+        self.assertIn(f"warning: {display(self.settings)} is no JSON with comments cortex can read", proc.err)
+        self.assertIn("at line 3", proc.err)
+        self.assertIn(f'"{KEY}": ["{self.entry}"]', proc.err)
+        self.assertNotIn("Traceback", proc.err)
+        self.assertEqual(self.settings.read_text(encoding="utf-8"), broken)
+        self.assertNotIn("copilot_entry", self.local())
+
+    def test_the_entry_stays_while_another_registered_project_sets_it(self):
+        other = self.tmp / "other"
+        self.toml("copilot_access = true\n")
+        self.toml("copilot_access = true\n", project=other)
+        self.run_cortex("sync")
+        self.run_cortex("sync", cwd=other)
+        # The second found the entry the first wrote: Cortex's, both record it.
+        self.assertIn(f'copilot_entry = "{self.entry}"', self.local(other))
+        self.assertEqual(self.allowed(), [self.entry])
+        self.toml()
+        proc = self.run_cortex("sync")
+        self.assertIn("still sets copilot_access", proc.out)
+        self.assertIn("other", proc.out)
+        self.assertEqual(self.allowed(), [self.entry])
+        self.assertNotIn("copilot_entry", self.local())
+        self.toml(project=other)
+        self.run_cortex("sync", cwd=other)
+        self.assertEqual(self.allowed(), [])
+        self.assertNotIn("copilot_entry", self.local(other))
+
+    def test_a_project_that_set_it_but_never_wrote_it_keeps_nothing(self):
+        other = self.tmp / "other"
+        self.toml()
+        self.toml(project=other)
+        self.run_cortex("sync", cwd=other)              # registered, without the key
+        self.toml("copilot_access = true\n", project=other)     # set, not synced
+        self.run_cortex("sync", "--copilot-access")
+        self.run_cortex("sync", "--no-copilot-access")
+        self.assertEqual(self.allowed(), [])
+
+    def test_the_team_locks_it_to_false(self):
+        (self.project / "agents").mkdir()
+        (self.project / "agents" / "cortex.team.toml").write_text(
+            'copilot_access = false\nlocked = ["copilot_access"]\n', encoding="utf-8")
+        self.toml()
+        proc = self.run_cortex("sync", "--copilot-access", code=1)
+        self.assertIn("copilot_access is locked to false by agents/cortex.team.toml", proc.err)
+        (self.project / "cortex.local.toml").write_text("copilot_access = true\n", encoding="utf-8")
+        proc = self.run_cortex("sync")
+        self.assertIn("copilot_access is locked by agents/cortex.team.toml", proc.err)
+        self.assertIsNone(self.allowed())
+        proc = self.run_cortex("config")
+        self.assertRegex(proc.out, r"copilot_access\s+false\s+agents/cortex.team.toml — locked")
+        (self.project / "agents" / "cortex.team.toml").write_text(
+            'copilot_access = true\nlocked = ["copilot_access"]\n', encoding="utf-8")
+        proc = self.run_cortex("sync", code=1)
+        self.assertIn("copilot_access is locked to false only", proc.err)
+
+    def test_config_says_where_it_comes_from(self):
+        self.toml("copilot_access = true\n")
+        self.assertRegex(self.run_cortex("config").out, r"copilot_access\s+true\s+cortex.toml")
+        self.run_cortex("sync", "--no-copilot-access")
+        self.assertRegex(self.run_cortex("config").out, r"copilot_access\s+false\s+cortex.local.toml")
+
+    def test_a_link_still_asks_and_says_so(self):
+        self.toml('sync = "link"\ncopilot_access = true\n')
+        proc = self.run_cortex("sync")
+        self.assertEqual(self.allowed(), [self.entry])
+        self.assertIn("note: copilot_access does not reach cortex/, a link: Copilot still asks", proc.err)
+        self.assertIn("`cortex sync --store`", proc.err)
+        proc = self.run_cortex("sync", "--store")       # the command the note names
+        self.assertNotIn("does not reach cortex/", proc.err)
+        self.assertIn("The spec is read where it is", proc.out)
+
+
 if __name__ == "__main__":
     unittest.main()
