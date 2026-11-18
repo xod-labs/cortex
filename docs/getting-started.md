@@ -77,7 +77,7 @@ The two context files are written only when missing. Running `cortex init` again
 
 The instructions file is in two parts ([ADR-012](adr/ADR-012-bootstrap-block.md)):
 
-- **Cortex's block**, from the top to the line `<!-- cortex:bootstrap end -->`. `cortex init --force` writes it again, and `cortex upgrade` too when the version moves and nobody changed it. Keep its marker line as it is — `<!-- cortex:bootstrap layout=single format=3 digest=… -->` under the title: `cortex init` reads from it the layout and the format the file was written for, and `cortex upgrade`, by its digest, whether anyone changed the block. A change above the end marker keeps the block from following Cortex.
+- **Cortex's block**, from the top to the line `<!-- cortex:bootstrap end -->`. `cortex init --force` writes it again, and `cortex upgrade` too when the version moves and nobody changed it. Keep its marker line as it is — `<!-- cortex:bootstrap layout=single format=4 digest=… version=… theme=… -->` under the title: `cortex init` reads from it the layout and the format the file was written for, and `cortex upgrade`, by its digest, whether anyone changed the block. A change above the end marker keeps the block from following Cortex.
 - **Your part**, everything below the end marker. Cortex writes nothing there, and keeps it byte for byte when it writes its block again.
 
 Where a rule of yours goes:
@@ -235,7 +235,7 @@ For each service:
 - `{service}/project-overview.md` — with its `@alias` pre-filled
 - `{service}/project-context.md` — with its `@alias` pre-filled
 
-At the workspace root, as in single project mode: `cortex.toml`, `cortex.local.toml` (git-ignored) and the instructions file of your `--tool` — written from the workspace bootstrap, `cortex/templates/bootstrap-instructions-workspace.md`. Its marker line is `<!-- cortex:bootstrap layout=workspace format=3 digest=… -->`: keep it as it is when you adapt the file, as in single project mode. Declare the workspace's services — `@alias`, folder, description — in a table below its end marker, where `cortex upgrade` and `cortex init --force` keep it.
+At the workspace root, as in single project mode: `cortex.toml`, `cortex.local.toml` (git-ignored) and the instructions file of your `--tool` — written from the workspace bootstrap, `cortex/templates/bootstrap-instructions-workspace.md`. Its marker line is `<!-- cortex:bootstrap layout=workspace format=4 digest=… version=… theme=… -->`: keep it as it is when you adapt the file, as in single project mode. Declare the workspace's services — `@alias`, folder, description — in a table below its end marker, where `cortex upgrade` and `cortex init --force` keep it.
 
 And at the workspace root (optional) — this is your **developer** tier, not shared by default:
 - `project-overview.md` — your own notes on the global vision (shared stakeholders, common constraints)
