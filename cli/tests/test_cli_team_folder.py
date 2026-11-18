@@ -171,7 +171,7 @@ class RefusalTests(FolderTestCase):
         proc = self.cortex(root, "config")
         self.assert_ok(proc)
         self.assertIn('config.toml: "agents" is set in cortex.toml only, not read', proc.err)
-        self.assertIn(f"agents         {FOLDER}", proc.out)
+        self.assertIn(f"agents          {FOLDER}", proc.out)
 
     def test_a_value_that_names_no_team_s_folder_is_refused(self):
         made = self.named(name="made")
