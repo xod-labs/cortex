@@ -1316,9 +1316,13 @@ def _copilot(root: str, project: config.Project, versions: Path, mode: str, out:
     if access is None and owned is None:
         return
     entry = vscode.entry_for(versions)
+    files = vscode.settings_files()
     if access:
-        if owned is None and _copilot_projects(root, entry, setting=False):
-            owned = entry                       # written by cortex sync, for another project of this machine
+        # The registry is read only where the entry is there already: written by cortex sync, for another
+        # project of this machine, or the developer's own.
+        if owned is None and any(vscode.allows(path, entry) for path in files) \
+                and _copilot_projects(root, entry, setting=False):
+            owned = entry
         allow: Optional[str] = entry
     else:
         allow = None
@@ -1332,7 +1336,6 @@ def _copilot(root: str, project: config.Project, versions: Path, mode: str, out:
                 out.write(f"VS Code's settings: {owned} is kept — {others[0]} still sets copilot_access\n")
                 config.write_local(root, {"copilot_entry": None})
                 return
-    files = vscode.settings_files()
     if not files and access and asked:
         err.write("note: copilot_access: no VS Code settings on this machine — neither a VS Code server nor a "
                   "VS Code installed: nothing is written\n")
