@@ -4,8 +4,9 @@ The files of the project, the machine's ``config.toml`` and the variables, resol
 resolves them (``cortex_core.cascade``): a value, then its origin — a file as the project root names
 it, a variable, or *default* — and what it won over. ``--locked`` gives the team's resolution, without
 the developer's ``cortex.local.toml``: the version and the lock ``cortex sync --locked`` checks, and
-what the runtime reads — ``cortex sync --locked`` still applies the developer's own ``theme`` and
-``claude_access`` to their machine. Outside a project, the machine's keys only. It writes nothing.
+what the runtime reads — ``cortex sync --locked`` still applies the developer's own ``theme``,
+``claude_access`` and ``copilot_access`` to their machine. Outside a project, the machine's keys only. It
+writes nothing.
 """
 
 from __future__ import annotations

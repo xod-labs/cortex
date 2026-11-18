@@ -29,14 +29,15 @@ A try is never lower than the team's version, and `version` is never locked.
 
 ```text
 $ cortex config
-version        1.8.1                                          cortex.toml
-theme          h2g2                                           cortex.toml
-sync           store                                          default
-claude_access  unset                                          default
-agents         agents                                         default
-releases_url   https://github.com/xod-labs/cortex/releases    default
-update_check   true                                           default
-register       true                                           default
+version         1.8.1                                          cortex.toml
+theme           h2g2                                           cortex.toml
+sync            store                                          default
+claude_access   unset                                          default
+copilot_access  unset                                          default
+agents          agents                                         default
+releases_url    https://github.com/xod-labs/cortex/releases    default
+update_check    true                                           default
+register        true                                           default
 ```
 
 Three columns: the setting, its value, and where the value comes from — a file, an environment
@@ -107,8 +108,8 @@ Remove `version` and `theme` from the root's `cortex.toml`, and commit the lock 
 
 ```text
 $ cortex config
-version        1.8.1                                          agents/cortex.team.toml
-theme          h2g2                                           agents/cortex.team.toml — locked
+version         1.8.1                                          agents/cortex.team.toml
+theme           h2g2                                           agents/cortex.team.toml — locked
 …
 ```
 
@@ -126,8 +127,8 @@ committed `cortex.toml` pins 1.8.1 and theme `h2g2`:
 
 ```text
 $ cortex config
-version        1.8.1                                          cortex.toml
-theme          h2g2                                           cortex.toml
+version         1.8.1                                          cortex.toml
+theme           h2g2                                           cortex.toml
 …
 ```
 
@@ -145,8 +146,8 @@ Remove `version` from the committed `cortex.toml`, and the project follows the t
 
 ```text
 $ cortex config
-version        1.8.1                                          agents/cortex.team.toml
-theme          h2g2                                           cortex.toml
+version         1.8.1                                          agents/cortex.team.toml
+theme           h2g2                                           cortex.toml
 …
 ```
 
