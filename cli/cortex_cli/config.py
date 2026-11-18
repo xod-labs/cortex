@@ -1,10 +1,10 @@
 """``cortex.toml`` and ``cortex.local.toml`` — ADR-008 §3.4.
 
 ``cortex.toml`` is committed at the project root: the Cortex ``version`` it uses, the team's
-``theme``, and optionally how ``sync`` brings the spec to it and whether Claude Code may read it
-without asking (``claude_access``). ``cortex.local.toml``, next to it and ignored by git, is this
-developer on this machine: a ``theme`` and a ``claude_access`` of their own, and the ``spec``
-``cortex sync`` writes. An unknown key is an error, never a warning: these are the files a later
+``theme``, and optionally how ``sync`` brings the spec to it and whether Claude Code and VS Code's
+Copilot may read it without asking (``claude_access``, ``copilot_access``). ``cortex.local.toml``,
+next to it and ignored by git, is this developer on this machine: a ``theme``, a ``claude_access``
+and a ``copilot_access`` of their own, and the ``spec`` ``cortex sync`` writes. An unknown key is an error, never a warning: these are the files a later
 ADR extends, and a typo that silently does nothing is the failure they must not start with.
 
 ``cortex.lock``, next to ``cortex.toml`` and committed, is the spec the project resolved: its
@@ -63,6 +63,9 @@ class Project:
     claude_access: Optional[bool] = None        # cortex.toml's, when set
     local_claude_access: Optional[bool] = None  # cortex.local.toml's, which wins
     claude_entry: Optional[str] = None          # the entry sync keeps in Claude Code's settings
+    copilot_access: Optional[bool] = None       # cortex.toml's, when set (ADR-014 §3.5)
+    local_copilot_access: Optional[bool] = None     # cortex.local.toml's, which wins
+    copilot_entry: Optional[str] = None         # the entry sync keeps in VS Code's settings of this machine
     settings: Optional[cascade.Resolution] = None   # the project's keys, each with its origin, as load resolved them
     team_settings: Optional[cascade.Resolution] = None  # the team's resolution: what the team commits follows
     synced: Optional[Dict[str, str]] = None     # what `cortex sync` recorded (ADR-013 §3.1)
@@ -153,17 +156,33 @@ class Project:
         """``None`` while neither file sets it: Claude Code's settings are then left alone."""
         return self._settings().value("claude_access")     # type: ignore[return-value]
 
+    @property
+    def active_copilot_access(self) -> Optional[bool]:
+        """``None`` while neither file sets it: VS Code's settings are then left alone (ADR-014 §3.5)."""
+        return self._settings().value("copilot_access")    # type: ignore[return-value]
+
     def with_claude_access(self, value: bool) -> "Project":
         """This project with this developer's ``claude_access`` — ``cortex sync --claude-access``, written
         with ``spec`` — over ``cortex.toml``'s: resolved again from the files ``load`` read, the team's
         file and its lock with them."""
+        return self.with_local_access("claude_access", value)
+
+    def with_copilot_access(self, value: bool) -> "Project":
+        """This project with this developer's ``copilot_access`` — ``cortex sync --copilot-access`` — as
+        ``with_claude_access``."""
+        return self.with_local_access("copilot_access", value)
+
+    def with_local_access(self, key: str, value: bool) -> "Project":
+        """This project with this developer's ``key`` — ``claude_access`` or ``copilot_access`` — set in
+        ``cortex.local.toml``, resolved again."""
+        field_name = f"local_{key}"
         if self.inputs is None:
-            changed = dataclasses.replace(self, local_claude_access=value, settings=None)
+            changed = dataclasses.replace(self, **{field_name: value}, settings=None)
             return dataclasses.replace(changed, settings=_resolved(changed))
         data, local, team, known = self.inputs
-        local = {**local, "claude_access": value}
+        local = {**local, key: value}
         settings, team_settings = _resolve_both(data, local, team, known, self.team_folder)
-        return dataclasses.replace(self, local_claude_access=value, settings=settings, team_settings=team_settings,
+        return dataclasses.replace(self, **{field_name: value}, settings=settings, team_settings=team_settings,
                                    inputs=(data, local, team, known))
 
     def spec_directory(self) -> Optional[str]:
@@ -177,9 +196,11 @@ class Project:
 def _resolved(found: Project) -> cascade.Resolution:
     data = {**({"version": str(found.version)} if found.version is not None else {}), "theme": found.theme or "none",
             **({"sync": found.sync} if found.sync else {}),
-            **({"claude_access": found.claude_access} if found.claude_access is not None else {})}
+            **({"claude_access": found.claude_access} if found.claude_access is not None else {}),
+            **({"copilot_access": found.copilot_access} if found.copilot_access is not None else {})}
     local = {**({"theme": found.local_theme} if found.local_theme else {}),
-             **({"claude_access": found.local_claude_access} if found.local_claude_access is not None else {})}
+             **({"claude_access": found.local_claude_access} if found.local_claude_access is not None else {}),
+             **({"copilot_access": found.local_copilot_access} if found.local_copilot_access is not None else {})}
     return cascade.resolve(data, local, {}, {}, machine=False)
 
 
@@ -424,7 +445,9 @@ def load(root: str, lenient: bool = False) -> Project:
     return Project(root=root, version=Version(str(settings.value("version"))), theme=data.get("theme"),
                    sync=data.get("sync"), local_theme=local.get("theme"), spec=local.get("spec"),
                    claude_access=data.get("claude_access"), local_claude_access=local.get("claude_access"),
-                   claude_entry=local.get("claude_entry"), settings=settings, team_settings=team_settings,
+                   claude_entry=local.get("claude_entry"), copilot_access=data.get("copilot_access"),
+                   local_copilot_access=local.get("copilot_access"), copilot_entry=local.get("copilot_entry"),
+                   settings=settings, team_settings=team_settings,
                    synced=dict(synced) if synced is not None and not unread else None, synced_unread=unread,
                    inputs=(data, local, team, known), team_folder=folder)
 
