@@ -715,6 +715,8 @@ class TeamFileTests(TeamTestCase):
                 text = (harness.REPO / name).read_text(encoding="utf-8")
                 self.assertIn("`claude_access` locks to `false` only", text)
                 self.assertIn("never grant one on a developer's machine", text)
+        # ADR-014 §3.5: copilot_access locks alike.
+        self.assertIn("and so does `copilot_access`", (harness.REPO / "README.md").read_text(encoding="utf-8"))
 
 
 class UpgradeTests(TeamTestCase):
