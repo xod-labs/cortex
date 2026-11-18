@@ -42,7 +42,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
-from typing import List, NamedTuple, Optional, TextIO, Tuple
+from typing import Dict, List, NamedTuple, Optional, TextIO, Tuple
 
 from cortex_core import cascade
 from cortex_core import project as grammar
@@ -67,7 +67,16 @@ BOM = b"\xef\xbb\xbf"
 # The marker a bootstrap template carries under its title (ADR-010 §3.1): a whole line, read anywhere.
 # The file Cortex writes from it carries the digest of what it wrote; the templates, none.
 BOOTSTRAP_MARKER = re.compile(rb"(?m)^<!-- cortex:bootstrap layout=(single|workspace) format=([1-9][0-9]*)"
-                              rb"(?: digest=([0-9a-f]{16}))? -->\r*$")
+                              rb"(?: digest=([0-9a-f]{16}))?((?: [a-z]+=[0-9A-Za-z._+-]+)*) -->\r*$")
+# The format whose block is rendered from the team's resolution (ADR-014 §3.1): its marker carries the values it was
+# rendered from, after the digest — `version=1.9.0 theme=h2g2`.
+RENDERED_FORMAT = 4
+# What a template of that format names, each rendered as a value, never as text of the binary's own.
+PLACEHOLDER = re.compile(rb"\{\{(version|theme|folder|character|card)\}\}")
+# The lines a template of that format says the Prompt Manager's character between: left out, with the lines between,
+# when the theme's characters.md maps no character Cortex can read.
+CHARACTER_BEGIN = b"<!-- cortex:character -->"
+CHARACTER_END = b"<!-- cortex:character end -->"
 DIGEST_FIELD = b" digest="
 # The line that closes Cortex's block in a bootstrap of format 2 (ADR-012 §3.1): what follows it is the team's.
 END_MARKER = re.compile(rb"(?m)^<!-- cortex:bootstrap end -->\r*$")
@@ -105,6 +114,121 @@ def instructions(template: bytes, personality: bool) -> bytes:
                 kept.append(line)
         template = b"\n".join(kept)
     return template.rstrip(b"\n") + b"\n"
+
+
+class Values(NamedTuple):
+    """What a bootstrap of format 4 is rendered from (ADR-014 §3.1): the version and the theme the team's files
+    resolve to, the team's folder, and the Prompt Manager's character and the path of its card — ``None`` both, when
+    the theme's ``characters.md`` maps none Cortex can read, or the theme is ``none``."""
+    version: str
+    theme: str
+    folder: str
+    character: Optional[str] = None
+    card: Optional[str] = None
+
+
+# The Prompt Manager's row of a theme's mapping table: its role, its character, and the card its 📄 link names.
+_CARD_LINK = re.compile(r"\[📄\]\(([^)]+)\)")
+_CHARACTER_NAME = re.compile(r"[^`*|<>\[\]{}\\]+")
+
+
+def values_for(root: Path, spec: Path, version: object, theme: str, folder: str) -> Values:
+    """The values a bootstrap of format 4 is rendered with, for the project at ``root`` reading the spec at ``spec``:
+    the Prompt Manager's character as the theme's ``characters.md`` maps it — the spec's, else the team's folder's own
+    theme's, as the bootstrap finds it — and its card, the team's folder's when it holds one, else the spec's."""
+    found = Values(str(version), theme, folder)
+    if theme == "none" or not is_theme(theme):
+        return found
+    try:
+        table = resolver.resolve_layer("personalities", f"{theme}/characters.md", None, root, base_root=spec,
+                                       team_folder=root / folder)
+        text = table[0].read_text(encoding="utf-8") if table else ""
+    except (OSError, UnicodeDecodeError):
+        return found
+    for line in text.splitlines():
+        cells = _cells(line)
+        if cells is None or len(cells) < 2 or cells[0] != "`prompt-manager`":
+            continue
+        link = _CARD_LINK.search(line)
+        name = cells[1]
+        card = link.group(1) if link else None
+        if card is None or not _CHARACTER_NAME.fullmatch(name) or "/" in card or "\\" in card or \
+                not card.endswith(".md") or card.startswith(".") or not is_theme(card[:-3]):
+            return found
+        for where, shown in ((root / folder, f"{folder}/personalities"),
+                             (spec / "agents", "cortex/agents/personalities")):
+            try:
+                if (where / "personalities" / theme / card).is_file():
+                    return found._replace(character=name, card=f"{shown}/{theme}/{card}")
+            except OSError:
+                continue
+        return found
+    return found
+
+
+def rendered(template: bytes, given: Optional[Values]) -> bytes:
+    """A template of format 4 rendered with ``given`` (ADR-014 §3.1): each placeholder replaced by its value, the
+    lines that name the Prompt Manager's character left out — with their markers — when there is none to name, and
+    the version and the theme written in the marker. A template of an earlier format, or without ``given``, is
+    written as it is: a project kept on 1.8.x keeps format 3, byte for byte."""
+    found = list(BOOTSTRAP_MARKER.finditer(template))
+    if given is None or len(found) != 1 or int(found[0].group(2)) < RENDERED_FORMAT:
+        return template
+    kept, inside = [], False
+    for line in template.split(b"\n"):
+        bare = line.rstrip(b"\r")
+        if bare == CHARACTER_BEGIN:
+            inside = True
+        elif bare == CHARACTER_END:
+            inside = False
+        elif not inside or given.character is not None:
+            kept.append(line)
+    text = b"\n".join(kept)
+    marker = BOOTSTRAP_MARKER.search(text)
+    at = marker.end(4)
+    text = text[:at] + f" version={given.version} theme={given.theme}".encode() + text[at:]
+    fields = {"version": given.version, "theme": given.theme, "folder": given.folder,
+              "character": given.character or "", "card": given.card or ""}
+    return PLACEHOLDER.sub(lambda m: fields[m.group(1).decode()].encode("utf-8"), text)
+
+
+class Look(NamedTuple):
+    """How a bootstrap is written, besides its template and its version: with the theme — and its personality block
+    unless it is ``none`` — of the project at ``root``, whose team's folder is ``folder`` (ADR-014 §3.1)."""
+    theme: str
+    root: Path
+    folder: str = config.TEAM_FOLDER
+
+    @property
+    def personality(self) -> bool:
+        return self.theme != "none"
+
+    def values(self, spec: Path, version: object) -> Values:
+        return values_for(self.root, spec, version, self.theme, self.folder)
+
+    def written(self, template: bytes, spec: Path, version: object) -> bytes:
+        """``template``, of the spec at ``spec`` of ``version``, as Cortex writes its text: rendered, then its
+        personality block kept or removed — before the tool's frontmatter and the digest."""
+        return instructions(rendered(template, self.values(spec, version)), self.personality)
+
+
+def team_look(project: "config.Project") -> Look:
+    """How the team's bootstrap is written: from the team's resolution, never a developer's (ADR-014 §3.3)."""
+    return Look(project.team_theme, Path(project.root), project.team_folder)
+
+
+def own_look(project: "config.Project") -> Look:
+    """How the developer's own bootstrap is written: from the full resolution — their theme (ADR-013 §3.10)."""
+    return Look(project.active_theme, Path(project.root), project.team_folder)
+
+
+def marker_values(content: bytes) -> Optional[Dict[str, str]]:
+    """The values the marker of Cortex's block in ``content`` says it was rendered from — ``{"version": …, "theme":
+    …}`` — or ``None``: no marker, several, or one of a format before 4."""
+    found = list(BOOTSTRAP_MARKER.finditer(parts(LINE_BREAK.sub(b"\n", without_bom(content)))[0]))
+    if len(found) != 1 or int(found[0].group(2)) < RENDERED_FORMAT:
+        return None
+    return dict(field.decode().split("=", 1) for field in found[0].group(4).split())
 
 
 def with_alias(template: bytes, alias: str) -> bytes:
@@ -674,7 +798,9 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
                   **({"claude_access": claude_access}
                      if claude_access is not None and claude_access != project.claude_access else {})}
     project_text = config.render_project(str(root), values) if values or project is None else None
-    personality = (theme if theme is not None else project.team_theme) != "none"
+    # The team's theme, as its bootstrap is written with: the option's, or the team's resolution (ADR-014 §3.3).
+    written_theme = theme if theme is not None else project.team_theme
+    personality = written_theme != "none"
     if not options.source:
         # The lock, read as sync reads it: a spec it does not name, or a file that is no lock, stops
         # init here, before its first write — as sync stops before its own. Beside the file the
@@ -734,18 +860,25 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     workspace = options.workspace or kept_workspace
     layout = "bootstrap-instructions-workspace.md" if workspace else "bootstrap-instructions.md"
     team_personality = personality
+    # The resolution once cortex.toml is written: a format 4 template is rendered from it (ADR-014 §3.3) — the team's
+    # for the team's file, never a developer's local version or theme.
+    after = config.load(str(root))
 
     def as_forced(path: Path, name: str) -> Tuple[bytes, bool]:
-        """The template ``name`` and the personality `cortex init --tool X --force` writes ``path`` with. The
-        developer's own instructions file follows the version this machine reads, and its theme, from a team's
+        """The template ``name``, rendered, and the personality `cortex init --tool X --force` writes ``path`` with.
+        The developer's own instructions file follows the version this machine reads, and its theme, from a team's
         version of 1.8.0 (ADR-013 §3.10): before it, as 1.7.0 writes it — git asked only where they are not the
         team's. Any other file, the team's."""
         if project is not None and not grammar.before_team(str(project.team_version)):
             # The theme as read once cortex.toml is written: a local theme, or a lock, wins over --theme still.
-            mine = config.load(str(root)).active_theme != "none"
-            if (templates_spec != spec or mine != team_personality) and sync.developers_own(path):
-                return (spec / "templates" / name).read_bytes(), mine
-        return (templates / name).read_bytes(), team_personality
+            mine = after.active_theme
+            if (templates_spec != spec or mine != written_theme) \
+                    and sync.developers_own(path):
+                return rendered((spec / "templates" / name).read_bytes(),
+                                values_for(root, spec, version, mine, after.team_folder)), mine != "none"
+        return rendered((templates / name).read_bytes(), values_for(root, templates_spec, pinned, written_theme,
+                                                                  after.team_folder)), \
+            team_personality
 
     template = (templates / layout).read_bytes()
     if instructions_file is not None:
@@ -770,6 +903,13 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
         elif is_cursor_rule(instructions_file) and not applies_always(kept):
             err.write(f"note: {display(str(instructions_file))} has no `alwaysApply: true` line in a frontmatter, "
                       f"as Cursor's documentation writes it: Cursor may not apply it in every conversation — {again}\n")
+        elif marker_values(kept) not in (None, marker_values(template)):
+            # Rendered from other values than the resolution's (ADR-014 §3.3): the theme --theme just changed, say.
+            said = marker_values(kept) or {}
+            err.write(f"note: {display(str(instructions_file))} says Cortex {said.get('version')} and the theme "
+                      f"{said.get('theme')}, where this project reads Cortex {pinned} and the theme "
+                      f"{written_theme} — `cortex upgrade {pinned}` writes it again when no one changed its block; "
+                      f"{again}\n")
     else:
         replaced = instructions_file.exists()
         current = instructions_file.read_bytes() if replaced else None

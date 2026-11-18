@@ -857,6 +857,8 @@ def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err:
             upgrade.own_bootstraps(root, project, store.Store(), out, err, forced=bootstraps)
             for path, note in upgrade.behind(root, project, None, fetch=True):
                 err.write(f"note: {note}\n" if path is None else f"note: {upgrade._shown_path(path, root)} is behind: {note}\n")
+            for _, note in upgrade.unrendered(root, project):
+                err.write(f"note: {note}\n")
     if registers:
         register(root, out, err)
 
