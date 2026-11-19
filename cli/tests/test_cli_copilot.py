@@ -88,6 +88,8 @@ class EditorTests(unittest.TestCase):
         written, back = self.round_trip(text)
         self.assertEqual(written, f'{{\n  "{KEY}": [\n    "/opt/docs", // mine\n    "{ENTRY}",\n  ]\n}}\n')
         self.assertEqual(back, text)
+        written, back = self.round_trip(f'{{"{KEY}": []}}', f'{{"{KEY}": ["{ENTRY}"]}}')
+        self.assertEqual(back, "{}")                                               # an empty list goes with its key
         written, back = self.round_trip(f'{{"{KEY}": ["/opt/docs"]}}')
         self.assertEqual(written, f'{{"{KEY}": ["/opt/docs", "{ENTRY}"]}}')
         self.assertEqual(back, f'{{"{KEY}": ["/opt/docs"]}}')
@@ -121,6 +123,8 @@ class EditorTests(unittest.TestCase):
         self.assertTrue(vscode.covers("/home/dev/.cortex/", ENTRY))
         self.assertFalse(vscode.covers("/home/dev/.cortex/versions/1.9.0", ENTRY))
         self.assertFalse(vscode.covers("/home/dev/.cortex-other", ENTRY))
+        self.assertFalse(vscode.covers("/home/dev/.cort", ENTRY))                # a prefix, not a folder above
+        self.assertFalse(vscode.covers(ENTRY, ENTRY + "-old"))
         self.assertFalse(vscode.covers("~/.cortex/versions", ENTRY))     # Copilot expands no ~
         self.assertFalse(vscode.covers(3, ENTRY))
 
@@ -245,6 +249,13 @@ class SettingsFileTests(unittest.TestCase):
         with self.assertRaisesRegex(vscode.SettingsError, "read-only"):
             vscode.update(self.path, ENTRY, None)
         self.assertEqual(self.text(), "{}\n")
+
+    @unittest.skipIf(os.name == "nt", "a mode Windows has not")
+    def test_the_file_s_mode_is_kept(self):
+        self.write("{}\n")
+        self.path.chmod(0o600)
+        vscode.update(self.path, ENTRY, None)
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
 
     def test_a_link_is_written_through(self):
         if os.name == "nt":
