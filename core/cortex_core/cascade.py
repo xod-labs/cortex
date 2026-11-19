@@ -26,10 +26,10 @@ from typing import Dict, List, Mapping, Optional, Tuple
 from . import project
 from .project import LOCAL_FILE, MACHINE_FILE, MACHINE_KEYS, PROJECT_FILE, TEAM_FILE, TEAM_FOLDER, version_key
 
-PROJECT_SETTINGS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access", "agents")
+PROJECT_SETTINGS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access", "copilot_access", "agents")
 KEYS: Tuple[str, ...] = PROJECT_SETTINGS + MACHINE_KEYS
 DEFAULT = "default"
-DEFAULTS: Mapping[str, object] = {"sync": "store", "claude_access": None, "agents": TEAM_FOLDER,
+DEFAULTS: Mapping[str, object] = {"sync": "store", "claude_access": None, "copilot_access": None, "agents": TEAM_FOLDER,
                                   "releases_url": project.DEFAULT_RELEASES_URL, "update_check": True, "register": True}
 # The environment's keys (§3.7), as they behave since they were variables only: CORTEX_RELEASES_URL
 # names the host, an empty one counting as unset; the two others, set and not empty, turn their key
@@ -58,7 +58,7 @@ class Unreadable:
 @dataclass(frozen=True)
 class Setting:
     key: str
-    value: object                     # None: unset, as claude_access may be
+    value: object                     # None: unset, as claude_access and copilot_access may be
     origin: str                       # a file, as the project root names it; a variable; or "default"
     overridden: Tuple[Tuple[str, object], ...] = ()     # (origin, value) of the tiers it won over
     locked: bool = False              # the team's file locks it: its value is the team's

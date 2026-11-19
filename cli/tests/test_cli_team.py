@@ -715,6 +715,8 @@ class TeamFileTests(TeamTestCase):
                 text = (harness.REPO / name).read_text(encoding="utf-8")
                 self.assertIn("`claude_access` locks to `false` only", text)
                 self.assertIn("never grant one on a developer's machine", text)
+        # ADR-014 §3.5: copilot_access locks alike.
+        self.assertIn("and so does `copilot_access`", (harness.REPO / "README.md").read_text(encoding="utf-8"))
 
 
 class UpgradeTests(TeamTestCase):
@@ -1221,6 +1223,26 @@ class SecondReviewTests(TeamTestCase):
                     (root / "agents").unlink()
                     (root / "agents").symlink_to(team)
                 self.assert_ok(self.cortex(root, "sync"))
+
+    @unittest.skipUnless(os.name == "nt", "a junction is Windows' own")
+    def test_a_team_s_folder_that_is_a_junction_leading_nowhere_is_named_a_link(self):
+        # #376: a junction, which needs no privilege, is a link os.path.islink does not see, and Windows writes its
+        # target after `\\?\`. Named as a link, where it leads written plainly — agents/, the default folder, read by
+        # config.py, and a named one, said by sync.py.
+        import _winapi
+        for folder, version in (("agents", ""), ("team", f'version = "{OWN}"\nagents = "team"\n')):
+            with self.subTest(folder=folder):
+                root = self.project(f'{version}theme = "h2g2"\n', name=f"app-{folder}")
+                gone = self.tmp / f"gone-{folder}"
+                gone.mkdir()
+                _winapi.CreateJunction(str(gone), str(root / folder))
+                gone.rmdir()
+                proc = self.cortex(root, "sync")
+                said = (f'{folder}/ is a link to "{harness_path(gone)}", which leads nowhere: make it lead to the '
+                        "team's folder, or remove it and check that folder out in its place")
+                self.assertIn(said, proc.err)
+                self.assertNotIn("\\\\?\\", proc.err)
+                self.assertNotIn("is no folder: remove it", proc.err)
 
     @unittest.skipIf(os.name == "nt", "a link needs a privilege on Windows")
     def test_a_version_less_cortex_toml_names_a_file_where_its_team_s_folder_is(self):

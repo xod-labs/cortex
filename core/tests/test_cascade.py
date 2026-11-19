@@ -248,6 +248,20 @@ class TeamTests(unittest.TestCase):
         found = cascade.resolve({}, None, {}, {}, team_data=TEAM, committed=True)       # a cortex.toml of nothing
         self.assertEqual((found.value("theme"), found.value("version")), ("team-theme", "1.8.0"))
 
+    def test_copilot_access_resolves_and_locks_as_claude_access(self):
+        # ADR-014 §3.5: the most specific file wins; the team's file locks it to false.
+        self.assertIsNone(cascade.resolve({"theme": "h2g2"}, None, {}, {}, team_data=TEAM,
+                                          committed=True).value("copilot_access"))
+        found = cascade.resolve({"theme": "h2g2", "copilot_access": True}, {"copilot_access": False}, {}, {},
+                                team_data=TEAM, committed=True)
+        self.assertEqual((found.value("copilot_access"), found["copilot_access"].origin), (False, project.LOCAL_FILE))
+        team = {**TEAM, "copilot_access": False, "locked": ["copilot_access"]}
+        found = cascade.resolve({"theme": "h2g2"}, {"copilot_access": True}, {}, {}, team_data=team, committed=True)
+        self.assertEqual((found.value("copilot_access"), found["copilot_access"].origin), (False, NAME))
+        self.assertTrue(found["copilot_access"].locked)
+        self.assertEqual(found.notes,
+                         (f"copilot_access is locked by {NAME} to false: cortex.local.toml's true is not read",))
+
     def test_a_locked_key_set_to_the_team_s_value_is_no_override(self):
         # ADR-013 §3.5: what is set otherwise above a lock is said; the lock's own value, set again, is not.
         team = {**TEAM, "claude_access": False, "locked": ["claude_access"]}
