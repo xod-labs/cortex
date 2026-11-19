@@ -7,6 +7,9 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-19 — The Babel Fish _(Released)_
+[Full notes](changelog/1.9.0.md)
+
 ### Added
 - **`copilot_access`: VS Code's Copilot reads the store without asking** ([ADR-014](docs/adr/ADR-014-ide-modes.md) §3.5, [#410](https://github.com/xod-labs/cortex/issues/410)). As `claude_access` does for Claude Code: `copilot_access = true` in `cortex.toml` — `cortex init --tool copilot --copilot-access`, or the question `cortex init` asks on a terminal — or `cortex sync --copilot-access` for you alone, has `cortex sync` keep one entry, the store's versions folder, in `github.copilot.chat.additionalReadAccessPaths` of VS Code's settings of your machine — a remote's `~/.vscode-server/data/Machine/settings.json`, else the user `settings.json` of each VS Code installed — never the project's `.vscode/settings.json`. The edit keeps the file's comments; `cortex.local.toml` records the entry as `copilot_entry`, and sync removes it once no project of the machine still sets the key. A team's file locks it to `false` only. It reaches neither a `link` nor Copilot CLI, which takes `--add-dir`.
 - **What each tool needs, measured** ([#137](https://github.com/xod-labs/cortex/issues/137)). [Moving to the `cortex` binary](docs/migrating-to-the-binary.md#7-which-mode-your-tool-needs) gives, for GitHub Copilot, Cursor and Codex — in their IDE and their CLI — whether each reaches the spec in `store`, `link` and `copy` mode, and what it asks on the way; measured again with format 4.
