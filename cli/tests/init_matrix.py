@@ -18,6 +18,7 @@ included, and review the diff:
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -84,6 +85,21 @@ def snapshot(project, skip=("cortex",)):
             continue
         files[rel.as_posix()] = path.read_bytes().decode("utf-8")
     return files
+
+
+def at_version(files, version):
+    """The captured ``files`` as ``cortex init`` writes them at ``version``: a block of format 4 names the version it
+    was rendered for (ADR-014 §3.1), and its digest changes with it. A binary carries its own version and cannot
+    stand for ``CAPTURE_VERSION`` — its suite reads the matrix at the binary's."""
+    if version == CAPTURE_VERSION:
+        return files
+    sys.path.insert(0, str(REPO / "cli"))
+    from cortex_cli import init as init_command
+    digest = re.compile(r" digest=[0-9a-f]{16}(?= version=)")
+    return {path: init_command.stamped(digest.sub("", text.replace(CAPTURE_VERSION, version), count=1)
+                                       .encode("utf-8")).decode("utf-8")
+            if digest.search(text) else text
+            for path, text in files.items()}
 
 
 def run_init(case, tmp, spec, run):

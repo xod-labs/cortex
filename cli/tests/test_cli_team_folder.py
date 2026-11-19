@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_cli_format3 import FORMAT_2, OURS, TEMPLATE, written  # noqa: E402
+from test_cli_format3 import FORMAT_2, OURS, OWN_TEMPLATE, written  # noqa: E402
 from test_cli_team import (AS_ROOT, COMMIT_IT, DEV_OWN, DOWNLOADS, GIT, GIT_ENV, NEEDS_GIT, OWN, SOURCE, TEAM_MOVES,  # noqa: E402
                            OTHER_TEAM, TEAM_RELEASE, TeamTestCase, harness_path)
 
@@ -63,9 +63,10 @@ class FollowsTests(FolderTestCase):
         # The bootstrap compares cortex.toml's agents with the folder synced records, every leading ./ and every
         # final / dropped (§3.10): each spelling the command takes, a sync records as that comparison reads it —
         # no sync in every conversation for a spelling.
+        # Format 3, which 1.8.x ships, compares it; format 4 names the folder rendered (ADR-014 §3.1).
         for name in ("bootstrap-instructions.md", "bootstrap-instructions-workspace.md"):
             self.assertIn("compared with every leading `./` and every final `/` dropped",
-                          (harness.REPO / "templates" / name).read_text(encoding="utf-8"))
+                          (harness.FORMAT_3 / name).read_text(encoding="utf-8"))
         for value in (FOLDER, f"./{FOLDER}/", f"././{FOLDER}", f"{FOLDER}//", f"./././{FOLDER}///"):
             with self.subTest(value=value):
                 root = self.named(toml=f'agents = "{value}"\ntheme = "h2g2"\n', name=f"spelling-{len(value)}")
@@ -170,7 +171,7 @@ class RefusalTests(FolderTestCase):
         proc = self.cortex(root, "config")
         self.assert_ok(proc)
         self.assertIn('config.toml: "agents" is set in cortex.toml only, not read', proc.err)
-        self.assertIn(f"agents         {FOLDER}", proc.out)
+        self.assertIn(f"agents          {FOLDER}", proc.out)
 
     def test_a_value_that_names_no_team_s_folder_is_refused(self):
         made = self.named(name="made")
@@ -430,7 +431,8 @@ class LinkedBootstrapTests(FolderTestCase):
                     self.assertEqual((root / FOLDER / "CLAUDE.md").read_bytes(), written(FORMAT_2) + OURS)
                     self.assertIn("CLAUDE.md is behind", proc.err)
                 else:
-                    self.assertEqual((root / FOLDER / "CLAUDE.md").read_bytes(), written(TEMPLATE) + OURS)
+                    self.assertEqual((root / FOLDER / "CLAUDE.md").read_bytes(),
+                                     harness.written(OWN_TEMPLATE, OWN, folder=FOLDER) + OURS)
                     self.assertIn("CLAUDE.md: written again", proc.out)
 
 

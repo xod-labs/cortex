@@ -1321,7 +1321,7 @@ class ProjectFileTests(SyncTestCase):
         proc = self.sync(project)
         self.assertEqual(proc.returncode, 1)
         self.assertIn('unknown key "pinned"', proc.err)
-        self.assertIn("version, theme, spec, claude_access, claude_entry and synced only", proc.err)
+        self.assertIn("version, theme, spec, claude_access, claude_entry, copilot_access, copilot_entry and synced only", proc.err)
 
     def test_two_modes_at_once_are_a_bad_argument(self):
         proc = self.sync(self.project(), "--link", "--copy")

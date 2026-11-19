@@ -77,7 +77,7 @@ An ADR delivered in several steps adds:
 | [ADR-011](ADR-011-project-registry.md) | The project registry — a machine's Cortex projects, for the CLI and the cockpit | Implemented | 2026-11-05 |
 | [ADR-012](ADR-012-bootstrap-block.md) | The bootstrap file: Cortex's block, then the team's | Implemented | 2026-11-06 |
 | [ADR-013](ADR-013-configuration-cascade.md) | The configuration cascade — the team's settings, the machine's, and where each value comes from | Implemented | 2026-11-12 |
-| [ADR-014](ADR-014-ide-modes.md) | The IDE modes — a bootstrap rendered from the resolution, and access to the store for each tool | Proposed | 2026-11-18 |
+| [ADR-014](ADR-014-ide-modes.md) | The IDE modes — a bootstrap rendered from the resolution, and access to the store for each tool | Implemented | 2026-11-19 |
 
 ## Authoring an ADR
 

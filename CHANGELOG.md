@@ -7,6 +7,21 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-19 — The Babel Fish _(Released)_
+[Full notes](changelog/1.9.0.md)
+
+### Added
+- **`copilot_access`: VS Code's Copilot reads the store without asking** ([ADR-014](docs/adr/ADR-014-ide-modes.md) §3.5, [#410](https://github.com/xod-labs/cortex/issues/410)). As `claude_access` does for Claude Code: `copilot_access = true` in `cortex.toml` — `cortex init --tool copilot --copilot-access`, or the question `cortex init` asks on a terminal — or `cortex sync --copilot-access` for you alone, has `cortex sync` keep one entry, the store's versions folder, in `github.copilot.chat.additionalReadAccessPaths` of VS Code's settings of your machine — a remote's `~/.vscode-server/data/Machine/settings.json`, else the user `settings.json` of each VS Code installed — never the project's `.vscode/settings.json`. The edit keeps the file's comments; `cortex.local.toml` records the entry as `copilot_entry`, and sync removes it once no project of the machine still sets the key. A team's file locks it to `false` only. It reaches neither a `link` nor Copilot CLI, which takes `--add-dir`.
+- **What each tool needs, measured** ([#137](https://github.com/xod-labs/cortex/issues/137)). [Moving to the `cortex` binary](docs/migrating-to-the-binary.md#7-which-mode-your-tool-needs) gives, for GitHub Copilot, Cursor and Codex — in their IDE and their CLI — whether each reaches the spec in `store`, `link` and `copy` mode, and what it asks on the way; measured again with format 4.
+
+### Changed
+- **The bootstrap names the team's version, theme, Prompt Manager and folder: format 4** ([ADR-014](docs/adr/ADR-014-ide-modes.md), [#409](https://github.com/xod-labs/cortex/issues/409)). `cortex init` and `cortex upgrade` render Cortex's block from the team's resolution — the version and the theme its files resolve to, the Prompt Manager's character and the path of its card, the team's folder — and its marker carries the version and the theme: `<!-- cortex:bootstrap layout=single format=4 digest=… version=1.9.0 theme=h2g2 -->`. The assistant no longer resolves them: it reads `cortex.local.toml` for the spec's path, compares `pinned` in `synced` with the version the block names, and takes a developer's own `theme` over the block's. *Where the spec is* has three rules, and the personality step a fourth, where format 3 had eleven: the rules for a version before 1.8.0, the team's folder compared, and the reading of a `cortex/` link are gone, with the two actions a link to a checkout had ([#378](https://github.com/xod-labs/cortex/issues/378)) and the link's target PowerShell prints otherwise ([#376](https://github.com/xod-labs/cortex/issues/376)). A developer's try and theme never reach the committed block; the developer's own bootstrap, one git ignores, is rendered from theirs, and `cortex sync` writes it again when they move, untouched and of format 4.
+- **A theme or a version the team changes leaves the committed bootstrap behind** ([ADR-014](docs/adr/ADR-014-ide-modes.md) §3.3). `cortex sync` says so, naming `cortex upgrade` with the team's version, which writes an untouched block again at the same version too; `cortex validate` warns, and fails `--strict`. A block the team changed is kept: `cortex sync` and `cortex validate` say it is not rendered from the team's resolution, with the command that writes it again.
+- **A project kept on 1.8.x keeps format 3, byte for byte** ([ADR-014](docs/adr/ADR-014-ide-modes.md) §3.4). Format 4's templates ship in the spec of 1.9.0: a project reads the format of its version, and `cortex upgrade` to 1.9.0 moves an untouched block of format 3 to format 4, the team's part below its end marker kept.
+
+### Fixed
+- **A team's folder that is a junction is named a link, on Windows** ([#376](https://github.com/xod-labs/cortex/issues/376)). A junction that leads nowhere was said to be "no folder", with the remedy for a file; it is now said to be a link, and where it leads is written without the `\\?\` Windows puts before a junction's target.
+
 ## [1.8.7] - 2026-11-17 — Almost, but Not Quite, Entirely Unlike Tea _(Released)_
 [Full notes](changelog/1.8.7.md)
 
