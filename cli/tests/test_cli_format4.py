@@ -491,6 +491,14 @@ class CommandTests(TeamTestCase):
         self.assert_ok(proc)
         self.assertNotIn("CLAUDE.md", proc.out)
         self.assertEqual((root / "CLAUDE.md").read_bytes(), self.own("h2g2"))   # rule 2 tells the developer
+        said = f"note: CLAUDE.md is of format 4, which Cortex {KEPT} does not write — so it is kept: " \
+            f"`cortex upgrade {KEPT}` writes it again\n"
+        self.assertEqual(proc.err.count(said), 1, proc.err)
+        upgraded = self.tmp / "upgraded"                                        # the command named, in a copy
+        shutil.copytree(root, upgraded)
+        self.assert_ok(self.cortex(upgraded, "upgrade", KEPT))
+        self.assertEqual(init.markers((upgraded / "CLAUDE.md").read_bytes()), [("single", 3)])
+        self.assertNotIn("format 4", self.cortex(upgraded, "sync").err)
         (root / "cortex.toml").write_text(f'version = "{OWN}"\ntheme = "h2g2"\n', encoding="utf-8")
         self.assert_ok(self.cortex(root, "sync"))
         self.assertEqual((root / "CLAUDE.md").read_bytes(), self.own("h2g2"))

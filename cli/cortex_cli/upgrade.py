@@ -400,7 +400,11 @@ def own_bootstraps(root: str, project: config.Project, the_store: store.Store, o
         if not intact:
             continue
         written, _ = bootstrap(path, version, None, target, personality)
-        if written is not None and not (rendered_only and _format(written) < init.RENDERED_FORMAT):
+        if written is not None and rendered_only and _format(written) < init.RENDERED_FORMAT:
+            err.write(f"note: {_shown_path(path, root)} is of format {_format(content)}, which Cortex {version} does "
+                      f"not write — so it is kept: `cortex upgrade {version}` writes it again\n")
+            continue
+        if written is not None:
             _put(path, written)
             out.write(f"{_shown_path(path, root)}: written again from Cortex {version}'s template — your own bootstrap "
                       f"follows the version this machine reads; {_nobody(written)}\n")
