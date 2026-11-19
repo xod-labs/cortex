@@ -357,7 +357,10 @@ def own_bootstraps(root: str, project: config.Project, the_store: store.Store, o
     left alone. With no team's file, a block of format 4 is written again too when the full resolution renders
     another: its values move with it (ADR-014 §9)."""
     below = grammar.before_team(str(project.team_version))
-    if not (forced or below or project.team_file or _own_rendered(root)):
+    # With no team's file, only a block of format 4 follows the machine's values — and stays of format 4: a
+    # neighbour of format 3 is left as before, and a pin moved to 1.8.x leaves the block for rule 2 to tell.
+    rendered_only = not (forced or below or project.team_file)
+    if rendered_only and not _own_rendered(root):
         return
     contents = {}
     for path in _listed(Path(root)):
@@ -367,6 +370,8 @@ def own_bootstraps(root: str, project: config.Project, the_store: store.Store, o
             continue        # what cannot be read is not written: `cortex upgrade` refuses it, naming the error
     if below:       # as 1.7.0 leaves them, but a format 3 file: no git asked of the others
         contents = {path: content for path, content in contents.items() if _format(content) >= 3}
+    if rendered_only:
+        contents = {path: content for path, content in contents.items() if _format(content) >= init.RENDERED_FORMAT}
     version = project.version
     target = the_store.path(version)
     personality = init.team_look(project) if below else init.own_look(project)
@@ -395,7 +400,7 @@ def own_bootstraps(root: str, project: config.Project, the_store: store.Store, o
         if not intact:
             continue
         written, _ = bootstrap(path, version, None, target, personality)
-        if written is not None:
+        if written is not None and not (rendered_only and _format(written) < init.RENDERED_FORMAT):
             _put(path, written)
             out.write(f"{_shown_path(path, root)}: written again from Cortex {version}'s template — your own bootstrap "
                       f"follows the version this machine reads; {_nobody(written)}\n")

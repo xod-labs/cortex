@@ -470,3 +470,27 @@ class CommandTests(TeamTestCase):
         proc = self.cortex(root, "sync")
         self.assert_ok(proc)
         self.assertNotIn("CLAUDE.md", proc.out + proc.err)                     # in step: nothing to say
+
+    @harness.outside_a_repository
+    def test_with_no_team_s_file_a_neighbour_of_format_3_is_left_as_it_is(self):
+        root = self.project(toml=f'version = "{OWN}"\ntheme = "h2g2"\n', committed=False)
+        self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+        format_3 = init.stamped(init.instructions(FORMAT_3, True))
+        (root / "AGENTS.md").write_bytes(format_3)
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        self.assertNotIn("AGENTS.md", proc.out)
+        self.assertEqual((root / "AGENTS.md").read_bytes(), format_3)
+
+    @harness.outside_a_repository
+    def test_with_no_team_s_file_a_pin_moved_to_1_8_x_leaves_the_block_of_format_4(self):
+        root = self.project(toml=f'version = "{OWN}"\ntheme = "h2g2"\n', committed=False)
+        self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+        (root / "cortex.toml").write_text(f'version = "{KEPT}"\ntheme = "h2g2"\n', encoding="utf-8")
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        self.assertNotIn("CLAUDE.md", proc.out)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), self.own("h2g2"))   # rule 2 tells the developer
+        (root / "cortex.toml").write_text(f'version = "{OWN}"\ntheme = "h2g2"\n', encoding="utf-8")
+        self.assert_ok(self.cortex(root, "sync"))
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), self.own("h2g2"))
