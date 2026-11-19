@@ -1045,10 +1045,10 @@ def renamed_folder_notes(project: config.Project) -> List[Tuple[str, str]]:
     if project.team_folder == config.TEAM_FOLDER:
         return []
     said = []
-    if os.path.islink(project.team_dir) and not os.path.isdir(project.team_dir):
+    if store.is_link(project.team_dir) and not os.path.isdir(project.team_dir):
         # A link that leads nowhere, or to what is no folder: no checkout makes it lead to one (#350) — named as
-        # config._missing_team_folder names the default agents/ (#358).
-        target = json.dumps(display(os.readlink(project.team_dir)))
+        # config._missing_team_folder names the default agents/ (#358), a junction on Windows too (#376).
+        target = json.dumps(display(store.link_text(project.team_dir)))
         what = "which leads nowhere" if not os.path.exists(project.team_dir) else \
             "a file" if os.path.isfile(project.team_dir) else "which is no folder"
         said.append(("TEAM_FOLDER_MISSING",

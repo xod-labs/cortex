@@ -348,10 +348,10 @@ def _missing_team_folder(root: str, folder: str = TEAM_FOLDER) -> None:
         return
     required = f'{PROJECT_FILE}: "version" is required, or in {cascade.team_name(folder)}'
     path = os.path.join(root, folder)
-    if os.path.islink(path) and not os.path.isdir(path):
+    if store.is_link(path) and not os.path.isdir(path):
         # A link that leads nowhere, or to a file: no checkout makes it lead to a folder — a submodule's update leaves
-        # it (#350).
-        target = project.shown(os.readlink(path).replace(os.sep, "/"))
+        # it (#350). A junction on Windows too, which os.path.islink does not see (#376).
+        target = project.shown(store.link_text(path).replace(os.sep, "/"))
         what = "which leads nowhere" if not os.path.exists(path) else "a file" if os.path.isfile(path) else \
             "which is no folder"
         raise ConfigError(f"{required} — {folder}/ is a link to {target}, {what}: make it lead to the team's folder, "
