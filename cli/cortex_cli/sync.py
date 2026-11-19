@@ -42,7 +42,7 @@ from typing import Collection, Dict, List, Optional, Pattern, Set, TextIO, Tuple
 from cortex_core import cascade
 from cortex_core.validate import shown
 
-from . import claude, config, machine, registry, store
+from . import claude, config, machine, registry, store, vscode
 from .paths import display, quote, word, working_directory
 
 LINK = "cortex"
@@ -835,7 +835,7 @@ def unswap(target: Path, aside: Optional[Path]) -> None:
 def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
          claude_access: Optional[bool] = None, notes: bool = True, locked: bool = False,
          announce: bool = True, registers: bool = True, bootstraps: Optional[bool] = None,
-         said: Collection[str] = ()) -> None:
+         said: Collection[str] = (), copilot_access: Optional[bool] = None) -> None:
     """Sync the project at or above ``cwd``. ``notes`` off, what git ignores is left to the
     caller — ``cortex init`` writes .gitignore once ``cortex/`` has its final form. ``locked``,
     ``cortex.lock`` is never written: a sync that would write it stops. ``announce`` off, the
@@ -845,12 +845,13 @@ def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err:
     own bootstrap again and says whether the team's is behind (ADR-013 §3.10), still under the
     project's lock: ``True`` writes the developer's own whatever the team's file, ``False`` only
     where there is one. ``said``: the notes of the versions the caller said already —
-    ``cortex upgrade``'s — not said again."""
+    ``cortex upgrade``'s — not said again. ``claude_access`` and ``copilot_access``, this developer's
+    choice, written in ``cortex.local.toml``."""
     root = config.find_project(cwd)
     if root is None:
         raise SyncError(config.no_project(cwd))
     with project_lock(Path(root), err):
-        _sync(root, mode, source, out, err, claude_access, notes, locked, announce, said)
+        _sync(root, mode, source, out, err, claude_access, notes, locked, announce, said, copilot_access)
         if bootstraps is not None and source is None and not locked:
             from . import upgrade       # upgrade imports this module: the bootstraps are its
             project = config.load(root)
@@ -1044,10 +1045,10 @@ def renamed_folder_notes(project: config.Project) -> List[Tuple[str, str]]:
     if project.team_folder == config.TEAM_FOLDER:
         return []
     said = []
-    if os.path.islink(project.team_dir) and not os.path.isdir(project.team_dir):
+    if store.is_link(project.team_dir) and not os.path.isdir(project.team_dir):
         # A link that leads nowhere, or to what is no folder: no checkout makes it lead to one (#350) — named as
-        # config._missing_team_folder names the default agents/ (#358).
-        target = json.dumps(display(os.readlink(project.team_dir)))
+        # config._missing_team_folder names the default agents/ (#358), a junction on Windows too (#376).
+        target = json.dumps(display(store.link_text(project.team_dir)))
         what = "which leads nowhere" if not os.path.exists(project.team_dir) else \
             "a file" if os.path.isfile(project.team_dir) else "which is no folder"
         said.append(("TEAM_FOLDER_MISSING",
@@ -1106,7 +1107,7 @@ def synced_record(project: config.Project, reads: str) -> Optional[Dict[str, str
 
 def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
           claude_access: Optional[bool], notes: bool, locked: bool = False, announce: bool = True,
-          said: Collection[str] = ()) -> None:
+          said: Collection[str] = (), copilot_access: Optional[bool] = None) -> None:
     if source is None:
         # A version newer than this cortex, said before any key is checked (ADR-013 §3.8) — `--from`
         # checks no version, as before.
@@ -1118,7 +1119,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if local is not None:
         # Read as none, as `cortex config` reads it: the sync writes the file, which would fail half-way (#358).
         raise SyncError(f"{local}. Nothing of the project was changed")
-    against_locks(project, {"sync": mode, "claude_access": claude_access})
+    against_locks(project, {"sync": mode, "claude_access": claude_access, "copilot_access": copilot_access})
     if announce:
         out.write(f"Project: {display(root)}\n")
     for note in version_notes(project, locked):
@@ -1133,6 +1134,8 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         # This developer's choice, written with spec and kept for the next syncs: cortex.local.toml's
         # wins over the team's — unless the team's file locks it.
         project = project.with_claude_access(claude_access)
+    if copilot_access is not None:
+        project = project.with_copilot_access(copilot_access)
     # --locked checks the team's version and its lock, never a developer's try (ADR-013 §3.4).
     version = project.team_version if locked else project.version
     origin = project.team_origin if locked else project.version_origin
@@ -1188,6 +1191,8 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     recorded = synced_record(project, "" if source is not None else str(version))
     local_text = config.render_local(root, {"spec": spec, **({"claude_access": claude_access}
                                                              if claude_access is not None else {}),
+                                            **({"copilot_access": copilot_access}
+                                               if copilot_access is not None else {}),
                                             "synced": recorded},
                                      {"spec": "written by `cortex sync`",
                                       "synced": "written by `cortex sync` — the versions it read"},
@@ -1260,6 +1265,7 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     if notes:
         _notes(Path(root), mode, err)
     _claude(Path(root), project, None if mode == "copy" else spec_source, out, err)
+    _copilot(root, project, the_store.versions, mode, out, err, asked=copilot_access is not None)
     theme = project.active_theme
     if theme != "none" and not any(base.is_dir() for base in (spec_source / "agents" / "personalities" / theme,
                                                               Path(project.team_dir) / "personalities" / theme)):
@@ -1295,6 +1301,91 @@ def _claude(root: Path, project: config.Project, spec: Optional[Path], out: Text
         added = add_to_gitignore(root, {claude.SETTINGS: claude.SETTINGS})
         if added:
             out.write(f".gitignore: {', '.join(added)}\n")
+
+
+def _copilot(root: str, project: config.Project, versions: Path, mode: str, out: TextIO, err: TextIO,
+             asked: bool = False) -> None:
+    """Keep VS Code's Copilot reading the store without asking, when the project or the developer asks
+    for it (``copilot_access``, ADR-014 §3.5) — one entry, the store's versions folder, in VS Code's
+    settings of this machine, recorded as ``copilot_entry``, and no other. The entry is the machine's,
+    every project's that sets the key: another registered project that set it, and wrote it, keeps
+    it. While neither file sets ``copilot_access``, and Cortex wrote no entry, VS Code's settings are
+    left alone. ``asked``, the developer gave ``--copilot-access`` or ``--no-copilot-access``."""
+    access = project.active_copilot_access
+    owned = project.copilot_entry
+    if access is None and owned is None:
+        return
+    entry = vscode.entry_for(versions)
+    files = vscode.settings_files()
+    if access:
+        # The registry is read only where the entry is there already: written by cortex sync, for another
+        # project of this machine, or the developer's own.
+        if owned is None and any(vscode.allows(path, entry) for path in files) \
+                and _copilot_projects(root, entry, setting=False):
+            owned = entry
+        allow: Optional[str] = entry
+    else:
+        allow = None
+        if owned is not None:
+            others = _copilot_projects(root, owned, setting=True)
+            if others is None:
+                err.write(f"warning: {registry.registry_path()} cannot be read: the entry cortex sync keeps in VS "
+                          f"Code's settings, {owned}, is kept — another project may still set copilot_access\n")
+                return
+            if others:
+                out.write(f"VS Code's settings: {owned} is kept — {others[0]} still sets copilot_access\n")
+                config.write_local(root, {"copilot_entry": None})
+                return
+    if not files and access and asked:
+        err.write("note: copilot_access: no VS Code settings on this machine — neither a VS Code server nor a "
+                  "VS Code installed: nothing is written\n")
+    owns, failed = False, False
+    for path in files:
+        try:
+            said, mine = vscode.update(path, allow, owned)
+        except vscode.SettingsError as error:
+            failed = True
+            remedy = (f" — add this line to it for Copilot to read the store without asking: "
+                      f"{vscode.line_to_add(allow)}" if allow is not None else
+                      f" — remove {json.dumps(owned)} from {json.dumps(vscode.KEY)} there for Copilot to ask again")
+            err.write(f"warning: {error}{remedy}\n")
+            continue
+        owns = owns or mine
+        if said:
+            out.write(f"{said}\n")
+        elif access is False and owned is None and vscode.allows(path, entry):
+            err.write(f"note: {display(str(path))} has an entry of your own that lets Copilot read {entry} "
+                      "without asking — remove it there for Copilot to ask again\n")
+    now = entry if owns else owned if failed else None
+    if now != project.copilot_entry:
+        config.write_local(root, {"copilot_entry": now},
+                           {"copilot_entry": "written by `cortex sync` — the entry it keeps in VS Code's settings"})
+    if access and mode == "link" and files:
+        # VS Code's read access paths do not cover a link inside the workspace that leads outside it (#336153).
+        err.write(f"note: copilot_access does not reach {LINK}/, a link: Copilot still asks before it reads the spec "
+                  "through it — with `cortex sync --store`, it reads the spec in the store without asking\n")
+
+
+def _copilot_projects(root: str, entry: str, setting: bool) -> Optional[List[str]]:
+    """The other projects of this machine's registry (ADR-011) that recorded ``entry`` as their
+    ``copilot_entry`` — of those, ``setting``, the ones that still set ``copilot_access``; ``None``
+    when the registry cannot be read. A project that cannot be read now counts as none."""
+    try:
+        entries = registry.load()
+    except registry.RegistryError:
+        return None if setting else []
+    found = []
+    for listed in entries:
+        if registry.same_directory(listed.path, root) or not os.path.isfile(os.path.join(listed.path,
+                                                                                        config.PROJECT_FILE)):
+            continue
+        try:
+            other = config.load(listed.path)
+        except (config.ConfigError, OSError):
+            continue
+        if other.copilot_entry == entry and (not setting or other.active_copilot_access):
+            found.append(listed.name)
+    return found
 
 
 def add_to_gitignore(root: Path, entries: Dict[str, str]) -> List[str]:
@@ -1630,12 +1721,19 @@ def run(args: List[str]) -> int:
                              "claude_access = true in cortex.local.toml")
     access.add_argument("--no-claude-access", dest="claude_access", action="store_const", const=False,
                         help="stop it: claude_access = false in cortex.local.toml")
+    copilot = parser.add_mutually_exclusive_group()
+    copilot.add_argument("--copilot-access", dest="copilot_access", action="store_const", const=True,
+                         help="let VS Code's Copilot read the store without asking, from now on, for you: "
+                              "copilot_access = true in cortex.local.toml — one entry in VS Code's settings of "
+                              "this machine")
+    copilot.add_argument("--no-copilot-access", dest="copilot_access", action="store_const", const=False,
+                         help="stop it: copilot_access = false in cortex.local.toml")
     options = parser.parse_args(args)
     if options.locked and options.source:
         parser.error("--locked checks cortex.lock, and --from reads none: a checkout has no version")
     try:
         sync(working_directory(), options.mode, options.source, sys.stdout, sys.stderr, options.claude_access,
-             locked=options.locked, bootstraps=False)
+             locked=options.locked, bootstraps=False, copilot_access=options.copilot_access)
     except (config.ConfigError, store.StoreError, SyncError) as error:
         return failed("cortex sync", str(error))
     except OSError as error:

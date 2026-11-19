@@ -735,7 +735,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
     locks = {key: team_data[key] for key in team_data.get("locked", ())} if team_data else \
         {key: setting.value for key, setting in project.settings.settings.items() if setting.locked} if project else {}
     flags = {"theme": theme if options.theme is not None or options.no_personality else None, "sync": mode,
-             "claude_access": options.claude_access}
+             "claude_access": options.claude_access, "copilot_access": options.copilot_access}
     for key, value in flags.items():
         if value is not None and key in locks and locks[key] != value:
             raise InitError(f"{key} is locked to {config.toml_value(locks[key])} by "
@@ -787,17 +787,27 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             and console.stdin_is_terminal():
         claude_access = ask(out, "Let Claude Code read the Cortex spec without asking for permission — "
                                  "claude_access = true in cortex.toml? [y/N] ")
+    # VS Code's Copilot asks too, in store and link (ADR-014 §3.5): the same offer, for --tool copilot named —
+    # not for the default tool, which every init would then ask about.
+    copilot_access = options.copilot_access
+    if copilot_access is None and options.tool == "copilot" and tool_named and project is None \
+            and spec_mode != "copy" and console.stdin_is_terminal():
+        copilot_access = ask(out, "Let VS Code's Copilot read the Cortex spec without asking for permission — "
+                                  "copilot_access = true in cortex.toml? [y/N] ")
 
     # cortex.toml: a new one, or only the keys the options name.
     if project is None:
         values = {**({} if team_pins else {"version": str(version)}),
                   **({} if team_theme is not None and not chosen else {"theme": theme}),
-                  **({"sync": mode} if mode else {}), **({"claude_access": True} if claude_access else {})}
+                  **({"sync": mode} if mode else {}), **({"claude_access": True} if claude_access else {}),
+                  **({"copilot_access": True} if copilot_access else {})}
     else:
         values = {**({"theme": theme} if theme is not None and theme != project.theme else {}),
                   **({"sync": mode} if mode and mode != project.sync else {}),
                   **({"claude_access": claude_access}
-                     if claude_access is not None and claude_access != project.claude_access else {})}
+                     if claude_access is not None and claude_access != project.claude_access else {}),
+                  **({"copilot_access": copilot_access}
+                     if copilot_access is not None and copilot_access != project.copilot_access else {})}
     project_text = config.render_project(str(root), values) if values or project is None else None
     # The team's theme, as its bootstrap is written with: the option's, or the team's resolution (ADR-014 §3.3).
     written_theme = theme if theme is not None else project.team_theme
@@ -1011,6 +1021,10 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
             and not config.load(str(root)).active_claude_access:
         out.write("\ntip: Claude Code asks before it reads the spec in the store. `claude_access = true` in "
                   "cortex.toml lets it read without asking — for the team; `cortex sync --claude-access`, for you.\n")
+    if options.tool == "copilot" and tool_named and copilot_access is None and spec_mode != "copy" \
+            and not config.load(str(root)).active_copilot_access:
+        out.write("\ntip: VS Code's Copilot asks before it reads the spec in the store. `copilot_access = true` in "
+                  "cortex.toml lets it read without asking — for the team; `cortex sync --copilot-access`, for you.\n")
     out.write(f"\nCortex {version} is ready in {display(str(root))}.\n")
     hint = theme_hint(root, spec)
     if hint is not None:
@@ -1123,6 +1137,12 @@ def run(args: List[str]) -> int:
                              "asked on a terminal with --tool claude")
     access.add_argument("--no-claude-access", dest="claude_access", action="store_const", const=False,
                         help="do not ask, and leave it off")
+    copilot = parser.add_mutually_exclusive_group()
+    copilot.add_argument("--copilot-access", dest="copilot_access", action="store_const", const=True,
+                         help="let VS Code's Copilot read the spec in the store without asking: copilot_access = true "
+                              "in cortex.toml — asked on a terminal with --tool copilot")
+    copilot.add_argument("--no-copilot-access", dest="copilot_access", action="store_const", const=False,
+                         help="do not ask, and leave it off")
     options = parser.parse_args(args)
     if options.service and not options.workspace:
         parser.error("--service goes with --workspace")
