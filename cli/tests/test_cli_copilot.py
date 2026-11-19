@@ -410,6 +410,56 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(self.allowed(), [])
         self.assertNotIn("copilot_entry", self.local(other))
 
+    def test_a_project_that_no_longer_sets_it_keeps_nothing(self):
+        other = self.tmp / "other"
+        self.toml("copilot_access = true\n")
+        self.toml("copilot_access = true\n", project=other)
+        self.run_cortex("sync")
+        self.run_cortex("sync", cwd=other)
+        self.toml(project=other)                        # the key gone, its copilot_entry still recorded: not synced
+        self.toml()
+        proc = self.run_cortex("sync")
+        self.assertNotIn("still sets copilot_access", proc.out)
+        self.assertEqual(self.allowed(), [])
+
+    def test_two_installs_the_entry_owned_in_one_is_removed_from_both(self):
+        insiders = self.user / ".vscode-server-insiders" / "data" / "Machine" / "settings.json"
+        insiders.parent.mkdir(parents=True)
+        insiders.write_text(f'{{"{KEY}": ["{self.entry}"]}}', encoding="utf-8")      # the developer's, the same
+        self.toml("copilot_access = true\n")
+        self.run_cortex("sync")
+        self.assertEqual(self.allowed(), [self.entry])
+        self.assertIn(f'copilot_entry = "{self.entry}"', self.local())                # owned in the first
+        self.toml()
+        self.run_cortex("sync")
+        self.assertEqual(self.allowed(), [])
+        self.assertEqual(self.allowed(insiders), [])                                    # the same entry, as written
+        self.assertNotIn("copilot_entry", self.local())
+
+    def test_a_failed_removal_keeps_the_entry_recorded(self):
+        self.toml("copilot_access = true\n")
+        self.run_cortex("sync")
+        written = self.settings.read_text(encoding="utf-8")
+        self.settings.write_text(written.replace("{", "{\n  \"a\": 1\n", 1), encoding="utf-8")   # no comma
+        self.toml()
+        proc = self.run_cortex("sync")
+        self.assertIn(f'remove "{self.entry}" from "{KEY}" there', proc.err)
+        self.assertIn(f'copilot_entry = "{self.entry}"', self.local())
+        self.settings.write_text(written, encoding="utf-8")
+        self.run_cortex("sync")                         # once the file can be read, the entry goes
+        self.assertEqual(self.allowed(), [])
+        self.assertNotIn("copilot_entry", self.local())
+
+    def test_a_registry_it_cannot_read_keeps_the_entry_and_says_so(self):
+        self.toml("copilot_access = true\n")
+        self.run_cortex("sync")
+        (self.home / "projects.toml").write_text("not = [toml\n", encoding="utf-8")
+        self.toml()
+        proc = self.run_cortex("sync")
+        self.assertIn("projects.toml cannot be read: the entry cortex sync keeps in VS Code's settings", proc.err)
+        self.assertEqual(self.allowed(), [self.entry])
+        self.assertIn(f'copilot_entry = "{self.entry}"', self.local())
+
     def test_a_project_that_set_it_but_never_wrote_it_keeps_nothing(self):
         other = self.tmp / "other"
         self.toml()
