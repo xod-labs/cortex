@@ -137,9 +137,13 @@ class RenderTests(unittest.TestCase):
         theme.mkdir(parents=True)
         for table in ("# Acme characters\n",                                           # no table
                       "| `prompt-manager` | Road Runner | @Beep | [📄](../../x.md) |\n",   # a card out of the theme
-                      "| `prompt-manager` | Road Runner | @Beep | [📄](Gone.md) |\n"):     # a card that is not there
+                      "| `prompt-manager` | Road Runner | @Beep | [📄](Gone.md) |\n",      # a card that is not there
+                      "| `prompt-manager` | Road `Runner` | @Beep | [📄](Road-Runner.md) |\n",  # a name of markup
+                      "| `prompt-manager` | Road Runner | @Beep | [📄](.Road-Runner.md) |\n"):  # a hidden card
             with self.subTest(table=table):
                 (theme / "characters.md").write_text(table, encoding="utf-8")
+                (theme / "Road-Runner.md").write_text("# Road Runner\n", encoding="utf-8")
+                (theme / ".Road-Runner.md").write_text("# Road Runner\n", encoding="utf-8")
                 found = init.values_for(self.tmp, harness.REPO, "1.9.0", "acme", "agents")
                 self.assertEqual((found.character, found.card), (None, None))
                 for name, template in TEMPLATES:
