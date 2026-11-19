@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "core"))
 import cli_harness as harness  # noqa: E402
 from cortex_cli import init  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
+from test_cli_format3 import remove_store  # noqa: E402
 from test_cli_team import DOWNLOADS, NEEDS_GIT, OWN, TEAM, TeamTestCase  # noqa: E402
 
 SINGLE = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes()
@@ -425,6 +426,30 @@ class CommandTests(TeamTestCase):
         self.assertTrue(written.endswith(OURS))
         self.assertEqual(self.local(root)["synced"]["pinned"], "9.9.8")     # the version the block names
         self.assert_ok(self.cortex(root, "validate", "--strict"))
+
+    def test_a_version_moved_by_hand_is_told_behind_without_the_store(self):
+        root = self.project(toml=f'version = "{OWN}"\ntheme = "h2g2"\n')
+        self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+        (root / "cortex.toml").write_text(f'version = "{KEPT}"\ntheme = "h2g2"\n', encoding="utf-8")
+        self.assert_ok(self.cortex(root, "sync", "--copy"))
+        remove_store(self.home / "versions" / KEPT)              # the copy is read; the store holds no such version
+        proc = self.cortex(root, "validate")
+        self.assert_ok(proc)
+        self.assertIn("BOOTSTRAP_BEHIND", proc.out + proc.err)
+        self.assertNotIn("not checked", proc.out + proc.err)                   # told by the marker alone
+        self.assertEqual(self.cortex(root, "validate", "--strict").returncode, 1)
+
+    def test_init_says_a_kept_block_rendered_from_other_values(self):
+        root = self.project(toml=f'version = "{OWN}"\ntheme = "h2g2"\n')
+        self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+        (root / "cortex.toml").write_text(f'version = "{OWN}"\ntheme = "breaking-bad"\n', encoding="utf-8")
+        proc = self.cortex(root, "init", "--tool", "claude")
+        self.assert_ok(proc)
+        self.assertIn(f"CLAUDE.md says Cortex {OWN} and the theme h2g2, where this project reads Cortex {OWN} "
+                      f"and the theme breaking-bad — `cortex upgrade {OWN}` writes it again", proc.err)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), self.own("h2g2"))
+        self.assert_ok(self.cortex(root, "upgrade", OWN))                      # the command named
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), self.own("breaking-bad"))
 
     @NEEDS_GIT
     def test_the_developer_s_own_bootstrap_follows_a_team_s_folder_moved_with_no_team_s_file(self):
