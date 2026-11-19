@@ -65,6 +65,16 @@ class FileTests(unittest.TestCase):
                     project.check_local(data)
         with self.assertRaisesRegex(project.ProjectFileError, 'unknown key "claude_entry"'):
             project.check_project({"version": "1.0.0", "theme": "h2g2", "claude_entry": "/x"})
+        # ADR-014 §3.5: copilot_access, as claude_access, and the entry sync keeps in VS Code's settings.
+        project.check_project({"version": "1.0.0", "theme": "h2g2", "copilot_access": True})
+        project.check_local({"copilot_access": False, "copilot_entry": "/home/x/.cortex/versions"})
+        for data, fragment in (({"copilot_entry": 1}, '"copilot_entry" must be a string'),
+                               ({"copilot_access": "yes"}, '"copilot_access" must be true or false')):
+            with self.subTest(data=data):
+                with self.assertRaisesRegex(project.ProjectFileError, fragment):
+                    project.check_local(data)
+        with self.assertRaisesRegex(project.ProjectFileError, 'unknown key "copilot_entry"'):
+            project.check_project({"version": "1.0.0", "theme": "h2g2", "copilot_entry": "/x"})
         project.check_local({"version": "1.9.0-rc.1"})                # a developer's try (ADR-013 §3.3)
         with self.assertRaisesRegex(project.ProjectFileError, 'version "9" is no version'):
             project.check_local({"version": "9"})
@@ -91,6 +101,7 @@ class TeamFileTests(unittest.TestCase):
     def test_a_team_s_file(self):
         project.check_team({"version": "1.8.0", "theme": "h2g2", "sync": "link", "claude_access": False,
                             "locked": ["claude_access", "theme"]})
+        project.check_team({"copilot_access": False, "locked": ["copilot_access"]})
         project.check_team({})                                       # none required
         project.check_team({"version": "2.0.0-rc.1"})
         for version in ("1.8.0-rc.1", "1.8.0-dev.3"):                 # a pre-release has its release's features
@@ -108,7 +119,8 @@ class TeamFileTests(unittest.TestCase):
                 ({"locked": ["locked"]}, 'locked names "locked", which no lock takes'),
                 ({"locked": ["theme"]}, 'locked names "theme", which the file does not set'),
                 ({"locked": ["theme", "theme"], "theme": "h2g2"}, 'locked names "theme" twice'),
-                ({"locked": ["claude_access"], "claude_access": True}, "claude_access is locked to false only")):
+                ({"locked": ["claude_access"], "claude_access": True}, "claude_access is locked to false only"),
+                ({"locked": ["copilot_access"], "copilot_access": True}, "copilot_access is locked to false only")):
             with self.subTest(data=data):
                 with self.assertRaisesRegex(project.ProjectFileError, fragment):
                     project.check_team(data, self.NAME)
