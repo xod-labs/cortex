@@ -57,6 +57,18 @@ class EditorTests(unittest.TestCase):
         for comment in ("// the editor", "/* big */", "// trailing", '/* "old": 1, */'):
             self.assertIn(comment, written)
 
+    def test_a_comment_in_an_empty_object_on_one_line_is_kept(self):
+        for text in ("{/* keep me */}\n", "{ /* nothing yet */ }\n"):
+            with self.subTest(text=text):
+                comment = text[text.index("/*"):text.index("*/") + 2]
+                written, back = self.round_trip(text)
+                self.assertEqual(written, f'{{\n    {comment}\n    "{KEY}": [\n        "{ENTRY}"\n    ]\n}}\n')
+                self.assertEqual(back, f"{{\n    {comment}\n}}\n")
+                again = vscode.with_entry(back, ENTRY)                          # added again: the comment stays
+                self.assertIn(comment, again)
+                self.assertEqual(vscode.entries(again), [ENTRY])
+                self.assertEqual(vscode.without_entry(again, ENTRY), back)
+
     def test_trailing_commas_are_kept_and_followed(self):
         text = '{\n\t"a": 1,\n\t"b": [\n\t\t"x",\n\t],\n}\n'
         written, back = self.round_trip(text)

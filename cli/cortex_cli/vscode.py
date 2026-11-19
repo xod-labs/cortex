@@ -271,7 +271,9 @@ def _insert(text: str, container: _Node, unit: str, newline: str, first: str, re
     if container.items and container.items[-1][2] is not None:
         block += ","                            # a file that ends each item with a comma: this one too
     if not multiline:                          # the settings' own {}, opened on lines of its own
-        edits.append((container.start + 1, close, newline + block + newline + outer))
+        inside = text[container.start + 1:close].strip(" \t")      # a comment, kept on a line of its own
+        kept = newline + indent + inside if inside else ""
+        edits.append((container.start + 1, close, kept + newline + block + newline + outer))
         return edits
     at = _first_newline(text, anchor, close)
     if at is not None:
