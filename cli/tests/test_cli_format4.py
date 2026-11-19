@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "core"))
 import cli_harness as harness  # noqa: E402
 from cortex_cli import init  # noqa: E402
 from release_fixture import FakeRelease  # noqa: E402
-from test_cli_team import DOWNLOADS, OWN, TEAM, TeamTestCase  # noqa: E402
+from test_cli_team import DOWNLOADS, NEEDS_GIT, OWN, TEAM, TeamTestCase  # noqa: E402
 
 SINGLE = (harness.REPO / "templates" / "bootstrap-instructions.md").read_bytes()
 WORKSPACE = (harness.REPO / "templates" / "bootstrap-instructions-workspace.md").read_bytes()
@@ -384,6 +384,60 @@ class CommandTests(TeamTestCase):
                             committed=False)
         self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
         self.assertEqual((root / "CLAUDE.md").read_bytes(), self.own("breaking-bad"))
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        self.assertNotIn("CLAUDE.md", proc.out + proc.err)                     # in step: nothing to say
+
+    @harness.outside_a_repository
+    def test_the_developer_s_own_bootstrap_follows_a_theme_moved_with_no_team_s_file(self):
+        root = self.project(toml=f'version = "{OWN}"\ntheme = "h2g2"\n', committed=False)
+        self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+        (root / "CLAUDE.md").write_bytes((root / "CLAUDE.md").read_bytes() + OURS)
+        (root / "cortex.toml").write_text(f'version = "{OWN}"\ntheme = "breaking-bad"\n', encoding="utf-8")
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        self.assertIn("CLAUDE.md: written again", proc.out)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), self.own("breaking-bad") + OURS)
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        self.assertNotIn("CLAUDE.md", proc.out + proc.err)                     # in step: nothing to say
+        self.assert_ok(self.cortex(root, "validate", "--strict"))
+
+    @DOWNLOADS
+    @harness.outside_a_repository
+    def test_the_developer_s_own_bootstrap_follows_a_version_moved_with_no_team_s_file(self):
+        self.release.replace_spec("9.9.8", {"templates/bootstrap-instructions.md": SINGLE,
+                                            "templates/project-overview.md.template": b"# Overview\n",
+                                            "templates/project-context.md.template": b"# Context\n"})
+        root = self.project(toml=f'version = "{OWN}"\ntheme = "h2g2"\n', committed=False)
+        self.assert_ok(self.cortex(root, "init", "--tool", "claude"))
+        (root / "CLAUDE.md").write_bytes((root / "CLAUDE.md").read_bytes() + OURS)
+        (root / "cortex.toml").write_text('version = "9.9.8"\ntheme = "h2g2"\n', encoding="utf-8")
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        written = (root / "CLAUDE.md").read_bytes()
+        self.assertEqual(init.marker_values(written), {"version": "9.9.8", "theme": "h2g2"})
+        self.assertIn(b"This project reads **Cortex 9.9.8**", written)
+        self.assertTrue(written.endswith(OURS))
+        self.assertEqual(self.local(root)["synced"]["pinned"], "9.9.8")     # the version the block names
+        self.assert_ok(self.cortex(root, "validate", "--strict"))
+
+    @NEEDS_GIT
+    def test_the_developer_s_own_bootstrap_follows_a_team_s_folder_moved_with_no_team_s_file(self):
+        root = self.project(toml=f'version = "{OWN}"\ntheme = "h2g2"\n', committed=False)
+        (root / "agents").mkdir()
+        (root / "team").mkdir()
+        (root / ".gitignore").write_text("CLAUDE.md\n", encoding="utf-8")
+        self.git(root, "init", "-q")
+        self.git(root, "add", "cortex.toml", ".gitignore")
+        self.git(root, "commit", "-qm", "init")
+        self.assert_ok(self.cortex(root, "init", "--workspace", "--tool", "claude", "--service", "api"))
+        self.assertIn(b"`{workspace_root}/agents/` is the team's folder", (root / "CLAUDE.md").read_bytes())
+        (root / "cortex.toml").write_text(f'version = "{OWN}"\ntheme = "h2g2"\nagents = "team"\n', encoding="utf-8")
+        self.git(root, "commit", "-qam", "the team's folder")
+        proc = self.cortex(root, "sync")
+        self.assert_ok(proc)
+        self.assertIn(b"`{workspace_root}/team/` is the team's folder", (root / "CLAUDE.md").read_bytes())
         proc = self.cortex(root, "sync")
         self.assert_ok(proc)
         self.assertNotIn("CLAUDE.md", proc.out + proc.err)                     # in step: nothing to say

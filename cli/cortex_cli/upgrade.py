@@ -333,6 +333,19 @@ def _recorded(content: bytes) -> Optional[bytes]:
     return found[0].group(3) if len(found) == 1 else None
 
 
+def _own_rendered(root: str) -> bool:
+    """Whether a developer's own bootstrap is of format 4: its block is rendered from values — the version, the
+    theme, the team's folder, the Prompt Manager — that move with the machine's resolution."""
+    for path in _listed(Path(root)):
+        try:
+            values = init.marker_values(init.normalised(path.read_bytes()))
+        except OSError:
+            continue
+        if values is not None and sync.developers_own(path):
+            return True
+    return False
+
+
 def own_bootstraps(root: str, project: config.Project, the_store: store.Store, out: TextIO, err: TextIO,
                    forced: bool = False) -> None:
     """The developer's own bootstrap files written again from the version this machine reads, and its theme
@@ -341,9 +354,10 @@ def own_bootstraps(root: str, project: config.Project, the_store: store.Store, o
     kept when that version writes another. A team's version before 1.8.0 writes an untouched format 3 one again
     from the resolved version's template, with the team's theme, and says a changed one needs 1.8.0; one of an
     earlier format is left as 1.7.0 leaves it. A file whose marker carries no digest, or that cannot be read, is
-    left alone."""
+    left alone. With no team's file, a block of format 4 is written again too when the full resolution renders
+    another: its values move with it (ADR-014 §9)."""
     below = grammar.before_team(str(project.team_version))
-    if not (forced or below or project.team_file):
+    if not (forced or below or project.team_file or _own_rendered(root)):
         return
     contents = {}
     for path in _listed(Path(root)):
