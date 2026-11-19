@@ -152,8 +152,9 @@ def values_for(root: Path, spec: Path, version: object, theme: str, folder: str)
         link = _CARD_LINK.search(line)
         name = cells[1]
         card = link.group(1) if link else None
-        if card is None or not _CHARACTER_NAME.fullmatch(name) or "/" in card or "\\" in card or \
-                not card.endswith(".md") or card.startswith(".") or not is_theme(card[:-3]):
+        # A card is a file of the theme's folder: a name, as a theme is — no path, no leading dot.
+        if card is None or not _CHARACTER_NAME.fullmatch(name) or not card.endswith(".md") or \
+                not is_theme(card[:-3]):
             return found
         for where, shown in ((root / folder, f"{folder}/personalities"),
                              (spec / "agents", "cortex/agents/personalities")):
