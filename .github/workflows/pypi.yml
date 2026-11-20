@@ -1,0 +1,70 @@
+# Reserves the core's distribution name on PyPI (#86): a placeholder, 0.0.0, that installs nothing,
+# so that no index serves a package of that name that is not ours. Run by hand, once, from main.
+# PyPI trusts this file by its name and the `pypi` environment, which a maintainer approves; the
+# name is the one `core/pyproject.toml` declares, so that what is reserved is what is depended on.
+name: pypi
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  placeholder:
+    name: placeholder
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      name: ${{ steps.build.outputs.name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the placeholder of the core's name
+        id: build
+        run: |
+          name=$(python3 -c 'import tomllib; print(tomllib.load(open("core/pyproject.toml", "rb"))["project"]["name"])')
+          mkdir placeholder
+          printf '%s\n' \
+            '[build-system]' \
+            'requires = ["setuptools>=68"]' \
+            'build-backend = "setuptools.build_meta"' \
+            '' \
+            '[project]' \
+            "name = \"$name\"" \
+            'version = "0.0.0"' \
+            'description = "Reserved for Cortex (https://github.com/xod-labs/cortex). Installs nothing."' \
+            '' \
+            '[tool.setuptools]' \
+            'packages = []' > placeholder/pyproject.toml
+          python3 -m pip wheel --no-deps --wheel-dir dist ./placeholder
+          # One wheel, holding its metadata and nothing else.
+          python3 -m zipfile -l dist/*.whl
+          test "$(ls dist | wc -l)" -eq 1
+          test -z "$(python3 -m zipfile -l dist/*.whl | awk 'NR > 1 {print $1}' | grep -v '\.dist-info/')"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: placeholder
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: placeholder
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/${{ needs.placeholder.outputs.name }}/
+    permissions:
+      id-token: write        # PyPI's trusted publishing: no token is stored
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: placeholder
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
