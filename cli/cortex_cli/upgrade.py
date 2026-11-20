@@ -57,6 +57,7 @@ from .version import VERSION
 
 LAYERS = ("roles", "capabilities", "personalities", "workflows")
 TEMPLATES = {"single": "bootstrap-instructions.md", "workspace": "bootstrap-instructions-workspace.md"}
+FIRST_RENDERED_VERSION = "1.9.0"     # the first whose templates write format 4 (ADR-014 §3.4)
 
 
 class UpgradeError(Exception):
@@ -181,7 +182,7 @@ def _instructions_files(root: Path, named: Optional[str]) -> List[Path]:
     return [root / rel for rel in init.TOOLS.values() if (root / rel).is_file()]
 
 
-def written_by(kept: bytes, templates: Path, layouts: List[str], personality: bool, path: Path) -> Optional[str]:
+def written_by(kept: bytes, templates: Path, layouts: List[str], look: init.Look, path: Path) -> Optional[str]:
     """The layout ``kept`` — normalised — is exactly the file of, as the templates at ``templates``
     write it for this personality: the team's theme decides it, as for ``cortex init``. ``None``
     when a team changed it, or another version wrote it. A Cursor rule is that file with or without
@@ -189,18 +190,26 @@ def written_by(kept: bytes, templates: Path, layouts: List[str], personality: bo
     for layout in layouts:
         template = templates / TEMPLATES[layout]
         if template.is_file():
-            text = init.instructions(template.read_bytes(), personality)
+            text = look.written(template.read_bytes(), templates.parent, templates.parent.name)
             if kept in (text, init.for_tool(path, text)):
                 return layout
     return None
 
 
-def _written(templates: Path, layout: str, personality: bool, path: Path) -> Optional[bytes]:
-    """The bootstrap the templates at ``templates`` write for ``layout``, as Cortex writes it at ``path``."""
+def _written(templates: Path, layout: str, look: init.Look, path: Path) -> Optional[bytes]:
+    """The bootstrap the templates at ``templates`` write for ``layout``, as Cortex writes it at ``path`` — rendered,
+    from format 4, with the version of their spec, which the store keeps at ``versions/X.Y.Z`` (ADR-014 §3.1)."""
     template = templates / TEMPLATES[layout]
     if not template.is_file():
         return None
-    return init.stamped(init.for_tool(path, init.instructions(template.read_bytes(), personality)))
+    text = look.written(template.read_bytes(), templates.parent, templates.parent.name)
+    return init.stamped(init.for_tool(path, text))
+
+
+def _first_reader(content: bytes) -> str:
+    """The first version that reads the format of ``content``: format 3, 1.8.0 (ADR-013 §3.10); format 4, 1.9.0
+    (ADR-014 §3.4)."""
+    return FIRST_RENDERED_VERSION if _format(content) >= init.RENDERED_FORMAT else grammar.FIRST_TEAM_VERSION
 
 
 def _format(content: Optional[bytes]) -> int:
@@ -208,8 +217,8 @@ def _format(content: Optional[bytes]) -> int:
     return found[0][1] if found else 0
 
 
-def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path, personality: bool,
-              team_personality: Optional[bool] = None) -> Tuple[Optional[bytes], Optional[str]]:
+def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path, personality: init.Look,
+              team_personality: Optional[init.Look] = None) -> Tuple[Optional[bytes], Optional[str]]:
     """What becomes of the bootstrap at ``path`` when the project moves from ``pinned``, whose spec
     is at ``current`` — ``None`` when the store has it not — to the spec at ``target`` (ADR-010
     §3.5, step 5): the bytes to write, or the note to give; ``(None, None)`` when nothing is to be
@@ -245,9 +254,9 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
     if layout is None and _format(content) >= 3 > max(_format(_written(target / "templates", name, personality, path))
                                                      for name in layouts):
         # Moved below 1.8.0, a format 3 file a team changed: its rules need a cortex of 1.8.0 (ADR-013 §3.10).
-        return None, (f"{display(str(path))} is of format {_format(content)}, which Cortex {grammar.FIRST_TEAM_VERSION} or "
-                      f"later reads, and not what Cortex wrote — so it is kept, and the target's template is not "
-                      f"written: {again}{below}")
+        return None, (f"{display(str(path))} is of format {_format(content)}, which Cortex "
+                      f"{_first_reader(content)} or later reads, and not what Cortex wrote — so it is kept, and the "
+                      f"target's template is not written: {again}{below}")
     if layout is None:
         # A team changed it: said when the target writes another file than the pinned version, or,
         # without the pinned version, a later format — and, of a Cursor rule, when it lacks the
@@ -256,6 +265,9 @@ def bootstrap(path: Path, pinned: Version, current: Optional[Path], target: Path
         if current is not None:
             matters = any(_written(current / "templates", name, personality, path) !=
                           _written(target / "templates", name, personality, path) for name in layouts)
+            # Of format 4, rendered from other values than the target renders — a theme the team changed (ADR-014 §3.3).
+            matters = matters or any(init.marker_values(content) not in (None, init.marker_values(
+                _written(target / "templates", name, personality, path) or b"")) for name in layouts)
         else:
             matters = _format(content) < max(_format(_written(target / "templates", name, personality, path))
                                              for name in layouts)
@@ -296,8 +308,8 @@ def _nobody(written: bytes) -> str:
     return "no one changed it"
 
 
-def bootstraps(files: List[Path], pinned: Version, current: Optional[Path], target: Path, personality: bool,
-               err: TextIO, team_personality: Optional[bool] = None) -> List[Tuple[Path, bytes]]:
+def bootstraps(files: List[Path], pinned: Version, current: Optional[Path], target: Path, personality: init.Look,
+               err: TextIO, team_personality: Optional[init.Look] = None) -> List[Tuple[Path, bytes]]:
     """The bootstrap files to write again, and what they are now; the notes said on ``err``."""
     rewrites = []
     for path in files:
@@ -321,6 +333,19 @@ def _recorded(content: bytes) -> Optional[bytes]:
     return found[0].group(3) if len(found) == 1 else None
 
 
+def _own_rendered(root: str) -> bool:
+    """Whether a developer's own bootstrap is of format 4: its block is rendered from values — the version, the
+    theme, the team's folder, the Prompt Manager — that move with the machine's resolution."""
+    for path in _listed(Path(root)):
+        try:
+            values = init.marker_values(init.normalised(path.read_bytes()))
+        except OSError:
+            continue
+        if values is not None and sync.developers_own(path):
+            return True
+    return False
+
+
 def own_bootstraps(root: str, project: config.Project, the_store: store.Store, out: TextIO, err: TextIO,
                    forced: bool = False) -> None:
     """The developer's own bootstrap files written again from the version this machine reads, and its theme
@@ -329,9 +354,13 @@ def own_bootstraps(root: str, project: config.Project, the_store: store.Store, o
     kept when that version writes another. A team's version before 1.8.0 writes an untouched format 3 one again
     from the resolved version's template, with the team's theme, and says a changed one needs 1.8.0; one of an
     earlier format is left as 1.7.0 leaves it. A file whose marker carries no digest, or that cannot be read, is
-    left alone."""
+    left alone. With no team's file, a block of format 4 is written again too when the full resolution renders
+    another: its values move with it (ADR-014 §9)."""
     below = grammar.before_team(str(project.team_version))
-    if not (forced or below or project.team_file):
+    # With no team's file, only a block of format 4 follows the machine's values — and stays of format 4: a
+    # neighbour of format 3 is left as before, and a pin moved to 1.8.x leaves the block for rule 2 to tell.
+    rendered_only = not (forced or below or project.team_file)
+    if rendered_only and not _own_rendered(root):
         return
     contents = {}
     for path in _listed(Path(root)):
@@ -341,9 +370,11 @@ def own_bootstraps(root: str, project: config.Project, the_store: store.Store, o
             continue        # what cannot be read is not written: `cortex upgrade` refuses it, naming the error
     if below:       # as 1.7.0 leaves them, but a format 3 file: no git asked of the others
         contents = {path: content for path, content in contents.items() if _format(content) >= 3}
+    if rendered_only:
+        contents = {path: content for path, content in contents.items() if _format(content) >= init.RENDERED_FORMAT}
     version = project.version
     target = the_store.path(version)
-    personality = (project.team_theme if below else project.active_theme) != "none"
+    personality = init.team_look(project) if below else init.own_look(project)
     for path, content in contents.items():
         if not sync.developers_own(path):
             continue
@@ -355,7 +386,7 @@ def own_bootstraps(root: str, project: config.Project, the_store: store.Store, o
                 "yours as .bak"
         if intact is False and below:
             err.write(f"note: {_shown_path(path, root)} is of format {_format(content)}, which Cortex "
-                      f"{grammar.FIRST_TEAM_VERSION} or later reads, and not what Cortex wrote — so it is kept: "
+                      f"{_first_reader(content)} or later reads, and not what Cortex wrote — so it is kept: "
                       f"{again}\n")
         elif intact is False:
             found = init.markers(content)
@@ -369,6 +400,10 @@ def own_bootstraps(root: str, project: config.Project, the_store: store.Store, o
         if not intact:
             continue
         written, _ = bootstrap(path, version, None, target, personality)
+        if written is not None and rendered_only and _format(written) < init.RENDERED_FORMAT:
+            err.write(f"note: {_shown_path(path, root)} is of format {_format(content)}, which Cortex {version} does "
+                      f"not write — so it is kept: `cortex upgrade {version}` writes it again\n")
+            continue
         if written is not None:
             _put(path, written)
             out.write(f"{_shown_path(path, root)}: written again from Cortex {version}'s template — your own bootstrap "
@@ -394,7 +429,7 @@ def _own_rewrites(files: List[Path], project: config.Project, after: Version, th
     current = project.version
     the_store.ensure(after)
     return bootstraps(files, current, the_store.path(current) if the_store.has(current) else None,
-                      the_store.path(after), project.active_theme != "none", err, project.team_theme != "none")
+                      the_store.path(after), init.own_look(project), err, init.team_look(project))
 
 
 def _again(path: Path, root: str, version: Version, content: bytes, own: bool, would: bool = False) -> str:
@@ -427,51 +462,88 @@ def reads_a_checkout(root: str, project: config.Project) -> bool:
     return Path(os.path.realpath(spec)).parent != Path(os.path.realpath(store.cortex_home() / "versions"))
 
 
-def behind(root: str, project: config.Project, the_store: Optional[store.Store],
-           fetch: bool) -> List[Tuple[Optional[Path], str]]:
-    """What is said of the team's bootstrap files (ADR-013 §3.10), each with its file — ``None`` for a note
-    of them all: untouched and not the team's version's template, each is behind — ``cortex upgrade`` writes
-    it again. ``fetch``, the team's version is put in the store to tell (`cortex sync`); without it and not
-    there, they are said not checked (`cortex validate`). A team's version before 1.8.0 writes no format 3:
-    an untouched format 3 file — a pin moved by hand — is behind it, told without the store. A changed block,
-    a file that cannot be read, or a machine reading a checkout, is never behind. ``the_store``, ``None`` for
-    one built only once there is a file to tell — `cortex validate` of a 1.7.0 project builds none."""
-    team = project.team_version
-    below = grammar.before_team(str(team))
+def _team_s_contents(root: str, project: config.Project) -> Dict[Path, bytes]:
+    """The team's bootstrap files that can be read, normalised: every known tool's that is there and is not the
+    developer's own — below 1.8.0, those of format 3 or later only, no git asked of the others."""
     contents = {}
     for path in _listed(Path(root)):
         try:
             contents[path] = init.normalised(path.read_bytes())
         except OSError:
             continue
-    if below:       # as 1.7.0 leaves them, but a format 3 file: no git asked of the others
+    if grammar.before_team(str(project.team_version)):
         contents = {path: content for path, content in contents.items() if _format(content) >= 3}
-    contents = {path: content for path, content in contents.items()
-                if init.untouched(content) and not sync.developers_own(path)}
+    return {path: content for path, content in contents.items() if not sync.developers_own(path)}
+
+
+def off_the_resolution(content: bytes, project: config.Project) -> bool:
+    """Whether a block of format 4 says, in its marker, other values than the team's resolution (ADR-014 §3.3): another
+    version or another theme. Never of an earlier format, whose marker says none."""
+    said = init.marker_values(content)
+    return said is not None and (said.get("version"), said.get("theme")) != (str(project.team_version),
+                                                                              project.team_theme)
+
+
+def behind(root: str, project: config.Project, the_store: Optional[store.Store],
+           fetch: bool) -> List[Tuple[Optional[Path], str]]:
+    """What is said of the team's bootstrap files (ADR-013 §3.10, ADR-014 §3.3), each with its file — ``None`` for a
+    note of them all: untouched and not what the team's resolution renders, each is behind — ``cortex upgrade`` writes
+    it again. A block of format 4 whose marker names another version or theme than the team's is behind, told
+    without the store; any other is compared with the team's version's template. ``fetch``, the team's version is put
+    in the store to tell (`cortex sync`); without it and not there, they are said not checked (`cortex validate`). A
+    team's version before 1.8.0 writes no format 3: an untouched format 3 file — a pin moved by hand — is behind it,
+    told without the store. A changed block, a file that cannot be read, or a machine reading a checkout, is never
+    behind. ``the_store``, ``None`` for one built only once there is a file to tell — `cortex validate` of a 1.7.0
+    project builds none."""
+    team = project.team_version
+    below = grammar.before_team(str(team))
+    contents = {path: content for path, content in _team_s_contents(root, project).items() if init.untouched(content)}
     if not contents or reads_a_checkout(root, project):
         return []
     reason = f"Cortex {team}, the team's version, writes another — `cortex upgrade {team}` writes it again"
     if below:
         return [(path, reason) for path in contents]
+    said = [(path, reason) for path, content in contents.items() if off_the_resolution(content, project)]
+    contents = {path: content for path, content in contents.items() if not off_the_resolution(content, project)}
+    if not contents:
+        return said
     names = _and([_shown_path(path, root) for path in contents])
     the_store = the_store or store.Store()
     if fetch:
         try:
             the_store.ensure(team)
         except store.StoreError as error:
-            return [(None, f"{names} not checked against Cortex {team}, the team's version: {error}")]
+            return said + [(None, f"{names} not checked against Cortex {team}, the team's version: {error}")]
     if not the_store.has(team):
-        return [(None, f"{names} not checked against Cortex {team}, the team's version, which is not in the store — "
-                       "`cortex sync` puts it there")]
-    personality = project.team_theme != "none"
-    said = []
+        return said + [(None, f"{names} not checked against Cortex {team}, the team's version, which is not in the "
+                              "store — `cortex sync` puts it there")]
+    look = init.team_look(project)
     for path, content in contents.items():
         found = init.markers(content)
         if len(found) != 1:
             continue
-        wanted = _written(the_store.path(team) / "templates", found[0][0], personality, path)
+        wanted = _written(the_store.path(team) / "templates", found[0][0], look, path)
         if wanted is not None and wanted != init.parts(content)[0]:
             said.append((path, reason))
+    return said
+
+
+def unrendered(root: str, project: config.Project) -> List[Tuple[Path, str]]:
+    """The team's bootstrap files of format 4 a team changed, whose marker names other values than the team's
+    resolution (ADR-014 §3.3): never written again, and said by `cortex sync` and `cortex validate`, once each, with
+    the command that writes the block again. None while the machine reads a checkout."""
+    if grammar.before_team(str(project.team_version)) or reads_a_checkout(root, project):
+        return []
+    said = []
+    for path, content in _team_s_contents(root, project).items():
+        if init.untouched(content) is False and off_the_resolution(content, project):
+            values = init.marker_values(content) or {}
+            said.append((path, f"{_shown_path(path, root)} is not rendered from the team's resolution — it says Cortex "
+                               f"{values.get('version')} and the theme {values.get('theme')}, where the team's files "
+                               f"say Cortex {project.team_version} and the theme {project.team_theme} — and a team "
+                               "changed its block, so Cortex keeps it: "
+                               f"`cortex init {init.tool_options(path)} --force`, at the project root, writes it again, "
+                               "and keeps yours as .bak"))
     return said
 
 
@@ -1177,7 +1249,7 @@ def team_move(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, out: 
             pass
         theirs, own = _theirs_only(_instructions_files(Path(root), None), target)
         rewrites = bootstraps(theirs, project.team_version, current_path, the_store.path(target),
-                              project.team_theme != "none", err)
+                              init.team_look(project), err)
         for path, content in rewrites:
             _put(path, content)
             out.write(f"{_shown_path(path, root)}: written again from Cortex {target}'s template — left uncommitted, "
@@ -1403,7 +1475,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     for note in said:
         err.write(f"note: {note}\n")
     files = _instructions_files(Path(root), named)
-    personality = project.team_theme != "none"
+    personality = init.team_look(project)
 
     if target == current:
         out.write(f"Cortex {current}: already on it — nothing to move\n")
@@ -1504,7 +1576,7 @@ def _upgrade(cwd: str, wanted: Optional[str], dry_run: bool, force: bool, named:
     return Outcome(root, current, target, files=team)
 
 
-def _resume(root: str, project: config.Project, the_store: store.Store, files: List[Path], personality: bool,
+def _resume(root: str, project: config.Project, the_store: store.Store, files: List[Path], personality: init.Look,
             dry_run: bool, out: TextIO, err: TextIO,
             prepare: Optional[Callable[[List[Path]], None]] = None, said: Tuple[str, ...] = (),
             read: Optional[Version] = None) -> Outcome:

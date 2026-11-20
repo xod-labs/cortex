@@ -80,3 +80,22 @@ def run(*args, cwd=None, env=None, stdin=subprocess.DEVNULL):
     if cwd is not None:
         env.setdefault("PWD", str(cwd))
     return subprocess.run(command(*args), cwd=cwd, env=env, stdin=stdin, capture_output=True)
+
+
+# The templates of format 3, as 1.8.x ships them: what a project kept on 1.8.x reads from its own spec (ADR-014 §3.4).
+FORMAT_3 = CLI / "tests" / "fixtures" / "format-3"
+
+
+def text(template, version, theme="h2g2", folder="agents", spec=REPO, root=None):
+    """``template`` as Cortex writes its text for a project reading ``version`` — rendered from format 4 with the theme,
+    the team's folder and the Prompt Manager's character ``spec`` maps (ADR-014 §3.1), its personality block kept
+    unless the theme is ``none`` — before the digest. ``root``, the project, where an overlay of the card may be."""
+    from cortex_cli import init
+    given = init.values_for(Path(root) if root else Path(_EMPTY_PATH), Path(spec), version, theme, folder)
+    return init.instructions(init.rendered(template, given), theme != "none")
+
+
+def written(template, version, theme="h2g2", folder="agents", spec=REPO, root=None):
+    """``text``, with the digest in its marker: a bootstrap as Cortex writes it."""
+    from cortex_cli import init
+    return init.stamped(text(template, version, theme, folder, spec, root))

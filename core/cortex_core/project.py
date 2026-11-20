@@ -21,20 +21,23 @@ from typing import Dict, List, Mapping, Tuple
 PROJECT_FILE = "cortex.toml"
 LOCAL_FILE = "cortex.local.toml"
 MODES = ("store", "link", "copy")
-PROJECT_KEYS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access", "agents")
+PROJECT_KEYS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access", "copilot_access", "agents")
 # The keys an unknown key's message names to a project before 1.8.0, as 1.7.0 named them.
 PROJECT_LISTED: Tuple[str, ...] = ("version", "theme", "sync", "claude_access")
 LOCAL_LISTED: Tuple[str, ...] = ("theme", "spec", "claude_access", "claude_entry")
 PROJECT_REQUIRED: Tuple[str, ...] = ("version", "theme")
-LOCAL_KEYS: Tuple[str, ...] = ("version", "theme", "spec", "claude_access", "claude_entry", "synced")
-BOOLEAN_KEYS: Tuple[str, ...] = ("claude_access",)
+LOCAL_KEYS: Tuple[str, ...] = ("version", "theme", "spec", "claude_access", "claude_entry", "copilot_access",
+                               "copilot_entry", "synced")
+# The keys that grant a tool a permission on a developer's machine: a team's file locks them to false only.
+ACCESS_KEYS: Tuple[str, ...] = ("claude_access", "copilot_access")
+BOOLEAN_KEYS: Tuple[str, ...] = ACCESS_KEYS
 # The team's settings, in the team's folder, committed in the team's repository (ADR-013 §3.5): read
 # only once the team's version is 1.8.0 or later — an earlier version's templates know none of it.
 TEAM_FOLDER = "agents"      # the team's folder, which a committed cortex.toml's `agents` renames (ADR-013 §3.6)
 TEAM_FILE = "cortex.team.toml"
 TEAM_LOCK_FILE = "cortex.team.lock"
-TEAM_KEYS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access", "locked")
-TEAM_LOCKABLE: Tuple[str, ...] = ("theme", "sync", "claude_access")
+TEAM_KEYS: Tuple[str, ...] = ("version", "theme", "sync", "claude_access", "copilot_access", "locked")
+TEAM_LOCKABLE: Tuple[str, ...] = ("theme", "sync", "claude_access", "copilot_access")
 FIRST_TEAM_VERSION = "1.8.0"
 # What `cortex sync` records in cortex.local.toml (ADR-013 §3.1): the version read from each file, the
 # team's, and the one synced — "" for a checkout.
@@ -315,9 +318,9 @@ def check_synced(value: object) -> None:
 def check_team(data: Mapping, name: str = f"{TEAM_FOLDER}/{TEAM_FILE}") -> None:
     """Refuse a team's ``cortex.team.toml`` that is not one (ADR-013 §3.5): its keys, none required;
     a ``version`` of 1.8.0 or later — an earlier one would not read the file; ``locked``, keys the file
-    sets, each once, never ``version`` nor ``locked``, and ``claude_access`` only at ``false``: a team
-    may forbid a permission, never grant one on a developer's machine (decision 25). ``name`` is how
-    the messages name the file."""
+    sets, each once, never ``version`` nor ``locked``, and ``claude_access`` and ``copilot_access`` only
+    at ``false``: a team may forbid a permission, never grant one on a developer's machine (decision 25).
+    ``name`` is how the messages name the file."""
     if "agents" in data:
         raise ProjectFileError(f"{name}: {_AGENTS_ONLY} — the team's file is in the folder it names")
     _check_keys(name, data, TEAM_KEYS, (), ("locked",))
@@ -344,8 +347,8 @@ def check_team(data: Mapping, name: str = f"{TEAM_FOLDER}/{TEAM_FILE}") -> None:
                                    f"{listed(TEAM_LOCKABLE)} do")
         if key not in data:
             raise ProjectFileError(f"{name}: locked names {shown(key)}, which the file does not set")
-        if key == "claude_access" and data[key] is True:
-            raise ProjectFileError(f"{name}: claude_access is locked to false only — a team may forbid a "
+        if key in ACCESS_KEYS and data[key] is True:
+            raise ProjectFileError(f"{name}: {key} is locked to false only — a team may forbid a "
                                    "permission, never grant one on a developer's machine (ADR-013, decision 25)")
 
 

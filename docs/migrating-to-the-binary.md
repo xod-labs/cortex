@@ -132,9 +132,11 @@ Whether a tool reads the spec in each mode is measured, not assumed. Each measur
 | Tool | Version | `store` | `link` | `copy` |
 |---|---|---|---|---|
 | Claude Code | 2.1.273 | **Reached**, after asking for permission. It reads outside the project only with permission, once per session. It reads with no prompt when the store is in `permissions.additionalDirectories` | **Reached**, after asking for permission. Claude Code checks the path a link resolves to, and that path is outside the project | **Reached**, no permission asked |
-| GitHub Copilot | — | not measured yet | not measured yet | not measured yet |
-| Cursor | — | not measured yet | not measured yet | not measured yet |
-| Codex | — | not measured yet | not measured yet | not measured yet |
+| GitHub Copilot | VS Code 1.144, Copilot Chat 0.72; CLI 1.0.112 | **Reached** in VS Code, after asking for permission to read outside the workspace, once per session; with `copilot_access`, no permission asked. The CLI asks too: in `copilot -p`, where no one answers, the read is denied and the card is not reached | **Reached** in VS Code, after asking for permission. Like Claude Code, Copilot checks the path a link resolves to; the CLI asks too | **Reached** by the CLI, no permission asked. Not measured in VS Code |
+| Cursor | Cursor 3.30.14; CLI 2026.11.05 | **Reached**, no permission asked, in Cursor and in `cursor-agent` | **Reached** by `cursor-agent`, no permission asked | **Reached** by `cursor-agent`, no permission asked |
+| Codex | VS Code extension 26.1111.21308; CLI 0.167.0 | **Reached**, no permission asked, in the VS Code extension and in `codex exec` | **Reached** by `codex exec`, no permission asked | **Reached** by `codex exec`, no permission asked |
+
+Measured again with the bootstrap of format 4, which 1.9.0 writes ([ADR-014](adr/ADR-014-ide-modes.md)), in `store` mode: Copilot in VS Code with `copilot_access`, Cursor and the Codex extension each reach the card with no permission asked to read the store. Copilot and Codex ask first to trust the project's folder, and Copilot to run its shell commands, which read inside the project.
 
 What it means today:
 
@@ -145,7 +147,16 @@ What it means today:
   `cortex sync` then keeps the store's path of the pinned version in `.claude/settings.local.json`, under `permissions.additionalDirectories`. That file holds Claude Code's settings for you on this machine, which git ignores. Sync replaces the path when the version changes, and removes it when access is turned off — the path it wrote, which `cortex.local.toml` records as `claude_entry`, and no other: an entry you added yourself, by hand or through Claude Code's own prompt, stays yours. While neither file sets `claude_access`, sync does not touch the file. `claude_entry` is how sync knows its own entry: if `cortex.local.toml` goes — a `git clean -X` removes it — the entry stays in `.claude/settings.local.json` as if you had written it, and is yours to remove; edit `claude_entry`, and the next sync takes the path you wrote for its own: it removes that entry at once, and the store's entry, already there, then passes for yours. Leave `claude_entry` to sync. Measured with Claude Code 2.1.273: the Prompt Manager's card is reached with no prompt at all.
 
   Without it, you answer the permission prompt once per session. `sync = "copy"` needs no setting either.
-- **The tools not measured yet** start in `store`. Switch the project to `link`, then to `copy`, if a conversation does not reach the Prompt Manager's card.
+- **GitHub Copilot** reads like Claude Code: in `store` and `link` it asks once per session before it reads outside the project, and `copy` needs no permission. In VS Code, keep the default `store` mode, and let `cortex sync` allow the store, as for Claude Code:
+  - `copilot_access = true` in `cortex.toml`, for the whole team. `cortex init --tool copilot` asks for it on a terminal, and `--copilot-access` sets it unattended.
+  - `cortex sync --copilot-access`, for you alone: it writes `copilot_access = true` in `cortex.local.toml`.
+
+  `cortex sync` then keeps one entry in `github.copilot.chat.additionalReadAccessPaths`: the store's versions folder, `~/.cortex/versions` written as an absolute path — Copilot expands no `~` — which covers every version, so a moved pin changes nothing. The file is VS Code's settings of your machine, never the project's `.vscode/settings.json`, which a team commits: inside a VS Code remote — WSL, SSH, a container — the server's `~/.vscode-server/data/Machine/settings.json` (and `~/.vscode-server-insiders`'s); otherwise the user `settings.json` of each VS Code installed, `Code` and `Code - Insiders`. Sync owns the entry it wrote, which `cortex.local.toml` records as `copilot_entry`, and no other; it removes it once no project of this machine's registry that wrote it still sets `copilot_access`. VS Code's settings are JSON with comments: sync places the entry as a text edit that keeps your comments and the rest of the file, and leaves a file it cannot edit that way as it is — it warns, naming the file and the line to add. Measured with VS Code 1.144 and Copilot Chat 0.72: the Prompt Manager's card is reached with no prompt to read the store. On Windows, the entry is written with `/`, as Cortex writes every path; Copilot's read of it there is not measured. Two places it does not reach:
+  - **a link** — VS Code's read access paths do not cover a link inside the workspace that leads outside it ([microsoft/vscode#336153](https://github.com/microsoft/vscode/issues/336153)): in `link` mode, Copilot still asks;
+  - **Copilot CLI**, which has no such setting: give it the store on each run, `copilot --add-dir ~/.cortex/versions`. In `copilot -p`, with no one to answer, only `copy` reaches the card without it.
+- **Cursor** and **Codex** read the store with no prompt: keep the default `store` mode, with no setting. Two things seen on the way:
+  - `cursor-agent` asks once to trust the project's folder, and denies shell commands; its reads are allowed, and the card is reached through them. Cursor's file search skips `cortex/`, which git ignores, so it reaches the card by its path, which the bootstrap gives.
+  - `codex exec` never asks: "no permission asked" holds for the extension, where it could have asked.
 
 ### How a measurement is made
 
@@ -163,3 +174,5 @@ claude -p "…" --setting-sources project --tools Read,Glob,Grep --permission-pr
 ```
 
 The run's `permission_denials` names every read that would have prompted. `--setting-sources project` leaves out your own settings, so that nothing you allowed before counts. To measure `claude_access`, add the settings `cortex sync` writes: `--setting-sources project,local`, since `.claude/settings.local.json` is Claude Code's *local* source.
+
+The other CLIs were measured the same way, with no interface to answer a prompt (#137): `copilot -p`, `cursor-agent -p --trust` — `--trust` answers only the folder's trust prompt — and `codex exec`. `copilot -p` lists each read it denied. The IDEs were measured by hand, in a new conversation, each prompt answered for the session only.

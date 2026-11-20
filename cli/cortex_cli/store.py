@@ -377,6 +377,13 @@ def is_link(path: Union[Path, str]) -> bool:
         return False
 
 
+def link_text(path: Union[Path, str]) -> str:
+    """Where the link ``path`` leads, as it is written — without the ``\\\\?\\`` Windows puts before a junction's
+    target (#376)."""
+    target = os.readlink(path)
+    return target[4:] if target.startswith("\\\\?\\") else target
+
+
 def make_writable(root: Path) -> None:
     """Give back the write permission under ``root``, ``root`` included — never through a link: a
     link found there is a user's, and what it leads to is none of the store's. A link's own
