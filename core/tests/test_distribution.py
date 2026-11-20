@@ -41,7 +41,9 @@ class DistributionNameTests(unittest.TestCase):
 
     def test_the_workflow_reserves_the_core_s_name(self):
         workflow = (ROOT / ".github" / "workflows" / "pypi.yml").read_text(encoding="utf-8")
-        self.assertIn("core/pyproject.toml", workflow)
+        code = "\n".join(line for line in workflow.splitlines() if not line.lstrip().startswith("#"))
+        self.assertIn('tomllib.load(open("core/pyproject.toml", "rb"))["project"]["name"]', code)
+        self.assertNotIn(RESERVED, code)
 
     def test_the_guard_can_fail(self):
         self.assertEqual(requirement_name("Cortex_Core>=1; python_version>'3'"), "cortex-core")
