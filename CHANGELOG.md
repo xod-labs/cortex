@@ -7,7 +7,7 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
-## [1.9.0] - 2026-11-19 — The Babel Fish _(Released)_
+## [1.9.0] - 2026-11-20 — The Babel Fish _(Released)_
 [Full notes](changelog/1.9.0.md)
 
 ### Added

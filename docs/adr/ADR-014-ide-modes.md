@@ -1,7 +1,7 @@
 # ADR-014 — The IDE modes: a bootstrap rendered from the resolution, and access to the store for each tool
 
 - **Status:** Implemented
-- **Date:** 2026-11-18 (proposed and accepted, with the arbitrations of 2026-11-18, §2, and the amendments listed in §9) · 2026-11-19 (implemented, 1.9.0)
+- **Date:** 2026-11-18 (proposed and accepted, with the arbitrations of 2026-11-18, §2, and the amendments listed in §9) · 2026-11-20 (implemented, 1.9.0)
 - **Authors:** Cortex maintainers (initiated by the maintainer, drafted by @Oolon)
 - **Affects:** `templates/bootstrap-instructions*.md` (format 4), `cli/cortex_cli/` (`init`, `sync`, `upgrade`, `validate`, `config`, `settings`, and a new module for VS Code's settings beside `claude.py`), `core/cortex_core/project.py` (the key), `runtime/` (the formats it reads), `README.md`, `docs/getting-started.md`, `docs/migrating-to-the-binary.md`
 - **Relates to:** [ADR-008](ADR-008-cortex-binary.md) §3.5 (the modes) and §9 (`claude_access`) · [ADR-010](ADR-010-lock-and-upgrade.md) §3.1 (the format) and §3.8 (the bootstrap's rules) · [ADR-012](ADR-012-bootstrap-block.md) (Cortex's block) · [ADR-013](ADR-013-configuration-cascade.md) §3.10 (format 3) and §7.1 (this follow-up) · epic [#98](https://github.com/xod-labs/cortex/issues/98), second of its two records · [#137](https://github.com/xod-labs/cortex/issues/137) (the measures) · [#376](https://github.com/xod-labs/cortex/issues/376), [#378](https://github.com/xod-labs/cortex/issues/378)
