@@ -551,3 +551,7 @@ Carried by [#386](https://github.com/xod-labs/cortex/issues/386).
 - **§3.4 — a loop of links is not a file.** Since 1.8.5 a named pipe, a socket or a directory at `cortex.toml`, `cortex.local.toml` or a lock is said not to be a file. Since 1.8.7 a loop of symbolic links there is said so too, by every command, where it was read as missing — and at `cortex.local.toml`, replaced in silence by `cortex sync`. A link that leads nowhere at `cortex.local.toml` is still replaced. `cortex config` and `cortex project add` say a `cortex.toml` that is not a file is not one, where they said there was none.
 - **§3.5 — `cortex/.git`, `cortex/.synced` and the registry are read without waiting.** Each was read as a file, with no limit: a named pipe there held the command. Each is now opened without blocking, and said not to be a file, with what to remove. A `cortex/.git` that is not a file nor a folder names no repository, as git reads it.
 - **§3.7 — `cortex init` refuses a `cortex.toml` that is not a file before it writes anything.**
+
+### 2026-11-20 — 1.9.1, the core's name on PyPI
+
+§7 item 5 says #86 reserves `cortex-core` on PyPI. PyPI refuses that name, as too close to `cortexcore`: the core is distributed as `xodlabs-cortex-core` from 1.9.1, the name #86 reserves, and the command depends on it — [ADR-007](ADR-007-cortex-core.md)'s amendment of the same day.
