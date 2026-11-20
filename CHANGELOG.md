@@ -7,6 +7,12 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-11-20 — Brain the Size of a Planet _(Released)_
+[Full notes](changelog/1.9.1.md)
+
+### Security
+- **The core's distribution name is reserved on PyPI: `xodlabs-cortex-core`** ([#86](https://github.com/xod-labs/cortex/issues/86)). The command and the runtime depend on the core by name; a `pip install` without `../core` looked for `cortex-core` on PyPI, where it was free — dependency confusion. `cortex-core` could not be reserved, PyPI finding it too close to `cortexcore`: the core is distributed as `xodlabs-cortex-core`, still imported as `cortex_core`, and `.github/workflows/pypi.yml`, run by hand and approved in the `pypi` environment, publishes a placeholder `0.0.0` that installs nothing, through trusted publishing. ADR-007 is amended.
+
 ## [1.9.0] - 2026-11-20 — The Babel Fish _(Released)_
 [Full notes](changelog/1.9.0.md)
 
