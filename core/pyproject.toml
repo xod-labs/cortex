@@ -3,7 +3,8 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cortex-core"
+# The name reserved on PyPI (#86): `cortex-core` is too close to another project there.
+name = "xodlabs-cortex-core"
 version = "0.1.0"
 description = "The one implementation of the Cortex cascade in code: resolution, merge semantics, capability catalog, prompt assembly and overlay validation (ADR-007)."
 requires-python = ">=3.11"

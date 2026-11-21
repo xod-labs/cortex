@@ -2,6 +2,8 @@
 
 The one implementation of the Cortex cascade in code — [ADR-007](../docs/adr/ADR-007-cortex-core.md).
 
+Distributed as `xodlabs-cortex-core`, the name reserved on PyPI ([#86](https://github.com/xod-labs/cortex/issues/86)), and imported as `cortex_core`.
+
 Everything Cortex computes from the spec lives here: resolving a layer file through the
 cascade, applying its merge semantic, finding a role, a workflow or a character, listing the
 capabilities the cascade offers, assembling an agent's system prompt, and validating overlays.

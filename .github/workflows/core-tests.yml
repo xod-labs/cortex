@@ -33,11 +33,15 @@ jobs:
         with:
           base: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           head: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
-          # the core, and the spec its self-hosting test resolves; the action that says what changed
+          # the core, and the spec its self-hosting test resolves; the action that says what changed;
+          # the packages that depend on the core by name, and the workflow that reserves it (#86)
           paths: |
             core/**
             agents/**
             cli/tests/**
+            cli/pyproject.toml
+            runtime/pyproject.toml
+            .github/workflows/pypi.yml
             .github/actions/changes/**
             .github/workflows/core-tests.yml
 
