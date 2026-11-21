@@ -21,7 +21,11 @@ def requirement_name(requirement):
 
 
 def dependencies(path):
-    return tomllib.loads(path.read_text(encoding="utf-8")).get("project", {}).get("dependencies", [])
+    """Every requirement a package declares: its dependencies, and each of its extras'."""
+    project = tomllib.loads(path.read_text(encoding="utf-8")).get("project", {})
+    return project.get("dependencies", []) + [
+        requirement for extra in project.get("optional-dependencies", {}).values() for requirement in extra
+    ]
 
 
 class DistributionNameTests(unittest.TestCase):
@@ -37,7 +41,7 @@ class DistributionNameTests(unittest.TestCase):
                     dependents.append(path.parent.name)
                     with self.subTest(package=path.parent.name):
                         self.assertEqual(name, RESERVED)
-        self.assertEqual(sorted(dependents), ["cli", "runtime"])
+        self.assertEqual(sorted(set(dependents)), ["cli", "runtime"])
 
     def test_the_workflow_reserves_the_core_s_name(self):
         workflow = (ROOT / ".github" / "workflows" / "pypi.yml").read_text(encoding="utf-8")
