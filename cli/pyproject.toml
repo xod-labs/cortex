@@ -14,7 +14,8 @@ requires-python = ">=3.11"
 readme = "README.md"
 # The standard library and the core only — the binary embeds nothing else.
 dependencies = [
-    "xodlabs-cortex-core",  # the cascade (ADR-007) — install it from ../core; its name is ours on PyPI (#86)
+    "xodlabs-cortex-core>=0.1.0",  # the cascade (ADR-007) — install it from ../core; its name is ours on PyPI (#86),
+                                   # whose placeholder, 0.0.0, must never satisfy it
 ]
 
 [project.scripts]

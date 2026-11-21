@@ -20,6 +20,14 @@ def requirement_name(requirement):
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
+def version(text):
+    """A release number as a tuple, trailing zeros dropped: 0.1 and 0.1.0 compare equal."""
+    parts = [int(part) for part in text.split(".")]
+    while parts and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
+
+
 def dependencies(path):
     """Every requirement a package declares: its dependencies, and each of its extras'."""
     project = tomllib.loads(path.read_text(encoding="utf-8")).get("project", {})
@@ -42,6 +50,19 @@ class DistributionNameTests(unittest.TestCase):
                     with self.subTest(package=path.parent.name):
                         self.assertEqual(name, RESERVED)
         self.assertEqual(sorted(set(dependents)), ["cli", "runtime"])
+
+    def test_no_package_accepts_the_placeholder(self):
+        # The name holds a placeholder, 0.0.0, that installs nothing: a requirement it satisfies
+        # would install it in place of ../core, and the import would fail later.
+        core = tomllib.loads((ROOT / "core" / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+        for package in ("cli", "runtime"):
+            requirements = [r for r in dependencies(ROOT / package / "pyproject.toml") if requirement_name(r) == RESERVED]
+            with self.subTest(package=package):
+                self.assertEqual(len(requirements), 1)
+                bound = re.fullmatch(rf"{re.escape(RESERVED)}\s*>=\s*([0-9]+(?:\.[0-9]+)*)", requirements[0].strip())
+                self.assertIsNotNone(bound, f"{requirements[0]!r} has no lower bound alone")
+                self.assertGreater(version(bound.group(1)), version("0.0.0"))
+                self.assertLessEqual(version(bound.group(1)), version(core))
 
     def test_the_workflow_reserves_the_core_s_name(self):
         workflow = (ROOT / ".github" / "workflows" / "pypi.yml").read_text(encoding="utf-8")
