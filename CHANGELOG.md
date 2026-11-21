@@ -7,7 +7,7 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
-## [1.9.1] - 2026-11-20 — Brain the Size of a Planet _(Released)_
+## [1.9.1] - 2026-11-21 — Brain the Size of a Planet _(Released)_
 [Full notes](changelog/1.9.1.md)
 
 ### Security
