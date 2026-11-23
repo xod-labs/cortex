@@ -369,3 +369,16 @@ ADR-010 became `cortex.lock`, `cortex upgrade` and the bootstrap marker on 2026-
 ### 2026-11 — the planned records hold no number
 
 ADR-011 became the project registry on 2026-11-04 ([#266](https://github.com/xod-labs/cortex/issues/266)). Rather than move every planned record up by one a third time, the maintainer decided that a planned record holds no number: it takes the next free one once its text is written. The ADR-013 this record names is the multi-provider LLM abstraction, [#40](https://github.com/xod-labs/cortex/issues/40), with no number yet.
+
+### 2026-11-23 — the project's view is an option (#89)
+
+The first 2026-09 amendment put the project's own view in every run's system prompt and left making it optional to #89. It is now an option, settled as follows:
+
+- **The parts.** `overview`, `services` and `context` — `# Project overview`, `# Workspace services`, `# Project context` — are each kept or left out on their own.
+- **Two levels, the more specific winning.** The deployment sets a default, `CORTEX_PROJECT_VIEW` — the parts separated by commas, or `none` — or `project_view` on a `WorkspaceConfig` in code. A run sets its own, `project_view` on the request — `/run`, `/resolve`, a manifest endpoint's alias — a list of parts, `[]` for none; it wins over the deployment's default. There is no workspace or team key: that would be a new key in `cortex.toml`, a change of its own.
+- **The default.** All three parts, as #87 and #88 shipped them: with neither level set, the system prompt is byte for byte what it was.
+- **Validation.** An unknown part is refused, with the accepted values named: `422` on the API, as an unknown autonomy action is; a stop at startup for the deployment's setting.
+
+A part left out is not read, so it never leaves the machine: leaving out `overview` and `context` keeps the developer's untracked notes, and the service's, away from the model provider, for that deployment or that run. The capabilities are still derived from `project-context.md` (ADR-007 §9) whether `context` is kept or not; only their cards reach the prompt. Narrowing them by role is a separate change.
+
+The run's record (ADR-003) stores no request. A queued run carries its request, `project_view` included, in its job, and resolves on it when a worker takes it.
