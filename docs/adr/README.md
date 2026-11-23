@@ -78,6 +78,7 @@ An ADR delivered in several steps adds:
 | [ADR-012](ADR-012-bootstrap-block.md) | The bootstrap file: Cortex's block, then the team's | Implemented | 2026-11-06 |
 | [ADR-013](ADR-013-configuration-cascade.md) | The configuration cascade — the team's settings, the machine's, and where each value comes from | Implemented | 2026-11-12 |
 | [ADR-014](ADR-014-ide-modes.md) | The IDE modes — a bootstrap rendered from the resolution, and access to the store for each tool | Implemented | 2026-11-20 |
+| [ADR-015](ADR-015-release-origin.md) | Where a release comes from — a signed `SHA256SUMS`, checked by `cortex self-update` | Accepted | 2026-11-23 |
 
 ## Authoring an ADR
 
