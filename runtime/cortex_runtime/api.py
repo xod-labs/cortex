@@ -56,6 +56,7 @@ class RunPayload(BaseModel):
     autonomy: Optional[List[str]] = None  # action kinds allowed without human validation
     handoff: bool = False                 # end in AWAITING_HUMAN (analysis/triage flows)
     force: bool = False                   # testing: bypass anti-recursion (re-run same subject)
+    project_view: Optional[List[str]] = None  # overview/services/context kept (#89); None: the deployment's
 
 
 class ReplyPayload(BaseModel):

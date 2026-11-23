@@ -19,6 +19,9 @@ Serves a single-workspace runtime configured from environment variables — enou
                        — MCP servers for the CLI (e.g. Jira) + ActionKind→MCP-tool bindings
     CORTEX_WEBHOOK_CONFIG  path to a JSON file: {"<source>": {"tenant","role","workflow"?,
                        "subject_path"}} — HMAC-authed POST /webhook/{source} → run bindings
+    CORTEX_PROJECT_VIEW  the parts of the project's view a run's prompt keeps, unless the request
+                       says otherwise: overview, services, context, separated by commas, or none
+                       (default: all three)
     CORTEX_HOST/PORT   bind address             (default: 127.0.0.1:8000)
 
 `demo` runs the whole wire with no key or CLI. Switch to `claude-cli` (Pro/Max via the Claude
@@ -36,7 +39,7 @@ def main():
     import uvicorn  # lazy: only needed to actually serve
 
     from .api import create_app
-    from .app import WorkspaceConfig
+    from .app import WorkspaceConfig, project_view_setting
     from .runtime import build_runtime
     from .state_store import store_from_env
 
@@ -44,6 +47,10 @@ def main():
     root = Path(os.environ.get("CORTEX_ROOT", "."))
     theme = os.environ.get("CORTEX_THEME") or None
     backend = os.environ.get("CORTEX_BACKEND", "demo")
+    try:
+        project_view = project_view_setting(os.environ.get("CORTEX_PROJECT_VIEW"))
+    except ValueError as exc:
+        raise SystemExit(str(exc))
 
     store = store_from_env()
 
@@ -62,8 +69,8 @@ def main():
         webhooks = json.loads(Path(webhook_cfg).read_text(encoding="utf-8"))
 
     runtime = build_runtime(
-        {workspace: WorkspaceConfig(root=root, theme=theme,
-                                    mcp_servers=mcp_servers, mcp_bindings=mcp_bindings)},
+        {workspace: WorkspaceConfig(root=root, theme=theme, mcp_servers=mcp_servers,
+                                    mcp_bindings=mcp_bindings, project_view=project_view)},
         store=store,
         webhooks=webhooks,
         model_backend=backend,

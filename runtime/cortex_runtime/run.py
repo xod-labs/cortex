@@ -14,9 +14,10 @@ import os
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from cortex_core.project import folded
+from cortex_core.prompt import project_view_parts
 from cortex_core.workspace import service_index
 
 from .base import Pin, base_for, read_pin
@@ -48,6 +49,9 @@ class RunRequest:
     # strings, e.g. ["code-read", "internal-comment"]). None → least-privilege default. The
     # autonomy level is a per-request decision, never hard-coded (ADR-002 §3.3).
     autonomy: Optional[List[str]] = None
+    # The parts of the project's view this run's prompt keeps, among "overview", "services" and
+    # "context" (#89). None: the deployment's default, all three unless it says otherwise; []: none.
+    project_view: Optional[List[str]] = None
 
 
 @dataclass
@@ -61,6 +65,7 @@ class ResolvedRun:
     model: Optional[str]
     allowed_actions: List[str]           # autonomy granted for this run (gating allowlist)
     cortex_version: Optional[str] = None  # the version cortex.toml pins; None: the base is {root}/cortex
+    project_view: List[str] = field(default_factory=lambda: list(project_view_parts(None)))  # the parts kept (#89)
 
 
 def _opens(root: Optional[Path], path: PurePosixPath, folder: str) -> bool:
@@ -122,7 +127,8 @@ READ_NOW: Any = _ReadNow()
 
 
 def resolve_run(req: RunRequest, root: Path, theme: Optional[str] = None, *,
-                pin: Union[Pin, None, _ReadNow] = READ_NOW) -> ResolvedRun:
+                pin: Union[Pin, None, _ReadNow] = READ_NOW,
+                project_view: Optional[Sequence[str]] = None) -> ResolvedRun:
     """Compile a request into a resolved bundle. ``theme`` is the workspace's active theme
     (deployment config, ``CORTEX_THEME`` — never a developer's own, in ``cortex.local.toml``); without
     one, the team's theme — and the team's file's whatever the deployment says when it locks ``theme``
@@ -130,8 +136,13 @@ def resolve_run(req: RunRequest, root: Path, theme: Optional[str] = None, *,
     ``cortex.toml`` (ADR-008 §3.6): a version the store lacks is a ``ValueError``, as a bad service is.
 
     ``pin`` is what ``cortex.toml`` said when the run was accepted — a queued run resolves as it
-    was checked, whatever the file says by the time a worker takes it (``None``: it had none)."""
+    was checked, whatever the file says by the time a worker takes it (``None``: it had none).
+
+    ``project_view`` is the deployment's default for the parts of the project's view the prompt keeps
+    (``None``: all three); the request's own ``project_view`` wins over it (#89). A part left out is
+    not read. An unknown part is a ``ValueError`` naming the parts."""
     root = Path(root)
+    view = project_view_parts(req.project_view if req.project_view is not None else project_view)
     req = replace(req, service=_service_inside(req.service, None, root))
     if pin is READ_NOW:
         pin = read_pin(root)
@@ -151,9 +162,10 @@ def resolve_run(req: RunRequest, root: Path, theme: Optional[str] = None, *,
         base_root=base_root,
         team_folder=team,
         capabilities=capabilities,
-        project_overview=read_project_overview(root, req.service, folder),
-        workspace_services=service_index(root, base_root, active=req.service, team_folder=team),
-        project_context=read_project_context(root, req.service, folder),
+        project_overview=read_project_overview(root, req.service, folder) if "overview" in view else "",
+        workspace_services=service_index(root, base_root, active=req.service, team_folder=team)
+        if "services" in view else "",
+        project_context=read_project_context(root, req.service, folder) if "context" in view else "",
     )
 
     workflow_text: Optional[str] = None
@@ -174,4 +186,5 @@ def resolve_run(req: RunRequest, root: Path, theme: Optional[str] = None, *,
         model=req.model,
         allowed_actions=sorted(k.value for k in policy.allowed),
         cortex_version=pin.version if pin is not None else None,
+        project_view=list(view),
     )

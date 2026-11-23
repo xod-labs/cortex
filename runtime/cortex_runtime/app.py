@@ -12,7 +12,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+
+from cortex_core.prompt import PROJECT_VIEW, project_view_parts
 
 from .run import ResolvedRun, RunRequest, resolve_run
 
@@ -26,12 +28,35 @@ class WorkspaceConfig:
     ``mcp_bindings``: maps an ActionKind value to the concrete MCP tool name(s) it unlocks
     (e.g. ``{"issue-comment": ["mcp__jira__add_comment"]}``) — so agnostic autonomy maps onto
     the deployment's real MCP tools.
+    ``project_view``: the parts of the project's view a run's prompt keeps unless the request says
+    otherwise (#89); ``None``, all three. An unknown part is refused here, when the deployment starts.
     """
 
     root: Path
     theme: Optional[str] = None
     mcp_servers: Optional[dict] = None
     mcp_bindings: Optional[dict] = None
+    project_view: Optional[Sequence[str]] = None
+
+    def __post_init__(self):
+        if self.project_view is not None:
+            self.project_view = project_view_parts(self.project_view)
+
+
+def project_view_setting(value: Optional[str]) -> Optional[Tuple[str, ...]]:
+    """``CORTEX_PROJECT_VIEW``, the deployment's default (#89): part names separated by commas, or
+    ``none`` to leave the whole view out. Unset or empty: ``None``, all three parts. An unknown part
+    is a ``ValueError`` naming the accepted values."""
+    if value is None or not value.strip():
+        return None
+    if value.strip() == "none":
+        return ()
+    names = [name.strip() for name in value.split(",")]
+    for name in names:
+        if name not in PROJECT_VIEW:
+            raise ValueError(f"CORTEX_PROJECT_VIEW: unknown part {name!r}, the accepted values are "
+                             f"{', '.join(PROJECT_VIEW)}, separated by commas, or none")
+    return project_view_parts(names)
 
 
 def build_run_request(payload: Mapping[str, Any], alias: Optional[Mapping[str, Any]] = None) -> RunRequest:
@@ -55,6 +80,7 @@ def build_run_request(payload: Mapping[str, Any], alias: Optional[Mapping[str, A
         subject=merged.get("subject"),
         handoff=bool(merged.get("handoff", False)),
         force=bool(merged.get("force", False)),
+        project_view=merged.get("project_view"),
     )
 
 
@@ -69,4 +95,4 @@ def resolve_endpoint(
     if req.workspace not in registry:
         raise KeyError(req.workspace)
     cfg = registry[req.workspace]
-    return resolve_run(req, cfg.root, cfg.theme)
+    return resolve_run(req, cfg.root, cfg.theme, project_view=cfg.project_view)
