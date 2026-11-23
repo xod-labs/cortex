@@ -37,7 +37,11 @@ LOOPBACK = ("127.0.0.1", "localhost", "::1")
 
 
 class DownloadError(Exception):
-    pass
+    """A download that failed — ``status``, the HTTP status of the answer, when there was one."""
+
+    def __init__(self, message: str, status: Optional[int] = None):
+        super().__init__(message)
+        self.status = status
 
 
 def _defaults_hold_certificates() -> bool:
@@ -121,7 +125,8 @@ def get(url: str, max_bytes: int, timeout: float = TIMEOUT, redirects: Optional[
         with opener.open(request, timeout=timeout) as response:
             data = response.read(max_bytes + 1)
     except urllib.error.HTTPError as error:
-        raise DownloadError(f"{_masked(url)}: HTTP {error.code} {error.reason}")
+        error.close()           # its connection, left open otherwise
+        raise DownloadError(f"{_masked(url)}: HTTP {error.code} {error.reason}", error.code)
     except (urllib.error.URLError, OSError) as error:
         reason = getattr(error, "reason", error)
         raise DownloadError(f"{_masked(url)}: {reason}")
