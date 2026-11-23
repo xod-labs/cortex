@@ -76,6 +76,25 @@ class ApiTests(unittest.TestCase):
                                            "autonomy": ["nuke-everything"]})
         self.assertEqual(r.status_code, 422)
 
+    def test_project_view_is_per_run(self):
+        # #89: the run keeps the parts it names; /resolve says which.
+        r = self.client.post("/resolve", json={"workspace": "host", "role": "lead-backend", "project_view": ["services"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["project_view"], ["services"])
+        self.assertNotIn("# Project context", r.json()["system_prompt"])
+        r = self.client.post("/resolve", json={"workspace": "host", "role": "lead-backend"})
+        self.assertEqual(r.json()["project_view"], ["overview", "services", "context"])
+        self.assertIn("# Project context", r.json()["system_prompt"])
+
+    def test_unknown_project_view_part_422_naming_the_parts(self):
+        for route in ("/run", "/resolve"):
+            with self.subTest(route=route):
+                r = self.client.post(route, json={"workspace": "host", "role": "lead-backend",
+                                                  "project_view": ["overview", "readme"]})
+                self.assertEqual(r.status_code, 422, r.text)
+                self.assertEqual(r.json()["detail"],
+                                 "project_view: unknown part 'readme', the parts are overview, services, context")
+
     def test_domain_alias_executes(self):
         r = self.client.post("/pr-review", json={"workspace": "host", "service": "svc-a",
                                                  "subject": "ACME-2"})
