@@ -1,0 +1,28 @@
+name: release sign
+description: >-
+  Signs a release's SHA256SUMS with the release key, into SHA256SUMS.sig, then checks that
+  signature against the primary key of the release keys file of the commit built: a key that does
+  not match fails the job before any draft (ADR-015 §3.3). The key is written to a file only the
+  runner's user may read, and removed in the same step.
+
+inputs:
+  assets:
+    description: The directory that holds SHA256SUMS; SHA256SUMS.sig is written beside it.
+    required: true
+  keys:
+    description: The release keys file, as the commit built has it.
+    required: true
+  key:
+    description: The private key, an Ed25519 key in PEM — the secret RELEASE_SIGNING_KEY of the environment the job runs in.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: The signature of SHA256SUMS
+      shell: bash
+      env:
+        ASSETS: ${{ inputs.assets }}
+        KEYS: ${{ inputs.keys }}
+        RELEASE_SIGNING_KEY: ${{ inputs.key }}
+      run: python3 "$GITHUB_ACTION_PATH/sign.py" --assets "$ASSETS" --keys "$KEYS"

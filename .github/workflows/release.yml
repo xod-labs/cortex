@@ -2,7 +2,7 @@ name: release
 
 # Every merge into main, or into a line's branch N.x, is a release (ADR-009 §3.3): this workflow
 # finds the version the push adds, builds it through binary.yml, and leaves it as a draft with its
-# six assets. The maintainer publishes it from the Releases page; GitHub creates the tag then.
+# seven assets: SHA256SUMS signed by the release key (ADR-015). The maintainer publishes it from the Releases page; GitHub creates the tag then.
 #
 # A pre-release is cut by hand (§3.7): *Run workflow* on a release/** branch, with the version.
 # *Run workflow* runs the workflow files of the branch it starts on, so a release candidate goes
@@ -73,6 +73,10 @@ jobs:
     name: draft
     needs: [version, build]
     runs-on: ubuntu-latest
+    # The release key, RELEASE_SIGNING_KEY, is this environment's secret: open to main, the lines'
+    # branches and release/** only — where a release or a pre-release is cut (ADR-015 §3.1).
+    # bin/setup-release.sh keeps it so.
+    environment: release-signing
     permissions:
       contents: write        # the draft and its assets
       id-token: write        # sign the attestations
@@ -106,6 +110,14 @@ jobs:
       - name: SHA256SUMS
         run: python3 cli/build.py --checksums "$RUNNER_TEMP/release-assets"
 
+      # SHA256SUMS.sig, then checked against the primary key of release_keys.py as this commit has
+      # it: a secret that does not match fails the run here, before any draft (ADR-015 §3.3).
+      - uses: ./.github/actions/release-sign
+        with:
+          assets: ${{ runner.temp }}/release-assets
+          keys: cli/cortex_cli/release_keys.py
+          key: ${{ secrets.RELEASE_SIGNING_KEY }}
+
       # The archives, and the binaries inside them: `gh attestation verify ~/.cortex/bin/cortex
       # --repo xod-labs/cortex` then checks the installed file itself.
       - name: The binaries inside the archives
@@ -137,6 +149,7 @@ jobs:
           latest: ${{ needs.version.outputs.latest }}
           expected: |
             SHA256SUMS
+            SHA256SUMS.sig
             cortex-linux-aarch64.tar.gz
             cortex-linux-x86_64.tar.gz
             cortex-macos-arm64.tar.gz
