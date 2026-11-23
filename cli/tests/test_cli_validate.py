@@ -84,6 +84,31 @@ class RootsTests(unittest.TestCase):
         self.assertIn(b"`cortex init` says how to leave it", proc.stderr)
 
 
+class ThemeTests(unittest.TestCase):
+    """The characters a project's files name are the team's theme's (#140): a theme a developer sets in
+    cortex.local.toml is theirs, and the team's files are not written for it."""
+
+    def test_the_team_s_theme_is_the_one_checked(self):
+        tmp = Path(tempfile.mkdtemp(prefix="cortex-validate-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        project = golden.layout("references-found", tmp)
+        mine = project / "cortex" / "agents" / "personalities" / "breaking-bad" / "characters.md"
+        mine.parent.mkdir(parents=True)
+        mine.write_text("| Role | Character | Alias |\n|---|---|---|\n| `architect` | Walter | @Heisenberg |\n",
+                        encoding="utf-8")
+        run_command(project, ["--help"])      # writes cortex.toml, theme h2g2, and cortex.local.toml
+        with open(project / "cortex.local.toml", "a", encoding="utf-8") as fh:
+            fh.write('theme = "breaking-bad"\n')
+        proc = harness.run("validate", "--strict", cwd=project, env=harness.environment(LC_ALL="C"))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertNotIn(b"REFERENCE_NOT_FOUND", proc.stdout)
+        # The team's theme changed, the same files name characters it does not have.
+        (project / "cortex.toml").write_text('version = "1.0.0"\ntheme = "breaking-bad"\n', encoding="utf-8")
+        proc = harness.run("validate", "--strict", cwd=project, env=harness.environment(LC_ALL="C"))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(b"'@Slartibartfast' is no character of the theme 'breaking-bad'", proc.stdout)
+
+
 class IsolationTests(unittest.TestCase):
     """Code from the project under validation never runs — the command runs in the project's root."""
 
