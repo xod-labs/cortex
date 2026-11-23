@@ -381,7 +381,7 @@ update_check = false                                          # no question of t
 register = false                                              # a throwaway machine: no registry
 ```
 
-The variables `CORTEX_RELEASES_URL`, `CORTEX_NO_UPDATE_CHECK` and `CORTEX_NO_REGISTER` go over the file, as they always did. A key the file does not know, or a value of the wrong type, is a warning — the rest is read, and no command stops on it.
+The variables `CORTEX_RELEASES_URL`, `CORTEX_NO_UPDATE_CHECK` and `CORTEX_NO_REGISTER` go over the file, as they always did. A mirror is trusted as the host it is: what Cortex downloads from it — a version's spec, `cortex self-update`'s binary — is checked against that host's `SHA256SUMS`, which proves the download whole, not who built it, and each command says so in a note before it downloads. The URL carries no user part — `https://user:pass@host/` is refused: serve the releases where they can be read without credentials. A key the file does not know, or a value of the wrong type, is a warning — the rest is read, and no command stops on it.
 
 `cortex config` prints each setting of the project and of the machine, and where it comes from — a file, a variable, or `default`. `cortex config --locked` leaves your `cortex.local.toml` out: it gives the version and the lock `cortex sync --locked` checks in CI, and what the runtime reads — your own `theme` and `claude_access` still apply to your machine:
 
