@@ -162,6 +162,27 @@ class StoreModeTests(SyncTestCase):
         self.assertEqual(self.release.requested, requested)
 
     @DOWNLOADS
+    def test_a_download_from_another_host_than_githubs_says_so(self):
+        # #275: the spec is the assistant's instructions — its host is said, as self-update says the binary's.
+        note = (f"note: downloading from {self.release.url}, set by CORTEX_RELEASES_URL — the spec is checked against "
+                "that host's SHA256SUMS, not against GitHub's releases\n")
+        project = self.project(version="9.9.8")
+        proc = self.sync(project)
+        self.assert_ok(proc)
+        self.assertIn("downloaded to the store", proc.out)
+        self.assertEqual(proc.err.count(note), 1, proc.err)
+        proc = self.sync(project)                                  # in the store: nothing downloaded, nothing said
+        self.assert_ok(proc)
+        self.assertIn("in the store", proc.out)
+        self.assertNotIn("note: downloading", proc.err)
+
+    def test_its_own_version_says_no_host(self):
+        proc = self.sync(self.project())                           # written from this cortex: no download
+        self.assert_ok(proc)
+        self.assertIn("written to the store, from this cortex", proc.out)
+        self.assertNotIn("note: downloading", proc.err)
+
+    @DOWNLOADS
     def test_a_spec_whose_checksum_differs_is_refused_and_leaves_nothing(self):
         self.release.alter_one_byte("spec", "9.9.8")
         proc = self.sync(self.project(version="9.9.8"))

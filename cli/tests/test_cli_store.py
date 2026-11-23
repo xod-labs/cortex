@@ -765,6 +765,28 @@ class DownloadTests(StoreTestCase):
         self.assertIn("Cortex 2.0.0", (the_store.path(Version("2.0.0")) / "agents/roles/prompt-manager.md").read_text(encoding="utf-8"))
         self.assertEqual([u.rsplit("/", 2)[-2:] for u in self.requested], [["2.0.0", "SHA256SUMS"], ["2.0.0", "cortex-spec.tar.gz"]])
 
+    def test_a_download_from_another_host_says_so_once(self):
+        # #275: on standard error, before the download, once per run however many versions are downloaded.
+        the_store = self.release("2.0.0")
+        later = self.release("2.1.0")
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": "https://mirror.example/r/"}), \
+                mock.patch.object(store, "_noted", set()), mock.patch("sys.stderr", err):
+            self.assertEqual(the_store.ensure(Version("2.0.0")), "downloaded")
+            self.assertEqual(later.ensure(Version("2.1.0")), "downloaded")
+            self.assertEqual(the_store.ensure(Version("2.0.0")), "stored")
+        self.assertEqual(err.getvalue(), "note: downloading from https://mirror.example/r, set by CORTEX_RELEASES_URL "
+                         "— the spec is checked against that host's SHA256SUMS, not against GitHub's releases\n")
+
+    def test_a_download_from_githubs_releases_says_nothing(self):
+        the_store = self.release("2.0.0")
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": "", "CORTEX_HOME": str(self.home)}), \
+                mock.patch.object(store, "_noted", set()), mock.patch("sys.stderr", err):
+            self.assertEqual(the_store.ensure(Version("2.0.0")), "downloaded")
+        self.assertTrue(self.requested[0].startswith(f"{store.DEFAULT_RELEASES_URL}/download/2.0.0/"), self.requested)
+        self.assertEqual(err.getvalue(), "")
+
     def test_a_checksum_that_differs(self):
         the_store = self.release("2.0.0", sums_line=f"{'0' * 64}  cortex-spec.tar.gz\n")
         with self.assertRaisesRegex(store.StoreError, "does not match its checksum"):

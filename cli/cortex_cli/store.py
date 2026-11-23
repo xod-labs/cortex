@@ -35,7 +35,7 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Callable, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 from cortex_core.project import DEFAULT_RELEASES_URL  # noqa: F401 — part of this module's API
 from cortex_core.cascade import read_file
@@ -80,6 +80,27 @@ def releases_url() -> str:
 def releases_origin() -> str:
     """Where ``releases_url`` is set: the variable, the machine's file, or ``default``."""
     return machine.setting(cortex_home, "releases_url").origin
+
+
+def from_where(base: str, what: str) -> Optional[str]:
+    """The note a download from ``base`` gives, ``what`` naming what is downloaded — ``None`` from
+    GitHub's releases. Integrity against the host the releases come from, not authenticity
+    (ADR-010 §3.7): another host than GitHub's says so, before it is downloaded from."""
+    if base == DEFAULT_RELEASES_URL:
+        return None
+    return (f"downloading from {base}, set by {releases_origin()} — {what} is checked against that host's "
+            "SHA256SUMS, not against GitHub's releases")
+
+
+_noted: Set[str] = set()
+
+
+def _note_once(note: Optional[str]) -> None:
+    """Say ``note`` on standard error, once per process: a command may download several versions."""
+    if note is not None and note not in _noted:
+        _noted.add(note)
+        sys.stdout.flush()      # what the command said before it comes first, in a pipe too
+        sys.stderr.write(f"note: {note}\n")
 
 
 def known_specs() -> Dict[str, str]:
@@ -692,7 +713,9 @@ class Store:
         return "downloaded"
 
     def _download(self, version: Version) -> None:
-        base = f"{releases_url()}/download/{version}"
+        url = releases_url()
+        _note_once(from_where(url, "the spec"))
+        base = f"{url}/download/{version}"
         try:
             sums = self.fetch(f"{base}/SHA256SUMS", MAX_SUMS).decode("utf-8")
         except net.DownloadError as error:
