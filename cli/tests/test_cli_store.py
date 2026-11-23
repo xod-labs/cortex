@@ -882,6 +882,25 @@ class NetTests(unittest.TestCase):
                 with self.assertRaises(net.DownloadError):
                     net.check_url(url)
 
+    def test_a_user_part_is_refused_saying_why(self):
+        # #275: urllib takes the user part as part of the host — it never reached the host it named.
+        for url in ("https://user:secret@mirror.example/r", "https://user@mirror.example/r",
+                    "http://127.0.0.1:1@example.invalid/r", "http://user@127.0.0.1:8765/r"):
+            with self.subTest(url=url):
+                with self.assertRaises(net.DownloadError) as raised:
+                    net.check_url(url)
+                self.assertIn("a URL with a user part, before @, is not downloaded from", str(raised.exception))
+                self.assertNotIn("secret", str(raised.exception))
+        with self.assertRaises(net.DownloadError) as raised:
+            net.check_url("https://user:secret@mirror.example/r")
+        self.assertEqual(str(raised.exception), "https://…@mirror.example/r: a URL with a user part, before @, is not "
+                         "downloaded from — no credentials are sent: serve the releases where they can be read "
+                         "without them")
+        with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": "https://user:secret@mirror.example/r"}):
+            with self.assertRaisesRegex(store.StoreError, "^CORTEX_RELEASES_URL: https://…@mirror.example/r: a URL "
+                                        "with a user part"):
+                store.releases_url()
+
     def test_the_releases_url_is_checked(self):
         from unittest import mock
 
@@ -907,6 +926,26 @@ class NetTests(unittest.TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         with self.assertRaisesRegex(net.DownloadError, "only https"):
+            net.get(f"http://127.0.0.1:{server.server_address[1]}/SHA256SUMS", 1024)
+
+    def test_a_redirect_to_a_url_with_a_user_part_is_refused(self):
+        import http.server
+        import threading
+
+        class Redirect(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", "https://user:secret@mirror.example/SHA256SUMS")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        with self.assertRaisesRegex(net.DownloadError, r"^https://…@mirror\.example/SHA256SUMS: a URL with a user part"):
             net.get(f"http://127.0.0.1:{server.server_address[1]}/SHA256SUMS", 1024)
 
     def test_a_url_holding_a_control_character(self):
