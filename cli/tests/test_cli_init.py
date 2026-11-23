@@ -22,7 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a p
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
 import init_matrix as matrix  # noqa: E402
-from cortex_cli import init as init_command  # noqa: E402
+from cortex_cli import config, init as init_command  # noqa: E402
+from cortex_core import project  # noqa: E402
 
 
 def display(path):
@@ -2144,6 +2145,125 @@ class ThemeHintTests(InitTestCase):
         proc = self.init("--workspace", "--theme", "ours")
         self.assertEqual(proc.returncode, 0, proc.err)
         self.assertTrue(proc.out.endswith(f"is ready in {display(self.project)}.\n"), proc.out)
+
+
+class SyncThemeHintTests(InitTestCase):
+    """Whom to call, said by `cortex sync` when the theme it reads is not the one the last sync recorded (#397)."""
+
+    H2G2 = ("Theme h2g2: @Oolon, the prompt manager, takes every request and calls the expert it needs.\n"
+            "Or call one yourself: @Slartibartfast (architect), @Hactar (lead-backend), @Eddie (lead-frontend), "
+            "@Marvin (security-engineer).\n")
+    BREAKING_BAD = ("Theme breaking-bad: @Saul, the prompt manager, takes every request and calls the expert it needs.\n"
+                    "Or call one yourself: @Werner (architect), @Heisenberg (lead-backend), @Jesse (lead-frontend), "
+                    "@Mike (security-engineer).\n")
+
+    def setUp(self):
+        super().setUp()
+        shipped = self.home / "versions" / OWN / "agents" / "personalities"
+        shutil.copytree(shipped / "h2g2", shipped / "none")     # a folder of that name is no theme: none is none
+        self.project.mkdir(parents=True)
+        proc = self.init()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertEqual(proc.out.count("Theme h2g2:"), 1, proc.out)       # init's hint alone: its sync says none
+
+    def sync(self):
+        proc = harness.run("sync", cwd=self.project, env=self.env)
+        proc.out, proc.err = proc.stdout.decode(), proc.stderr.decode()
+        self.assertEqual(proc.returncode, 0, proc.err)
+        return proc
+
+    def shipped(self, theme):
+        return display(self.home / "versions" / OWN / "agents" / "personalities" / theme / "characters.md")
+
+    def recorded(self):
+        return [line for line in self.read("cortex.local.toml").splitlines() if line.startswith("# synced theme:")]
+
+    def set_theme(self, name, theme):
+        path = self.project / name
+        lines = [line for line in path.read_text(encoding="utf-8").splitlines(keepends=True)
+                 if not line.startswith("theme =")]
+        path.write_text("".join(lines) + (f'theme = "{theme}"\n' if theme else ""), encoding="utf-8")
+
+    def test_init_records_the_theme(self):
+        self.assertEqual(self.recorded(), ["# synced theme: h2g2    — written by `cortex sync`, which tells whom to "
+                                           "call when the theme changes"])
+
+    def test_no_hint_while_the_theme_is_unchanged(self):
+        proc = self.sync()
+        self.assertNotIn("prompt manager", proc.out)
+        self.assertEqual(len(self.recorded()), 1)
+
+    def test_the_hint_when_the_team_s_theme_changed(self):
+        self.set_theme("cortex.toml", "breaking-bad")       # a teammate's commit
+        proc = self.sync()
+        self.assertTrue(proc.out.endswith(
+            f"\n{self.BREAKING_BAD}The whole team: {self.shipped('breaking-bad')}\n"), proc.out)
+        self.assertEqual(self.recorded()[0].split()[3], "breaking-bad")
+        self.assertNotIn("prompt manager", self.sync().out)     # said once
+
+    def test_the_first_sync_with_nothing_recorded_records_it_silently(self):
+        path = self.project / "cortex.local.toml"
+        path.write_text("".join(line for line in path.read_text(encoding="utf-8").splitlines(keepends=True)
+                                if not line.startswith("# synced theme:")), encoding="utf-8")
+        self.set_theme("cortex.toml", "breaking-bad")       # synced last by a cortex before 1.10.0
+        proc = self.sync()
+        self.assertNotIn("prompt manager", proc.out)
+        self.assertEqual(self.recorded()[0].split()[3], "breaking-bad")
+
+    def test_no_hint_for_none_and_the_hint_when_a_theme_comes_back(self):
+        self.set_theme("cortex.local.toml", "none")
+        proc = self.sync()
+        self.assertNotIn("prompt manager", proc.out)
+        self.assertEqual(self.recorded()[0].split()[3], "none")
+        self.set_theme("cortex.local.toml", None)
+        self.assertTrue(self.sync().out.endswith(f"\n{self.H2G2}The whole team: {self.shipped('h2g2')}\n"))
+
+    def test_the_developer_s_own_theme_is_compared_as_resolved(self):
+        self.set_theme("cortex.local.toml", "breaking-bad")
+        proc = self.sync()
+        self.assertTrue(proc.out.endswith(
+            f"\n{self.BREAKING_BAD}The whole team: {self.shipped('breaking-bad')}\n"), proc.out)
+        self.set_theme("cortex.toml", "h2g2")               # the team's, under the developer's: nothing read changed
+        self.assertNotIn("prompt manager", self.sync().out)
+        self.set_theme("cortex.local.toml", None)           # back to the team's
+        self.assertIn(self.H2G2, self.sync().out)
+
+    def test_init_that_changes_the_theme_says_it_once(self):
+        proc = self.init("--theme", "breaking-bad", "--force")
+        self.assertEqual(proc.returncode, 0, proc.err)
+        self.assertEqual(proc.out.count("Theme breaking-bad:"), 1, proc.out)
+        self.assertEqual(self.recorded()[0].split()[3], "breaking-bad")
+
+    def test_the_record_is_a_comment_every_reader_reads_past(self):
+        # A cortex before 1.10.0 refuses an unknown key in `synced`, or beside it — the runtime with a 422 naming
+        # `cortex sync`, which would write it again (ADR-013 §9): the record adds none.
+        self.set_theme("cortex.local.toml", "breaking-bad")
+        self.sync()
+        data = tomllib.loads(self.read("cortex.local.toml"))
+        self.assertEqual(sorted(data), ["spec", "synced", "theme"])
+        self.assertEqual(sorted(data["synced"]), ["pinned", "project", "reads"])
+        project.check_local(data)
+
+
+class SyncedThemeTextTests(unittest.TestCase):
+    """The ``# synced theme:`` comment, read and written in ``cortex.local.toml``'s text (#397)."""
+
+    LINE = f"{config.SYNCED_THEME}ours    — {config.SYNCED_THEME_NOTE}"
+
+    def test_read(self):
+        self.assertIsNone(config.synced_theme(None))
+        self.assertIsNone(config.synced_theme('spec = "x"\n'))
+        self.assertEqual(config.synced_theme(f"﻿{self.LINE}\n"), "ours")
+        self.assertIsNone(config.synced_theme("# synced theme: ../up\n"))      # no theme: nothing recorded
+
+    def test_written_after_synced_in_its_place_and_once(self):
+        text = 'spec = "x"\r\nsynced = { pinned = "1.9.0", reads = "1.9.0" }\r\ntheme = "h2g2"'
+        self.assertEqual(config.with_synced_theme(text, "ours"),
+                         f'spec = "x"\r\nsynced = {{ pinned = "1.9.0", reads = "1.9.0" }}\r\n{self.LINE}\r\n'
+                         'theme = "h2g2"')
+        self.assertEqual(config.with_synced_theme('﻿spec = "x"', "ours"), f'﻿spec = "x"\n{self.LINE}\n')
+        again = config.with_synced_theme(f'# synced theme: old\nspec = "x"\n# synced theme: older\n', "ours")
+        self.assertEqual(again, f'{self.LINE}\nspec = "x"\n')
 
 
 class AliasesTests(unittest.TestCase):
