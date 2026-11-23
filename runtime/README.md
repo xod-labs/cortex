@@ -67,9 +67,30 @@ the team (`agents/`), developer (root) and service tiers of `project-overview.md
 - **They leave the machine.** The whole view goes to the model provider with every model call,
   the developer's untracked notes included.
 - **They cost.** 44 to 66 KB of prompt on a real workspace, on every model call; the API backend
-  marks the system prompt cacheable. Making the view optional is [#89](https://github.com/xod-labs/cortex/issues/89).
+  marks the system prompt cacheable.
 - **A service is a folder of the workspace** — relative, never climbing out of it, never
   `agents/`; any other `service` is refused, `422`.
+
+### Keep only part of the view
+
+The view is an option ([#89](https://github.com/xod-labs/cortex/issues/89)). Its three parts are
+`overview`, `services` and `context`, each kept or left out on its own:
+
+- **The deployment's default:** `CORTEX_PROJECT_VIEW`, the parts separated by commas —
+  `overview,context` — or `none`. Unset or empty, all three are kept. In code:
+  `WorkspaceConfig(..., project_view=["context"])`.
+- **A run's own:** `project_view` in the request — `["services"]`, or `[]` for none — on `/run`,
+  `/resolve` and a manifest endpoint's alias. It wins over the deployment's default. Without it,
+  the run takes that default.
+
+With neither, every part is kept and the prompt is byte for byte what it was before the option.
+A part left out is not read at all, so it never reaches the model provider: leaving out `overview`
+and `context` keeps the developer's untracked notes off the provider
+([ADR-002 §9](../docs/adr/ADR-002-cortex-runtime.md#9-amendments)). An unknown part is refused:
+`422` on the API, with a message naming the accepted values, and a stop at startup for
+`CORTEX_PROJECT_VIEW`. `/resolve` returns the parts kept, `project_view`. The capabilities do not
+change with it: they are still derived from `project-context.md`, kept or not, and only their
+cards reach the prompt.
 
 ## Run the slice (Phase 5) — no key, no SDK
 
