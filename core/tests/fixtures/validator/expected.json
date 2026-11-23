@@ -1343,6 +1343,151 @@
    ]
   }
  },
+ "reference-not-found": {
+  "default": {
+   "code": 0,
+   "stdout": [
+    "Cortex overlay validator",
+    "  Project root:  <TMP>/host",
+    "  Cortex dir:    <TMP>/host/cortex",
+    "  Strict mode:   false",
+    "",
+    "── Scope: . ──",
+    "⚠ agents/roles/engineering/lead-backend.md",
+    "  REFERENCE_NOT_FOUND — line 10: 'cortex/templates/naming.md' is no file of the spec",
+    "✓ agents/roles/engineering/lead-backend.md",
+    "ℹ agents/workflows/product/launch.md (custom addition — no cortex base, skipping overlay checks)",
+    "⚠ agents/workflows/product/launch.md",
+    "  REFERENCE_NOT_FOUND — line 6: 'roles/product/market-analyst.md' is in neither the spec nor an overlay tier of this file's cascade",
+    "⚠ agents/workflows/product/launch.md",
+    "  REFERENCE_NOT_FOUND — line 6: '@Zarniwoop' is no character of the theme 'h2g2' — its characters.md does not name it",
+    "⚠ agents/workflows/product/launch.md",
+    "  REFERENCE_NOT_FOUND — line 7: 'roles/data/data-analyst.md' is in neither the spec nor an overlay tier of this file's cascade",
+    "⚠ agents/workflows/product/launch.md",
+    "  REFERENCE_NOT_FOUND — line 9: the role 'product/innovation-funding-advisor' is in neither the spec nor an overlay tier of this file's cascade — no roles/product/innovation-funding-advisor.md",
+    "⚠ agents/workflows/product/launch.md",
+    "  REFERENCE_NOT_FOUND — line 11: '@Hotblack' is no character of the theme 'h2g2' — its characters.md does not name it",
+    "⚠ agents/workflows/product/launch.md",
+    "  REFERENCE_NOT_FOUND — line 12: 'cortex/docs/ghost.md' is no file of the spec",
+    "⚠ agents/workflows/product/launch.md",
+    "  REFERENCE_NOT_FOUND — line 13: 'workflows/intelligence/market-study.md' is in neither the spec nor an overlay tier of this file's cascade",
+    "",
+    "── Scope: svc-a ──",
+    "ℹ svc-a/agents/roles/data/data-analyst.md (custom addition — no cortex base, skipping overlay checks)",
+    "ℹ svc-a/agents/workflows/engineering/svc-flow.md (custom addition — no cortex base, skipping overlay checks)",
+    "⚠ svc-a/agents/workflows/engineering/svc-flow.md",
+    "  REFERENCE_NOT_FOUND — line 4: 'agents/workflows/engineering/release.md' is in neither the spec nor an overlay tier of this file's cascade",
+    "",
+    "──────────────────────────────────────────",
+    "Checked:  4 files",
+    "Errors:   0",
+    "Warnings: 9",
+    ""
+   ],
+   "stderr": [
+    ""
+   ]
+  },
+  "--strict": {
+   "code": 1,
+   "stdout": [
+    "Cortex overlay validator",
+    "  Project root:  <TMP>/host",
+    "  Cortex dir:    <TMP>/host/cortex",
+    "  Strict mode:   true",
+    "",
+    "── Scope: . ──",
+    "⚠ agents/roles/engineering/lead-backend.md",
+    "  REFERENCE_NOT_FOUND — line 10: 'cortex/templates/naming.md' is no file of the spec",
+    "✓ agents/roles/engineering/lead-backend.md",
+    "ℹ agents/workflows/product/launch.md (custom addition — no cortex base, skipping overlay checks)",
+    "⚠ agents/workflows/product/launch.md",
+    "  REFERENCE_NOT_FOUND — line 6: 'roles/product/market-analyst.md' is in neither the spec nor an overlay tier of this file's cascade",
+    "⚠ agents/workflows/product/launch.md",
+    "  REFERENCE_NOT_FOUND — line 6: '@Zarniwoop' is no character of the theme 'h2g2' — its characters.md does not name it",
+    "⚠ agents/workflows/product/launch.md",
+    "  REFERENCE_NOT_FOUND — line 7: 'roles/data/data-analyst.md' is in neither the spec nor an overlay tier of this file's cascade",
+    "⚠ agents/workflows/product/launch.md",
+    "  REFERENCE_NOT_FOUND — line 9: the role 'product/innovation-funding-advisor' is in neither the spec nor an overlay tier of this file's cascade — no roles/product/innovation-funding-advisor.md",
+    "⚠ agents/workflows/product/launch.md",
+    "  REFERENCE_NOT_FOUND — line 11: '@Hotblack' is no character of the theme 'h2g2' — its characters.md does not name it",
+    "⚠ agents/workflows/product/launch.md",
+    "  REFERENCE_NOT_FOUND — line 12: 'cortex/docs/ghost.md' is no file of the spec",
+    "⚠ agents/workflows/product/launch.md",
+    "  REFERENCE_NOT_FOUND — line 13: 'workflows/intelligence/market-study.md' is in neither the spec nor an overlay tier of this file's cascade",
+    "",
+    "── Scope: svc-a ──",
+    "ℹ svc-a/agents/roles/data/data-analyst.md (custom addition — no cortex base, skipping overlay checks)",
+    "ℹ svc-a/agents/workflows/engineering/svc-flow.md (custom addition — no cortex base, skipping overlay checks)",
+    "⚠ svc-a/agents/workflows/engineering/svc-flow.md",
+    "  REFERENCE_NOT_FOUND — line 4: 'agents/workflows/engineering/release.md' is in neither the spec nor an overlay tier of this file's cascade",
+    "",
+    "──────────────────────────────────────────",
+    "Checked:  4 files",
+    "Errors:   0",
+    "Warnings: 9",
+    "Strict mode: warnings count as errors.",
+    ""
+   ],
+   "stderr": [
+    ""
+   ]
+  }
+ },
+ "references-found": {
+  "default": {
+   "code": 0,
+   "stdout": [
+    "Cortex overlay validator",
+    "  Project root:  <TMP>/host",
+    "  Cortex dir:    <TMP>/host/cortex",
+    "  Strict mode:   false",
+    "",
+    "── Scope: . ──",
+    "ℹ agents/roles/product/market-analyst.md (custom addition — no cortex base, skipping overlay checks)",
+    "ℹ agents/workflows/product/launch.md (custom addition — no cortex base, skipping overlay checks)",
+    "",
+    "── Scope: svc-a ──",
+    "ℹ svc-a/agents/roles/data/data-analyst.md (custom addition — no cortex base, skipping overlay checks)",
+    "ℹ svc-a/agents/workflows/engineering/svc-flow.md (custom addition — no cortex base, skipping overlay checks)",
+    "",
+    "──────────────────────────────────────────",
+    "Checked:  4 files",
+    "Errors:   0",
+    "Warnings: 0",
+    ""
+   ],
+   "stderr": [
+    ""
+   ]
+  },
+  "--strict": {
+   "code": 0,
+   "stdout": [
+    "Cortex overlay validator",
+    "  Project root:  <TMP>/host",
+    "  Cortex dir:    <TMP>/host/cortex",
+    "  Strict mode:   true",
+    "",
+    "── Scope: . ──",
+    "ℹ agents/roles/product/market-analyst.md (custom addition — no cortex base, skipping overlay checks)",
+    "ℹ agents/workflows/product/launch.md (custom addition — no cortex base, skipping overlay checks)",
+    "",
+    "── Scope: svc-a ──",
+    "ℹ svc-a/agents/roles/data/data-analyst.md (custom addition — no cortex base, skipping overlay checks)",
+    "ℹ svc-a/agents/workflows/engineering/svc-flow.md (custom addition — no cortex base, skipping overlay checks)",
+    "",
+    "──────────────────────────────────────────",
+    "Checked:  4 files",
+    "Errors:   0",
+    "Warnings: 0",
+    ""
+   ],
+   "stderr": [
+    ""
+   ]
+  }
+ },
  "replacement-outside-workflows": {
   "default": {
    "code": 1,

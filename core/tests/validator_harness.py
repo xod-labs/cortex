@@ -9,7 +9,8 @@ inside a directory named ``agents`` or ``cortex`` and ``scope-workspace-in-servi
 the workspace's ``── Scope: . ──`` header, ``escape-in-field`` and ``control-char-in-field`` (#85),
 then the review's fixes to #76 — ``non-overridable-without-header``, ``custom-theme``,
 ``readme-in-layer``, ``missing-header-in-service`` and the wording of ``MISSING_HEADER`` — and once
-for ADR-008, whose ``cortex validate`` the help now names.
+for ADR-008, whose ``cortex validate`` the help now names. ``references-found`` and
+``reference-not-found`` were added with ``REFERENCE_NOT_FOUND`` (#140), which changed no other case.
 The core must reproduce it byte for byte, the temporary directory aside.
 
 A case may carry a ``case.json``:
@@ -49,9 +50,11 @@ REPO = CORE.parent
 EXPECTED = FIXTURES / "expected.json"
 DEFAULT_RUNS = [[], ["--strict"]]
 # The core from source, isolated — no working directory, no PYTHONPATH on sys.path — given the
-# two roots as the cortex command gives them.
+# two roots and the team's theme as the cortex command gives them: the command's replay writes a
+# cortex.toml of the theme h2g2.
+THEME = "h2g2"
 CORE_CALL = ("import sys; sys.path.insert(0, sys.argv.pop(1)); from cortex_core.validate import main; "
-             "sys.exit(main(sys.argv[3:], project_root=sys.argv[1], base_root=sys.argv[2]))")
+             f"sys.exit(main(sys.argv[3:], project_root=sys.argv[1], base_root=sys.argv[2], theme={THEME!r}))")
 
 
 def cases():
