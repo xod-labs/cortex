@@ -1,8 +1,9 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
-# Written by cli/build.py for the duration of a build: the version it stamps, the earlier spec archives'
+# Written by cli/build.py for the duration of a build: the version it stamps, the earlier releases'
 # checksums it embeds — and PyInstaller's output.
 cortex_cli/_stamp.py
 cortex_cli/_known_specs.py
+cortex_cli/_known_releases.py
 build/

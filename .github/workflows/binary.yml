@@ -101,9 +101,10 @@ jobs:
           version="${RELEASE_VERSION:-$(python cli/build.py --development-version "$GITHUB_RUN_NUMBER")}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      # The checksum of every spec archive released so far, which the binary embeds: a release
-      # changed after this build — its archive replaced — is then refused (ADR-008 §9).
-      - name: The spec archives released before
+      # The checksum of every archive released so far, which the binary embeds: a spec archive
+      # changed after this build is then refused (ADR-008 §9), and a self-update to a release before
+      # 1.10.0, which no key signed, is checked against its binary archive's (ADR-015 §3.5).
+      - name: The archives released before
         env:
           GH_TOKEN: ${{ github.token }}
         run: python cli/build.py --fetch-known-specs "$GITHUB_REPOSITORY" "$RUNNER_TEMP/known-specs.json"
@@ -116,20 +117,34 @@ jobs:
           export SOURCE_DATE_EPOCH
           python cli/build.py --version "${{ steps.version.outputs.version }}" --known-specs "$RUNNER_TEMP/known-specs.json"
 
-      # The table the build was given is the one the binary carries: a table left out — the module
+      # The table the build was given is the one the binary carries: a table left out — a module
       # missing from the bundle — would check nothing, in silence.
-      - name: The binary knows the spec archives released before
+      - name: The binary knows the archives released before
         run: |
           binary="$GITHUB_WORKSPACE/cli/build/dist/cortex"
           [ "$RUNNER_OS" = Windows ] && binary="$binary.exe"
           "$binary" --version --verbose | tr -d '\r' > "$RUNNER_TEMP/known-by-binary.txt"
           cat "$RUNNER_TEMP/known-by-binary.txt"
-          # Every entry, version and checksum, as the binary prints them — not their number only.
+          # Every entry, version, asset and checksum, as the binary prints them — not their number only.
           # Compared by Python, which every runner has: no diff in the AlmaLinux image, CRLF on Windows.
+          # The file is {version: {asset: sha256}}; one of the shape before 1.10.0, {version: sha256}, is read too.
           python - "$RUNNER_TEMP/known-specs.json" "$RUNNER_TEMP/known-by-binary.txt" <<'EOF'
           import json, sys
-          given = [f"  {version}  {digest}" for version, digest in sorted(json.load(open(sys.argv[1])).items())]
-          carried = [line.rstrip("\r\n") for line in open(sys.argv[2], encoding="utf-8") if line.startswith("  ")]
+          spec, given = "cortex-spec.tar.gz", {"spec": [], "binary": []}
+          for version, value in sorted(json.load(open(sys.argv[1])).items()):
+              assets = {spec: value} if isinstance(value, str) else value
+              if spec in assets:
+                  given["spec"].append(f"  {version}  {assets[spec]}")
+              given["binary"] += [f"  {version}  {name}  {digest}" for name, digest in sorted(assets.items()) if name != spec]
+          carried, section = {"spec": [], "binary": []}, None
+          for line in open(sys.argv[2], encoding="utf-8"):
+              line = line.rstrip("\r\n")
+              if line.startswith("known spec archives:"):
+                  section = "spec"
+              elif line.startswith("known binary archives:"):
+                  section = "binary"
+              elif line.startswith("  ") and section:
+                  carried[section].append(line)
           if carried != given:
               print("::error::the binary does not carry the table the build was given")
               print("given:", given)

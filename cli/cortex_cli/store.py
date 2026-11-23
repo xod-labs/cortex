@@ -85,14 +85,16 @@ def releases_origin() -> str:
     return machine.setting(cortex_home, "releases_url").origin
 
 
-def from_where(base: str, what: str) -> Optional[str]:
-    """The note a download from ``base`` gives, ``what`` naming what is downloaded — ``None`` from
-    GitHub's releases. Integrity against the host the releases come from, not authenticity
-    (ADR-010 §3.7): another host than GitHub's says so, before it is downloaded from."""
+def from_where(base: str, what: str,
+               against: str = "that host's SHA256SUMS, not against GitHub's releases") -> Optional[str]:
+    """The note a download from ``base`` gives, ``what`` naming what is downloaded and ``against``
+    what it is checked — ``None`` from GitHub's releases. A spec is checked against the host the
+    releases come from, unless the binary embeds its checksum (ADR-010 §3.7); a binary, against
+    what this one embeds (ADR-015 §3.5). Another host than GitHub's says so, before it is
+    downloaded from."""
     if base == DEFAULT_RELEASES_URL:
         return None
-    return (f"downloading from {base}, set by {releases_origin()} — {what} is checked against that host's "
-            "SHA256SUMS, not against GitHub's releases")
+    return f"downloading from {base}, set by {releases_origin()} — {what} is checked against {against}"
 
 
 _noted: Set[str] = set()
@@ -114,6 +116,17 @@ def known_specs() -> Dict[str, str]:
     except ImportError:
         return {}
     return dict(KNOWN)
+
+
+def known_releases() -> Dict[str, Dict[str, str]]:
+    """The checksum of every binary archive released before this binary was built, by version and
+    asset — written by ``cli/build.py`` for the build: what ``cortex self-update`` checks a release
+    before 1.10.0 against, which no key signed (ADR-015 §3.5). A source checkout knows none."""
+    try:
+        from ._known_releases import KNOWN
+    except ImportError:
+        return {}
+    return {version: dict(assets) for version, assets in KNOWN.items()}
 
 
 def install_command(version: Optional[Version] = None) -> str:
