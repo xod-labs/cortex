@@ -8,13 +8,33 @@ cascade is resolved and merged per its semantic; distinct parts are joined by ``
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 from .resolver import character_for_role, find_role_relpath, read_resolved
 
 # Separator inserted between two distinct cascade layers when assembling a prompt.
 # Matches the ADR-002 §3.1 sketch ("\n\n---\n\n").
 LAYER_SEPARATOR = "\n\n---\n\n"
+
+# The parts of the project's own view, in the order they close the prompt — each kept or left out
+# on its own (#89): ``# Project overview``, ``# Workspace services``, ``# Project context``.
+PROJECT_VIEW: Tuple[str, ...] = ("overview", "services", "context")
+
+
+def project_view_parts(names: Optional[Iterable[str]]) -> Tuple[str, ...]:
+    """The parts of the project's view to keep, in ``PROJECT_VIEW`` order: ``None`` keeps them all,
+    an empty list none. An unknown part — or a bare string, not a list — is a ``ValueError`` that
+    names the parts."""
+    if names is None:
+        return PROJECT_VIEW
+    accepted = ", ".join(PROJECT_VIEW)
+    if isinstance(names, (str, bytes)) or not isinstance(names, Iterable):
+        raise ValueError(f"project_view must be a list of parts among {accepted}, got {names!r}")
+    names = list(names)
+    for name in names:
+        if name not in PROJECT_VIEW:
+            raise ValueError(f"project_view: unknown part {name!r}, the parts are {accepted}")
+    return tuple(part for part in PROJECT_VIEW if part in names)
 
 
 def layers_for(

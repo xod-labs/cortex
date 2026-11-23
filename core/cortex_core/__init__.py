@@ -11,7 +11,7 @@ Two rules hold for every module of this package:
 """
 
 from .catalog import capability_catalog, capability_dirs
-from .prompt import LAYER_SEPARATOR, build_system_prompt, layers_for
+from .prompt import LAYER_SEPARATOR, PROJECT_VIEW, build_system_prompt, layers_for, project_view_parts
 from .resolver import (
     ADDITIVE_SEPARATOR,
     MergeSemantic,
@@ -29,6 +29,7 @@ __all__ = [
     "ADDITIVE_SEPARATOR",
     "LAYER_SEPARATOR",
     "MergeSemantic",
+    "PROJECT_VIEW",
     "Refusal",
     "build_system_prompt",
     "capability_catalog",
@@ -38,6 +39,7 @@ __all__ = [
     "find_role_relpath",
     "find_workflow_relpath",
     "layers_for",
+    "project_view_parts",
     "read_resolved",
     "refusal",
     "resolve_layer",

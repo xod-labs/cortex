@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from cortex_core.prompt import LAYER_SEPARATOR, build_system_prompt, layers_for  # noqa: E402
+from cortex_core.prompt import LAYER_SEPARATOR, PROJECT_VIEW, build_system_prompt, layers_for, project_view_parts  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 ROOT = FIXTURES / "host"
@@ -80,6 +80,34 @@ class ProjectContextTests(unittest.TestCase):
             with self.subTest(context=context):
                 self.assertEqual(build_system_prompt("lead-backend", None, "h2g2", ROOT, project_context=context),
                                  build_system_prompt("lead-backend", None, "h2g2", ROOT))
+
+
+class ProjectViewPartsTests(unittest.TestCase):
+    """#89 — the parts of the project's view a prompt keeps, each on its own."""
+
+    def test_none_keeps_every_part_in_order(self):
+        self.assertEqual(project_view_parts(None), ("overview", "services", "context"))
+        self.assertEqual(PROJECT_VIEW, ("overview", "services", "context"))
+
+    def test_the_parts_named_in_the_prompt_order(self):
+        cases = {(): (), ("context",): ("context",), ("context", "overview"): ("overview", "context"),
+                 ("services", "services"): ("services",)}
+        for names, expected in cases.items():
+            with self.subTest(names=names):
+                self.assertEqual(project_view_parts(list(names)), expected)
+
+    def test_an_unknown_part_names_the_parts(self):
+        for names in (["readme"], ["overview", "Context"], [None], [1]):
+            with self.subTest(names=names):
+                with self.assertRaisesRegex(ValueError, r"^project_view: unknown part .*, the parts are "
+                                                        r"overview, services, context$"):
+                    project_view_parts(names)
+
+    def test_a_string_is_no_list(self):
+        for names in ("overview", "overview,context", b"overview", 3):
+            with self.subTest(names=names):
+                with self.assertRaisesRegex(ValueError, "must be a list of parts among overview, services, context"):
+                    project_view_parts(names)
 
 
 class BuildSystemPromptTests(unittest.TestCase):
