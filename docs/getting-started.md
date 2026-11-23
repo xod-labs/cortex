@@ -310,7 +310,7 @@ cortex validate
 
 The Prompt Manager loads `cortex/agents/roles/engineering/lead-backend.md` first — from the directory `spec` names, whatever the sync mode — then layers your overlay on top.
 
-`cortex validate` checks every overlay against the spec the project is synced to; `--service PATH` checks one service only. It exits `0` when clean, `1` on errors, `2` when it cannot run or the arguments are wrong. With `--strict`, warnings fail too — what CI should run, after installing the binary and running `cortex sync --locked`.
+`cortex validate` checks every overlay against the spec the project is synced to, and what every file of `agents/` refers to — a role, a character, a workflow, a spec path that names nothing is `REFERENCE_NOT_FOUND`; `--service PATH` checks one service only. It exits `0` when clean, `1` on errors, `2` when it cannot run or the arguments are wrong. With `--strict`, warnings fail too — what CI should run, after installing the binary and running `cortex sync --locked`.
 
 📖 **Full guide:** [extending-layers.md](extending-layers.md) — covers all four layers, examples, edge cases, and validation.
 

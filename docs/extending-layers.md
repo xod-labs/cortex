@@ -61,7 +61,7 @@ There are **two ways** to put a file in your project's `agents/` tree:
 | **Overlay** | ✅ Yes | You're extending an existing cortex base (adding rules to `lead-backend.md`, etc.) |
 | **Custom addition** | ❌ No | You're adding something brand new that doesn't exist in cortex (a custom theme, a new role, a project-specific capability) |
 
-This guide focuses on **overlays**. For custom additions, you just place the file at the cascade path and the PM picks it up — no header needed. `cortex validate` logs custom additions as informational and skips overlay-specific checks for them.
+This guide focuses on **overlays**. For custom additions, you just place the file at the cascade path and the PM picks it up — no header needed. `cortex validate` logs custom additions as informational and skips overlay-specific checks for them — but checks what they refer to, as it does for overlays (`REFERENCE_NOT_FOUND`, see [Validating your overlays](#-validating-your-overlays)).
 
 A file with no header that sits **at the path of a cortex base** is not a custom addition: it shadows that base, and the cascade stacks it as an overlay. The validator reports it as `MISSING_HEADER` — a warning, and an error under `--strict`. Add the header, or rename the file if it was never meant to extend the base. The one exception is `personalities/{theme}/characters.md`: it cannot be overridden at all, so a copy at the path of a base is `NON_OVERRIDABLE`, an error, header or not. A theme of your own, with no base of that name, is a custom addition. A `README.md` is documentation: the cascade never reads one, and the validator never reports it.
 
@@ -249,6 +249,18 @@ The validator catches the common mistakes:
 - Overlay path doesn't mirror the base path
 - Trying to override a non-overridable file (`characters.md`)
 - `replacement` semantic used outside `workflows/`
+- A reference to nothing (`REFERENCE_NOT_FOUND`) — in an overlay or a custom addition alike: a warning, and an error under `--strict`
+
+**What counts as a reference.** Only the forms a file dispatches with, so that no mention that is not one is reported — a reference the check misses costs less than a warning that cries wolf:
+
+| Form | Example | Must name |
+|---|---|---|
+| A spec path | `cortex/agents/roles/engineering/architect.md`, `cortex/docs/…`, `cortex/templates/…` | a file or folder of the spec |
+| A layer path | `agents/capabilities/languages/php.md`, and `roles/…` or `workflows/…` | a file or folder of the spec or of a tier the file is read with: the team's folder, and its own service's `agents/` for a service's file. A workflow in any of them is the one the cascade serves |
+| A role on a dispatch line | ``**Agent:** `product/market-analyst` `` | `roles/product/market-analyst.md` in one of those tiers |
+| A character tied to a role | `` `roles/data/data-analyst.md` (@Frankie-Benjy)``, `` `prompt-manager` (@Oolon)``, `**@Marvin** (security-engineer)` | a character of the team's theme's `characters.md` |
+
+Never a reference: an `@` mention anywhere else — Claude Code's subagents such as `@Explore`, a service's alias such as `@backend`, an e-mail address, an npm scope such as `@types/node` —, a path with a placeholder (`{service}/agents/…`, `<category>`, `*`, `…`), a path inside another path or a URL, anything in a fenced code block or an HTML comment, and any path outside `cortex/{agents,docs,templates}/` and the four layers, such as `cortex.toml` or `project-context.md`. Put an example in a code block: it is not checked.
 
 CI integration is recommended — fail the pipeline if `cortex validate --strict` returns non-zero. The CI job installs the binary of the version `cortex.toml` pins — its checks are that version's — then runs `cortex sync --locked`, which never writes `cortex.lock`: a lock missing, or naming another version than `cortex.toml`, fails the job instead of being written where nobody commits it. `--locked` is from Cortex 1.4.0, and the lines leave it out for a project pinned before it:
 
