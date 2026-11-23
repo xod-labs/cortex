@@ -30,6 +30,13 @@ SUMMARY = ("    if: always()\n"
            "          echo \"$RESULTS\" | jq -e 'all(.[]; . == \"success\" or . == \"skipped\")' > /dev/null")
 
 
+# The environment release-signing as the script leaves it — as GitHub serves it, with its branch policies.
+READY = {"name": "release-signing", "protection_rules": [{"type": "branch_policy"}],
+         "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True},
+         "policies": [{"id": 1, "name": "main", "type": "branch"}, {"id": 2, "name": "[0-9]*.x", "type": "branch"},
+                      {"id": 3, "name": "release/**", "type": "branch"}]}
+
+
 # GitHub's message for each refusal of a classic protection's required checks.
 MESSAGES = {404: "Branch not protected", 403: "Resource not accessible by integration", 500: "Server Error"}
 
@@ -46,7 +53,7 @@ class FakeGh(sr.Gh):
     """One repository's settings, as GitHub's API serves and takes them."""
 
     def __init__(self, owner_type="Organization", rulesets=None, immutable=False, delete_on_merge=False, branches=("main",),
-                 org_rulesets=None, protections=None):
+                 org_rulesets=None, protections=None, environment=..., secret_set=True, environment_error=None):
         self.owner_type = owner_type
         self.branches = list(branches)
         self.rulesets = {r["id"]: r for r in (rulesets or [])}
@@ -58,11 +65,56 @@ class FakeGh(sr.Gh):
         # status of its refusal. A branch with none answers 404, as GitHub does.
         self.protections = dict(protections or {})
         self.read = []
+        # The environment release-signing, as GitHub serves it, and its branch policies: as the script
+        # leaves it by default, as the repository has it; None, none. `secret_set`: whether the
+        # maintainer has set its secret — a value no script writes.
+        self.environment = copy.deepcopy(READY if environment is ... else environment)
+        self.secret_set = secret_set
+        self.environment_error = environment_error
+
+    def _environment(self, path, method, body):
+        base = "repos/o/r/environments/release-signing"
+        if self.environment_error:
+            raise sr.GhError(f"{method} {path}: gh: Forbidden (HTTP {self.environment_error})", self.environment_error)
+        env = self.environment
+        if path == base and method == "PUT":
+            policy = body["deployment_branch_policy"]
+            rules = [{"type": "branch_policy"}] if policy and policy["custom_branch_policies"] else []
+            if body.get("reviewers"):
+                rules.append({"type": "required_reviewers", "reviewers": body["reviewers"]})
+            if body.get("wait_timer"):
+                rules.append({"type": "wait_timer", "wait_timer": body["wait_timer"]})
+            policies = env["policies"] if env and policy and policy["custom_branch_policies"] else []
+            self.environment = {"name": "release-signing", "protection_rules": rules,
+                                "deployment_branch_policy": policy, "policies": policies}
+            return self.environment
+        if env is None:
+            raise sr.GhError(f"{method} {path}: gh: Not Found (HTTP 404)", 404)
+        if path == base:
+            return {k: copy.deepcopy(v) for k, v in env.items() if k != "policies"}
+        if path == f"{base}/secrets?per_page=100":
+            return {"total_count": int(self.secret_set),
+                    "secrets": [{"name": "RELEASE_SIGNING_KEY"}] if self.secret_set else []}
+        if path == f"{base}/deployment-branch-policies?per_page=100":
+            if not (env.get("deployment_branch_policy") or {}).get("custom_branch_policies"):
+                raise sr.GhError(f"{method} {path}: gh: Not Found (HTTP 404)", 404)
+            return {"total_count": len(env["policies"]), "branch_policies": copy.deepcopy(env["policies"])}
+        if path == f"{base}/deployment-branch-policies" and method == "POST":
+            new = dict(body, id=max([p["id"] for p in env["policies"]] + [0]) + 1)
+            env["policies"].append(new)
+            return new
+        match = re.fullmatch(rf"{base}/deployment-branch-policies/(\d+)", path)
+        if match and method == "DELETE":
+            env["policies"] = [p for p in env["policies"] if p["id"] != int(match.group(1))]
+            return None
+        raise AssertionError((method, path))
 
     def api(self, path, method="GET", body=None):
         if method != "GET":
             self.writes.append((method, path))
         self.read.append(path)
+        if path.startswith("repos/o/r/environments/"):
+            return self._environment(path, method, body)
         match = re.fullmatch(r"repos/o/r/branches/(.+)/protection/required_status_checks", path)
         if match and method == "GET":
             answer = self.protections.get(match.group(1), 404)
@@ -424,6 +476,70 @@ class SetupReleaseTests(unittest.TestCase):
         gh.branches.append("2.x")
         gh.protections["2.x"] = self.protection("ci")
         self.assertIn("✗ the classic branch protection of '2.x'", run(gh, "--check")[1])
+
+    def test_the_signing_environment_is_made_open_to_the_release_branches_with_no_reviewer(self):
+        # ADR-015 §3.1: where a release or a pre-release is cut, and nowhere else.
+        gh = FakeGh(environment=None, secret_set=False)
+        code, out = run(gh, "--check")
+        self.assertEqual(code, 1)
+        self.assertIn("✗ the environment 'release-signing', open to main, [0-9]*.x, release/**, with no reviewer\n"
+                      "    there is no environment named 'release-signing'", out)
+        self.assertIn("✗ the secret RELEASE_SIGNING_KEY of the environment 'release-signing'\n    it is not set", out)
+        code, out = run(gh)
+        self.assertEqual(code, 1, out)   # the secret is left to the maintainer
+        self.assertIn("→ set the environment 'release-signing'", out)
+        self.assertIn("! the secret RELEASE_SIGNING_KEY of the environment 'release-signing': left to you — set it by "
+                      "hand, the private key in PEM on its standard input:\n"
+                      "    gh secret set RELEASE_SIGNING_KEY --env release-signing --repo o/r < release-signing.pem", out)
+        env = gh.environment
+        self.assertEqual(env["deployment_branch_policy"], {"protected_branches": False, "custom_branch_policies": True})
+        self.assertEqual(sorted((p["name"], p["type"]) for p in env["policies"]),
+                         [("[0-9]*.x", "branch"), ("main", "branch"), ("release/**", "branch")])
+        self.assertFalse([r for r in env["protection_rules"] if r["type"] in ("required_reviewers", "wait_timer")])
+        gh.secret_set = True
+        self.assertEqual(run(gh, "--check")[0], 0)
+        before = list(gh.writes)
+        self.assertEqual(run(gh)[0], 0)
+        self.assertEqual(gh.writes, before)
+
+    def test_a_loosened_or_guarded_environment_is_drift(self):
+        cases = {
+            "it requires a reviewer, and should require none: the maintainer publishes each draft by hand":
+                dict(READY, protection_rules=[{"type": "required_reviewers", "reviewers": [{"type": "User", "reviewer": {"id": 1}}]},
+                                              {"type": "branch_policy"}]),
+            "it waits 5 minute(s) before a job runs, and should not wait":
+                dict(READY, protection_rules=[{"type": "wait_timer", "wait_timer": 5}, {"type": "branch_policy"}]),
+            "it is open to every branch, and should be open to main, [0-9]*.x, release/** only":
+                dict(READY, deployment_branch_policy=None, policies=[]),
+            "it is open to the protected branches, and should be open to main, [0-9]*.x, release/** only":
+                dict(READY, deployment_branch_policy={"protected_branches": True, "custom_branch_policies": False}, policies=[]),
+            "it is open to ['[0-9]*.x', 'feature/*', 'main', 'v* (tag)'], and should be open to ['[0-9]*.x', 'main', 'release/**']":
+                dict(READY, policies=[{"id": 1, "name": "main", "type": "branch"}, {"id": 2, "name": "[0-9]*.x", "type": "branch"},
+                                      {"id": 7, "name": "feature/*", "type": "branch"}, {"id": 8, "name": "v*", "type": "tag"}]),
+        }
+        for drift, environment in cases.items():
+            with self.subTest(drift=drift):
+                gh = FakeGh(environment=environment)
+                run(gh)   # the rest of the settings
+                gh.environment = copy.deepcopy(environment)
+                code, out = run(gh, "--check")
+                self.assertEqual(code, 1)
+                self.assertIn(f"✗ the environment 'release-signing', open to main, [0-9]*.x, release/**, with no reviewer\n"
+                              f"    {drift}", out)
+                self.assertEqual(run(gh)[0], 0)
+                self.assertEqual(run(gh, "--check")[0], 0)
+                self.assertEqual(sorted(p["name"] for p in gh.environment["policies"]), ["[0-9]*.x", "main", "release/**"])
+
+    def test_an_environment_the_api_refuses_stops_the_script(self):
+        gh = FakeGh(environment_error=403)
+        err = io.StringIO()
+        saved, sys.stderr = sys.stderr, err
+        try:
+            code, out = run(gh, "--check")
+        finally:
+            sys.stderr = saved
+        self.assertEqual(code, 2)
+        self.assertIn("setup-release: GET repos/o/r/environments/release-signing: gh: Forbidden (HTTP 403)", err.getvalue())
 
     def test_another_repositorys_checks(self):
         gh = FakeGh()
