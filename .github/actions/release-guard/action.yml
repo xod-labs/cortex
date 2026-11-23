@@ -1,10 +1,10 @@
 name: release guard
 description: >-
   What a published release is checked against (ADR-009 §3.5): a version tag, the provenance of every
-  asset naming the tag's commit, the assets expected and SHA256SUMS over them, immutability, and
-  `latest` on the highest version. It repairs `latest`, and the pre-release box of an X.Y.Z that
-  passes. Anything else fails, and opens one issue: the release cannot be repaired, only deleted,
-  and its version is spent.
+  asset naming the tag's commit, the assets expected and SHA256SUMS over them, its signature by a
+  release key of the tag's commit (ADR-015 §3.4), immutability, and `latest` on the highest version.
+  It repairs `latest`, and the pre-release box of an X.Y.Z that passes. Anything else fails, and
+  opens one issue: the release cannot be repaired, only deleted, and its version is spent.
 
 inputs:
   tag:
@@ -16,6 +16,12 @@ inputs:
   signer-workflow:
     description: The workflow that builds releases and signs their provenance, `OWNER/REPO/.github/workflows/FILE`.
     required: true
+  release-keys:
+    description: The release keys file, read at the tag's commit, that SHA256SUMS.sig is checked against. Empty, no signature is checked.
+    default: ""
+  signed-from:
+    description: "The first release whose SHA256SUMS is signed, X.Y.Z: one before it is expected without SHA256SUMS.sig."
+    default: ""
   label:
     description: The label of the issue it opens.
     default: type:infra
@@ -32,9 +38,11 @@ runs:
         TAG: ${{ inputs.tag }}
         EXPECTED: ${{ inputs.expected }}
         SIGNER: ${{ inputs.signer-workflow }}
+        RELEASE_KEYS: ${{ inputs.release-keys }}
+        SIGNED_FROM: ${{ inputs.signed-from }}
         LABEL: ${{ inputs.label }}
         GITHUB_TOKEN: ${{ inputs.token }}
         GH_TOKEN: ${{ inputs.token }}   # gh attestation verify
       run: >-
         python3 "$GITHUB_ACTION_PATH/guard.py" --tag "$TAG" --expected "$EXPECTED"
-        --signer-workflow "$SIGNER" --label "$LABEL"
+        --signer-workflow "$SIGNER" --release-keys "$RELEASE_KEYS" --signed-from "$SIGNED_FROM" --label "$LABEL"
