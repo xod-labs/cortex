@@ -835,7 +835,7 @@ def unswap(target: Path, aside: Optional[Path]) -> None:
 def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
          claude_access: Optional[bool] = None, notes: bool = True, locked: bool = False,
          announce: bool = True, registers: bool = True, bootstraps: Optional[bool] = None,
-         said: Collection[str] = (), copilot_access: Optional[bool] = None) -> None:
+         said: Collection[str] = (), copilot_access: Optional[bool] = None, hints: bool = True) -> None:
     """Sync the project at or above ``cwd``. ``notes`` off, what git ignores is left to the
     caller — ``cortex init`` writes .gitignore once ``cortex/`` has its final form. ``locked``,
     ``cortex.lock`` is never written: a sync that would write it stops. ``announce`` off, the
@@ -846,12 +846,13 @@ def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err:
     project's lock: ``True`` writes the developer's own whatever the team's file, ``False`` only
     where there is one. ``said``: the notes of the versions the caller said already —
     ``cortex upgrade``'s — not said again. ``claude_access`` and ``copilot_access``, this developer's
-    choice, written in ``cortex.local.toml``."""
+    choice, written in ``cortex.local.toml``. ``hints`` off, whom to call is not said when the theme changed:
+    ``cortex init`` says it whatever the theme (#397)."""
     root = config.find_project(cwd)
     if root is None:
         raise SyncError(config.no_project(cwd))
     with project_lock(Path(root), err):
-        _sync(root, mode, source, out, err, claude_access, notes, locked, announce, said, copilot_access)
+        hint = _sync(root, mode, source, out, err, claude_access, notes, locked, announce, said, copilot_access, hints)
         if bootstraps is not None and source is None and not locked:
             from . import upgrade       # upgrade imports this module: the bootstraps are its
             project = config.load(root)
@@ -862,6 +863,8 @@ def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err:
                 err.write(f"note: {note}\n")
     if registers:
         register(root, out, err)
+    if hint is not None:
+        out.write(f"\n{hint}")         # last: whom to call, once all of the sync is said
 
 
 def register(root: str, out: TextIO, err: TextIO) -> None:
@@ -1107,7 +1110,9 @@ def synced_record(project: config.Project, reads: str) -> Optional[Dict[str, str
 
 def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
           claude_access: Optional[bool], notes: bool, locked: bool = False, announce: bool = True,
-          said: Collection[str] = (), copilot_access: Optional[bool] = None) -> None:
+          said: Collection[str] = (), copilot_access: Optional[bool] = None, hints: bool = True) -> Optional[str]:
+    """The sync itself — and whom to call, when ``hints`` and the theme it reads is not the one the last sync
+    recorded: ``None`` when it is, or nothing is recorded yet, or with no personality (#397)."""
     if source is None:
         # A version newer than this cortex, said before any key is checked (ADR-013 §3.8) — `--from`
         # checks no version, as before.
@@ -1197,6 +1202,10 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
                                      {"spec": "written by `cortex sync`",
                                       "synced": "written by `cortex sync` — the versions it read"},
                                      drop_synced=project.synced_unread)
+    # The theme this sync reads, the developer's own over the team's, against the one the last sync recorded (#397).
+    theme = project.active_theme
+    before = config.synced_theme(config.local_text(root))
+    local_text = config.with_synced_theme(local_text, theme)
     keep, new = False, None
     if mode == "link":
         keep = existing == "link" and os.path.normcase(link_target(target)) == os.path.normcase(str(spec_source))
@@ -1266,11 +1275,14 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
         _notes(Path(root), mode, err)
     _claude(Path(root), project, None if mode == "copy" else spec_source, out, err)
     _copilot(root, project, the_store.versions, mode, out, err, asked=copilot_access is not None)
-    theme = project.active_theme
     if theme != "none" and not any(base.is_dir() for base in (spec_source / "agents" / "personalities" / theme,
                                                               Path(project.team_dir) / "personalities" / theme)):
         err.write(f'warning: theme "{theme}" is neither in the spec nor in {project.team_folder}/personalities/ — '
                   "the Prompt Manager would not find it\n")
+    if hints and before is not None and before != theme:
+        from . import init          # init imports this module: the hint is its
+        return init.theme_hint(Path(root), spec_source)
+    return None
 
 
 def _claude(root: Path, project: config.Project, spec: Optional[Path], out: TextIO, err: TextIO) -> None:
