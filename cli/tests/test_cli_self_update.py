@@ -566,6 +566,7 @@ class SignatureTests(ReleaseTestCase):
         run = lambda path: "cortex 1.10.0-rc.1"   # noqa: E731
         self.assertEqual(self.update("1.10.0-rc.1", run=run)[0], 0)
         self.binary.write_bytes(OLD)
+        self.binary.with_name("cortex.old").unlink(missing_ok=True)   # Windows renames the old one aside
         self.release.server.requested.clear()
         (self.release.root / "download" / "1.10.0-rc.1" / "SHA256SUMS.sig").unlink()
         self.assert_refused("1.10.0-rc.1", "has no SHA256SUMS.sig", run=run)
