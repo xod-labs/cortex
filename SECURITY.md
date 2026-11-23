@@ -48,6 +48,24 @@ Credit is given in the advisory unless you prefer to stay anonymous.
 
 Pre-1.0: fixes land on `main` and in the next release. There are no backports.
 
+## Where a release comes from
+
+The install scripts trust the host they are downloaded from, and the binary they install. From
+then on, a binary decides what it trusts ([ADR-015](docs/adr/ADR-015-release-origin.md)):
+
+- **A newer binary** — `cortex self-update` installs a release from 1.10.0 on only when one line
+  of its `SHA256SUMS.sig` verifies its `SHA256SUMS` with an Ed25519 release key the running binary
+  embeds (`cli/cortex_cli/release_keys.py`); a release before 1.10.0, only when it matches the
+  checksum the running binary embeds for it. A mirror, `CORTEX_RELEASES_URL`, can serve a
+  release, not change one.
+- **A spec** — every spec archive a binary downloads, up to its own version, is checked against
+  the checksum it embeds.
+- **The keys** — the release workflow signs with the primary key, a secret of the
+  `release-signing` environment; a backup key is kept offline. A leaked key cannot be revoked
+  offline: the release that rotates it says so, and asks for an update.
+
+A way around these checks is in scope.
+
 ## Scope
 
 **In scope** — anything shipped by this repository: the runtime's HTTP surface,
