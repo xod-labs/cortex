@@ -119,6 +119,20 @@ class WhatCountsTests(unittest.TestCase):
             "no roles/security/nobody.md",
         ])
 
+    def test_a_bare_role_on_a_dispatch_line_is_not_checked(self):
+        # Claude Code's general-purpose has a role's shape: only {category}/{role} counts there.
+        self.assertEqual(self.p.missing("**Agent:** `general-purpose`, `architect`\n"), [])
+
+    def test_a_role_before_a_character_is_checked(self):
+        text = "`product/ghost` (@Hactar)\n`data/ghost` (@Ghost)\n"
+        self.assertEqual(self.p.missing(text), [
+            "line 1: the role 'product/ghost' is in neither the spec nor an overlay tier of this file's cascade — "
+            "no roles/product/ghost.md",
+            "line 2: the role 'data/ghost' is in neither the spec nor an overlay tier of this file's cascade — "
+            "no roles/data/ghost.md",
+            "line 2: '@Ghost' is no character of the theme 'h2g2' — its characters.md does not name it",
+        ])
+
     def test_a_character_tied_to_a_role(self):
         text = ("| 1 | `roles/engineering/architect.md` (@Slartibartfast) |\n"
                 "| 2 | `roles/engineering/lead-backend.md` (@Hotblack) |\n"
@@ -156,6 +170,11 @@ class WhatCountsTests(unittest.TestCase):
         text = "line one\r\n`roles/x/ghost.md`\r\n```\r\n`roles/y/ghost.md`\r\n```\r\n"
         self.assertEqual(self.p.missing(text), [
             "line 2: 'roles/x/ghost.md' is in neither the spec nor an overlay tier of this file's cascade"])
+
+    def test_a_carriage_return_ends_a_path(self):
+        text = ("See roles/engineering/architect.md\r\nand agents/roles/engineering/lead-backend.md\r\n"
+                "and cortex/docs/extending-layers.md\r\n")
+        self.assertEqual(self.p.missing(text), [])
 
 
 class WhatDoesNotCountTests(unittest.TestCase):
@@ -225,6 +244,13 @@ class WhatDoesNotCountTests(unittest.TestCase):
         self.assertEqual(self.p.missing(text), [
             "line 15: 'roles/ghost/after.md' is in neither the spec nor an overlay tier of this file's cascade"])
 
+    def test_a_fence_closes_only_on_a_bare_fence_as_long_at_least(self):
+        # A 4-backtick fence holds a 3-backtick one; an info string or tildes close nothing; 5 backticks do.
+        text = ("````markdown\n```python\n`roles/ghost/a.md`\n```\n`roles/ghost/b.md`\n"
+                "````text\n~~~~~\n`roles/ghost/c.md`\n`````\n`roles/ghost/after.md`\n")
+        self.assertEqual(self.p.missing(text), [
+            "line 10: 'roles/ghost/after.md' is in neither the spec nor an overlay tier of this file's cascade"])
+
     def test_an_unclosed_fence_runs_to_the_end(self):
         self.assertEqual(self.p.missing("```\n`roles/ghost/a.md`\n"), [])
 
@@ -258,7 +284,16 @@ class ThemeTests(unittest.TestCase):
     def test_a_project_s_own_theme(self):
         self.p.write(self.p.root / "agents/personalities/acme/characters.md",
                      "| Role | Character | Alias |\n|---|---|---|\n| `architect` | Road Runner | @Road-Runner |\n")
-        self.assertEqual(self.p.missing("`architect` (@Road-Runner)\n", theme="acme"), [])
+        self.assertEqual(self.p.missing("`architect` (@Road-Runner), `architect` (@Nobody)\n", theme="acme"), [
+            "line 1: '@Nobody' is no character of the theme 'acme' — its characters.md does not name it"])
+
+    def test_a_theme_of_the_base_reads_the_tiers_too(self):
+        # A project's overlay tier may hold the base theme's characters.md too: its characters count.
+        self.p.write(self.p.root / "agents/personalities/h2g2/characters.md",
+                     "| Role | Character | Alias |\n|---|---|---|\n| `architect` | Deep Thought | @Deep-Thought |\n")
+        text = "`architect` (@Deep-Thought), `architect` (@Slartibartfast), `architect` (@Nobody)\n"
+        self.assertEqual(self.p.missing(text), [
+            "line 1: '@Nobody' is no character of the theme 'h2g2' — its characters.md does not name it"])
 
     def test_no_characters_to_check_against(self):
         # The theme none, or a theme no tier holds: nothing to say of a character.
@@ -318,6 +353,27 @@ class ValidateTests(unittest.TestCase):
         _, out = self.run_validate(False)
         self.assertIn("BASE_NOT_FOUND", out)
         self.assertNotIn("roles/x/ghost.md", out)
+
+    def test_a_renamed_team_s_folder_is_a_tier(self):
+        team = self.p.root / "team"
+        self.p.write(team / "roles/product/mine.md", "# The team's\n")
+        self.p.write(team / "workflows/product/flow.md", "`roles/product/mine.md`, `roles/product/ghost.md`\n")
+        out = io.StringIO()
+        validate(str(self.p.root), str(self.p.base), "", False, out, Colors(False), team_folder=str(team),
+                 theme="h2g2")
+        self.assertIn("⚠ team/workflows/product/flow.md\n  REFERENCE_NOT_FOUND — line 1: 'roles/product/ghost.md' "
+                      "is in neither the spec nor an overlay tier of this file's cascade\n", out.getvalue())
+        self.assertNotIn("mine.md' is in neither", out.getvalue())
+
+    def test_an_overlay_is_read_with_the_theme(self):
+        self.p.write(self.p.base / "agents/personalities/breaking-bad/characters.md",
+                     "| Role | Character | Alias |\n|---|---|---|\n| `architect` | Walter | @Heisenberg |\n")
+        self.p.write(self.p.root / "agents/roles/engineering/architect.md",
+                     "<!-- OVERLAY\n Base: cortex/agents/roles/engineering/architect.md\n Scope: workspace\n"
+                     " Semantic: additive\n-->\n## Notes (additive)\n`architect` (@Heisenberg)\n")
+        _, out = self.run_validate(False)
+        self.assertIn("⚠ agents/roles/engineering/architect.md\n  REFERENCE_NOT_FOUND — line 7: '@Heisenberg' is no "
+                      "character of the theme 'h2g2' — its characters.md does not name it\n", out)
 
     def test_a_service_file_reads_its_own_tier(self):
         self.p.write(self.p.root / "svc/project-overview.md", "# Service\n")
