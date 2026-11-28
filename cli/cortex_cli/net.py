@@ -124,7 +124,7 @@ def get(url: str, max_bytes: int, timeout: float = TIMEOUT, redirects: Optional[
         reason = getattr(error, "reason", error)
         raise DownloadError(f"{_masked(url)}: {reason}")
     except (ValueError, http.client.HTTPException) as error:   # InvalidURL: a control character in it
-        raise DownloadError(f"{url!r}: {error}")
+        raise DownloadError(f"{_masked(url)!r}: {error}")
     if len(data) > max_bytes:
         raise DownloadError(f"{_masked(url)}: larger than {max_bytes} bytes")
     return data

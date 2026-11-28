@@ -939,6 +939,18 @@ class NetTests(unittest.TestCase):
                 self.assertNotIn("secret", str(raised.exception))
                 self.assertIn(shown, str(raised.exception))
 
+    def test_a_password_cut_by_a_slash_is_never_repeated_by_get(self):
+        # #275: a "/", "?" or "#" in the password ends the netloc before its @ — check_url sees no user part,
+        # and urllib fails on the "port".
+        from cortex_cli import net
+        for url in ("https://user:se/cret@host.invalid/r", "https://user:sec?ret@host.invalid/r",
+                    "https://user:sec#ret@host.invalid/r"):
+            with self.subTest(url=url):
+                with self.assertRaises(net.DownloadError) as raised:
+                    net.get(url, 10, timeout=2)
+                self.assertNotIn("se/cret", str(raised.exception))
+                self.assertNotIn("ret@", str(raised.exception).replace("…@", ""))
+
     def test_the_releases_url_is_checked(self):
         from unittest import mock
 
