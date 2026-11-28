@@ -90,12 +90,15 @@ def prose_lines(text: str) -> List[str]:
     return lines
 
 
-def _clean(path: str) -> Optional[str]:
-    """``path`` as a reference names it — its anchor, its line number and the sentence's punctuation
-    off — or ``None`` when it is a pattern."""
-    path = path.rstrip(".:!?*_")           # the sentence's, or the emphasis's
+def _clean(path: str, before: str = "") -> Optional[str]:
+    """``path`` as a reference names it — its anchor, its line number, the sentence's punctuation and
+    the emphasis that ``before``, the line up to it, opens off — or ``None`` when it is a pattern."""
+    emphasis = before[len(before.rstrip("*_")):]
+    if emphasis and path.rstrip(".:!?").endswith(emphasis):
+        path = path.rstrip(".:!?")[:-len(emphasis)]
     if _PLACEHOLDER.search(path):
         return None
+    path = path.rstrip(".:!?")             # the sentence's
     path = path.split("#", 1)[0]
     return re.sub(r":\d+(?:[-:]\d+)*$", "", path)
 
@@ -125,14 +128,14 @@ def references(text: str, role_exists) -> List[Reference]:
 
     for number, line in enumerate(prose_lines(text), 1):
         for match in _SPEC.finditer(line):
-            path = _clean(f"cortex/{match.group(1)}{match.group(2)}")
+            path = _clean(f"cortex/{match.group(1)}{match.group(2)}", line[:match.start()])
             if path is not None:
                 add(number, "spec", path)
         for match in _LAYER.finditer(line):
             prefix, layer, rest = match.group(1), match.group(2), match.group(3)
             if not prefix and layer not in ("roles", "workflows"):
                 continue            # capabilities/… and personalities/… are named from agents/ only
-            path = _clean(f"{prefix or ''}{layer}/{rest}")
+            path = _clean(f"{prefix or ''}{layer}/{rest}", line[:match.start()])
             if path is not None and not prefix and not path.endswith(".md"):
                 continue            # roles/common/tasks/main.yml, workflows/release.yml: no layer's file
             if path is not None and not path.endswith(f"{layer}/"):
@@ -142,7 +145,7 @@ def references(text: str, role_exists) -> List[Reference]:
         for match in _AFTER_ROLE.finditer(line):
             code, path, character = match.group(1), match.group(2), match.group(3)
             if path is not None:
-                tied = _clean(path) is not None
+                tied = _clean(path, line[:match.start(2)]) is not None
             else:
                 name = code.strip()
                 tied = bool(re.fullmatch(r"(?:agents/)?roles/\S+", name)) and _clean(name) is not None

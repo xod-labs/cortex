@@ -142,6 +142,16 @@ class WhatCountsTests(unittest.TestCase):
                 "`agents/roles/engineering/architect.md:3`, and roles/engineering/lead-backend.md.\n")
         self.assertEqual(self.p.missing(text), [])
 
+    def test_emphasis_is_no_part_of_the_path(self):
+        text = ("**cortex/agents/roles/engineering/architect.md**, *roles/engineering/lead-backend.md*.\n"
+                "**cortex/docs/ghost.md**: and *roles/x/ghost.md*.\n"
+                "**roles/engineering/architect.md** (@Ghost)\n")
+        self.assertEqual(self.p.missing(text), [
+            "line 2: 'cortex/docs/ghost.md' is no file of the spec",
+            "line 2: 'roles/x/ghost.md' is in neither the spec nor an overlay tier of this file's cascade",
+            "line 3: '@Ghost' is no character of the theme 'h2g2' — its characters.md does not name it",
+        ])
+
     def test_a_crlf_file_reads_as_its_lf_one(self):
         text = "line one\r\n`roles/x/ghost.md`\r\n```\r\n`roles/y/ghost.md`\r\n```\r\n"
         self.assertEqual(self.p.missing(text), [
@@ -190,6 +200,10 @@ class WhatDoesNotCountTests(unittest.TestCase):
         # GitHub workflow, a cloud IAM role are the host's own.
         text = ("Edit roles/common/tasks/main.yml, then `workflows/release.yml`;\n"
                 "grant roles/iam.workloadIdentityUser to the runner.\n")
+        self.assertEqual(self.p.missing(text), [])
+
+    def test_a_trailing_glob_is_a_pattern(self):
+        text = "Delete agents/personalities/.active-* and cortex/agents/roles/ghost-*, then roles/ghost-*.\n"
         self.assertEqual(self.p.missing(text), [])
 
     def test_a_path_inside_another_path(self):
