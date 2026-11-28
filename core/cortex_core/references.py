@@ -10,8 +10,8 @@ mention that is no reference. What counts, outside fenced code blocks and HTML c
 
 - **Spec paths** — ``cortex/agents/…``, ``cortex/docs/…``, ``cortex/templates/…``: a file or a
   directory of the spec.
-- **Layer paths** — ``agents/{layer}/…``, and ``roles/…`` and ``workflows/…`` written from the layer
-  directory, as the base's workflows dispatch: a file or a directory of a tier of the file's own cascade
+- **Layer paths** — ``agents/{layer}/…``, and ``roles/….md`` and ``workflows/….md`` written from the
+  layer directory, as the base's workflows dispatch: a file or a directory of a tier of the file's own cascade
   — the spec, the team's folder, and the file's service when it is a service's. A workflow in any of
   them is the one the cascade serves, by replacement: one is enough.
 - **Roles** written ``{category}/{role}``, in backticks, on a dispatch line — ``**Agent:**``,
@@ -133,6 +133,8 @@ def references(text: str, role_exists) -> List[Reference]:
             if not prefix and layer not in ("roles", "workflows"):
                 continue            # capabilities/… and personalities/… are named from agents/ only
             path = _clean(f"{prefix or ''}{layer}/{rest}")
+            if path is not None and not prefix and not path.endswith(".md"):
+                continue            # roles/common/tasks/main.yml, workflows/release.yml: no layer's file
             if path is not None and not path.endswith(f"{layer}/"):
                 add(number, "layer", path)
         for name in _roles_on_dispatch(line):

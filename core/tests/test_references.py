@@ -185,6 +185,13 @@ class WhatDoesNotCountTests(unittest.TestCase):
                 "`workflows/…/x.md`, roles/.../x.md, `cortex/docs/$NAME.md`, roles/*.md\n")
         self.assertEqual(self.p.missing(text), [])
 
+    def test_a_host_s_own_roles_and_workflows(self):
+        # Written from the layer directory, only a Markdown file is a layer's: an Ansible role's task, a
+        # GitHub workflow, a cloud IAM role are the host's own.
+        text = ("Edit roles/common/tasks/main.yml, then `workflows/release.yml`;\n"
+                "grant roles/iam.workloadIdentityUser to the runner.\n")
+        self.assertEqual(self.p.missing(text), [])
+
     def test_a_path_inside_another_path(self):
         text = ("ai/cortex/agents/roles/ghost.md, ../roles/ghost.md, ./workflows/ghost.md,\n"
                 "https://github.com/xod-labs/cortex/blob/main/agents/roles/ghost.md, my-cortex/docs/ghost.md\n")
