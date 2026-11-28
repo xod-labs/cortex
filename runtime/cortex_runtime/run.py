@@ -140,7 +140,7 @@ def resolve_run(req: RunRequest, root: Path, theme: Optional[str] = None, *,
 
     ``project_view`` is the deployment's default for the parts of the project's view the prompt keeps
     (``None``: all three); the request's own ``project_view`` wins over it (#89). A part left out is
-    not read. An unknown part is a ``ValueError`` naming the parts."""
+    not read into the prompt. An unknown part is a ``ValueError`` naming the parts."""
     root = Path(root)
     view = project_view_parts(req.project_view if req.project_view is not None else project_view)
     req = replace(req, service=_service_inside(req.service, None, root))

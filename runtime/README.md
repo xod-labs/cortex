@@ -86,8 +86,10 @@ The view is an option ([#89](https://github.com/xod-labs/cortex/issues/89)). Its
 With neither, every part is kept and the prompt is byte for byte what it was before the option.
 A part left out is not put in the system prompt. The run's tools can still open its files: the
 default autonomy includes `code-read`, so the model may call `read_file` on `project-context.md`
-and get it back as a tool result. To also keep a run from opening them, leave `code-read` out of
-its `autonomy` ([ADR-002 §9](../docs/adr/ADR-002-cortex-runtime.md#9-amendments)). An unknown part is refused:
+and get it back as a tool result. To also keep a run from opening them, leave `code-read` out of its `autonomy`, on the `demo`
+and `anthropic-api` backends. The `claude-cli` backend runs Claude Code in the workspace, which
+reads the files under it whatever the autonomy grants: there, no setting keeps them from the model
+([ADR-002 §9](../docs/adr/ADR-002-cortex-runtime.md#9-amendments)). An unknown part is refused:
 `422` on the API, with a message naming the accepted values, and a stop at startup for
 `CORTEX_PROJECT_VIEW`. `/resolve` returns the parts kept, `project_view`. The capabilities do not
 change with it: they are still derived from `project-context.md`, kept or not, and only their
