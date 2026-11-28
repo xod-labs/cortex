@@ -1,6 +1,7 @@
 """The release's signature (ADR-015 §3.3): made with the secret, checked against the committed
 primary key, and the key never left on disk nor printed."""
 
+import base64
 import io
 import os
 import subprocess
@@ -97,6 +98,15 @@ class SignTests(unittest.TestCase):
         # The committed file, until the maintainer's keys are in it.
         self.keys.write_text("KEYS = {}\n", encoding="utf-8")
         self.assert_refused(self.primary, f"{self.keys} holds 0 primary key(s), and should hold one: no signature can be "
+                                          "checked")
+        self.assertFalse((self.assets / "SHA256SUMS.sig").exists())
+
+    def test_a_keys_file_with_two_primary_keys_signs_nothing(self):
+        two = "".join(f'    "{sg.key_id(raw)}": ("primary", "{base64.b64encode(raw).decode()}"),\n'
+                      for raw in (self.primary_raw, self.backup_raw))
+        self.keys.write_text(f"KEYS = {{\n{two}}}\n", encoding="utf-8")
+        self.assertEqual([role for role, _ in sg.read_keys(self.keys.read_text()).values()], ["primary", "primary"])
+        self.assert_refused(self.primary, f"{self.keys} holds 2 primary key(s), and should hold one: no signature can be "
                                           "checked")
         self.assertFalse((self.assets / "SHA256SUMS.sig").exists())
 
