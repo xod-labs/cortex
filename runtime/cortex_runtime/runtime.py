@@ -94,7 +94,7 @@ class Runtime:
         """Resolution only — the identity bundle, no execution (used by `POST /resolve`)."""
         req = build_run_request(payload, alias)
         wcfg = self._workspace(req.workspace)
-        return resolve_run(req, wcfg.root, wcfg.theme)
+        return resolve_run(req, wcfg.root, wcfg.theme, project_view=wcfg.project_view)
 
     def _subject(self, req) -> str:
         return req.subject or req.input.get("issue") or "default"
@@ -124,7 +124,7 @@ class Runtime:
         req = build_run_request(payload, alias)
         wcfg = self._workspace(req.workspace)
         pin = read_pin(wcfg.root)
-        resolved = resolve_run(req, wcfg.root, wcfg.theme, pin=pin)
+        resolved = resolve_run(req, wcfg.root, wcfg.theme, pin=pin, project_view=wcfg.project_view)
         subject = self._subject(req)
         run_id = self.cfg.store.start_run(req.workspace, req.role, subject, req.model, run_id=run_id)
         return {"run_id": run_id, "subject": subject, "cortex_version": resolved.cortex_version,
@@ -146,7 +146,7 @@ class Runtime:
     def _execute(self, req, run_id: Optional[str] = None, pin=READ_NOW) -> Dict[str, Any]:
         wcfg = self._workspace(req.workspace)
         try:
-            resolved = resolve_run(req, wcfg.root, wcfg.theme, pin=pin)
+            resolved = resolve_run(req, wcfg.root, wcfg.theme, pin=pin, project_view=wcfg.project_view)
             registry, comments = local_tool_registry(wcfg.root)
             model = make_model_client(self.cfg.model_backend, registry, self.cfg.secrets, req.model,
                                       root=wcfg.root, allowed_actions=resolved.allowed_actions,
