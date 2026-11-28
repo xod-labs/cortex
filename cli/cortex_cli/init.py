@@ -843,7 +843,7 @@ def init(options: argparse.Namespace, cwd: str, out: TextIO, err: TextIO) -> Non
 
     # The spec, where the project finds it — then what git must ignore, asked of git once
     # cortex/ has its final form: a copy turned into a link is a file to git.
-    sync.sync(str(root), mode, options.source, out, err, notes=False, registers=False)
+    sync.sync(str(root), mode, options.source, out, err, notes=False, registers=False, hints=False)
     spec_mode = spec_mode or "store"
     entries = {config.LOCAL_FILE: config.LOCAL_FILE}
     if spec_mode in ("link", "copy"):

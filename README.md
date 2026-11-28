@@ -184,7 +184,7 @@ If no alias is mentioned, Cortex infers the service from the active file context
 | `project-overview.md`, `project-context.md` | yes | your project's vision and stack — per service, too, in a workspace |
 | `agents/` | yes | your overlays, if any — the team's folder, unless `cortex.toml` renames it ([the team's folder](#the-teams-folder)) |
 | `agents/cortex.team.toml`, `agents/cortex.team.lock` | yes, in the team's repository | the team's settings — its `version`, `theme`, `sync`, `claude_access`, `copilot_access` and the keys it locks — and the lock of its version ([the team's file](#the-teams-file)) |
-| `cortex.local.toml` | no — git-ignored | `spec`, where the spec is on this machine; your own `theme`, `claude_access` and `copilot_access`, which win over the team's; a `version` you try; `synced`, what `cortex sync` read; `claude_entry` and `copilot_entry`, the entries it keeps in your tools' settings |
+| `cortex.local.toml` | no — git-ignored | `spec`, where the spec is on this machine; your own `theme`, `claude_access` and `copilot_access`, which win over the team's; a `version` you try; `synced`, what `cortex sync` read, and a `# synced theme:` comment, the theme it read; `claude_entry` and `copilot_entry`, the entries it keeps in your tools' settings |
 | `cortex/` | no — git-ignored | the link or the copy, in `link` or `copy` mode |
 | `.claude/settings.local.json` | no — git-ignored | where `cortex sync` lets Claude Code read the store, with `claude_access` |
 | VS Code's settings of your machine | no — outside the project | where `cortex sync` lets Copilot read the store, with `copilot_access`: a VS Code remote's `~/.vscode-server/data/Machine/settings.json`, else the user `settings.json` of each VS Code installed — never `.vscode/settings.json` |
@@ -271,6 +271,8 @@ cortex sync [--store | --link | --copy] [--locked] [--from PATH] [--claude-acces
 ```
 
 Puts the version `cortex.toml` pins in the store — from the binary itself when it is the binary's own version, otherwise downloaded and checked against its release's `SHA256SUMS` — checks it against `cortex.lock`, and writes `spec` in `cortex.local.toml`. A binary serves every version from 1.0.0 up to its own: a project pinned to a newer one is refused, with the `cortex self-update` command that installs it.
+
+When the theme it reads — yours, in `cortex.local.toml`, over the team's — is not the one the last sync read, it ends with whom to call, as `cortex init` does: the prompt manager's alias and a few experts'. A teammate's change of theme, or one of your own, is said once; with no personality, nothing is. The theme read is recorded in `cortex.local.toml` as a comment, `# synced theme:`, which an older cortex reads past: a key it does not know, it would refuse.
 
 | Option | What it does |
 |---|---|

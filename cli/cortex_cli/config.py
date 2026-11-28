@@ -744,6 +744,11 @@ def _read_text(path: str) -> Optional[str]:
         raise ConfigError(f"{os.path.basename(path)}: not UTF-8 text")
 
 
+def local_text(root: str) -> Optional[str]:
+    """``cortex.local.toml`` at ``root`` as it is — ``None`` when it is not there."""
+    return _read_text(os.path.join(root, LOCAL_FILE))
+
+
 def _comment(line: str, key: str) -> str:
     """The comment that ends ``line`` — with the blanks before it — or ``""``. A ``#`` inside a
     string is no comment: the comment starts at the first ``#`` before which the line reads as
@@ -842,6 +847,49 @@ def _without_synced(text: str, line: bool = False) -> str:
             continue
         kept.append(row)
     return "".join(kept)
+
+
+# The theme `cortex sync` last synced, which it compares to say whom to call when the theme changes (#397). A
+# comment, never a key: every cortex before 1.10.0 — the command and the runtime — refuses an unknown key, in
+# `synced` or beside it, and the runtime's refusal names a sync that would write it again (ADR-013 §9).
+SYNCED_THEME = "# synced theme: "
+SYNCED_THEME_NOTE = "written by `cortex sync`, which tells whom to call when the theme changes"
+_SYNCED_THEME_LINE = re.compile(r"^[ \t]*#[ \t]*synced theme:[ \t]*(\S*)")
+_SYNCED_LINE = re.compile(r"""^[ \t]*(?:synced|"synced"|'synced')[ \t]*=""")
+
+
+def synced_theme(text: Optional[str]) -> Optional[str]:
+    """The theme the ``# synced theme:`` comment of ``cortex.local.toml``'s ``text`` records — ``None`` with no
+    such comment, or one that names no theme: nothing recorded."""
+    for row in (text or "").lstrip("\ufeff").splitlines():
+        found = _SYNCED_THEME_LINE.match(row)
+        if found:
+            return found.group(1) if project.THEME.fullmatch(found.group(1)) else None
+    return None
+
+
+def with_synced_theme(text: str, theme: str) -> str:
+    """``cortex.local.toml``'s ``text`` with its ``# synced theme:`` comment naming ``theme``: in its place, every
+    other one dropped; else after the ``synced`` line; else at the end."""
+    bom = "\ufeff" if text.startswith("\ufeff") else ""
+    text = text[len(bom):]
+    newline = "\r\n" if "\r\n" in text else "\n"
+    line = f"{SYNCED_THEME}{theme}    — {SYNCED_THEME_NOTE}"
+    lines = text.splitlines(keepends=True)
+    kept, placed = [], False
+    for row in lines:
+        if _SYNCED_THEME_LINE.match(row):
+            if not placed:
+                kept.append(line + (row[len(row.rstrip("\r\n")):] or newline))
+                placed = True
+            continue
+        kept.append(row)
+    if not placed:
+        at = next((index + 1 for index, row in enumerate(kept) if _SYNCED_LINE.match(row)), len(kept))
+        if at and not kept[at - 1].endswith(("\n", "\r")):
+            kept[at - 1] += newline
+        kept.insert(at, line + newline)
+    return bom + "".join(kept)
 
 
 def render_project(root: str, values: Dict[str, object]) -> str:
