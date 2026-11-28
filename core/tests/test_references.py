@@ -183,6 +183,12 @@ class WhatCountsTests(unittest.TestCase):
         self.assertEqual(self.p.missing(text), [
             "line 1: 'agents/roles/ghost/' is in neither the spec nor an overlay tier of this file's cascade"])
 
+    def test_an_underscore_inside_a_path_is_part_of_it(self):
+        text = "See agents/roles/engineering/my_ghost_role.md here.\n"
+        self.assertEqual(self.p.missing(text), [
+            "line 1: 'agents/roles/engineering/my_ghost_role.md' is in neither the spec nor an overlay tier"
+            " of this file's cascade"])
+
     def test_a_crlf_file_reads_as_its_lf_one(self):
         text = "line one\r\n`roles/x/ghost.md`\r\n```\r\n`roles/y/ghost.md`\r\n```\r\n"
         self.assertEqual(self.p.missing(text), [
