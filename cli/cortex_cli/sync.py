@@ -875,8 +875,8 @@ def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err:
                 text = config.local_text(root)
                 if text is not None:
                     config.write_local_text(root, config.with_synced_theme(text, theme))
-        except (SyncError, OSError) as e:
-            err.write(f"note: the theme read was not recorded ({e}): the next cortex sync names whom to call again\n")
+        except (SyncError, OSError):
+            err.write("note: the theme just named was not recorded: the next cortex sync names whom to call again\n")
 
 
 def register(root: str, out: TextIO, err: TextIO) -> None:
