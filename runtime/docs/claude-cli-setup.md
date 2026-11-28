@@ -86,6 +86,10 @@ is enforced in this backend (the CLI owns the loop + its own tools):
 Default = read-only (`code-read`). Grant more per request:
 `"autonomy": ["code-read", "code-write"]`.
 
+The built-in read tools are not gated by autonomy: Claude Code reads the files under the
+workspace whatever the autonomy grants, `project-context.md` among them, even with `code-read`
+left out ([ADR-002 §9](../../docs/adr/ADR-002-cortex-runtime.md#9-amendments)).
+
 ## MCP tools (e.g. posting to the issue tracker)
 
 To let the agent act on real tools (post an internal Jira comment, read a ticket…), declare an
