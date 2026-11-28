@@ -41,6 +41,19 @@ def link_read_only(path):
 
 
 AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
+# #275: passwords that end the host before their @ — urllib reads "ci:Ab3" as a host and a port.
+CUT_PASSWORDS = ("Ab3/xYz9", "tok?en", "tok#en", "1234/x")
+
+
+def assert_no_part_of(test, text, password):
+    """No head of ``password`` of 2 characters or more in ``text``, and no segment of it between
+    / ? #, standing on its own — "en" is in "sent"."""
+    import re
+
+    for end in range(2, len(password) + 1):
+        test.assertNotIn(password[:end], text)
+    for segment in re.split(r"[/?#]", password):
+        test.assertNotRegex(text, rf"(?<![A-Za-z0-9]){re.escape(segment)}(?![A-Za-z0-9])")
 
 
 class StoreTestCase(unittest.TestCase):
@@ -923,6 +936,17 @@ class NetTests(unittest.TestCase):
                                         "with a user part"):
                 store.releases_url()
 
+    def test_a_password_that_ends_the_host_is_refused_and_never_repeated(self):
+        # #275: a /, ? or # in the password ends the netloc before its @ — check_url sees no user part.
+        for password in CUT_PASSWORDS:
+            with self.subTest(password=password):
+                with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": f"https://ci:{password}@mirror.invalid/cortex"}):
+                    with self.assertRaises(store.StoreError) as raised:
+                        store.releases_url()
+                self.assertEqual(str(raised.exception), f"CORTEX_RELEASES_URL: https://…@mirror.invalid/cortex: "
+                                 f"{net.USER_PART}")
+                assert_no_part_of(self, str(raised.exception), password)
+
     def test_a_user_part_is_never_repeated_when_the_url_is_refused_otherwise(self):
         # #275: the scheme forgotten, or a URL urllib cannot parse — refused before its user part is seen.
         for url, shown in (("user:secret@mirror.example/r", "…@mirror.example/r"),
@@ -948,7 +972,8 @@ class NetTests(unittest.TestCase):
             with self.subTest(url=url):
                 with self.assertRaises(net.DownloadError) as raised:
                     net.get(url, 10, timeout=2)
-                self.assertNotIn("se/cret", str(raised.exception))
+                password = url.split("user:", 1)[1].split("@", 1)[0]
+                assert_no_part_of(self, str(raised.exception), password)
                 self.assertNotIn("ret@", str(raised.exception).replace("…@", ""))
 
     def test_the_releases_url_is_checked(self):

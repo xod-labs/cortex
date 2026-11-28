@@ -76,6 +76,10 @@ def _masked(url: str) -> str:
     return (scheme.group(0) if scheme else "") + "…@" + url.rpartition("@")[2]
 
 
+USER_PART = ("a URL with a user part, before @, is not downloaded from — no credentials are sent: serve the "
+             "releases where they can be read without them")
+
+
 def check_url(url: str) -> None:
     """Refuse a URL to download from that is neither https nor http to this machine, or that
     carries a user part — ``https://user:pass@host/``: urllib takes it as part of the host, so it
@@ -87,8 +91,7 @@ def check_url(url: str) -> None:
         raise DownloadError(f"{_masked(url)!r}: {error}")
     if "@" in parts.netloc:
         shown = urllib.parse.urlunsplit(parts._replace(netloc="…@" + parts.netloc.rpartition("@")[2]))
-        raise DownloadError(f"{shown}: a URL with a user part, before @, is not downloaded from — no credentials "
-                            "are sent: serve the releases where they can be read without them")
+        raise DownloadError(f"{shown}: {USER_PART}")
     if parts.scheme in ("https", "http") and not host:
         raise DownloadError(f"{_masked(url)}: names no host — write it https://host/path")
     if parts.scheme == "https" or (parts.scheme == "http" and host in LOOPBACK):
@@ -124,7 +127,8 @@ def get(url: str, max_bytes: int, timeout: float = TIMEOUT, redirects: Optional[
         reason = getattr(error, "reason", error)
         raise DownloadError(f"{_masked(url)}: {reason}")
     except (ValueError, http.client.HTTPException) as error:   # InvalidURL: a control character in it
-        raise DownloadError(f"{_masked(url)!r}: {error}")
+        reason = "not a URL that can be read" if "@" in url else error    # "nonnumeric port": a password cut by /
+        raise DownloadError(f"{_masked(url)!r}: {reason}")
     if len(data) > max_bytes:
         raise DownloadError(f"{_masked(url)}: larger than {max_bytes} bytes")
     return data

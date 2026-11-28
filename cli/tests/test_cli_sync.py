@@ -176,6 +176,22 @@ class StoreModeTests(SyncTestCase):
         self.assertIn("in the store", proc.out)
         self.assertNotIn("note: downloading", proc.err)
 
+    @DOWNLOADS
+    def test_a_password_that_ends_the_host_is_never_printed(self):
+        # #275: a /, ? or # in the password ends the host before its @ — neither the note nor the error repeats it.
+        project = self.project(version="9.9.8")
+        for password in ("Ab3/xYz9", "tok?en", "tok#en", "1234/x"):
+            with self.subTest(password=password):
+                self.env["CORTEX_RELEASES_URL"] = f"https://ci:{password}@mirror.invalid/cortex"
+                proc = self.sync(project)
+                self.assertEqual(proc.returncode, 1, proc.err)
+                self.assertIn("CORTEX_RELEASES_URL: https://…@mirror.invalid/cortex: a URL with a user part", proc.err)
+                for end in range(2, len(password) + 1):                    # no head of it
+                    self.assertNotIn(password[:end], proc.err)
+                for segment in re.split(r"[/?#]", password):               # no segment of it, on its own
+                    self.assertNotRegex(proc.err, rf"(?<![A-Za-z0-9]){re.escape(segment)}(?![A-Za-z0-9])")
+        self.assertEqual(self.release.requested, [])
+
     def test_its_own_version_says_no_host(self):
         proc = self.sync(self.project())                           # written from this cortex: no download
         self.assert_ok(proc)

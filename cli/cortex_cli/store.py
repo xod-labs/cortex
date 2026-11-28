@@ -67,13 +67,16 @@ def releases_url() -> str:
     """Where releases are downloaded from — the machine's ``releases_url`` (ADR-013 §3.7):
     ``$CORTEX_RELEASES_URL``, as for the install scripts, else ``config.toml`` in the Cortex home,
     else GitHub's. https, or http to this machine for tests: refused otherwise, naming where it is
-    set."""
+    set. An @ anywhere is refused: a password holding /, ? or # ends the host before its @, and
+    would be repeated by a note or an error (#275)."""
     found = machine.setting(cortex_home, "releases_url")
     url = str(found.value).rstrip("/")
     try:
         net.check_url(url)
     except net.DownloadError as error:
         raise StoreError(f"{found.origin}: {error}")
+    if "@" in url:
+        raise StoreError(f"{found.origin}: {net._masked(url)}: {net.USER_PART}")
     return url
 
 
