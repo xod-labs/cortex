@@ -118,6 +118,16 @@ class UpgradeTests(UpgradeTestCase):
         self.assertIn(f"Cortex {OWN} is ready. Written: cortex.toml and cortex.lock — in no git work tree", proc.out)
         self.assertEqual(proc.out.count("Project: "), 1)
 
+    def test_two_versions_downloaded_say_their_host_once(self):
+        # #275: the pinned version and the target, both downloaded in one run — one note.
+        project = self.project("9.9.7", synced=False)
+        proc = self.upgrade(project, "9.9.8")
+        self.assert_ok(proc)
+        self.assertTrue((self.home / "versions" / "9.9.7").is_dir())
+        self.assertTrue((self.home / "versions" / "9.9.8").is_dir())
+        self.assertEqual(proc.err.count(f"note: downloading from {self.release.url}, set by CORTEX_RELEASES_URL — "
+                                        "the spec is checked against that host's SHA256SUMS"), 1, proc.err)
+
     def test_to_an_older_version_is_a_downgrade(self):
         project = self.project(OWN)
         proc = self.upgrade(project, "9.9.8")

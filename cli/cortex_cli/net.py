@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import http.client
 import os
+import re
 import ssl
 import urllib.error
 import urllib.parse
@@ -66,16 +67,35 @@ def ssl_context() -> ssl.SSLContext:
     return context
 
 
+def _masked(url: str) -> str:
+    """``url`` with what comes before its last @ masked, scheme kept — a user part it may carry
+    never repeated, however malformed the URL (#275)."""
+    if "@" not in url:
+        return url
+    scheme = re.match(r"[A-Za-z][A-Za-z0-9+.-]*://", url)     # a scheme of its own, not a later "://"
+    return (scheme.group(0) if scheme else "") + "…@" + url.rpartition("@")[2]
+
+
+USER_PART = ("a URL with a user part, before @, is not downloaded from — no credentials are sent: serve the "
+             "releases where they can be read without them")
+
+
 def check_url(url: str) -> None:
-    """Refuse a URL to download from that is neither https nor http to this machine."""
+    """Refuse a URL to download from that is neither https nor http to this machine, or that
+    carries a user part — ``https://user:pass@host/``: urllib takes it as part of the host, so it
+    never reached that host. Refused by name, its user part not repeated (#275)."""
     try:
         parts = urllib.parse.urlsplit(url)
         host = parts.hostname
     except ValueError as error:
-        raise DownloadError(f"{url!r}: {error}")
+        raise DownloadError(f"{_masked(url)!r}: {'not a URL that can be read' if '@' in url else error}")
+    if "@" in parts.netloc:
+        raise DownloadError(f"{_masked(url)}: {USER_PART}")
+    if parts.scheme in ("https", "http") and not host:
+        raise DownloadError(f"{_masked(url)}: names no host — write it https://host/path")
     if parts.scheme == "https" or (parts.scheme == "http" and host in LOOPBACK):
         return
-    raise DownloadError(f"{url}: only https is downloaded from — http only to this machine, for tests")
+    raise DownloadError(f"{_masked(url)}: only https is downloaded from — http only to this machine, for tests")
 
 
 class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
@@ -101,12 +121,13 @@ def get(url: str, max_bytes: int, timeout: float = TIMEOUT, redirects: Optional[
         with opener.open(request, timeout=timeout) as response:
             data = response.read(max_bytes + 1)
     except urllib.error.HTTPError as error:
-        raise DownloadError(f"{url}: HTTP {error.code} {error.reason}")
+        raise DownloadError(f"{_masked(url)}: HTTP {error.code} {error.reason}")
     except (urllib.error.URLError, OSError) as error:
         reason = getattr(error, "reason", error)
-        raise DownloadError(f"{url}: {reason}")
+        raise DownloadError(f"{_masked(url)}: {reason}")
     except (ValueError, http.client.HTTPException) as error:   # InvalidURL: a control character in it
-        raise DownloadError(f"{url!r}: {error}")
+        reason = "not a URL that can be read" if "@" in url else error    # "nonnumeric port": a password cut by /
+        raise DownloadError(f"{_masked(url)!r}: {reason}")
     if len(data) > max_bytes:
-        raise DownloadError(f"{url}: larger than {max_bytes} bytes")
+        raise DownloadError(f"{_masked(url)}: larger than {max_bytes} bytes")
     return data

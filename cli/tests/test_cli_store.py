@@ -41,6 +41,19 @@ def link_read_only(path):
 
 
 AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
+# #275: passwords that end the host before their @ — urllib reads "ci:Ab3" as a host and a port.
+CUT_PASSWORDS = ("Ab3/xYz9", "tok?en", "tok#en", "1234/x", "p@ss/word", "p@ss#word", "pw＃x")
+
+
+def assert_no_part_of(test, text, password):
+    """No head of ``password`` of 2 characters or more in ``text``, and no segment of it between
+    / ? #, standing on its own — "en" is in "sent"."""
+    import re
+
+    for end in range(2, len(password) + 1):
+        test.assertNotIn(password[:end], text)
+    for segment in re.split(r"[/?#]", password):
+        test.assertNotRegex(text, rf"(?<![A-Za-z0-9]){re.escape(segment)}(?![A-Za-z0-9])")
 
 
 class StoreTestCase(unittest.TestCase):
@@ -765,6 +778,28 @@ class DownloadTests(StoreTestCase):
         self.assertIn("Cortex 2.0.0", (the_store.path(Version("2.0.0")) / "agents/roles/prompt-manager.md").read_text(encoding="utf-8"))
         self.assertEqual([u.rsplit("/", 2)[-2:] for u in self.requested], [["2.0.0", "SHA256SUMS"], ["2.0.0", "cortex-spec.tar.gz"]])
 
+    def test_a_download_from_another_host_says_so_once(self):
+        # #275: on standard error, before the download, once per run however many versions are downloaded.
+        the_store = self.release("2.0.0")
+        later = self.release("2.1.0")
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": "https://mirror.example/r/"}), \
+                mock.patch.object(store, "_noted", set()), mock.patch("sys.stderr", err):
+            self.assertEqual(the_store.ensure(Version("2.0.0")), "downloaded")
+            self.assertEqual(later.ensure(Version("2.1.0")), "downloaded")
+            self.assertEqual(the_store.ensure(Version("2.0.0")), "stored")
+        self.assertEqual(err.getvalue(), "note: downloading from https://mirror.example/r, set by CORTEX_RELEASES_URL "
+                         "— the spec is checked against that host's SHA256SUMS, not against GitHub's releases\n")
+
+    def test_a_download_from_githubs_releases_says_nothing(self):
+        the_store = self.release("2.0.0")
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": "", "CORTEX_HOME": str(self.home)}), \
+                mock.patch.object(store, "_noted", set()), mock.patch("sys.stderr", err):
+            self.assertEqual(the_store.ensure(Version("2.0.0")), "downloaded")
+        self.assertTrue(self.requested[0].startswith(f"{store.DEFAULT_RELEASES_URL}/download/2.0.0/"), self.requested)
+        self.assertEqual(err.getvalue(), "")
+
     def test_a_checksum_that_differs(self):
         the_store = self.release("2.0.0", sums_line=f"{'0' * 64}  cortex-spec.tar.gz\n")
         with self.assertRaisesRegex(store.StoreError, "does not match its checksum"):
@@ -882,6 +917,80 @@ class NetTests(unittest.TestCase):
                 with self.assertRaises(net.DownloadError):
                     net.check_url(url)
 
+    def test_a_user_part_is_refused_saying_why(self):
+        # #275: urllib takes the user part as part of the host — it never reached the host it named.
+        for url in ("https://user:secret@mirror.example/r", "https://user@mirror.example/r",
+                    "http://127.0.0.1:1@example.invalid/r", "http://user@127.0.0.1:8765/r"):
+            with self.subTest(url=url):
+                with self.assertRaises(net.DownloadError) as raised:
+                    net.check_url(url)
+                self.assertIn("a URL with a user part, before @, is not downloaded from", str(raised.exception))
+                self.assertNotIn("secret", str(raised.exception))
+        with self.assertRaises(net.DownloadError) as raised:
+            net.check_url("https://user:secret@mirror.example/r")
+        self.assertEqual(str(raised.exception), "https://…@mirror.example/r: a URL with a user part, before @, is not "
+                         "downloaded from — no credentials are sent: serve the releases where they can be read "
+                         "without them")
+        with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": "https://user:secret@mirror.example/r"}):
+            with self.assertRaisesRegex(store.StoreError, "^CORTEX_RELEASES_URL: https://…@mirror.example/r: a URL "
+                                        "with a user part"):
+                store.releases_url()
+
+    def test_a_password_that_ends_the_host_is_refused_and_never_repeated(self):
+        # #275: a /, ? or # in the password ends the netloc before its @ — check_url sees no user part.
+        for password in CUT_PASSWORDS:
+            with self.subTest(password=password):
+                with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": f"https://ci:{password}@mirror.invalid/cortex"}):
+                    with self.assertRaises(store.StoreError) as raised:
+                        store.releases_url()
+                self.assertEqual(str(raised.exception), f"CORTEX_RELEASES_URL: https://…@mirror.invalid/cortex: "
+                                 f"{net.USER_PART}")
+                assert_no_part_of(self, str(raised.exception), password)
+
+    def test_a_user_part_is_never_repeated_when_the_url_is_refused_otherwise(self):
+        # #275: the scheme forgotten, or a URL urllib cannot parse — refused before its user part is seen.
+        for url, shown in (("user:secret@mirror.example/r", "…@mirror.example/r"),
+                           ("user:sec@ret@host/r", "…@host/r"),
+                           ("https://user:secret@[bad/r", "https://…@[bad/r"),
+                           ("user:secret@host/r?next=https://x", "…@host/r?next=https://x"),
+                           ("user:secret@host/r#https://x", "…@host/r#https://x"),
+                           ("https:/user:secret@host/r", "…@host/r"),
+                           ("https:user:secret@host/r", "…@host/r"),
+                           ("https:///user:secret@host/r", "https://…@host/r")):
+            with self.subTest(url=url):
+                with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": url}):
+                    with self.assertRaises(store.StoreError) as raised:
+                        store.releases_url()
+                self.assertNotIn("secret", str(raised.exception))
+                self.assertTrue(str(raised.exception).startswith(f"CORTEX_RELEASES_URL: {shown}"), str(raised.exception))
+
+    def test_check_url_repeats_no_part_of_a_password(self):
+        # #275: a redirect target is checked by check_url alone — its message masks from the last @,
+        # and never repeats the parser's own text, which quotes the host.
+        for url, message in (
+                ("https://ci:p@ss/word@mirror.invalid/cortex",
+                 "https://…@mirror.invalid/cortex: " + net.USER_PART),
+                ("https://ci:pw＃x@mirror.invalid/cortex",
+                 "'https://…@mirror.invalid/cortex': not a URL that can be read"),
+                ("https://ci:Q[@3]#x@[::1]/cortex", "'https://…@[::1]/cortex': not a URL that can be read")):
+            with self.subTest(url=url):
+                with self.assertRaises(net.DownloadError) as raised:
+                    net.check_url(url)
+                self.assertEqual(str(raised.exception), message)
+
+    def test_a_password_cut_by_a_slash_is_never_repeated_by_get(self):
+        # #275: a "/", "?" or "#" in the password ends the netloc before its @ — check_url sees no user part,
+        # and urllib fails on the "port".
+        from cortex_cli import net
+        for url in ("https://user:se/cret@host.invalid/r", "https://user:sec?ret@host.invalid/r",
+                    "https://user:sec#ret@host.invalid/r"):
+            with self.subTest(url=url):
+                with self.assertRaises(net.DownloadError) as raised:
+                    net.get(url, 10, timeout=2)
+                password = url.split("user:", 1)[1].split("@", 1)[0]
+                assert_no_part_of(self, str(raised.exception), password)
+                self.assertNotIn("ret@", str(raised.exception).replace("…@", ""))
+
     def test_the_releases_url_is_checked(self):
         from unittest import mock
 
@@ -908,6 +1017,59 @@ class NetTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         with self.assertRaisesRegex(net.DownloadError, "only https"):
             net.get(f"http://127.0.0.1:{server.server_address[1]}/SHA256SUMS", 1024)
+
+    def test_a_redirect_to_a_url_with_a_user_part_is_refused(self):
+        import http.server
+        import threading
+
+        class Redirect(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", "https://user:secret@mirror.example/SHA256SUMS")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        with self.assertRaisesRegex(net.DownloadError, r"^https://…@mirror\.example/SHA256SUMS: a URL with a user part"):
+            net.get(f"http://127.0.0.1:{server.server_address[1]}/SHA256SUMS", 1024)
+
+    def test_a_user_part_is_masked_when_the_host_is_not_reached(self):
+        # #275: "1234/pw" is read as a port, then a path — the host "u" is not found.
+        with self.assertRaises(net.DownloadError) as raised:
+            net.get("https://u:1234/pw@127.0.0.1:1/r", 10, timeout=2)
+        self.assertTrue(str(raised.exception).startswith("https://…@127.0.0.1:1/r: "), str(raised.exception))
+        self.assertNotIn("pw", str(raised.exception))
+
+    def test_a_user_part_is_masked_when_the_answer_is_refused(self):
+        # #275: an @ in the path, served from this machine — an HTTP error, then a body too large.
+        import http.server
+        import threading
+
+        class Serve(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(404 if self.path.endswith("/gone") else 200)
+                self.end_headers()
+                self.wfile.write(b"x" * 100)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Serve)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = f"http://127.0.0.1:{server.server_address[1]}/user:secret@x"
+        for path, said in (("gone", "http://…@x/gone: HTTP 404 Not Found"),
+                           ("big", "http://…@x/big: larger than 10 bytes")):
+            with self.subTest(path=path):
+                with self.assertRaises(net.DownloadError) as raised:
+                    net.get(f"{base}/{path}", 10)
+                self.assertEqual(str(raised.exception), said)
 
     def test_a_url_holding_a_control_character(self):
         with self.assertRaises(net.DownloadError):

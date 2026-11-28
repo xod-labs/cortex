@@ -162,6 +162,43 @@ class StoreModeTests(SyncTestCase):
         self.assertEqual(self.release.requested, requested)
 
     @DOWNLOADS
+    def test_a_download_from_another_host_than_githubs_says_so(self):
+        # #275: the spec is the assistant's instructions — its host is said, as self-update says the binary's.
+        note = (f"note: downloading from {self.release.url}, set by CORTEX_RELEASES_URL — the spec is checked against "
+                "that host's SHA256SUMS, not against GitHub's releases\n")
+        project = self.project(version="9.9.8")
+        proc = self.sync(project)
+        self.assert_ok(proc)
+        self.assertIn("downloaded to the store", proc.out)
+        self.assertEqual(proc.err.count(note), 1, proc.err)
+        proc = self.sync(project)                                  # in the store: nothing downloaded, nothing said
+        self.assert_ok(proc)
+        self.assertIn("in the store", proc.out)
+        self.assertNotIn("note: downloading", proc.err)
+
+    @DOWNLOADS
+    def test_a_password_that_ends_the_host_is_never_printed(self):
+        # #275: a /, ? or # in the password ends the host before its @ — neither the note nor the error repeats it.
+        project = self.project(version="9.9.8")
+        for password in ("Ab3/xYz9", "tok?en", "tok#en", "1234/x"):
+            with self.subTest(password=password):
+                self.env["CORTEX_RELEASES_URL"] = f"https://ci:{password}@mirror.invalid/cortex"
+                proc = self.sync(project)
+                self.assertEqual(proc.returncode, 1, proc.err)
+                self.assertIn("CORTEX_RELEASES_URL: https://…@mirror.invalid/cortex: a URL with a user part", proc.err)
+                for end in range(2, len(password) + 1):                    # no head of it
+                    self.assertNotIn(password[:end], proc.err)
+                for segment in re.split(r"[/?#]", password):               # no segment of it, on its own
+                    self.assertNotRegex(proc.err, rf"(?<![A-Za-z0-9]){re.escape(segment)}(?![A-Za-z0-9])")
+        self.assertEqual(self.release.requested, [])
+
+    def test_its_own_version_says_no_host(self):
+        proc = self.sync(self.project())                           # written from this cortex: no download
+        self.assert_ok(proc)
+        self.assertIn("written to the store, from this cortex", proc.out)
+        self.assertNotIn("note: downloading", proc.err)
+
+    @DOWNLOADS
     def test_a_spec_whose_checksum_differs_is_refused_and_leaves_nothing(self):
         self.release.alter_one_byte("spec", "9.9.8")
         proc = self.sync(self.project(version="9.9.8"))
