@@ -256,7 +256,7 @@ The validator catches the common mistakes:
 | Form | Example | Must name |
 |---|---|---|
 | A spec path | `cortex/agents/roles/engineering/architect.md`, `cortex/docs/…`, `cortex/templates/…` | a file or folder of the spec |
-| A layer path | `agents/capabilities/languages/php.md`, and `roles/….md` or `workflows/….md` | a file or folder of the spec or of a tier the file is read with: the team's folder, and its own service's `agents/` for a service's file. A workflow in any of them is the one the cascade serves |
+| A layer path | `agents/capabilities/languages/php.md`, and `roles/….md` or `workflows/….md` | a file of the spec or of a tier the file is read with, or a folder when written with `agents/`: the team's folder, and its own service's `agents/` for a service's file. A workflow in any of them is the one the cascade serves |
 | A role on a dispatch line | ``**Agent:** `product/market-analyst` `` | `roles/product/market-analyst.md` in one of those tiers |
 | A character tied to a role | `` `roles/data/data-analyst.md` (@Frankie-Benjy)``, `` `prompt-manager` (@Oolon)``, `**@Marvin** (security-engineer)` | a character of the team's theme's `characters.md` |
 

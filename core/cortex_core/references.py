@@ -11,7 +11,8 @@ mention that is no reference. What counts, outside fenced code blocks and HTML c
 - **Spec paths** — ``cortex/agents/…``, ``cortex/docs/…``, ``cortex/templates/…``: a file or a
   directory of the spec.
 - **Layer paths** — ``agents/{layer}/…``, and ``roles/….md`` and ``workflows/….md`` written from the
-  layer directory, as the base's workflows dispatch: a file or a directory of a tier of the file's own cascade
+  layer directory, as the base's workflows dispatch: a file — or, written with ``agents/``, a directory —
+  of a tier of the file's own cascade
   — the spec, the team's folder, and the file's service when it is a service's. A workflow in any of
   them is the one the cascade serves, by replacement: one is enough.
 - **Roles** written ``{category}/{role}``, in backticks, on a dispatch line — ``**Agent:**``,
@@ -20,6 +21,9 @@ mention that is no reference. What counts, outside fenced code blocks and HTML c
   role — ``roles/data/data-analyst.md`` (@Frankie-Benjy), `` `prompt-manager` (@Oolon)`` — or followed by
   one — ``**@Marvin** (security-engineer)``. A bare role counts there only when it names a role that
   exists. The character must be in the theme's ``characters.md``.
+
+Emphasis around a path, ``**path**``, is no part of it; a trailing ``*`` with no opening one just
+before the path is a placeholder.
 
 What never counts: a path with a placeholder — ``{service}``, ``<name>``, ``*``, ``…`` — which is a
 pattern; a path preceded by another path's characters — ``{service}/agents/…``, ``../roles/…``, a
