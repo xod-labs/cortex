@@ -869,10 +869,14 @@ def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err:
         if hint is not None:
             out.write(f"\n{hint}")     # last: whom to call, once all of the sync is said
         # Recorded once said, never before: a step that failed in between would lose the hint for good (#397).
-        with project_lock(Path(root), err):
-            text = config.local_text(root)
-            if text is not None:
-                config.write_local_text(root, config.with_synced_theme(text, theme))
+        # Best effort: the sync is done; a record not written only says the hint again next time.
+        try:
+            with project_lock(Path(root), err):
+                text = config.local_text(root)
+                if text is not None:
+                    config.write_local_text(root, config.with_synced_theme(text, theme))
+        except (SyncError, OSError) as e:
+            err.write(f"note: the theme read was not recorded ({e}): the next cortex sync names whom to call again\n")
 
 
 def register(root: str, out: TextIO, err: TextIO) -> None:

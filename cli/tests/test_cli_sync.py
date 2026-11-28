@@ -1228,6 +1228,28 @@ class ThemeHintTests(SyncTestCase):
         self.assertIn("Theme breaking-bad: @Saul, the prompt manager, takes every request", out.getvalue())
         self.assertIn("# synced theme: breaking-bad ", (project / "cortex.local.toml").read_text(encoding="utf-8"))
 
+    def test_a_record_not_written_after_the_hint_fails_no_sync(self):
+        sync, version = in_process()
+        project = self.project(version=version)
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home), "CORTEX_NO_REGISTER": "1"}):
+            sync.sync(str(project), None, None, io.StringIO(), io.StringIO())       # records h2g2
+            toml = project / "cortex.toml"
+            toml.write_text(toml.read_text(encoding="utf-8").replace('"h2g2"', '"breaking-bad"'), encoding="utf-8")
+            real, calls = sync.config.write_local_text, []
+
+            def second_write_fails(root, text):     # the sync's own write, then the record's
+                calls.append(text)
+                if len(calls) > 1:
+                    raise OSError(errno.EIO, "disk gone")
+                real(root, text)
+            out, err = io.StringIO(), io.StringIO()
+            with mock.patch.object(sync.config, "write_local_text", side_effect=second_write_fails):
+                sync.sync(str(project), None, None, out, err)
+            self.assertEqual(len(calls), 2)
+            self.assertIn("Theme breaking-bad: @Saul", out.getvalue())
+            self.assertIn("the next cortex sync names whom to call again", err.getvalue())
+            self.assertIn("# synced theme: h2g2 ", (project / "cortex.local.toml").read_text(encoding="utf-8"))
+
 
 class SafetyTests(SyncTestCase):
     """Sync deletes nothing it did not write, and changes nothing before every check passed."""
