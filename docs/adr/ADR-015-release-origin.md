@@ -149,4 +149,6 @@ The verifier; `cortex self-update` checks the signature, or the embedded checksu
 
 ## 9. Amendments
 
-None yet.
+### 2026-11-28 — A rotation's second signature needs a second secret (#275)
+
+The release workflow of 1.10.0 signs with one key, the primary, from `RELEASE_SIGNING_KEY`. A release that rotates keys and carries two signatures (§3.2, §3.6) needs a second secret in the `release-signing` environment and a second signing step, added by the change that makes the first rotation. Until then, a lost or leaked primary is answered as §3.6's first item says: the backup key becomes the environment's secret, and the release it signs embeds the new pair.
