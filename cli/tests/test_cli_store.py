@@ -951,7 +951,7 @@ class NetTests(unittest.TestCase):
         # #275: the scheme forgotten, or a URL urllib cannot parse — refused before its user part is seen.
         for url, shown in (("user:secret@mirror.example/r", "…@mirror.example/r"),
                            ("user:sec@ret@host/r", "…@host/r"),
-                           ("https://user:secret@[bad/r", "https://…@[bad/r"),
+                           ("https://user:secret@[bad/r", "'https://…@[bad/r"),
                            ("user:secret@host/r?next=https://x", "…@host/r?next=https://x"),
                            ("user:secret@host/r#https://x", "…@host/r#https://x"),
                            ("https:/user:secret@host/r", "…@host/r"),
@@ -962,7 +962,7 @@ class NetTests(unittest.TestCase):
                     with self.assertRaises(store.StoreError) as raised:
                         store.releases_url()
                 self.assertNotIn("secret", str(raised.exception))
-                self.assertIn(shown, str(raised.exception))
+                self.assertTrue(str(raised.exception).startswith(f"CORTEX_RELEASES_URL: {shown}"), str(raised.exception))
 
     def test_a_password_cut_by_a_slash_is_never_repeated_by_get(self):
         # #275: a "/", "?" or "#" in the password ends the netloc before its @ — check_url sees no user part,
