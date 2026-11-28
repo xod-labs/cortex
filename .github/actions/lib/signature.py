@@ -29,8 +29,6 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 SIG = "SHA256SUMS.sig"
 ALGORITHM = "ed25519"
-# The first release whose SHA256SUMS is signed: one before it carries six assets, and no signature.
-FIRST_SIGNED = "1.10.0"
 # An Ed25519 SubjectPublicKeyInfo is this prefix, then the 32 bytes of the key (RFC 8410).
 SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
 
