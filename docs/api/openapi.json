@@ -780,6 +780,20 @@
             "type": "boolean",
             "title": "Force",
             "default": false
+          },
+          "project_view": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project View"
           }
         },
         "type": "object",
