@@ -950,6 +950,7 @@ class NetTests(unittest.TestCase):
     def test_a_user_part_is_never_repeated_when_the_url_is_refused_otherwise(self):
         # #275: the scheme forgotten, or a URL urllib cannot parse — refused before its user part is seen.
         for url, shown in (("user:secret@mirror.example/r", "…@mirror.example/r"),
+                           ("user:sec@ret@host/r", "…@host/r"),
                            ("https://user:secret@[bad/r", "https://…@[bad/r"),
                            ("user:secret@host/r?next=https://x", "…@host/r?next=https://x"),
                            ("user:secret@host/r#https://x", "…@host/r#https://x"),
@@ -1022,6 +1023,39 @@ class NetTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         with self.assertRaisesRegex(net.DownloadError, r"^https://…@mirror\.example/SHA256SUMS: a URL with a user part"):
             net.get(f"http://127.0.0.1:{server.server_address[1]}/SHA256SUMS", 1024)
+
+    def test_a_user_part_is_masked_when_the_host_is_not_reached(self):
+        # #275: "1234/pw" is read as a port, then a path — the host "u" is not found.
+        with self.assertRaises(net.DownloadError) as raised:
+            net.get("https://u:1234/pw@127.0.0.1:1/r", 10, timeout=2)
+        self.assertTrue(str(raised.exception).startswith("https://…@127.0.0.1:1/r: "), str(raised.exception))
+        self.assertNotIn("pw", str(raised.exception))
+
+    def test_a_user_part_is_masked_when_the_answer_is_refused(self):
+        # #275: an @ in the path, served from this machine — an HTTP error, then a body too large.
+        import http.server
+        import threading
+
+        class Serve(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(404 if self.path.endswith("/gone") else 200)
+                self.end_headers()
+                self.wfile.write(b"x" * 100)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Serve)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = f"http://127.0.0.1:{server.server_address[1]}/user:secret@x"
+        for path, said in (("gone", "http://…@x/gone: HTTP 404 Not Found"),
+                           ("big", "http://…@x/big: larger than 10 bytes")):
+            with self.subTest(path=path):
+                with self.assertRaises(net.DownloadError) as raised:
+                    net.get(f"{base}/{path}", 10)
+                self.assertEqual(str(raised.exception), said)
 
     def test_a_url_holding_a_control_character(self):
         with self.assertRaises(net.DownloadError):
