@@ -11,7 +11,8 @@ the root being scanned, where the script cut absolute paths at their first ``/ag
 was read is printed as it was read, where the script passed it through ``echo -e``.
 
 The cascade's own rules — which layer replaces, which file cannot be overridden — are not
-restated here: they come from the resolver, the one implementation the runtime runs too.
+restated here: they come from the resolver, the one implementation the runtime runs too. What a file
+refers to is ``references``'s to find (#140).
 """
 
 # The standard library and this package only: the core runs from source, with nothing installed
@@ -25,7 +26,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Sequence, TextIO, Tuple
 
-from . import catalog, resolver
+from . import catalog, references, resolver
 from .workspace import find, listed_services, refusal, same_directory, services  # noqa: F401 — find, services: this module's API
 
 LAYERS = ("roles", "capabilities", "personalities", "workflows")
@@ -160,8 +161,19 @@ def layer_directory(root: str, project_root: str, team_folder: Optional[str] = N
     return f"{root}/agents"             # as 1.7.0 wrote it: `--service .` reads ./agents
 
 
+def check_references(text: str, rel_path: str, root: str, project_root: str, base_root: str, report: Report,
+                     team_folder: Optional[str] = None, theme: Optional[str] = None) -> None:
+    """What the file refers to and no tier of its cascade holds — ``REFERENCE_NOT_FOUND``, a warning
+    (#140). Its tiers: the spec, the team's folder, and its service's ``agents/`` when it is a service's."""
+    tiers = [layer_directory(project_root, project_root, team_folder)]
+    if os.path.normpath(root) != os.path.normpath(project_root):
+        tiers.append(layer_directory(root, project_root, team_folder))
+    for found in references.missing(text, references.Tiers(base_root, tiers, theme)):
+        report.warning(rel_path, "REFERENCE_NOT_FOUND", found.message)
+
+
 def check_overlay(file: str, root: str, project_root: str, base_root: str, report: Report,
-                  team_folder: Optional[str] = None) -> None:
+                  team_folder: Optional[str] = None, theme: Optional[str] = None) -> None:
     """Validate one overlay file, found under ``root``'s layer directory — the script's
     ``validate_overlay_file``: ``{root}/agents/``, or the team's folder ``team_folder`` for the workspace.
 
@@ -205,6 +217,7 @@ def check_overlay(file: str, root: str, project_root: str, base_root: str, repor
                            "if it is not meant to extend that base")
             return
         report.info(rel_path, "custom addition — no cortex base, skipping overlay checks")
+        check_references(text, rel_path, root, project_root, base_root, report, team_folder, theme)
         return
 
     # Tier 1.2 — required fields, absent or empty alike
@@ -261,6 +274,9 @@ def check_overlay(file: str, root: str, project_root: str, base_root: str, repor
     if semantic == "additive" and not any(_ADDITIVE_TAG.search(line) for line in text.split("\n")):
         report.warning(rel_path, "SECTIONS_UNTAGGED",
                        "additive overlay should tag at least one section as '(additive)' or use '## 🚫 Disabled rules from base'")
+
+    # What it refers to (#140)
+    check_references(text, rel_path, root, project_root, base_root, report, team_folder, theme)
 
     report.ok(rel_path)
 
@@ -323,12 +339,15 @@ def refused_service(project_root: str, service: str, team_folder: Optional[str] 
 # The run
 # --------------------------------------------------------------------------- #
 def validate(project_root: str, base_root: str, service: str, strict: bool, out: TextIO, colors: Colors,
-             project_warnings: Sequence[Tuple[str, str, str]] = (), team_folder: Optional[str] = None) -> int:
+             project_warnings: Sequence[Tuple[str, str, str]] = (), team_folder: Optional[str] = None,
+             theme: Optional[str] = None) -> int:
     """Validate every overlay under the overlay roots; return the script's exit code.
 
     ``project_warnings`` — ``(file, code, message)`` — are what the caller found of the project
     itself, its ``cortex.lock`` (ADR-010 §3.4): reported first, and counted as warnings.
-    ``team_folder`` is the workspace's layer directory, the team's folder (ADR-013 §3.6)."""
+    ``team_folder`` is the workspace's layer directory, the team's folder (ADR-013 §3.6). ``theme`` is the
+    team's, whose ``characters.md`` the characters a file names are looked for in — every theme's when
+    it is not given (#140)."""
     c = colors
     report = Report(out, c)
     report.echo(f"{c.BOLD}{c.BLUE}Cortex overlay validator{c.NC}")
@@ -376,7 +395,7 @@ def validate(project_root: str, base_root: str, service: str, strict: bool, out:
             if not os.path.isdir(layer_dir):
                 continue
             for path in find(layer_dir, "*.md", regular_files=True, follow_links=True):
-                check_overlay(path, root, project_root, base_root, report, team_folder)
+                check_overlay(path, root, project_root, base_root, report, team_folder, theme)
                 found += 1
         if found == 0:
             report.echo("  (no overlay files)")
@@ -400,7 +419,8 @@ def _stream(stream: TextIO) -> TextIO:
 
 
 def main(argv: List[str], *, project_root: str, base_root: str, prog: str = "cortex validate",
-         project_warnings: Sequence[Tuple[str, str, str]] = (), team_folder: Optional[str] = None) -> int:
+         project_warnings: Sequence[Tuple[str, str, str]] = (), team_folder: Optional[str] = None,
+         theme: Optional[str] = None) -> int:
     """``cortex validate [--service PATH] [--strict] [-h|--help]``.
 
     The two roots are no options: the ``cortex`` command finds them from the project (ADR-008
@@ -413,7 +433,7 @@ def main(argv: List[str], *, project_root: str, base_root: str, prog: str = "cor
     sys.stderr.flush()
     out, err = _stream(sys.stdout), _stream(sys.stderr)
     try:
-        return _main(args, project_root, base_root, out, err, prog, project_warnings, team_folder)
+        return _main(args, project_root, base_root, out, err, prog, project_warnings, team_folder, theme)
     finally:
         # The wrappers borrow the process's own streams: detached, returning leaves stdout and
         # stderr open for whatever runs next in this process.
@@ -422,7 +442,8 @@ def main(argv: List[str], *, project_root: str, base_root: str, prog: str = "cor
 
 
 def _main(args: List[str], project_root: str, base_root: str, out: TextIO, err: TextIO,
-          prog: str, project_warnings: Sequence[Tuple[str, str, str]] = (), team_folder: Optional[str] = None) -> int:
+          prog: str, project_warnings: Sequence[Tuple[str, str, str]] = (), team_folder: Optional[str] = None,
+          theme: Optional[str] = None) -> int:
     service, strict = "", False
     i = 0
     while i < len(args):
@@ -441,4 +462,4 @@ def _main(args: List[str], project_root: str, base_root: str, out: TextIO, err: 
             err.write(USAGE.format(prog=prog))
             return 2
     return validate(project_root, base_root, service, strict, out, Colors(out.isatty()), project_warnings,
-                    team_folder)
+                    team_folder, theme)

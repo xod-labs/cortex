@@ -403,7 +403,7 @@ Outside a project, it knows the machine's keys only. A project pinned to a versi
 cortex validate [--service PATH] [--strict]
 ```
 
-Checks the project's overlays against the spec it is synced to ([ADR-001](docs/adr/ADR-001-layered-overrides.md)): a header missing or malformed, a `Base:` that names no file, an overlay whose path does not mirror its base, an override of `characters.md`, `replacement` outside `workflows/`. It checks the spec against `cortex.lock` too — no lock, a lock of another version, a digest that differs — as warnings. A project not synced, or synced for another version than `cortex.toml`'s, is not validated: run `cortex sync`. In a checkout of Cortex, it validates the checkout as its own base.
+Checks the project's overlays against the spec it is synced to ([ADR-001](docs/adr/ADR-001-layered-overrides.md)): a header missing or malformed, a `Base:` that names no file, an overlay whose path does not mirror its base, an override of `characters.md`, `replacement` outside `workflows/`. What any of the project's files refers to — overlays and custom additions alike — is checked too: a spec path, a role, a character, a workflow that names nothing is `REFERENCE_NOT_FOUND`, a warning ([extending-layers.md](docs/extending-layers.md#-validating-your-overlays) says which forms count). It checks the spec against `cortex.lock` too — no lock, a lock of another version, a digest that differs — as warnings. A project not synced, or synced for another version than `cortex.toml`'s, is not validated: run `cortex sync`. In a checkout of Cortex, it validates the checkout as its own base.
 
 | Option | What it does |
 |---|---|

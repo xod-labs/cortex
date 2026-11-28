@@ -151,6 +151,13 @@ def roots(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]]]:
 def roots_and_folder(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]], Optional[str]]:
     """``roots``, and the team's folder of the project — ``None`` for the default ``agents/``, or
     outside a project."""
+    root, base, warnings, team, _ = roots_folder_and_theme(cwd)
+    return root, base, warnings, team
+
+
+def roots_folder_and_theme(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]], Optional[str], Optional[str]]:
+    """``roots_and_folder``, and the team's theme, whose characters the project's files name (#140) —
+    ``None`` outside a project."""
     root = config.find_project(cwd)
     if root is not None:
         # A version newer than this cortex, said before any key is checked (ADR-013 §3.8) — but of a
@@ -221,9 +228,9 @@ def roots_and_folder(cwd: str) -> Tuple[str, str, List[Tuple[str, str, str]], Op
         for _, note in upgrade.unrendered(root, project):
             sys.stderr.write(f"note: {note}\n")
         team = f"{root}/{project.team_folder}" if project.team_folder != config.TEAM_FOLDER else None
-        return root, base, warnings, team
+        return root, base, warnings, team, project.team_theme
     if sync.is_checkout(Path(cwd)) and os.path.isfile(os.path.join(cwd, "templates", "bootstrap-instructions.md")):
-        return cwd, cwd, [], None
+        return cwd, cwd, [], None, None
     hint = (" — a cortex/ submodule or clone is here: `cortex init` says how to leave it"
             if os.path.isdir(os.path.join(cwd, "cortex")) else "")
     raise RootsError(config.no_project(cwd, hint))
@@ -233,10 +240,10 @@ def run(args: List[str]) -> int:
     if any(arg in ("-h", "--help") for arg in args):
         return validate.main(args, project_root=".", base_root="cortex", prog="cortex validate")
     try:
-        project_root, base_root, warnings, team = roots_and_folder(working_directory())
+        project_root, base_root, warnings, team, theme = roots_folder_and_theme(working_directory())
     except RootsError as error:
         return sync.failed("cortex validate", str(error), 2)
     except OSError as error:
         return sync.failed("cortex validate", sync.os_error(error), 2)
     return validate.main(args, project_root=project_root, base_root=base_root, prog="cortex validate",
-                         project_warnings=warnings, team_folder=team)
+                         project_warnings=warnings, team_folder=team, theme=theme)
