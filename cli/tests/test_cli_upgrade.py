@@ -334,13 +334,15 @@ class UpgradeTests(UpgradeTestCase):
 
     def test_the_upgrade_s_sync_says_whom_to_call_when_the_theme_changed(self):
         # #397: the theme the last sync recorded is not the one the upgrade's sync reads — said once, as `cortex sync`
-        # says it; the pin moved, then a developer's try.
+        # says it; the pin moved, then a developer's try, then a plain upgrade of a pin moved by hand.
         hint = "Theme breaking-bad: @Saul, the prompt manager, takes every request and calls the expert it needs.\n"
-        for args in ((OWN,), ("--local", OWN)):
+        for args in ((OWN,), ("--local", OWN), ()):
             with self.subTest(args=args):
                 project = self.project("9.9.8")
                 try:
                     pin = self.pinned(project)
+                    if not args:
+                        pin = pin.replace('"9.9.8"', f'"{OWN}"')
                     (project / "cortex.toml").write_text(pin.replace('theme = "h2g2"', 'theme = "breaking-bad"'),
                                                          encoding="utf-8")
                     proc = self.upgrade(project, *args)
