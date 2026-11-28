@@ -166,6 +166,12 @@ class WhatCountsTests(unittest.TestCase):
             "line 3: '@Ghost' is no character of the theme 'h2g2' — its characters.md does not name it",
         ])
 
+    def test_an_emphasis_opened_further_back_is_no_part_of_the_path(self):
+        text = ("_See cortex/docs/extending-layers.md_, __See cortex/docs/extending-layers.md__.\n"
+                "_Base: cortex/agents/roles/engineering/architect.md_ and _See roles/engineering/architect.md_.\n"
+                "_See cortex/docs/ghost.md_\n")
+        self.assertEqual(self.p.missing(text), ["line 3: 'cortex/docs/ghost.md' is no file of the spec"])
+
     def test_a_crlf_file_reads_as_its_lf_one(self):
         text = "line one\r\n`roles/x/ghost.md`\r\n```\r\n`roles/y/ghost.md`\r\n```\r\n"
         self.assertEqual(self.p.missing(text), [

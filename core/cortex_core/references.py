@@ -23,7 +23,7 @@ mention that is no reference. What counts, outside fenced code blocks and HTML c
   exists. The character must be in the theme's ``characters.md``.
 
 Emphasis around a path, ``**path**``, is no part of it; a trailing ``*`` with no opening one just
-before the path is a placeholder.
+before the path is a placeholder, and a trailing ``_`` — ``_See cortex/docs/….md_`` — no part of it.
 
 What never counts: a path with a placeholder — ``{service}``, ``<name>``, ``*``, ``…`` — which is a
 pattern; a path preceded by another path's characters — ``{service}/agents/…``, ``../roles/…``, a
@@ -102,7 +102,7 @@ def _clean(path: str, before: str = "") -> Optional[str]:
         path = path.rstrip(".:!?")[:-len(emphasis)]
     if _PLACEHOLDER.search(path):
         return None
-    path = path.rstrip(".:!?")             # the sentence's
+    path = path.rstrip(".:!?_")            # the sentence's, and an emphasis opened further back
     path = path.split("#", 1)[0]
     return re.sub(r":\d+(?:[-:]\d+)*$", "", path)
 
