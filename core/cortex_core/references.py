@@ -24,6 +24,7 @@ mention that is no reference. What counts, outside fenced code blocks and HTML c
 
 Emphasis around a path, ``**path**``, is no part of it; a trailing ``*`` with no opening one just
 before the path is a placeholder, and a trailing ``_`` — ``_See cortex/docs/….md_`` — no part of it.
+An underscore emphasis opened just before a path, ``_cortex/docs/….md_``, is not read as one.
 
 What never counts: a path with a placeholder — ``{service}``, ``<name>``, ``*``, ``…`` — which is a
 pattern; a path preceded by another path's characters — ``{service}/agents/…``, ``../roles/…``, a
