@@ -16,6 +16,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cortex_runtime import run as run_module  # noqa: E402
+from cortex_runtime.loop import ModelTurn, ToolCall  # noqa: E402
 from cortex_runtime.app import WorkspaceConfig, build_run_request, project_view_setting  # noqa: E402
 from cortex_runtime.run import RunRequest, resolve_run  # noqa: E402
 from cortex_runtime.runtime import build_runtime  # noqa: E402
@@ -192,6 +193,46 @@ class QueuedRunTests(unittest.TestCase):
     def test_a_queued_run_takes_the_deployment_default(self):
         seen = self.executed_views(["context"])
         self.assertEqual([r.project_view for r in seen], [["context"]])
+
+
+class ToolAccessTests(unittest.TestCase):
+    """A part left out is not put in the system prompt; the run's tools still open its files unless
+    the run's autonomy leaves code-read out (runtime README, ADR-002 amendment of #89)."""
+
+    def run_reading_the_notes(self, **fields):
+        root = view_workspace(self)
+        rt = build_runtime({"host": WorkspaceConfig(root=root, theme="h2g2", project_view=())},
+                           store=InMemoryStateStore(), model_backend="demo")
+        seen = []
+
+        class Reader:
+            def __init__(self):
+                self.turns = [ModelTurn(tool_calls=[ToolCall("read_file", {"path": "project-overview.md"})]),
+                              ModelTurn(final_text="done")]
+
+            def propose(self, system_prompt, history):
+                seen.append((system_prompt, [dict(h) for h in history]))
+                return self.turns.pop(0)
+
+        with mock.patch("cortex_runtime.runtime.make_model_client", lambda *a, **k: Reader()):
+            out = rt.run({"workspace": "host", "role": "lead-backend", "subject": "ACME-7", **fields})
+        return out, seen
+
+    def test_the_default_autonomy_still_reads_a_part_left_out(self):
+        out, seen = self.run_reading_the_notes()
+        self.assertEqual(out["actions_taken"], [("read_file", "code-read")])
+        for system_prompt, _ in seen:
+            self.assertNotIn("DEV-VISION", system_prompt)
+            self.assertNotIn("# Project overview", system_prompt)
+        results = [h["content"] for h in seen[-1][1] if h["role"] == "tool-result"]
+        self.assertEqual(results, ["DEV-VISION\n"])
+
+    def test_without_code_read_the_files_stay_closed(self):
+        out, seen = self.run_reading_the_notes(autonomy=["internal-comment"])
+        self.assertEqual(out["gated_action"], ("read_file", "code-read"))
+        self.assertEqual(out["actions_taken"], [])
+        self.assertEqual(len(seen), 1)
+        self.assertNotIn("DEV-VISION", repr(seen))
 
 
 @unittest.skipUnless(__import__("importlib").util.find_spec("uvicorn"), "uvicorn not installed")
