@@ -172,6 +172,17 @@ class WhatCountsTests(unittest.TestCase):
                 "_See cortex/docs/ghost.md_\n")
         self.assertEqual(self.p.missing(text), ["line 3: 'cortex/docs/ghost.md' is no file of the spec"])
 
+    def test_a_bare_role_of_a_workspace_tier_ties_its_character(self):
+        # The role is the team's, in no tier but the last: its character is checked all the same.
+        self.p.write(self.p.root / "agents/roles/product/mine.md", "# The team's\n")
+        self.assertEqual(self.p.missing("`mine` (@Ghost)\n"), [
+            "line 1: '@Ghost' is no character of the theme 'h2g2' — its characters.md does not name it"])
+
+    def test_a_folder_written_with_agents_is_checked(self):
+        text = "See agents/roles/engineering/ and agents/roles/ghost/.\n"
+        self.assertEqual(self.p.missing(text), [
+            "line 1: 'agents/roles/ghost/' is in neither the spec nor an overlay tier of this file's cascade"])
+
     def test_a_crlf_file_reads_as_its_lf_one(self):
         text = "line one\r\n`roles/x/ghost.md`\r\n```\r\n`roles/y/ghost.md`\r\n```\r\n"
         self.assertEqual(self.p.missing(text), [
@@ -259,6 +270,9 @@ class WhatDoesNotCountTests(unittest.TestCase):
 
     def test_an_unclosed_fence_runs_to_the_end(self):
         self.assertEqual(self.p.missing("```\n`roles/ghost/a.md`\n"), [])
+
+    def test_an_unclosed_comment_runs_to_the_end(self):
+        self.assertEqual(self.p.missing("<!-- unclosed\n`roles/x/ghost.md`\n"), [])
 
     def test_prose_lines_keep_the_file_s_line_numbers(self):
         lines = prose_lines("a\n<!--\nb\n-->\n```\nc\n```\nd\n")
