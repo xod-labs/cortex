@@ -2214,9 +2214,10 @@ class SyncThemeHintTests(InitTestCase):
         self.set_theme("cortex.local.toml", "none")
         proc = self.sync()
         self.assertNotIn("prompt manager", proc.out)
+        self.assertNotIn("\n\n", proc.out)                # no hint at all: one comes last, after a blank line
         self.assertEqual(self.recorded()[0].split()[3], "none")
         self.set_theme("cortex.local.toml", None)
-        self.assertTrue(self.sync().out.endswith(f"\n{self.H2G2}The whole team: {self.shipped('h2g2')}\n"))
+        self.assertTrue(self.sync().out.endswith(f"\n\n{self.H2G2}The whole team: {self.shipped('h2g2')}\n"))
 
     def test_the_developer_s_own_theme_is_compared_as_resolved(self):
         self.set_theme("cortex.local.toml", "breaking-bad")

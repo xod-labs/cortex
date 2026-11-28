@@ -1250,6 +1250,23 @@ class ThemeHintTests(SyncTestCase):
             self.assertIn("the next cortex sync names whom to call again", err.getvalue())
             self.assertIn("# synced theme: h2g2 ", (project / "cortex.local.toml").read_text(encoding="utf-8"))
 
+    def test_a_hint_not_said_is_not_recorded(self):
+        sync, version = in_process()
+        project = self.project(version=version)
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home), "CORTEX_NO_REGISTER": "1"}):
+            sync.sync(str(project), None, None, io.StringIO(), io.StringIO())       # records h2g2
+            toml = project / "cortex.toml"
+            toml.write_text(toml.read_text(encoding="utf-8").replace('"h2g2"', '"breaking-bad"'), encoding="utf-8")
+
+            class Closed(io.StringIO):      # the reader went away as the hint was written
+                def write(self, text):
+                    if "Theme breaking-bad:" in text:
+                        raise BrokenPipeError(errno.EPIPE, "closed")
+                    return super().write(text)
+            with self.assertRaises(BrokenPipeError):
+                sync.sync(str(project), None, None, Closed(), io.StringIO())
+            self.assertIn("# synced theme: h2g2 ", (project / "cortex.local.toml").read_text(encoding="utf-8"))
+
 
 class SafetyTests(SyncTestCase):
     """Sync deletes nothing it did not write, and changes nothing before every check passed."""
