@@ -1247,7 +1247,30 @@ class ThemeHintTests(SyncTestCase):
                 sync.sync(str(project), None, None, out, err)
             self.assertEqual(len(calls), 2)
             self.assertIn("Theme breaking-bad: @Saul", out.getvalue())
-            self.assertIn("the next cortex sync names whom to call again", err.getvalue())
+            self.assertIn("note: the theme read was not recorded ([Errno 5] disk gone): the next cortex sync says it "
+                          "again\n", err.getvalue())
+            self.assertIn("# synced theme: h2g2 ", (project / "cortex.local.toml").read_text(encoding="utf-8"))
+            out = io.StringIO()
+            sync.sync(str(project), None, None, out, io.StringIO())        # what the note says
+            self.assertIn("Theme breaking-bad: @Saul", out.getvalue())
+
+    def test_a_record_not_read_after_the_hint_fails_no_sync(self):
+        sync, version = in_process()
+        project = self.project(version=version)
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home), "CORTEX_NO_REGISTER": "1"}):
+            sync.sync(str(project), None, None, io.StringIO(), io.StringIO())       # records h2g2
+            toml = project / "cortex.toml"
+            toml.write_text(toml.read_text(encoding="utf-8").replace('"h2g2"', '"breaking-bad"'), encoding="utf-8")
+            real, out, err = sync.config.local_text, io.StringIO(), io.StringIO()
+
+            def unreadable_once_said(root):     # the file turned to no UTF-8 once the hint is said
+                if "Theme breaking-bad:" in out.getvalue():
+                    raise sync.config.ConfigError("cortex.local.toml: not UTF-8 text")
+                return real(root)
+            with mock.patch.object(sync.config, "local_text", side_effect=unreadable_once_said):
+                sync.sync(str(project), None, None, out, err)
+            self.assertIn("note: the theme read was not recorded (cortex.local.toml: not UTF-8 text): the next cortex "
+                          "sync says it again\n", err.getvalue())
             self.assertIn("# synced theme: h2g2 ", (project / "cortex.local.toml").read_text(encoding="utf-8"))
 
     def test_a_hint_not_said_is_not_recorded(self):
