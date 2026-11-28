@@ -7,7 +7,10 @@ For releases and pre-releases alike:
    API, then ``gh attestation verify``, signed by the workflow that built it. The API failing to
    answer is no finding: the guard stops, and says nothing of the release. ``gh`` still fetches its
    trust root over the network, and a failure there reads as one;
-3. the assets expected are there, no other, and ``SHA256SUMS`` matches them;
+3. the assets expected are there, no other, and ``SHA256SUMS`` matches them — and, given the
+   release keys file, one line of ``SHA256SUMS.sig`` verifies ``SHA256SUMS`` with a key of that file
+   as the tag's commit has it (ADR-015 §3.4). A release before the first signed one,
+   ``--signed-from``, carries no signature, and is expected without it;
 4. the release is immutable;
 5. ``latest`` is the highest version without a suffix — among the releases that carry every asset
    expected and are not marked pre-release: a release that fails its guard leaves ``latest`` to the
@@ -19,12 +22,13 @@ pre-release or a release that fails took it; and the pre-release box of an ``X.Y
 ticked when it was published, since GitHub makes no pre-release ``latest``. On any other failure it
 fails, and opens one issue naming what it found and the only fix: the release cannot be repaired,
 only deleted, and its version is spent; the next patch ships what it should have. Standard library
-only, and ``gh``.
+only, ``gh``, and ``openssl`` for the signature.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -36,10 +40,12 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+import signature  # noqa: E402
 from github import GitHub, GitHubError, quote, write_release  # noqa: E402
 from semver import Version, highest, is_prerelease, is_release  # noqa: E402
 
 SUMS = "SHA256SUMS"
+SIG = signature.SIG
 
 
 @dataclass
@@ -82,10 +88,54 @@ def gh_verify(path: Path, bundle: Path, repository: str, commit: str, signer: st
     return lines[-1] if lines else "verification failed"
 
 
+def required(expected: Sequence[str], tag: str, signed_from: Optional[str]) -> List[str]:
+    """The assets ``tag`` must carry: those expected, but ``SHA256SUMS.sig`` before the first signed
+    release — or on a tag that is no version, which no binary installs."""
+    version = Version.parse(tag)
+    if signed_from and (version is None or version.core < Version(signed_from).core):
+        return [name for name in expected if name != SIG]
+    return list(expected)
+
+
+def release_keys(github: GitHub, path: str, commit: str) -> Dict[str, Any]:
+    """The release keys of the file at ``path``, as ``commit`` has it. A 404 is a GitHubError its
+    caller reads: the file is not there."""
+    answer = github.get(github.repo(f"/contents/{quote(path).replace('%2F', '/')}?ref={commit}"))
+    return signature.read_keys(base64.b64decode(answer.get("content") or "").decode("utf-8"))
+
+
+def check_signature(github: GitHub, report: Report, files: Dict[str, Path], keys_path: str, commit: str,
+                    verify: signature.Verify = signature.openssl_verify) -> None:
+    """One line of ``SHA256SUMS.sig`` verifies ``SHA256SUMS`` with a key of ``keys_path`` at
+    ``commit``: a release the binaries from the first signed one would otherwise refuse."""
+    if SIG not in files:
+        return   # said already, among the assets missing
+    if SUMS not in files:
+        return   # said already: there is nothing to check the signature over
+    try:
+        keys = release_keys(github, keys_path, commit)
+    except GitHubError as error:
+        if error.status != 404:
+            raise   # the API in trouble says nothing of the release
+        report.findings.append(f"{keys_path} is not in the tag's commit {commit[:12]}: {SIG} cannot be checked")
+        return
+    except (signature.SignatureError, ValueError) as error:
+        report.findings.append(f"{keys_path} at the tag's commit {commit[:12]} does not read: {error}")
+        return
+    checked = signature.check(files[SUMS].read_bytes(), files[SIG].read_text(encoding="utf-8", errors="replace"),
+                              keys, verify)
+    if checked.key is None:
+        report.findings.append(f"{SIG} does not verify {SUMS} with a key of {keys_path} at {commit[:12]}: {checked.why}")
+    else:
+        report.passed.append(f"{SIG} verifies {SUMS} with the {keys[checked.key][0]} key {checked.key} of {keys_path}")
+
+
 def check(github: GitHub, release: Dict[str, Any], expected: Sequence[str], signer: str, workdir: Path,
-          verify: Callable[[Path, Path, str, str, str], Optional[str]] = gh_verify) -> Report:
+          verify: Callable[[Path, Path, str, str, str], Optional[str]] = gh_verify, keys_path: str = "",
+          signed_from: Optional[str] = None, verify_signature: signature.Verify = signature.openssl_verify) -> Report:
     tag = release["tag_name"]
     report = Report(tag)
+    expected = required(expected, tag, signed_from)
 
     # 1. A version.
     if is_release(tag) or is_prerelease(tag):
@@ -116,7 +166,9 @@ def check(github: GitHub, release: Dict[str, Any], expected: Sequence[str], sign
             fields = line.split()
             if len(fields) == 2:
                 listed[fields[1].lstrip("*")] = fields[0].lower()
-        wrong = [n for n, p in files.items() if n != SUMS and listed.get(n) != hashlib.sha256(p.read_bytes()).hexdigest()]
+        # SHA256SUMS.sig signs SHA256SUMS: neither is listed in it.
+        wrong = [n for n, p in files.items()
+                 if n not in (SUMS, SIG) and listed.get(n) != hashlib.sha256(p.read_bytes()).hexdigest()]
         unlisted_files = sorted(set(listed) - set(files))
         if wrong:
             report.findings.append(f"{SUMS} does not match: {', '.join(sorted(wrong))}")
@@ -153,6 +205,9 @@ def check(github: GitHub, release: Dict[str, Any], expected: Sequence[str], sign
                                    f"{'; '.join(failed)}")
         elif files:
             report.passed.append(f"the provenance of every asset names {commit[:12]}, signed by {signer}")
+        # The signature, against the keys of the tag's commit (ADR-015 §3.4).
+        if keys_path and SIG in expected:
+            check_signature(github, report, files, keys_path, commit, verify_signature)
 
     # 4. Immutable.
     if release.get("immutable") is True:
@@ -177,10 +232,10 @@ def untick_pre_release(github: GitHub, release: Dict[str, Any], report: Report) 
     report.repaired.append(f"{tag} was marked pre-release; it is a release again, as its version says")
 
 
-def keep_latest(github: GitHub, report: Report, expected: Sequence[str]) -> None:
+def keep_latest(github: GitHub, report: Report, expected: Sequence[str], signed_from: Optional[str] = None) -> None:
     """5. ``latest`` on the highest version without a suffix that carries every asset expected, which
     the guard repairs. A release missing one stays out, whichever guard runs: it cannot pass. GitHub
-    makes no pre-release ``latest``. Deleting a release that was ``latest`` leaves none at all:
+    makes no pre-release ``latest``. A release before the first signed one needs no signature. Deleting a release that was ``latest`` leaves none at all:
     GitHub does not move it."""
     failing = report.tag if report.findings else None
     # Chosen by their assets, not by a guard of their own: 1.0.0 to 1.2.2 are signed by binary.yml, not
@@ -189,7 +244,7 @@ def keep_latest(github: GitHub, report: Report, expected: Sequence[str]) -> None
     # take `latest` back until it is deleted: its issue says so (ADR-009 §9).
     published = [r for r in github.releases() if not r.get("draft") and is_release(r.get("tag_name"))
                  and r.get("tag_name") != failing and not r.get("prerelease")
-                 and set(expected) <= {a["name"] for a in r.get("assets", [])}]
+                 and set(required(expected, r["tag_name"], signed_from)) <= {a["name"] for a in r.get("assets", [])}]
     top = highest(Version(r["tag_name"]) for r in published)
     try:
         current = github.get(github.repo("/releases/latest"))["tag_name"]
@@ -240,12 +295,15 @@ def open_issue(github: GitHub, report: Report, label: str, url: str) -> Optional
 
 
 def main(argv: Optional[Sequence[str]] = None, github: Optional[GitHub] = None,
-         verify: Callable[[Path, Path, str, str, str], Optional[str]] = gh_verify) -> int:
+         verify: Callable[[Path, Path, str, str, str], Optional[str]] = gh_verify,
+         verify_signature: signature.Verify = signature.openssl_verify) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--tag", required=True)
     parser.add_argument("--expected", default="", help="the names of the assets, one per line")
     parser.add_argument("--signer-workflow", required=True, help="OWNER/REPO/.github/workflows/FILE that builds releases")
     parser.add_argument("--label", default="type:infra")
+    parser.add_argument("--release-keys", default="", help="the release keys file, read at the tag's commit")
+    parser.add_argument("--signed-from", default="", help="the first release whose SHA256SUMS is signed, X.Y.Z")
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
     args = parser.parse_args(argv)
     github = github or GitHub(args.repository)
@@ -258,13 +316,14 @@ def main(argv: Optional[Sequence[str]] = None, github: Optional[GitHub] = None,
             print(f"::error title=release guard::no published release is tagged {args.tag}")
             return 2
         with tempfile.TemporaryDirectory(prefix="release-guard-") as tmp:
-            report = check(github, release, expected, args.signer_workflow, Path(tmp), verify)
+            report = check(github, release, expected, args.signer_workflow, Path(tmp), verify,
+                           args.release_keys, args.signed_from or None, verify_signature)
         # Both writes are tried, whatever the other does: `latest` moved off a release whose issue
         # cannot be opened, and the issue opened while `latest` cannot move. When both fail, the
         # issue's error is the one printed: running the guard again tries both.
         try:
             untick_pre_release(github, release, report)
-            keep_latest(github, report, expected)
+            keep_latest(github, report, expected, args.signed_from or None)
         finally:
             issue = open_issue(github, report, args.label, release.get("html_url", "")) if report.findings else None
     except GitHubError as error:

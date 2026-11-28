@@ -1,7 +1,7 @@
 name: release guard
 
-# Every publication is checked (ADR-009 §3.5): the tag, the provenance of each asset, the six assets
-# and SHA256SUMS, immutability, and `latest`. The guard moves `latest` back to the highest version
+# Every publication is checked (ADR-009 §3.5): the tag, the provenance of each asset, the seven assets,
+# SHA256SUMS and its signature (ADR-015 §3.4), immutability, and `latest`. The guard moves `latest` back to the highest version
 # when an older line or a pre-release took it, and unticks the pre-release box of an X.Y.Z that
 # passes; anything else it reports in an issue, since an immutable release cannot be repaired, only
 # deleted.
@@ -44,8 +44,12 @@ jobs:
         with:
           tag: ${{ github.event.release.tag_name || inputs.tag }}
           signer-workflow: ${{ github.repository }}/.github/workflows/release.yml
+          # Read at the tag's commit: the keys the binaries of that release embed.
+          release-keys: cli/cortex_cli/release_keys.py
+          signed-from: "1.10.0"
           expected: |
             SHA256SUMS
+            SHA256SUMS.sig
             cortex-linux-aarch64.tar.gz
             cortex-linux-x86_64.tar.gz
             cortex-macos-arm64.tar.gz

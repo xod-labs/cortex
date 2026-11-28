@@ -7,6 +7,9 @@
 # releases, and head branches deleted on merge. Another ruleset that requires checks there is
 # reported, and left to be removed by hand; so is a classic branch protection that does, read on
 # each of those branches that exists: one written for a pattern reaches a line once it is cut.
+# The environment `release-signing` (ADR-015 §3.1) is open to main, `[0-9]*.x` and `release/**`,
+# with no reviewer. Its secret, RELEASE_SIGNING_KEY, is a private key: left to you, and set with
+# `gh secret set RELEASE_SIGNING_KEY --env release-signing --repo OWNER/NAME < key.pem`.
 #
 # Run it as an administrator, with your own `gh` login: CI has no administrator rights, and should
 # not. Idempotent: a setting that holds is left alone, so a second run changes nothing.
@@ -29,7 +32,7 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 2
 fi
 case "${1:-}" in
-    -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
 
 exec python3 "$(dirname "$0")/setup_release.py" "$@"

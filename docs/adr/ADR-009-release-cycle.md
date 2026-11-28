@@ -552,3 +552,11 @@ The repository was deleted after the run.
 ### 1.8.7 — found in use (2026-11-15)
 
 - **§9, how a changelog is read** ([#398](https://github.com/xod-labs/cortex/issues/398)). An entry's text that a line of `=` or `-` underlines, as indented as the item's content, is a heading, as CommonMark 0.31.2 reads it: the entry asks only for its kind, and a 💥 there marks no major. 1.8.6 named this as the reader's one difference left with commonmark.js outside the forms it declares unread. Cortex's own CHANGELOG reads the same at every revision.
+
+### 2026-11-23 — ADR-015, a seventh asset and its signature (#275)
+
+[ADR-015](ADR-015-release-origin.md) signs each release's `SHA256SUMS`. Its phase 1 changes this record:
+
+- **§3.3 — the draft carries seven assets**, `SHA256SUMS.sig` the seventh. The `draft` job runs in the environment `release-signing`, whose secret `RELEASE_SIGNING_KEY` signs `SHA256SUMS` (`.github/actions/release-sign`). The signature is then checked against the primary key of `cli/cortex_cli/release_keys.py` as the commit built has it, before anything is drafted: a secret that does not match it, or a file that holds no primary key, fails the run with no draft. `SHA256SUMS.sig` is attested like every other asset.
+- **§3.5 — the guard gains an item**: `SHA256SUMS.sig` is there, and one of its lines verifies `SHA256SUMS` with a key of `release_keys.py` at the tag's commit, read through the API. A missing signature is a missing asset; one that does not verify, or a keys file the tag's commit lacks, is a finding. Item 3's six assets are seven from 1.10.0 on, its pre-releases included. A release before 1.10.0 is expected with its six: a guard run by hand on an older tag still passes it, and `latest` can still go back to it when a signed release fails.
+- **§3.10 — `bin/setup-release.sh` keeps the environment** `release-signing`: open to `main`, `[0-9]*.x` and `release/**` only, with no required reviewer and no wait. Its secret is a private key, which the script never handles: it says whether it is set, and how to set it, `gh secret set RELEASE_SIGNING_KEY --env release-signing --repo OWNER/NAME < key.pem`.

@@ -16,6 +16,11 @@ and `--check` reports every setting that differs, changing nothing, and exits no
   branch that exists: cutting a new line means running this script again, and `--check` says so.
 - Immutable releases: on.
 - Head branches deleted on merge.
+- The environment `release-signing`, whose secret `RELEASE_SIGNING_KEY` signs a release's
+  `SHA256SUMS` (ADR-015 §3.1): open to the branches `main`, `[0-9]*.x` and `release/**` only — where
+  a release or a pre-release is cut — with no required reviewer and no wait: the maintainer already
+  publishes each draft by hand. The secret is a private key, which no script handles: the script
+  says whether it is set, and how to set it.
 - No other ruleset requiring checks of the default branch or of a line's: GitHub requires the
   checks of every ruleset, and an older one names jobs that may never report again. The script
   asks GitHub which rules it applies to each of those branches, an organisation's or an
@@ -49,6 +54,9 @@ RULESET = "release cycle"
 QUEUE_RULESET = "release cycle: merge queue"
 BRANCHES = ["~DEFAULT_BRANCH", "refs/heads/*.x"]
 LINE = re.compile(r"(0|[1-9][0-9]*)\.x")
+ENVIRONMENT = "release-signing"
+ENVIRONMENT_BRANCHES = ("main", "[0-9]*.x", "release/**")
+SECRET = "RELEASE_SIGNING_KEY"
 
 
 class GhError(Exception):
@@ -165,7 +173,7 @@ class Setting:
     name: str
     drift: List[str]
     apply: Optional[Callable[[], None]]   # None: the script reports it, and leaves it to be done by hand
-    where: str = "in the Settings → Rules of whoever owns it"   # where to do it by hand
+    by_hand: str = "remove it by hand, in the Settings → Rules of whoever owns it"   # how, when it is left
 
 
 def ruleset_setting(gh: Gh, repository: str, name: str, desired: Dict[str, Any], found: List[Dict[str, Any]]) -> Setting:
@@ -231,8 +239,70 @@ def classic_protections(gh: Gh, repository: str, default: str, lines: Sequence[s
             continue    # a protection that names no check stands in no merge's way
         result.append(Setting(f"the classic branch protection of {branch!r}, which the cycle does not set", [
             f"it requires {len(contexts)} check(s) of its own — {', '.join(contexts)}: GitHub requires them "
-            "besides every ruleset's, so remove it by hand"], None, "in the Settings → Branches of the repository"))
+            "besides every ruleset's, so remove it by hand"], None,
+            "remove it by hand, in the Settings → Branches of the repository"))
     return result
+
+
+def _optional(gh: Gh, path: str) -> Any:
+    """``path``'s answer, or None on a 404; any other error stops the script."""
+    try:
+        return gh.api(path)
+    except GhError as error:
+        if error.status == 404:
+            return None
+        raise
+
+
+def environment_settings(gh: Gh, repository: str) -> List[Setting]:
+    """The environment ``release-signing`` and its secret (ADR-015 §3.1)."""
+    base = f"repos/{repository}/environments/{ENVIRONMENT}"
+    environment = _optional(gh, base)
+    want = sorted(ENVIRONMENT_BRANCHES)
+    policies: List[Dict[str, Any]] = []
+    drift = []
+    if environment is None:
+        drift.append(f"there is no environment named {ENVIRONMENT!r}")
+    else:
+        rules = environment.get("protection_rules") or []
+        if any(r.get("type") == "required_reviewers" and r.get("reviewers") for r in rules):
+            drift.append("it requires a reviewer, and should require none: the maintainer publishes each draft by hand")
+        waits = [r.get("wait_timer") for r in rules if r.get("type") == "wait_timer" and r.get("wait_timer")]
+        if waits:
+            drift.append(f"it waits {waits[0]} minute(s) before a job runs, and should not wait")
+        policy = environment.get("deployment_branch_policy") or {}
+        if not policy.get("custom_branch_policies") or policy.get("protected_branches"):
+            opened = "the protected branches" if policy.get("protected_branches") else "every branch"
+            drift.append(f"it is open to {opened}, and should be open to {', '.join(ENVIRONMENT_BRANCHES)} only")
+        else:
+            policies = (gh.api(f"{base}/deployment-branch-policies?per_page=100") or {}).get("branch_policies", [])
+            have = sorted(f"{p.get('name')}" + ("" if p.get("type", "branch") == "branch" else f" ({p.get('type')})")
+                          for p in policies)
+            if have != want:
+                drift.append(f"it is open to {have}, and should be open to {want}")
+
+    def apply() -> None:
+        gh.api(base, "PUT", {"wait_timer": 0, "prevent_self_review": False, "reviewers": [],
+                             "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}})
+        current = (gh.api(f"{base}/deployment-branch-policies?per_page=100") or {}).get("branch_policies", [])
+        kept = set()
+        for found in current:
+            if found.get("name") in ENVIRONMENT_BRANCHES and found.get("type", "branch") == "branch" \
+                    and found.get("name") not in kept:
+                kept.add(found["name"])
+            else:
+                gh.api(f"{base}/deployment-branch-policies/{found['id']}", "DELETE")
+        for name in want:
+            if name not in kept:
+                gh.api(f"{base}/deployment-branch-policies", "POST", {"name": name, "type": "branch"})
+
+    secrets = _optional(gh, f"{base}/secrets?per_page=100") if environment is not None else None
+    secret_set = any(s.get("name") == SECRET for s in (secrets or {}).get("secrets", []))
+    return [Setting(f"the environment {ENVIRONMENT!r}, open to {', '.join(ENVIRONMENT_BRANCHES)}, with no reviewer",
+                    drift, apply),
+            Setting(f"the secret {SECRET} of the environment {ENVIRONMENT!r}", [] if secret_set else ["it is not set"],
+                    None, "set it by hand, the private key in PEM on its standard input:\n"
+                          f"    gh secret set {SECRET} --env {ENVIRONMENT} --repo {repository} < release-signing.pem")]
 
 
 def settings(gh: Gh, repository: str, checks: Sequence[str]) -> List[Setting]:
@@ -250,6 +320,7 @@ def settings(gh: Gh, repository: str, checks: Sequence[str]) -> List[Setting]:
                           lambda: gh.api(f"repos/{repository}/immutable-releases", "PUT")))
     result.append(Setting("head branches deleted on merge", [] if repo.get("delete_branch_on_merge") is True else ["they are kept"],
                           lambda: gh.api(f"repos/{repository}", "PATCH", {"delete_branch_on_merge": True})))
+    result += environment_settings(gh, repository)
     default = repo.get("default_branch", "main")
     return (result + other_rulesets(gh, repository, found, default, lines)
             + classic_protections(gh, repository, default, lines))
@@ -296,7 +367,7 @@ def main(argv: Optional[Sequence[str]] = None, gh: Optional[Gh] = None) -> int:
     changed = len(drifted) - len(by_hand)
     print(f"{changed} setting(s) changed." if changed else "Nothing to change.")
     for setting in by_hand:
-        print(f"! {setting.name}: left to you — remove it by hand, {setting.where}")
+        print(f"! {setting.name}: left to you — {setting.by_hand}")
     return 1 if by_hand else 0
 
 

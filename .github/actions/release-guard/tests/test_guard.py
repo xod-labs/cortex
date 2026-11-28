@@ -1,34 +1,60 @@
 """The guard, against a fake GitHub (ADR-009 §3.5): what passes, what fails and opens one issue,
-and the one thing it repairs, `latest`."""
+and the one thing it repairs, `latest`. From 1.10.0, SHA256SUMS.sig too, checked with keys made for
+the test by openssl against the release keys file at the tag's commit (ADR-015 §3.4)."""
 
+import base64
 import copy
 import hashlib
 import io
 import json
 import re
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib" / "tests"))
 import guard  # noqa: E402
+import signature as sg  # noqa: E402
 from github import GitHubError  # noqa: E402
+from test_signature import keys_file, new_key  # noqa: E402
 
 COMMIT = "c" * 40
 SIX = ["SHA256SUMS", "cortex-linux-aarch64.tar.gz", "cortex-linux-x86_64.tar.gz", "cortex-macos-arm64.tar.gz",
        "cortex-spec.tar.gz", "cortex-windows-x86_64.zip"]
+SEVEN = SIX + ["SHA256SUMS.sig"]
 SIGNER = "o/r/.github/workflows/release.yml"
+KEYS_PATH = "cli/cortex_cli/release_keys.py"
+_KEYS = tempfile.TemporaryDirectory(prefix="guard-keys-")
+PRIMARY, PRIMARY_RAW = new_key(_KEYS.name)
+BACKUP, BACKUP_RAW = new_key(_KEYS.name)
+OTHER, OTHER_RAW = new_key(_KEYS.name)
+KEYS_TEXT = keys_file(primary=PRIMARY_RAW, backup=BACKUP_RAW)
+
+
+def tearDownModule():
+    _KEYS.cleanup()
 RELEASE_PREDICATE = "https://in-toto.io/attestation/release/v0.2"
 PROVENANCE = "https://slsa.dev/provenance/v1"
 
 
-def assets(drop=(), corrupt=()):
+def assets(drop=(), corrupt=(), signed_by=None, sums_changed=False):
+    """A release's assets: the six of a release before 1.10.0, and SHA256SUMS.sig with ``signed_by``,
+    a private key's path."""
     files = {name: name.encode() * 7 for name in SIX if name != "SHA256SUMS"}
     sums = "".join(f"{hashlib.sha256(data).hexdigest()}  {name}\n" for name, data in sorted(files.items()))
     for name in corrupt:
         files[name] = b"replaced"
     files["SHA256SUMS"] = sums.encode()
+    if signed_by is not None:
+        with tempfile.TemporaryDirectory(prefix="guard-sums-") as tmp:
+            path = Path(tmp, "SHA256SUMS")
+            path.write_bytes(files["SHA256SUMS"])
+            files["SHA256SUMS.sig"] = sg.line(*sg.sign(signed_by, path)).encode()
+    if sums_changed:   # after it was signed, its own lines still matching the assets
+        files["SHA256SUMS"] += b"\n"
     return {name: data for name, data in files.items() if name not in drop}
 
 
@@ -48,6 +74,8 @@ class FakeGitHub:
         self.annotated = set()
         self.tags_fail = None
         self.latest_fails = None
+        self.keys = {COMMIT: KEYS_TEXT}   # the release keys file, by commit
+        self.contents_fail = None
 
     def repo(self, suffix=""):
         return f"/repos/o/r{suffix}"
@@ -86,6 +114,13 @@ class FakeGitHub:
             if tag in self.annotated:
                 return {"object": {"type": "tag", "sha": f"t-{tag}"}}
             return {"object": {"type": "commit", "sha": self.tags[tag]}}
+        if path.startswith(f"/repos/o/r/contents/{KEYS_PATH}?ref="):
+            if self.contents_fail:
+                raise self.contents_fail
+            commit = path.rsplit("=", 1)[1]
+            if commit not in self.keys:
+                raise GitHubError(404, "Not Found")
+            return {"type": "file", "encoding": "base64", "content": base64.encodebytes(self.keys[commit].encode()).decode()}
         if path.startswith("/repos/o/r/git/tags/t-"):
             return {"object": {"type": "commit", "sha": self.tags[path.rsplit("/t-", 1)[1]]}}
         raise AssertionError(path)
@@ -115,8 +150,14 @@ class FakeGitHub:
         raise AssertionError((method, path))
 
 
+def signed(tag):
+    """Whether the release workflow signs ``tag``: from 1.10.0, its pre-releases included."""
+    found = re.match(r"(\d+)\.(\d+)\.(\d+)", tag)
+    return bool(found) and tuple(map(int, found.groups())) >= (1, 10, 0)
+
+
 def release(tag, rid, files=None, immutable=True, prerelease=None, draft=False):
-    files = assets() if files is None else files
+    files = assets(signed_by=PRIMARY if signed(tag) else None) if files is None else files
     return {"id": rid, "tag_name": tag, "draft": draft, "prerelease": "-" in tag if prerelease is None else prerelease,
             "immutable": immutable, "html_url": f"https://github.com/o/r/releases/tag/{tag}", "files": files,
             "assets": [{"name": n, "url": f"https://api/{tag}/{n}"} for n in sorted(files)]}
@@ -136,7 +177,8 @@ def verify_names(commit):
 def run(github, tag, verify=None):
     out = io.StringIO()
     with redirect_stdout(out):
-        code = guard.main(["--tag", tag, "--expected", "\n".join(SIX), "--signer-workflow", SIGNER],
+        code = guard.main(["--tag", tag, "--expected", "\n".join(SEVEN), "--signer-workflow", SIGNER,
+                           "--release-keys", KEYS_PATH, "--signed-from", "1.10.0"],
                           github=github, verify=verify or verify_names(COMMIT))
     return code, out.getvalue()
 
@@ -394,6 +436,91 @@ class LatestTests(unittest.TestCase):
         github = FakeGitHub([release("1.5.1", 1, immutable=False), release("2.0.0", 2)], latest="1.5.1")
         self.assertEqual(run(github, "1.5.1")[0], 1)
         self.assertEqual(github.latest, "2.0.0")
+
+
+class SignatureTests(unittest.TestCase):
+    """SHA256SUMS.sig, from 1.10.0 (ADR-015 §3.4): one line verifies SHA256SUMS with a key of the
+    release keys file at the tag's commit."""
+
+    def assert_fails(self, github, tag, expected, verify=None):
+        return FailingTests.assert_fails(self, github, tag, expected, verify)
+
+    def test_a_release_signed_by_the_primary_key_passes(self):
+        github = FakeGitHub([release("1.10.0", 1), release("1.9.1", 2)], latest="1.10.0")
+        code, out = run(github, "1.10.0")
+        self.assertEqual(code, 0, out)
+        self.assertIn("✓ the 7 assets expected are there", out)
+        self.assertIn(f"✓ SHA256SUMS.sig verifies SHA256SUMS with the primary key {sg.key_id(PRIMARY_RAW)} of {KEYS_PATH}", out)
+
+    def test_a_pre_release_of_the_first_signed_one_is_signed_too(self):
+        github = FakeGitHub([release("1.10.0-rc.1", 1, assets()), release("1.9.1", 2)], latest="1.9.1")
+        self.assert_fails(github, "1.10.0-rc.1", "assets missing: SHA256SUMS.sig")
+
+    def test_a_release_signed_by_the_backup_key_passes(self):
+        github = FakeGitHub([release("1.10.0", 1, assets(signed_by=BACKUP))], latest="1.10.0")
+        code, out = run(github, "1.10.0")
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"with the backup key {sg.key_id(BACKUP_RAW)}", out)
+
+    def test_an_unsigned_release_fails(self):
+        self.assert_fails(FakeGitHub([release("1.10.0", 1, assets())], "1.10.0"), "1.10.0", "assets missing: SHA256SUMS.sig")
+
+    def test_a_release_signed_by_no_release_key_fails(self):
+        github = FakeGitHub([release("1.10.0", 1, assets(signed_by=OTHER))], "1.10.0")
+        self.assert_fails(github, "1.10.0", f"SHA256SUMS.sig does not verify SHA256SUMS with a key of {KEYS_PATH} at "
+                                            f"{COMMIT[:12]}: it is signed by no release key: {sg.key_id(OTHER_RAW)}")
+
+    def test_sums_changed_after_they_were_signed_fail(self):
+        github = FakeGitHub([release("1.10.0", 1, assets(signed_by=PRIMARY, sums_changed=True))], "1.10.0")
+        out = self.assert_fails(github, "1.10.0", f"SHA256SUMS.sig does not verify SHA256SUMS with a key of {KEYS_PATH} at "
+                                                  f"{COMMIT[:12]}: its signature by {sg.key_id(PRIMARY_RAW)} does not match "
+                                                  "SHA256SUMS")
+        self.assertIn("✓ SHA256SUMS matches the assets", out)   # its lines still do
+
+    def test_the_keys_are_read_at_the_tag_s_commit(self):
+        # Another commit's file holds the signing key; the tag's does not.
+        github = FakeGitHub([release("1.10.0", 1)], "1.10.0", tags={"1.10.0": "d" * 40})
+        github.keys = {COMMIT: KEYS_TEXT, "d" * 40: keys_file(primary=OTHER_RAW)}
+        out = self.assert_fails(github, "1.10.0", f"SHA256SUMS.sig does not verify SHA256SUMS with a key of {KEYS_PATH} at "
+                                                  f"{'d' * 12}: it is signed by no release key: {sg.key_id(PRIMARY_RAW)}",
+                                verify=verify_names("d" * 40))
+        self.assertIn("✓ the provenance of every asset names dddddddddddd", out)
+
+    def test_a_tag_s_commit_without_the_keys_file_fails(self):
+        github = FakeGitHub([release("1.10.0", 1)], "1.10.0")
+        github.keys = {}
+        self.assert_fails(github, "1.10.0", f"{KEYS_PATH} is not in the tag's commit {COMMIT[:12]}: SHA256SUMS.sig cannot "
+                                            "be checked")
+
+    def test_a_keys_file_that_does_not_read_fails(self):
+        github = FakeGitHub([release("1.10.0", 1)], "1.10.0")
+        github.keys = {COMMIT: "KEYS = dict()\n"}
+        self.assert_fails(github, "1.10.0", f"{KEYS_PATH} at the tag's commit {COMMIT[:12]} does not read: "
+                                            "the release keys file's KEYS is no literal")
+
+    def test_the_keys_file_the_api_cannot_return_fails_no_release(self):
+        github = FakeGitHub([release("1.10.0", 1), release("1.9.1", 2)], "1.10.0")
+        github.contents_fail = GitHubError(503, "Service Unavailable")
+        code, out = run(github, "1.10.0")
+        self.assertEqual(code, 2, out)
+        self.assertEqual((github.issues, github.patched, github.latest), ([], [], "1.10.0"))
+
+    def test_a_release_before_the_first_signed_one_needs_no_signature(self):
+        github = FakeGitHub([release("1.9.1", 1), release("1.9.0", 2)], latest="1.9.1")
+        code, out = run(github, "1.9.1")
+        self.assertEqual(code, 0, out)
+        self.assertIn("✓ the 6 assets expected are there", out)
+        self.assertNotIn("SHA256SUMS.sig", out)
+
+    def test_latest_goes_back_to_a_release_before_the_first_signed_one(self):
+        # 1.10.0 published unsigned: 1.9.1, with the six assets of its time, takes `latest` back.
+        github = FakeGitHub([release("1.10.0", 1, assets()), release("1.9.1", 2)], latest="1.10.0")
+        code, out = run(github, "1.10.0")
+        self.assertEqual((code, github.latest), (1, "1.9.1"), out)
+
+    def test_the_signature_is_not_listed_in_the_sums_it_signs(self):
+        out = run(FakeGitHub([release("1.10.0", 1)], "1.10.0"), "1.10.0")[1]
+        self.assertIn("✓ SHA256SUMS matches the assets", out)
 
 
 class GhVerifyTests(unittest.TestCase):
