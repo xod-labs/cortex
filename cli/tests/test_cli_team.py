@@ -836,6 +836,15 @@ class UpgradeTests(TeamTestCase):
         self.assertIn(f'version = "{OWN}"', (root / "agents" / "cortex.team.lock").read_text(encoding="utf-8"))
         self.assertEqual(self.local(root)["synced"]["reads"], OWN)
 
+    @DOWNLOADS
+    def test_team_s_sync_of_a_follower_says_whom_to_call_when_the_theme_changed(self):
+        root = self.project('theme = "h2g2"\n', team='version = "9.9.8"\n')     # #397
+        self.assert_ok(self.cortex(root, "sync"))
+        (root / "cortex.toml").write_text('theme = "breaking-bad"\n', encoding="utf-8")
+        proc = self.cortex(root, "upgrade", "--team", OWN)
+        self.assert_ok(proc)
+        self.assertEqual(proc.out.count("Theme breaking-bad: @Saul, the prompt manager,"), 1, proc.out)
+
     def test_team_stops_on_a_follower_s_failing_overlays_but_under_force(self):
         root = self.project('theme = "h2g2"\n', team=f'version = "{OWN}"\n')
         overlay = root / "agents" / "roles" / "engineering" / "architect.md"
