@@ -88,10 +88,9 @@ def check_url(url: str) -> None:
         parts = urllib.parse.urlsplit(url)
         host = parts.hostname
     except ValueError as error:
-        raise DownloadError(f"{_masked(url)!r}: {error}")
+        raise DownloadError(f"{_masked(url)!r}: {'not a URL that can be read' if '@' in url else error}")
     if "@" in parts.netloc:
-        shown = urllib.parse.urlunsplit(parts._replace(netloc="…@" + parts.netloc.rpartition("@")[2]))
-        raise DownloadError(f"{shown}: {USER_PART}")
+        raise DownloadError(f"{_masked(url)}: {USER_PART}")
     if parts.scheme in ("https", "http") and not host:
         raise DownloadError(f"{_masked(url)}: names no host — write it https://host/path")
     if parts.scheme == "https" or (parts.scheme == "http" and host in LOOPBACK):

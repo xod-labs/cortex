@@ -42,7 +42,7 @@ def link_read_only(path):
 
 AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
 # #275: passwords that end the host before their @ — urllib reads "ci:Ab3" as a host and a port.
-CUT_PASSWORDS = ("Ab3/xYz9", "tok?en", "tok#en", "1234/x")
+CUT_PASSWORDS = ("Ab3/xYz9", "tok?en", "tok#en", "1234/x", "p@ss/word", "p@ss#word", "pw＃x")
 
 
 def assert_no_part_of(test, text, password):
@@ -951,7 +951,7 @@ class NetTests(unittest.TestCase):
         # #275: the scheme forgotten, or a URL urllib cannot parse — refused before its user part is seen.
         for url, shown in (("user:secret@mirror.example/r", "…@mirror.example/r"),
                            ("user:sec@ret@host/r", "…@host/r"),
-                           ("https://user:secret@[bad/r", "'https://…@[bad/r"),
+                           ("https://user:secret@[bad/r", "https://…@[bad/r"),
                            ("user:secret@host/r?next=https://x", "…@host/r?next=https://x"),
                            ("user:secret@host/r#https://x", "…@host/r#https://x"),
                            ("https:/user:secret@host/r", "…@host/r"),
@@ -963,6 +963,20 @@ class NetTests(unittest.TestCase):
                         store.releases_url()
                 self.assertNotIn("secret", str(raised.exception))
                 self.assertTrue(str(raised.exception).startswith(f"CORTEX_RELEASES_URL: {shown}"), str(raised.exception))
+
+    def test_check_url_repeats_no_part_of_a_password(self):
+        # #275: a redirect target is checked by check_url alone — its message masks from the last @,
+        # and never repeats the parser's own text, which quotes the host.
+        for url, message in (
+                ("https://ci:p@ss/word@mirror.invalid/cortex",
+                 "https://…@mirror.invalid/cortex: " + net.USER_PART),
+                ("https://ci:pw＃x@mirror.invalid/cortex",
+                 "'https://…@mirror.invalid/cortex': not a URL that can be read"),
+                ("https://ci:Q[@3]#x@[::1]/cortex", "'https://…@[::1]/cortex': not a URL that can be read")):
+            with self.subTest(url=url):
+                with self.assertRaises(net.DownloadError) as raised:
+                    net.check_url(url)
+                self.assertEqual(str(raised.exception), message)
 
     def test_a_password_cut_by_a_slash_is_never_repeated_by_get(self):
         # #275: a "/", "?" or "#" in the password ends the netloc before its @ — check_url sees no user part,
