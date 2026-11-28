@@ -4,10 +4,13 @@ In process, from source: the releases are ``release_fixture``'s, served from thi
 binary replaced is a file in a temporary directory. A release's stand-in answers ``--version`` on
 POSIX only, so these tests read what it would answer from its last line, and the POSIX ones run it.
 
-Through a built binary, a copy of it is replaced — never the binary under test. On POSIX the copy
-installs the stand-in, which then answers for itself; on Windows the stand-in answers nothing
-sensible, so the copy refuses it — and installs instead a program built from pip's own launcher,
-which answers, while the copy runs.
+The releases from 1.10.0 on are signed by the tests' own key, ``RELEASE_KEY``, which these tests
+trust by patching ``release_keys.KEYS``; a release before it is checked against what
+``store.known_releases`` embeds, which they patch too (ADR-015 §3.5).
+
+Through a built binary, a copy of it is run — never the binary under test. It embeds the committed
+release keys, not the tests': it refuses every release the tests serve, and replaces nothing. That
+a built binary installs a release is shown by the in-process tests, and by none through a binary.
 """
 
 import importlib
@@ -30,11 +33,12 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # the harness, not a package named tests
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[2] / "core")]
 import cli_harness as harness  # noqa: E402
-from cortex_cli import binary, machine, net, self_update, store, version  # noqa: E402
+from cortex_cli import binary, machine, net, release_keys, self_update, store, version  # noqa: E402
 from cortex_cli.paths import display  # noqa: E402
 from cortex_cli.self_update import SelfUpdateError  # noqa: E402
 from cortex_cli.semver import Version  # noqa: E402
-from release_fixture import TARGETS, FakeRelease, build, stand_in  # noqa: E402
+from ed25519_signer import KeyPair  # noqa: E402
+from release_fixture import RELEASE_KEY, TARGETS, FakeRelease, build, checksums, stand_in  # noqa: E402
 
 LINUX = ("Linux", "x86_64")
 WINDOWS = ("Windows", "AMD64")
@@ -84,23 +88,6 @@ class Piped:
         self.held.clear()
 
 
-def answering_windows_program(version):
-    """A Windows program that answers ``cortex VERSION``: pip's launcher, then the line naming the
-    Python to run, then a zip of the script — how pip writes its commands on Windows. ``None``
-    where pip ships no launcher."""
-    try:
-        import pip._vendor.distlib as distlib
-    except ImportError:
-        return None
-    launcher = Path(distlib.__file__).parent / "t64.exe"
-    if not launcher.is_file():
-        return None
-    script = io.BytesIO()
-    with zipfile.ZipFile(script, "w") as archive:
-        archive.writestr("__main__.py", f"print('cortex {version}')\n")
-    return launcher.read_bytes() + f'#!"{sys.executable}"\n'.encode() + script.getvalue()
-
-
 def answer_of(path):
     """What a release's stand-in answers to ``--version``: the version it was written with."""
     return "cortex " + re.findall(rb"cortex (\d+\.\d+\.\d+)", path.read_bytes())[-1].decode()
@@ -119,15 +106,23 @@ class ReleaseTestCase(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": self.release.url})
         patcher.start()
         self.addCleanup(patcher.stop)
+        # The tests' release key, trusted as the committed ones are; the releases before 1.10.0 a
+        # binary built after them would embed: none, unless a test names them.
+        self.known = {}
+        for patcher in (mock.patch.object(release_keys, "KEYS", RELEASE_KEY.keys("primary")),
+                        mock.patch.object(store, "known_releases", side_effect=lambda: self.known)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def latest_is(self, version):
         self.release.redirect("/latest/download/SHA256SUMS", f"{self.release.url}/download/{version}/SHA256SUMS")
 
-    def update(self, wanted=None, dry_run=False, own="9.9.8", system=LINUX, run=answer_of, binary=..., built_for=None):
+    def update(self, wanted=None, dry_run=False, own="9.9.8", system=LINUX, run=answer_of, binary=..., built_for=None,
+               keys=None):
         out, err = io.StringIO(), io.StringIO()
         code = self_update.self_update(wanted, dry_run, out, err, binary=self.binary if binary is ... else binary,
                                        own=Version(own), run=run, built_for=built_for, system=system[0],
-                                       machine=system[1])
+                                       machine=system[1], keys=keys)
         return code, out.getvalue(), err.getvalue()
 
     def assert_untouched(self):
@@ -139,7 +134,8 @@ class SelfUpdateTests(ReleaseTestCase):
     @property
     def ELSEWHERE(self):
         return (f"note: downloading from {self.release.url}, set by CORTEX_RELEASES_URL — the binary is checked "
-                "against that host's SHA256SUMS, not against GitHub's releases\n")
+                "against what this cortex embeds — a release key, or the checksum of a release before 1.10.0 — "
+                "whatever that host serves\n")
 
     def test_releases_from_another_host_say_so_before_anything_is_downloaded(self):
         for wanted in ("9.9.9", None):
@@ -225,7 +221,9 @@ class SelfUpdateTests(ReleaseTestCase):
         self.assertIn(f"Installed cortex 9.9.9 as {display(str(self.binary))}, in place of 9.9.8.", out)
         self.assertIn("No project moved: `cortex upgrade` moves one to this version.", out)
         # The SHA256SUMS the redirect led to is the release's: it is not asked for twice.
+        # Its signature is read beside it, at the version the redirect named.
         self.assertEqual(self.release.requested, ["/latest/download/SHA256SUMS", "/download/9.9.9/SHA256SUMS",
+                                                  "/download/9.9.9/SHA256SUMS.sig",
                                                   "/download/9.9.9/cortex-linux-x86_64.tar.gz"])
 
     @unittest.skipIf(os.name == "nt", "a mode Windows does not keep")
@@ -238,7 +236,7 @@ class SelfUpdateTests(ReleaseTestCase):
         code, _, err = self.update("9.9.9", own="9.9.7")
         self.assertEqual(code, 0)
         self.assertEqual(self.binary.read_bytes(), stand_in("9.9.9", False))
-        self.assertEqual(self.release.requested, ["/download/9.9.9/SHA256SUMS",
+        self.assertEqual(self.release.requested, ["/download/9.9.9/SHA256SUMS", "/download/9.9.9/SHA256SUMS.sig",
                                                   "/download/9.9.9/cortex-linux-x86_64.tar.gz"])
         self.assertEqual(err, self.ELSEWHERE)
 
@@ -283,6 +281,7 @@ class SelfUpdateTests(ReleaseTestCase):
 
     def test_a_downgrade_to_a_binary_without_self_update_names_the_install_script(self):
         FakeRelease.publish(self.release.root / "download" / "1.3.2", "1.3.2")
+        self.known = self.release.known("1.3.2")
         code, _, err = self.update("1.3.2", own="9.9.9")
         self.assertEqual(code, 0)
         self.assertIn("note: Cortex 1.3.2 has no self-update — the install script moves it again:", err)
@@ -290,6 +289,7 @@ class SelfUpdateTests(ReleaseTestCase):
 
     def test_a_downgrade_to_a_pre_release_of_the_first_with_self_update_names_no_install_script(self):
         FakeRelease.publish(self.release.root / "download" / "1.4.0-rc.1", "1.4.0-rc.1")
+        self.known = self.release.known("1.4.0-rc.1")
         # A pre-release has its release's features: 1.4.0's self-update.
         code, _, err = self.update("1.4.0-rc.1", own="9.9.9", run=lambda path: "cortex 1.4.0-rc.1")
         self.assertEqual(code, 0)
@@ -298,6 +298,7 @@ class SelfUpdateTests(ReleaseTestCase):
 
     def test_on_windows_a_downgrade_to_a_binary_without_self_update_says_the_old_one_stays(self):
         FakeRelease.publish(self.release.root / "download" / "1.3.2", "1.3.2")
+        self.known = self.release.known("1.3.2")
         old = self.bin / "cortex.old"
         with mock.patch.object(self_update, "ASIDE", True):
             code, _, err = self.update("1.3.2", own="9.9.9")
@@ -346,7 +347,8 @@ class SelfUpdateTests(ReleaseTestCase):
 
     def test_a_checksum_mismatch_replaces_nothing(self):
         self.release.alter_one_byte("linux-x86_64", "9.9.9")
-        with self.assertRaisesRegex(SelfUpdateError, "cortex-linux-x86_64.tar.gz does not match its checksum — "
+        with self.assertRaisesRegex(SelfUpdateError, f"cortex-linux-x86_64.tar.gz of Cortex 9.9.9, from "
+                                                     f"{re.escape(self.release.url)}, does not match its checksum — "
                                                      "expected [0-9a-f]{64}, got [0-9a-f]{64}. Nothing was replaced."):
             self.update("9.9.9")
         self.assert_untouched()
@@ -354,6 +356,7 @@ class SelfUpdateTests(ReleaseTestCase):
     def test_sums_that_list_no_asset_of_this_system_replace_nothing(self):
         sums = self.release.root / "download" / "9.9.9" / "SHA256SUMS"
         sums.write_text("".join(line for line in sums.read_text().splitlines(True) if "linux-x86_64" not in line))
+        (sums.parent / "SHA256SUMS.sig").write_text(RELEASE_KEY.line(sums.read_bytes()))   # signed as it is
         with self.assertRaisesRegex(SelfUpdateError, "the SHA256SUMS of Cortex 9.9.9 lists no "
                                                      "cortex-linux-x86_64.tar.gz — nothing was replaced"):
             self.update("9.9.9")
@@ -365,7 +368,7 @@ class SelfUpdateTests(ReleaseTestCase):
             info = tarfile.TarInfo("LICENSE")
             info.size = 8
             archive.addfile(info, io.BytesIO(b"licence\n"))
-        build.checksums(directory)
+        checksums(directory)
         with self.assertRaisesRegex(SelfUpdateError, "cortex-linux-x86_64.tar.gz holds no cortex — nothing was replaced"):
             self.update("9.9.9")
         self.assert_untouched()
@@ -373,7 +376,7 @@ class SelfUpdateTests(ReleaseTestCase):
     def test_an_asset_that_is_no_archive_replaces_nothing(self):
         directory = self.release.root / "download" / "9.9.9"
         (directory / "cortex-windows-x86_64.zip").write_bytes(b"no zip at all")
-        build.checksums(directory)
+        checksums(directory)
         with self.assertRaisesRegex(SelfUpdateError, "cortex-windows-x86_64.zip cannot be read: .* — nothing was replaced"):
             self.update("9.9.9", system=WINDOWS)
         self.assert_untouched()
@@ -473,6 +476,159 @@ class SelfUpdateTests(ReleaseTestCase):
                                                      "nothing was replaced"):
             self.update("9.9.9", run=self_update.answers)
         self.assert_untouched()
+
+
+class SignatureTests(ReleaseTestCase):
+    """ADR-015 §3.5, from a mirror on this machine: a release from 1.10.0 on is installed only when
+    one line of its SHA256SUMS.sig verifies its SHA256SUMS with a key this cortex trusts; one before
+    it, by the checksum this cortex embeds. Each refusal names what was wrong and the host."""
+
+    def sums(self, version="9.9.9"):
+        return self.release.root / "download" / version / "SHA256SUMS"
+
+    def assert_refused(self, wanted, message, **kwargs):
+        with self.assertRaises(SelfUpdateError) as refused:
+            self.update(wanted, **kwargs)
+        self.assertIn(message, str(refused.exception))
+        self.assertIn(self.release.url, str(refused.exception))      # the host
+        self.assertTrue(str(refused.exception).endswith(("nothing was replaced", "Nothing was replaced.")))
+        self.assert_untouched()
+        self.assertFalse([p for p in self.release.requested if "/cortex-" in p])   # no asset downloaded
+        return str(refused.exception)
+
+    def test_a_signed_release_is_installed(self):
+        code, out, _ = self.update("9.9.9")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.binary.read_bytes(), stand_in("9.9.9", False))
+
+    def test_an_unsigned_release_is_refused(self):
+        (self.sums().parent / "SHA256SUMS.sig").unlink()
+        self.assert_refused("9.9.9", f"Cortex 9.9.9, from {self.release.url}, has no SHA256SUMS.sig: a release from "
+                                     "1.10.0 on is installed only once a Cortex release key has signed it — a mirror "
+                                     "serves the seven assets of a release. Nothing was replaced.")
+
+    def test_a_release_signed_by_an_unknown_key_is_refused(self):
+        stranger = KeyPair()
+        (self.sums().parent / "SHA256SUMS.sig").write_text(stranger.line(self.sums().read_bytes()))
+        self.assert_refused("9.9.9", f"the SHA256SUMS.sig of Cortex 9.9.9, from {self.release.url}, is signed by no "
+                                     f"key this cortex knows ({stranger.id}) — nothing was replaced")
+
+    def test_sums_changed_after_they_were_signed_are_refused(self):
+        # The mirror's own binary, its SHA256SUMS rewritten to match it: the signature still names the old one.
+        self.release.replace_binary("linux-x86_64", b"#!/bin/sh\necho 'cortex 9.9.9'\n", "9.9.9")
+        (self.sums().parent / "SHA256SUMS.sig").write_text(RELEASE_KEY.line(b"the SHA256SUMS that was signed\n"))
+        self.assert_refused("9.9.9", f"the SHA256SUMS of Cortex 9.9.9, from {self.release.url}, does not match its "
+                                     f"signature by the release key {RELEASE_KEY.id}: it was changed after it was "
+                                     "signed — nothing was replaced")
+
+    def test_a_line_changed_after_signing_is_refused(self):
+        with self.sums().open("a") as fh:
+            fh.write(f"{'0' * 64}  cortex-extra.tar.gz\n")
+        self.assert_refused("9.9.9", "it was changed after it was signed")
+
+    def test_a_signature_file_with_no_signature_is_refused(self):
+        for text in ("", "rsa 0123456789abcdef AAAA\n", "not a signature at all\n"):
+            with self.subTest(text=text):
+                (self.sums().parent / "SHA256SUMS.sig").write_text(text)
+                self.assert_refused("9.9.9", f"the SHA256SUMS.sig of Cortex 9.9.9, from {self.release.url}, holds no "
+                                             "signature — a release from 1.10.0 on is installed only once a Cortex "
+                                             "release key has signed it. Nothing was replaced.")
+
+    def test_a_line_of_another_algorithm_or_key_is_skipped(self):
+        sig = self.sums().parent / "SHA256SUMS.sig"
+        sig.write_text("rsa 0123456789abcdef AAAA\n" + KeyPair().line(self.sums().read_bytes()) + sig.read_text())
+        self.assertEqual(self.update("9.9.9")[0], 0)
+
+    def test_a_rotation_s_second_key_verifies(self):
+        # A release of a rotation carries two lines; a binary that embeds only the backup verifies the second.
+        backup = KeyPair()
+        sig = self.sums().parent / "SHA256SUMS.sig"
+        sig.write_text(sig.read_text() + backup.line(self.sums().read_bytes()))
+        self.assertEqual(self.update("9.9.9", keys={backup.id: backup.public})[0], 0)
+
+    def test_the_keys_are_the_ones_this_cortex_embeds(self):
+        with mock.patch.object(release_keys, "KEYS", {}):
+            self.assert_refused("9.9.9", f"is signed by no key this cortex knows ({RELEASE_KEY.id})")
+
+    def test_the_latest_release_is_checked_by_the_version_its_redirect_names(self):
+        self.latest_is("9.9.9")
+        (self.sums().parent / "SHA256SUMS.sig").unlink()
+        self.assert_refused(None, f"Cortex 9.9.9, from {self.release.url}, has no SHA256SUMS.sig")
+        self.assertIn("/download/9.9.9/SHA256SUMS.sig", self.release.requested)
+
+    def test_the_latest_release_signed_is_installed(self):
+        self.latest_is("9.9.9")
+        self.assertEqual(self.update()[0], 0)
+
+    def test_a_pre_release_of_1_10_0_is_signed_too(self):
+        FakeRelease.publish(self.release.root / "download" / "1.10.0-rc.1", "1.10.0-rc.1")
+        self.assertTrue((self.release.root / "download" / "1.10.0-rc.1" / "SHA256SUMS.sig").is_file())
+        run = lambda path: "cortex 1.10.0-rc.1"   # noqa: E731
+        self.assertEqual(self.update("1.10.0-rc.1", run=run)[0], 0)
+        self.binary.write_bytes(OLD)
+        self.binary.with_name("cortex.old").unlink(missing_ok=True)   # Windows renames the old one aside
+        self.release.server.requested.clear()
+        (self.release.root / "download" / "1.10.0-rc.1" / "SHA256SUMS.sig").unlink()
+        self.assert_refused("1.10.0-rc.1", "has no SHA256SUMS.sig", run=run)
+
+    def test_a_signature_that_cannot_be_downloaded_is_no_missing_one(self):
+        def fetch(url, *args, **kwargs):
+            if url.endswith(".sig"):
+                raise net.DownloadError(f"{url}: HTTP 503 Service Unavailable", 503)
+            return net.get(url, *args, **kwargs)
+
+        with self.assertRaisesRegex(SelfUpdateError, "could not download Cortex 9.9.9: .*SHA256SUMS.sig: HTTP 503"):
+            self_update.self_update("9.9.9", False, io.StringIO(), io.StringIO(), binary=self.binary,
+                                    own=Version("9.9.8"), fetch=fetch, run=answer_of, system="Linux", machine="x86_64")
+        self.assert_untouched()
+
+    def test_no_option_skips_the_check(self):
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out), self.assertRaises(SystemExit):
+            self_update.run(["--help"])
+        self.assertEqual(sorted(re.findall(r"(?m)^\s+(-[-\w]+)", out.getvalue())), ["--dry-run", "-h"])
+
+    # Before 1.10.0: the checksum this cortex embeds for the release and the target.
+
+    def test_a_release_before_1_10_0_is_installed_by_its_embedded_checksum(self):
+        FakeRelease.publish(self.release.root / "download" / "1.9.1", "1.9.1")
+        self.assertFalse((self.release.root / "download" / "1.9.1" / "SHA256SUMS.sig").exists())
+        self.known = self.release.known("1.9.1")
+        code, _, err = self.update("1.9.1", own="9.9.9")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.binary.read_bytes(), stand_in("1.9.1", False))
+        # Neither its SHA256SUMS nor a signature is read: what the binary embeds is enough.
+        self.assertEqual(self.release.requested, ["/download/1.9.1/cortex-linux-x86_64.tar.gz"])
+
+    def test_a_release_before_1_10_0_that_does_not_match_is_refused(self):
+        FakeRelease.publish(self.release.root / "download" / "1.9.1", "1.9.1")
+        self.known = self.release.known("1.9.1")
+        self.release.replace_binary("linux-x86_64", b"#!/bin/sh\necho 'cortex 1.9.1'\n", "1.9.1")   # its SHA256SUMS too
+        with self.assertRaises(SelfUpdateError) as refused:
+            self.update("1.9.1", own="9.9.9")
+        self.assertRegex(str(refused.exception), f"cortex-linux-x86_64.tar.gz of Cortex 1.9.1, from "
+                                                 f"{re.escape(self.release.url)}, does not match the checksum this "
+                                                 "cortex embeds for it — expected [0-9a-f]{64}, got [0-9a-f]{64}. "
+                                                 "Nothing was replaced.")
+        self.assert_untouched()
+
+    def test_a_release_before_1_10_0_this_cortex_does_not_embed_is_refused_before_any_download(self):
+        FakeRelease.publish(self.release.root / "download" / "1.9.1", "1.9.1")
+        self.known = {"1.9.0": {"cortex-linux-x86_64.tar.gz": "0" * 64}}
+        with self.assertRaisesRegex(SelfUpdateError, "this cortex embeds no checksum of cortex-linux-x86_64.tar.gz of "
+                                                     "Cortex 1.9.1: a release before 1.10.0 is signed by nobody, and is "
+                                                     "installed only by the checksum a binary embeds for it — nothing "
+                                                     "was replaced"):
+            self.update("1.9.1", own="9.9.9")
+        self.assertEqual(self.release.requested, [])
+        self.assert_untouched()
+
+    def test_the_embedded_checksum_is_the_target_s(self):
+        FakeRelease.publish(self.release.root / "download" / "1.9.1", "1.9.1")
+        self.known = {"1.9.1": {"cortex-windows-x86_64.zip": self.release.known("1.9.1")["1.9.1"]["cortex-windows-x86_64.zip"]}}
+        with self.assertRaisesRegex(SelfUpdateError, "embeds no checksum of cortex-linux-x86_64.tar.gz of Cortex 1.9.1"):
+            self.update("1.9.1", own="9.9.9")
+        self.assertEqual(self.update("1.9.1", own="9.9.9", system=WINDOWS)[0], 0)
 
 
 class AssetTests(unittest.TestCase):
@@ -758,8 +914,9 @@ class CommandTests(unittest.TestCase):
 
 @BUILT
 class BuiltBinaryTests(ReleaseTestCase):
-    """A copy of the binary under test, replaced — the binary under test never is — by release
-    TARGET, a version no build of this checkout stands for."""
+    """A copy of the binary under test, asked to self-update — the binary under test never is — to
+    release TARGET, a version no build of this checkout stands for. The copy embeds the committed
+    release keys: it refuses every release the tests sign, and replaces nothing."""
 
     def setUp(self):
         super().setUp()
@@ -774,18 +931,33 @@ class BuiltBinaryTests(ReleaseTestCase):
         proc.out, proc.err = proc.stdout.decode(), proc.stderr.decode()
         return proc
 
-    @POSIX
-    def test_the_copy_installs_the_release_and_the_release_answers(self):
-        proc = self.run_copy("self-update", TARGET)
-        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
-        self.assertIn(f"Installed cortex {TARGET} as {display(str(self.binary))}", proc.out)
-        self.assertEqual(self.run_copy("--version").out, f"cortex {TARGET}\n")
+    def assert_refused_unknown_key(self, proc):
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"cortex self-update: the SHA256SUMS.sig of Cortex {TARGET}, from {self.release.url}, is signed by "
+                      f"no key this cortex knows ({RELEASE_KEY.id}) — nothing was replaced", proc.err)
+        self.assertEqual(self.binary.read_bytes(), self.before)
         self.assertEqual(sorted(p.name for p in self.bin.iterdir()), [self.binary.name])
+        self.assertNotIn(f"/download/{TARGET}/{self_update.asset_name(platform.system(), platform.machine())}",
+                         self.release.requested)
 
-    @POSIX
-    def test_a_machine_file_that_does_not_read_warns_and_the_copy_updates_all_the_same(self):
+    def test_the_copy_trusts_its_own_keys_and_refuses_a_release_the_tests_signed(self):
+        # The keys a binary embeds are the committed ones (ADR-015 §3.1): the tests' key is none of them, and
+        # patching release_keys in this process changes nothing of the copy.
+        self.before = self.binary.read_bytes()
+        self.assert_refused_unknown_key(self.run_copy("self-update", TARGET))
+
+    def test_the_copy_refuses_an_unsigned_release_naming_its_host(self):
+        self.before = self.binary.read_bytes()
+        (self.release.root / "download" / TARGET / "SHA256SUMS.sig").unlink()
+        proc = self.run_copy("self-update", TARGET)
+        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
+        self.assertIn(f"cortex self-update: Cortex {TARGET}, from {self.release.url}, has no SHA256SUMS.sig", proc.err)
+        self.assertEqual(self.binary.read_bytes(), self.before)
+
+    def test_a_machine_file_that_does_not_read_warns_and_the_copy_checks_all_the_same(self):
         # ADR-013 §3.7: `cortex self-update` runs whatever the machine's config.toml holds. The variable is read
         # before the file: emptied, it is unset, and the file names the host.
+        self.before = self.binary.read_bytes()
         home = self.tmp / "home"
         home.mkdir(exist_ok=True)
         machine_file = home / "config.toml"
@@ -793,47 +965,15 @@ class BuiltBinaryTests(ReleaseTestCase):
                                 encoding="utf-8")
         self.env["CORTEX_RELEASES_URL"] = ""
         proc = self.run_copy("self-update", TARGET)
-        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
-        self.assertIn(f"Installed cortex {TARGET} as {display(str(self.binary))}", proc.out)
+        self.assert_refused_unknown_key(proc)
         self.assertIn(f"set by {display(str(machine_file))}", proc.err)
         self.assertIn('unknown key "endpoints", not read', proc.err)
         self.assertIn('"register" must be true or false', proc.err)
         machine_file.write_text("releases_url = [\n", encoding="utf-8")   # a file that does not read: with the
         self.env["CORTEX_RELEASES_URL"] = self.release.url                # variable set, it is not read at all
-        shutil.copy2(harness.BINARY, self.binary)                       # the copy again, replaced by the stand-in
         proc = self.run_copy("self-update", TARGET)
-        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
+        self.assert_refused_unknown_key(proc)
         self.assertNotIn("warning", proc.err)
-
-    @POSIX
-    def test_through_a_link_the_file_it_names_is_replaced_and_the_link_kept(self):
-        links = self.tmp / "links"
-        links.mkdir()
-        (links / "cortex").symlink_to(self.binary)
-        proc = subprocess.run([str(links / "cortex"), "self-update", TARGET], env=self.env, capture_output=True,
-                              stdin=subprocess.DEVNULL)
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn(f"Installed cortex {TARGET} as {display(str(self.binary))}", proc.stdout.decode())
-        self.assertEqual(os.readlink(links / "cortex"), str(self.binary))
-        self.assertEqual(self.run_copy("--version").out, f"cortex {TARGET}\n")
-        self.assertEqual(sorted(p.name for p in self.bin.iterdir()), [self.binary.name])
-
-    @unittest.skipUnless(os.name == "nt", "Windows")
-    def test_on_windows_the_copy_puts_a_release_in_its_place_while_it_runs(self):
-        program = answering_windows_program(TARGET)
-        if program is None:
-            self.skipTest("no launcher of pip's to build a program that answers")
-        directory = self.release.root / "download" / TARGET
-        with zipfile.ZipFile(directory / "cortex-windows-x86_64.zip", "w") as archive:
-            archive.writestr("cortex.exe", program)
-        build.checksums(directory)
-        proc = self.run_copy("self-update", TARGET)
-        self.assertEqual(proc.returncode, 0, proc.out + proc.err)
-        self.assertIn(f"Installed cortex {TARGET} as {display(str(self.binary))}", proc.out)
-        self.assertTrue((self.bin / f"{self.binary.name}.old").is_file())     # renamed aside, as it ran
-        self.assertEqual(self.run_copy("--version").out.replace("\r\n", "\n"), f"cortex {TARGET}\n")
-        binary.tidy(self.binary, aside=True)            # what the release's next start would do
-        self.assertEqual(sorted(p.name for p in self.bin.iterdir()), [self.binary.name])
 
     @unittest.skipUnless(os.name == "nt", "Windows")
     def test_on_windows_a_stand_in_that_answers_otherwise_is_refused(self):
@@ -843,26 +983,6 @@ class BuiltBinaryTests(ReleaseTestCase):
         self.assertIn("nothing was replaced", proc.err)
         self.assertEqual(self.binary.read_bytes(), before)
         self.assertEqual(sorted(p.name for p in self.bin.iterdir()), [self.binary.name])
-
-    @unittest.skipUnless(harness.EXPECTED_VERSION, "the version the binary stands for")
-    def test_a_built_binary_runs_the_one_it_downloads(self):
-        """The binary under test served as release TARGET: the copy runs it — one PyInstaller binary
-        started by another — and refuses it for answering its own version, not TARGET."""
-        asset = self_update.asset_name(platform.system(), platform.machine())
-        directory = self.release.root / "download" / TARGET
-        if asset.endswith(".zip"):
-            with zipfile.ZipFile(directory / asset, "w", zipfile.ZIP_DEFLATED) as archive:
-                archive.write(harness.BINARY, "cortex.exe")
-        else:
-            with tarfile.open(directory / asset, "w:gz") as archive:
-                archive.add(harness.BINARY, arcname="cortex")
-        build.checksums(directory)
-        before = self.binary.read_bytes()
-        proc = self.run_copy("self-update", TARGET)
-        self.assertEqual(proc.returncode, 1, proc.out + proc.err)
-        self.assertIn(f"the binary of Cortex {TARGET} answers 'cortex {harness.EXPECTED_VERSION}' to --version, "
-                      f"not 'cortex {TARGET}' — nothing was replaced", proc.err)
-        self.assertEqual(self.binary.read_bytes(), before)
 
     @unittest.skipUnless(os.name == "nt", "Windows")
     def test_on_windows_the_next_start_removes_the_old_binary(self):

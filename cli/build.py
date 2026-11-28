@@ -20,9 +20,12 @@ writes ``DIR/SHA256SUMS`` over the release assets in ``DIR``.
     python cli/build.py --fetch-known-specs OWNER/REPO FILE
     python cli/build.py --version 1.1.0 --known-specs FILE
 
-The first writes, as JSON, the checksum of the spec archive of every release published so far,
-read from their ``SHA256SUMS``; the second embeds that table in the binary, which then refuses a
-spec archive of those versions that changed since (§3.3).
+The first writes, as JSON, the checksum of every archive of every release published so far — its
+spec archive and its binary archives, ``{version: {asset: sha256}}`` — read from their
+``SHA256SUMS``; the second embeds that table in the binary. It then refuses a spec archive of those
+versions that changed since (§3.3), and ``cortex self-update`` checks a release before 1.10.0,
+which no key signed, against the checksum of its binary archive (ADR-015 §3.5). A file of the
+shape before 1.10.0, ``{version: sha256}`` of the spec archives alone, is still read.
 
     python cli/build.py --development-version N
 
@@ -51,13 +54,14 @@ import time
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 CLI = Path(__file__).resolve().parent
 REPO = CLI.parent
 BUILD = CLI / "build"
 STAMP = CLI / "cortex_cli" / "_stamp.py"
 KNOWN_SPECS = CLI / "cortex_cli" / "_known_specs.py"
+KNOWN_RELEASES = CLI / "cortex_cli" / "_known_releases.py"
 sys.path[:0] = [str(REPO / "core"), str(CLI)]     # run from anywhere, or loaded by the tests
 from cortex_core.project import is_version  # noqa: E402 — the grammar the command and the runtime read
 from cortex_cli.devversion import development  # noqa: E402
@@ -93,13 +97,14 @@ class KnownSpecsError(Exception):
     pass
 
 
-def fetch_known_specs(repository: str, api: str = "https://api.github.com") -> Dict[str, str]:
-    """``{version: sha256}`` of the spec archive of every published release of ``repository``,
-    from each release's ``SHA256SUMS``. A release before 1.0.0 may have none; one from 1.0.0 on
-    that has none is refused — a binary built without it would check that version against its
-    ``SHA256SUMS`` alone, in silence. A pre-release counts once it is immutable (ADR-009 §3.7):
-    nothing can build it again under its tag. A mutable one is left out — it could be rebuilt, and
-    a binary that kept its checksum would refuse the new build."""
+def fetch_known_releases(repository: str, api: str = "https://api.github.com") -> Dict[str, Dict[str, str]]:
+    """``{version: {asset: sha256}}`` of every archive — ``cortex-*`` — of every published release
+    of ``repository``, from each release's ``SHA256SUMS``. A release before 1.0.0 may have none; one
+    from 1.0.0 on that has none, or whose ``SHA256SUMS`` lists no spec archive, is refused — a
+    binary built without it would check that version's spec against its ``SHA256SUMS`` alone, in
+    silence. A pre-release counts once it is immutable (ADR-009 §3.7): nothing can build it again
+    under its tag. A mutable one is left out — it could be rebuilt, and a binary that kept its
+    checksum would refuse the new build."""
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "cortex-build"}
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if token:
@@ -109,7 +114,7 @@ def fetch_known_specs(repository: str, api: str = "https://api.github.com") -> D
         with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
             return response.read()
 
-    known: Dict[str, str] = {}
+    known: Dict[str, Dict[str, str]] = {}
     page = 1
     while True:
         releases = json.loads(get(f"{api}/repos/{repository}/releases?per_page=100&page={page}"))
@@ -127,13 +132,40 @@ def fetch_known_specs(repository: str, api: str = "https://api.github.com") -> D
                 if served:
                     raise KnownSpecsError(f"release {tag} has no SHA256SUMS: a binary could not check its spec")
                 continue
+            archives = {}
             for line in get(sums["browser_download_url"]).decode("utf-8").splitlines():
                 fields = line.split()
-                if len(fields) == 2 and fields[1].lstrip("*") == SPEC_ARCHIVE:
-                    known[tag] = fields[0].lower()
-            if served and tag not in known:
+                if len(fields) == 2 and fields[1].lstrip("*").startswith("cortex-"):
+                    archives[fields[1].lstrip("*")] = fields[0].lower()
+            if SPEC_ARCHIVE in archives:
+                known[tag] = archives
+            elif served:
                 raise KnownSpecsError(f"the SHA256SUMS of release {tag} lists no {SPEC_ARCHIVE}")
         page += 1
+
+
+def fetch_known_specs(repository: str, api: str = "https://api.github.com") -> Dict[str, str]:
+    """``{version: sha256}`` of the spec archive of every published release of ``repository``."""
+    return read_known(fetch_known_releases(repository, api))[0]
+
+
+def read_known(known: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, Dict[str, str]]]:
+    """The spec archives' checksums, ``{version: sha256}``, and the binary archives',
+    ``{version: {asset: sha256}}``, of a table ``--fetch-known-specs`` wrote: ``{version: {asset:
+    sha256}}`` — or, as it was before 1.10.0, ``{version: sha256}`` of the spec archives alone,
+    which knows no binary archive."""
+    specs: Dict[str, str] = {}
+    releases: Dict[str, Dict[str, str]] = {}
+    for version, value in known.items():
+        if isinstance(value, str):
+            specs[version] = value
+            continue
+        if SPEC_ARCHIVE in value:
+            specs[version] = value[SPEC_ARCHIVE]
+        binaries = {asset: digest for asset, digest in value.items() if asset != SPEC_ARCHIVE}
+        if binaries:
+            releases[version] = binaries
+    return specs, releases
 
 
 def known_specs_module(known: Dict[str, str]) -> str:
@@ -143,19 +175,37 @@ def known_specs_module(known: Dict[str, str]) -> str:
             f"KNOWN = {json.dumps(dict(sorted(known.items())), indent=4)}\n")
 
 
+def known_releases_module(known: Dict[str, Dict[str, str]]) -> str:
+    """``cortex_cli/_known_releases.py``, as a build writes it."""
+    table = {version: dict(sorted(assets.items())) for version, assets in sorted(known.items())}
+    return ('"""Written by cli/build.py for one build — never committed: the checksum of the binary '
+            'archives of every release before this one, by version and asset."""\n\n'
+            f"KNOWN = {json.dumps(table, indent=4)}\n")
+
+
 def stamp_module(version: str, target: str) -> str:
     """``cortex_cli/_stamp.py``, as a build writes it."""
     return f'"""Written by cli/build.py for one build — never committed."""\n\nVERSION = "{version}"\nTARGET = "{target}"\n'
 
 
-def build(version: str, target: str, known: Optional[Dict[str, str]] = None) -> Path:
+def write_known(known: Optional[Dict[str, Any]]) -> None:
+    """``_known_specs.py`` and ``_known_releases.py``, from a table ``--fetch-known-specs`` wrote."""
+    specs, releases = read_known(known or {})
+    if not specs:
+        print("warning: no spec archive known (--known-specs): this binary checks a download against its "
+              "release's SHA256SUMS alone", file=sys.stderr)
+    if not releases:
+        print("warning: no binary archive known (--known-specs): this binary's self-update refuses every release "
+              "before 1.10.0", file=sys.stderr)
+    KNOWN_SPECS.write_text(known_specs_module(specs), encoding="utf-8")
+    KNOWN_RELEASES.write_text(known_releases_module(releases), encoding="utf-8")
+
+
+def build(version: str, target: str, known: Optional[Dict[str, Any]] = None) -> Path:
     """Run PyInstaller and return the binary it wrote."""
     embedded = spec_archive(BUILD)
     STAMP.write_text(stamp_module(version, target), encoding="utf-8")
-    if not known:
-        print("warning: no spec archive known (--known-specs): this binary checks a download against its "
-              "release's SHA256SUMS alone", file=sys.stderr)
-    KNOWN_SPECS.write_text(known_specs_module(known or {}), encoding="utf-8")
+    write_known(known)
     try:
         subprocess.run([
             sys.executable, "-m", "PyInstaller",
@@ -170,6 +220,7 @@ def build(version: str, target: str, known: Optional[Dict[str, str]] = None) -> 
     finally:
         STAMP.unlink()
         KNOWN_SPECS.unlink()
+        KNOWN_RELEASES.unlink()
     return BUILD / "dist" / ("cortex.exe" if os.name == "nt" else "cortex")
 
 
@@ -226,22 +277,24 @@ def main() -> int:
     action.add_argument("--spec-archive", metavar="DIR", type=Path, help=f"write DIR/{SPEC_ARCHIVE} from the commit checked out")
     action.add_argument("--checksums", metavar="DIR", type=Path, help="write DIR/SHA256SUMS over the assets in DIR")
     action.add_argument("--fetch-known-specs", nargs=2, metavar=("REPOSITORY", "FILE"),
-                        help="write FILE, the checksums of the spec archives REPOSITORY has released")
+                        help="write FILE, the checksums of the archives REPOSITORY has released")
     action.add_argument("--development-version", metavar="N", type=build_number,
                         help="print X.Y.Z-dev.N, the version of a build of no release: X.Y.Z, the one CHANGELOG.md "
                              "says the branch prepares; N, the CI run's number")
     parser.add_argument("--known-specs", metavar="FILE", type=Path,
-                        help="with --version: the checksums of the earlier spec archives, to embed")
+                        help="with --version: the checksums of the earlier releases' archives, to embed")
     args = parser.parse_args()
     if args.fetch_known_specs:
         repository, output = args.fetch_known_specs
         try:
-            known = fetch_known_specs(repository)
+            known = fetch_known_releases(repository)
         except KnownSpecsError as error:
             print(f"build.py: {error}", file=sys.stderr)
             return 1
         Path(output).write_text(json.dumps(known, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        print(f"{len(known)} spec archive(s) known: {', '.join(sorted(known)) or 'none'}")
+        specs, releases = read_known(known)
+        print(f"{len(specs)} spec archive(s) known: {', '.join(sorted(specs)) or 'none'}")
+        print(f"the binary archives of {len(releases)} release(s) known: {', '.join(sorted(releases)) or 'none'}")
         return 0
     if args.spec_archive:
         print(spec_archive(args.spec_archive))

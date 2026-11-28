@@ -3,9 +3,15 @@
 ``cortex self-update [VERSION]`` installs the binary of ``VERSION``, or of the latest release, in
 place of the one running, under the name it was installed with. It downloads the asset of the
 build running — its target, stamped at build time — from where the store and the install scripts
-download, checks it against the release's ``SHA256SUMS``, writes the binary beside the old one
-and runs it: only a binary that answers ``--version`` with the target is installed, by a rename
-(``binary.replace``).
+download, checks it, writes the binary beside the old one and runs it: only a binary that answers
+``--version`` with the target is installed, by a rename (``binary.replace``).
+
+What the asset is checked against does not come from the host alone (ADR-015 §3.5). A release from
+1.10.0 on, its pre-releases included, is checked against its ``SHA256SUMS``, once one line of
+``SHA256SUMS.sig`` verifies that file with a release key this binary embeds (``release_keys``) —
+before any of its lines is read. A release before 1.10.0, which nobody signed, is checked against
+the checksum this binary embeds for it and its target (``store.known_releases``), and refused when
+it embeds none. A refusal names what was wrong and the host; there is no option to skip the check.
 
 The latest release is the version ``latest/download/SHA256SUMS`` redirects to, as GitHub's releases
 do. A latest release older than this binary — a pre-release running, a patch of an older line
@@ -16,6 +22,7 @@ upgrade`` moves one.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import io
 import os
@@ -28,11 +35,11 @@ import tempfile
 import zipfile
 import zlib
 from pathlib import Path
-from typing import Callable, List, Optional, TextIO, Tuple
+from typing import Callable, Dict, List, Optional, TextIO, Tuple
 
 from cortex_core.project import shown
 
-from . import net, store, sync
+from . import ed25519, net, release_keys, store, sync
 from .binary import ASIDE, environment, replace, running_binary
 from .paths import display
 from .semver import Version
@@ -41,6 +48,8 @@ from .version import TARGET, VERSION
 # The first release with this command: a binary before it — a pre-release of 1.4.0 has it — is moved by
 # the install script only.
 FIRST_SELF_UPDATE = Version("1.4.0")
+# The first release whose SHA256SUMS is signed (ADR-015): its pre-releases are, too — compared on the core.
+FIRST_SIGNED = Version("1.10.0")
 MAX_ASSET = 256 * 1024 * 1024
 MAX_BINARY = 512 * 1024 * 1024
 # How long `cortex upgrade` waits to learn the latest release: a notice, never worth a wait.
@@ -48,6 +57,8 @@ NOTICE_TIMEOUT = 5
 MAX_OUTPUT = 64 * 1024
 RUN_TIMEOUT = 120
 SUMS = "SHA256SUMS"
+SIG = "SHA256SUMS.sig"
+MAX_SIG = 64 * 1024
 _DOWNLOADED_SUMS = re.compile(r"/download/([^/]+)/SHA256SUMS$")
 
 
@@ -107,6 +118,54 @@ def expected_checksum(sums: bytes, asset: str, version: Version) -> str:
     found = store.listed_checksum(sums.decode("utf-8", errors="replace"), asset)
     if found is None:
         raise SelfUpdateError(f"the {SUMS} of Cortex {version} lists no {asset} — nothing was replaced")
+    return found
+
+
+def signed(version: Version) -> bool:
+    """Whether ``version``'s ``SHA256SUMS`` is signed: from 1.10.0 on, its pre-releases included."""
+    return version.core >= FIRST_SIGNED.core
+
+
+def check_signature(sums: bytes, sig: bytes, keys: Dict[str, bytes], version: Version, base: str) -> str:
+    """The id of the key whose line of ``SHA256SUMS.sig`` verifies ``sums`` — or the refusal of
+    what was wrong: no signature this cortex reads, one by no key it embeds, one that does not
+    match (ADR-015 §3.2). A line of another algorithm, or by a key it does not know, is skipped."""
+    unknown: List[str] = []
+    failed: List[str] = []
+    for line in sig.decode("utf-8", errors="replace").splitlines():
+        fields = line.split()
+        if len(fields) != 3 or fields[0] != "ed25519":
+            continue
+        kid = fields[1]
+        if kid not in keys:
+            unknown.append(kid)
+            continue
+        try:
+            signature = base64.b64decode(fields[2], validate=True)
+        except ValueError:      # binascii.Error, among them
+            signature = b""
+        if ed25519.verify(keys[kid], sums, signature):
+            return kid
+        failed.append(kid)
+    where = f"Cortex {version}, from {base}"
+    if failed:
+        raise SelfUpdateError(f"the {SUMS} of {where}, does not match its signature by the release key "
+                              f"{', '.join(failed)}: it was changed after it was signed — nothing was replaced")
+    if unknown:
+        raise SelfUpdateError(f"the {SIG} of {where}, is signed by no key this cortex knows "
+                              f"({', '.join(unknown)}) — nothing was replaced")
+    raise SelfUpdateError(f"the {SIG} of {where}, holds no signature — a release from {FIRST_SIGNED} on is "
+                          "installed only once a Cortex release key has signed it. Nothing was replaced.")
+
+
+def embedded_checksum(known: Dict[str, Dict[str, str]], version: Version, asset: str) -> str:
+    """The checksum this cortex embeds for ``asset`` of ``version`` — a release before 1.10.0, which
+    nobody signed — or the refusal of one it does not embed."""
+    found = known.get(str(version), {}).get(asset)
+    if found is None:
+        raise SelfUpdateError(f"this cortex embeds no checksum of {asset} of Cortex {version}: a release before "
+                              f"{FIRST_SIGNED} is signed by nobody, and is installed only by the checksum a binary "
+                              "embeds for it — nothing was replaced")
     return found
 
 
@@ -178,7 +237,11 @@ def beside(binary: Path, target: Version) -> Path:
 def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, *,
                 binary: Optional[Path], own: Version, fetch: Callable[..., bytes] = net.get,
                 run: Callable[[Path], str] = answers, built_for: Optional[str] = None,
-                system: Optional[str] = None, machine: Optional[str] = None) -> int:
+                system: Optional[str] = None, machine: Optional[str] = None,
+                keys: Optional[Dict[str, bytes]] = None, known: Optional[Dict[str, Dict[str, str]]] = None) -> int:
+    """Install ``wanted``, or the latest release. ``keys`` — ``{id: raw public key}`` — and ``known``
+    — ``{version: {asset: checksum}}`` — are what the release is checked against: this binary's
+    own, ``release_keys`` and ``store.known_releases()``, unless a test gives its own."""
     if binary is None:
         raise SelfUpdateError("this cortex runs from a source checkout, not from a binary — there is none to "
                               f"replace. Install one with:\n    {store.install_command()}")
@@ -189,7 +252,8 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
     base = store.releases_url()
 
     def from_where() -> None:
-        note = store.from_where(base, "the binary")
+        note = store.from_where(base, "the binary", "what this cortex embeds — a release key, or the "
+                                "checksum of a release before 1.10.0 — whatever that host serves")
         if note is not None:
             err.write(f"note: {note}\n")
 
@@ -226,18 +290,36 @@ def self_update(wanted: Optional[str], dry_run: bool, out: TextIO, err: TextIO, 
         probe.unlink()
     except OSError:     # held, by an antivirus say: empty, and removed by a start an hour later
         pass
+    # A release before 1.10.0 is checked against what this cortex embeds: one it does not embed is
+    # refused before anything is downloaded.
+    expected = None if signed(target) else embedded_checksum(store.known_releases() if known is None else known,
+                                                              target, asset)
     out.write(f"Downloading {asset} of Cortex {target} from {base}\n")
     try:
-        if sums is None:
-            sums = fetch(f"{base}/download/{target}/{SUMS}", store.MAX_SUMS)
-        expected = expected_checksum(sums, asset, target)
+        if expected is None:
+            if sums is None:
+                sums = fetch(f"{base}/download/{target}/{SUMS}", store.MAX_SUMS)
+            # Beside SHA256SUMS, at the version the latest/ redirect named when it was asked for the
+            # latest: a `latest` that moved between two requests pairs no SHA256SUMS with another's signature.
+            try:
+                sig = fetch(f"{base}/download/{target}/{SIG}", MAX_SIG)
+            except net.DownloadError as error:
+                if getattr(error, "status", None) != 404:
+                    raise
+                raise SelfUpdateError(f"Cortex {target}, from {base}, has no {SIG}: a release from {FIRST_SIGNED} "
+                                      "on is installed only once a Cortex release key has signed it — a mirror "
+                                      "serves the seven assets of a release. Nothing was replaced.")
+            check_signature(sums, sig, release_keys.public_keys(release_keys.KEYS) if keys is None else keys,
+                            target, base)
+            expected = expected_checksum(sums, asset, target)
         data = fetch(f"{base}/download/{target}/{asset}", MAX_ASSET)
     except net.DownloadError as error:
         raise SelfUpdateError(f"could not download Cortex {target}: {error} — nothing was replaced")
     actual = hashlib.sha256(data).hexdigest()
     if actual != expected:
-        raise SelfUpdateError(f"{asset} does not match its checksum — expected {expected}, got {actual}. "
-                              "Nothing was replaced.")
+        against = "its checksum" if signed(target) else "the checksum this cortex embeds for it"
+        raise SelfUpdateError(f"{asset} of Cortex {target}, from {base}, does not match {against} — expected "
+                              f"{expected}, got {actual}. Nothing was replaced.")
     found = unpack(data, asset)
     new = beside(binary, target)
     try:
@@ -282,7 +364,8 @@ def run(args: List[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="cortex self-update",
         description="Replace this cortex with a release's binary — the latest, by default — checked against the "
-                    "release's SHA256SUMS. ADR-010 §3.7.")
+                    "release's SHA256SUMS, signed by a release key this cortex embeds, or before 1.10.0 against the "
+                    "checksum it embeds. ADR-010 §3.7, ADR-015 §3.5.")
     parser.add_argument("version", nargs="?", metavar="VERSION", help="the version to install: X.Y.Z")
     parser.add_argument("--dry-run", action="store_true",
                         help="download, check and run the binary, and replace nothing")

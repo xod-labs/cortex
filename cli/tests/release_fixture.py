@@ -6,6 +6,11 @@ binaries in it are stand-ins: on POSIX a shell script printing ``cortex VERSION`
 file that is no program at all — what is checked is how the scripts download, verify and install.
 Each release also carries a spec archive, ``cortex-spec.tar.gz``: a spec of a few files whose
 role card names the version. The server records the paths it was asked for.
+
+A release from 1.10.0 on, its pre-releases included, carries ``SHA256SUMS.sig`` too, signed by a key
+made for the tests, ``RELEASE_KEY`` — never a key of ``release_keys.py`` (ADR-015 §3.1). A test that
+self-updates in process trusts it by patching ``release_keys.KEYS``; a built binary trusts only its
+own keys, and refuses it.
 """
 
 import functools
@@ -13,6 +18,7 @@ import gzip
 import importlib.util
 import io
 import os
+import re
 import shutil
 import tarfile
 import tempfile
@@ -26,7 +32,31 @@ TARGETS = ("linux-x86_64", "linux-aarch64", "macos-arm64", "windows-x86_64")
 
 _spec = importlib.util.spec_from_file_location("cortex_build", CLI / "build.py")
 build = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(build)
+_spec.loader.exec_module(build)   # which puts the checkout's cli/ and core/ on sys.path
+
+import ed25519_signer  # noqa: E402 — after build: it imports cortex_cli
+
+# The release key of the tests: a fixed secret, so that a test's subprocess signs alike.
+RELEASE_KEY = ed25519_signer.KeyPair(bytes(range(7, 39)))
+BINARY_ARCHIVE = ("cortex-linux-x86_64.tar.gz", "cortex-linux-aarch64.tar.gz", "cortex-macos-arm64.tar.gz",
+                  "cortex-windows-x86_64.zip")
+
+
+def signed(version):
+    """Whether ``version``'s release is signed: from 1.10.0 on, its pre-releases included."""
+    return tuple(int(part) for part in version.split("-", 1)[0].split(".")) >= (1, 10, 0)
+
+
+def checksums(directory, key=RELEASE_KEY, sign=None):
+    """``SHA256SUMS`` over the assets of ``directory``, then ``SHA256SUMS.sig`` by ``key`` when the
+    release is signed: ``sign``, or by the version the directory is named after — signed when it is
+    named after none, as ``latest/download`` of a signed release. ``key`` None: no signature."""
+    sums = build.checksums(directory)
+    if sign is None:
+        sign = not re.fullmatch(r"\d+\.\d+\.\d+(-.+)?", directory.name) or signed(directory.name)
+    if key is not None and sign:
+        (directory / "SHA256SUMS.sig").write_text(key.line(sums.read_bytes()), encoding="ascii", newline="\n")
+    return sums
 
 
 def _windows_program(name="doskey.exe"):
@@ -117,6 +147,7 @@ class FakeRelease:
         self.root = Path(tempfile.mkdtemp(prefix="cortex-release-"))
         for version in versions:
             self.publish(self.root / "download" / version, version)
+        self.latest_version = versions[-1]
         shutil.copytree(self.root / "download" / versions[-1], self.root / "latest" / "download")
         handler = functools.partial(_Handler, directory=str(self.root))
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -126,12 +157,23 @@ class FakeRelease:
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
 
     @staticmethod
-    def publish(directory, version):
+    def publish(directory, version, key=RELEASE_KEY):
         directory.mkdir(parents=True)
         for target in TARGETS:
             _asset(directory, target, version)
         spec_archive(directory, version)
-        build.checksums(directory)
+        checksums(directory, key, signed(version))
+
+    def known(self, *versions):
+        """What a binary built after ``versions`` embeds of their binary archives: ``{version: {asset: checksum}}``."""
+        import hashlib
+
+        return {version: {name: hashlib.sha256((self.root / "download" / version / name).read_bytes()).hexdigest()
+                          for name in BINARY_ARCHIVE} for version in versions}
+
+    def _sums(self, directory):
+        version = self.latest_version if directory.parent.name == "latest" else directory.name
+        checksums(directory, RELEASE_KEY, signed(version))
 
     @property
     def requested(self):
@@ -141,7 +183,7 @@ class FakeRelease:
         """Republish ``version``'s spec archive with ``extra`` members, its checksum rewritten."""
         directory = self.root / "download" / version
         spec_archive(directory, version, extra)
-        build.checksums(directory)
+        self._sums(directory)
 
     def asset(self, target, version=None):
         directory = self.root / ("latest/download" if version is None else f"download/{version}")
@@ -156,14 +198,14 @@ class FakeRelease:
             info = tarfile.TarInfo("cortex")
             info.size, info.mode = len(content), 0o755
             archive.addfile(info, io.BytesIO(content))
-        build.checksums(directory)
+        self._sums(directory)
 
     def replace_windows_binary(self, content):
         """Republish the latest release's Windows asset with ``content`` as its cortex.exe."""
         directory = self.root / "latest/download"
         with zipfile.ZipFile(directory / "cortex-windows-x86_64.zip", "w") as archive:
             archive.writestr("cortex.exe", content)
-        build.checksums(directory)
+        self._sums(directory)
 
     def redirect(self, path, location):
         """Answer ``path`` — ``/latest/download/SHA256SUMS`` — with a redirect to ``location``."""

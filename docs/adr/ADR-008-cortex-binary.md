@@ -555,3 +555,11 @@ Carried by [#386](https://github.com/xod-labs/cortex/issues/386).
 ### 2026-11-20 — 1.9.1, the core's name on PyPI
 
 §7 item 5 says #86 reserves `cortex-core` on PyPI. PyPI refuses that name, as too close to `cortexcore`: the core is distributed as `xodlabs-cortex-core` from 1.9.1, the name #86 reserves, and the command depends on it — [ADR-007](ADR-007-cortex-core.md)'s amendment of the same day.
+
+### 2026-11-23 — ADR-015, the origin of a self-update (#275)
+
+[ADR-015](ADR-015-release-origin.md) answers, for `cortex self-update`, the amendment *Integrity is not origin* (phase 1, found in review):
+
+- **§9 — a binary installs a newer one only from its release's signature.** From 1.10.0 on, a release's `SHA256SUMS` is signed with an Ed25519 release key, in a seventh asset, `SHA256SUMS.sig`; the binary embeds the public keys of `cli/cortex_cli/release_keys.py` at the commit it is built from, and `cortex self-update` installs a release from 1.10.0 on only when one line of its `SHA256SUMS.sig` verifies with one of them. A release before 1.10.0 is installed only by the checksum the binary embeds for it. Wherever the release comes from — GitHub or a mirror — the host proves the download whole, and the binary that runs proves who built it.
+- **§3.3 — the checksums embedded are every archive's.** `cli/build.py --fetch-known-specs` keeps every archive line of each release's `SHA256SUMS`, not only the spec's: the file it writes is `{version: {asset: sha256}}`, and `--known-specs` still reads the shape before it, `{version: sha256}`. A build embeds the spec archives' checksums in `_known_specs.py`, as before, and the binary archives' in `_known_releases.py`; `cortex --version --verbose` lists both, and `binary.yml` holds each built binary to the table its build was given.
+- **What does not change.** The install scripts still trust the host they are downloaded from, and the binary they install (ADR-015 §2, item 5). `gh attestation verify` still checks an installed binary against its provenance, by hand.

@@ -81,9 +81,17 @@ def known_specs_report() -> str:
 
     known = store.known_specs()
     if not known:
-        return "known spec archives: 0 — a download is checked against its release's SHA256SUMS alone\n"
-    return f"known spec archives: {len(known)}\n" + "".join(f"  {version}  {digest}\n"
-                                                          for version, digest in sorted(known.items()))
+        report = "known spec archives: 0 — a download is checked against its release's SHA256SUMS alone\n"
+    else:
+        report = f"known spec archives: {len(known)}\n" + "".join(f"  {version}  {digest}\n"
+                                                                for version, digest in sorted(known.items()))
+    # The binary archives a self-update to a release before 1.10.0 is checked against (ADR-015 §3.5).
+    releases = store.known_releases()
+    lines = [f"  {version}  {asset}  {digest}" for version, assets in sorted(releases.items())
+             for asset, digest in sorted(assets.items())]
+    if not lines:
+        return report + "known binary archives: 0 — a self-update to a release before 1.10.0 is refused\n"
+    return report + f"known binary archives: {len(lines)}\n" + "".join(f"{line}\n" for line in lines)
 
 
 def usage() -> str:

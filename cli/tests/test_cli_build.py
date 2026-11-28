@@ -188,6 +188,85 @@ class FetchKnownSpecsTests(unittest.TestCase):
         self.assertEqual(namespace["KNOWN"], {"1.0.0": self.A, "1.1.0": self.B})
 
 
+class FetchKnownReleasesTests(unittest.TestCase):
+    """Every archive of every release, the binary archives too: what self-update checks a release
+    before 1.10.0 against (ADR-015 §3.5)."""
+
+    A, B, C = FetchKnownSpecsTests.A, FetchKnownSpecsTests.B, FetchKnownSpecsTests.C
+    fetch = FetchKnownSpecsTests.fetch
+
+    def releases(self, pages, files):
+        api = _FakeApi(pages, files)
+        self.addCleanup(api.close)
+        return build.fetch_known_releases("o/r", api=api.url)
+
+    def test_every_archive_of_every_release(self):
+        pages = [[release("1.9.1", "SHA256SUMS", immutable=True), release("1.0.0", "SHA256SUMS")]]
+        files = {("1.9.1", "SHA256SUMS"): (f"{self.A}  cortex-linux-x86_64.tar.gz\n{self.B.upper()}  cortex-spec.tar.gz\n"
+                                           f"{self.C} *cortex-windows-x86_64.zip\n{self.A}  notes.txt\n").encode(),
+                 ("1.0.0", "SHA256SUMS"): f"{self.C}  cortex-spec.tar.gz\n".encode()}
+        known = self.releases(pages, files)
+        self.assertEqual(known, {"1.9.1": {"cortex-linux-x86_64.tar.gz": self.A, "cortex-spec.tar.gz": self.B,
+                                           "cortex-windows-x86_64.zip": self.C},
+                                 "1.0.0": {"cortex-spec.tar.gz": self.C}})
+        # The specs' table, as it was: fetch_known_specs keeps its answer.
+        self.assertEqual(self.fetch(pages, files), {"1.9.1": self.B, "1.0.0": self.C})
+
+    def test_a_release_without_its_spec_archive_still_fails_the_build(self):
+        with self.assertRaisesRegex(build.KnownSpecsError, "lists no cortex-spec.tar.gz"):
+            self.releases([[release("1.2.0", "SHA256SUMS")]],
+                          {("1.2.0", "SHA256SUMS"): f"{self.A}  cortex-linux-x86_64.tar.gz\n".encode()})
+
+
+class KnownTableTests(unittest.TestCase):
+    A, B = "a" * 64, "b" * 64
+
+    def test_the_table_splits_into_specs_and_binary_archives(self):
+        specs, releases = build.read_known({"1.9.1": {"cortex-spec.tar.gz": self.A, "cortex-macos-arm64.tar.gz": self.B},
+                                            "1.0.0": {"cortex-spec.tar.gz": self.B}})
+        self.assertEqual(specs, {"1.9.1": self.A, "1.0.0": self.B})
+        self.assertEqual(releases, {"1.9.1": {"cortex-macos-arm64.tar.gz": self.B}})
+
+    def test_a_table_of_the_shape_before_1_10_0_is_read(self):
+        # {version: sha256} of the spec archives alone: it knows no binary archive.
+        self.assertEqual(build.read_known({"1.9.1": self.A}), ({"1.9.1": self.A}, {}))
+
+    def test_the_module_a_build_writes_holds_the_binary_archives(self):
+        namespace = {}
+        exec(build.known_releases_module({"1.9.1": {"cortex-linux-x86_64.tar.gz": self.A}, "1.4.0": {}}), namespace)
+        self.assertEqual(namespace["KNOWN"], {"1.4.0": {}, "1.9.1": {"cortex-linux-x86_64.tar.gz": self.A}})
+
+    def test_a_build_writes_both_modules_the_command_reads(self):
+        # What build() embeds, without PyInstaller: the two modules, read back by the store.
+        tmp = Path(tempfile.mkdtemp(prefix="cortex-build-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        specs, releases = tmp / "_known_specs.py", tmp / "_known_releases.py"
+        with unittest.mock.patch.object(build, "KNOWN_SPECS", specs), \
+                unittest.mock.patch.object(build, "KNOWN_RELEASES", releases):
+            build.write_known({"1.9.1": {"cortex-spec.tar.gz": self.A, "cortex-linux-x86_64.tar.gz": self.B}})
+        for path, expected in ((specs, {"1.9.1": self.A}), (releases, {"1.9.1": {"cortex-linux-x86_64.tar.gz": self.B}})):
+            namespace = {}
+            exec(path.read_text(encoding="utf-8"), namespace)
+            self.assertEqual(namespace["KNOWN"], expected)
+
+    def test_the_command_reads_the_binary_archives_embedded(self):
+        sys.path[:0] = [str(REPO / "cli"), str(REPO / "core")]
+        import types
+
+        from cortex_cli import store
+
+        module = types.ModuleType("cortex_cli._known_releases")
+        module.KNOWN = {"1.9.1": {"cortex-linux-x86_64.tar.gz": self.A}}
+        with unittest.mock.patch.dict(sys.modules, {"cortex_cli._known_releases": module}):
+            self.assertEqual(store.known_releases(), {"1.9.1": {"cortex-linux-x86_64.tar.gz": self.A}})
+        self.assertEqual(store.known_releases(), {})   # a source checkout knows none
+
+    def test_the_modules_are_never_committed(self):
+        ignored = (REPO / "cli" / ".gitignore").read_text(encoding="utf-8").splitlines()
+        self.assertIn("cortex_cli/_known_releases.py", ignored)
+        self.assertIn("cortex_cli/_known_specs.py", ignored)
+
+
 class StampTests(unittest.TestCase):
     def test_the_stamp_names_the_version_and_the_target(self):
         namespace = {}
@@ -199,7 +278,7 @@ class VersionReportTests(unittest.TestCase):
     """``cortex --version --verbose`` says which spec archives the binary knows — what CI checks
     of each binary it builds."""
 
-    def report(self, known):
+    def report(self, known, releases=None):
         import io
         from contextlib import redirect_stdout
 
@@ -207,16 +286,43 @@ class VersionReportTests(unittest.TestCase):
         from cortex_cli import main, store
 
         out = io.StringIO()
-        with unittest.mock.patch.object(store, "known_specs", return_value=known), redirect_stdout(out):
+        with unittest.mock.patch.object(store, "known_specs", return_value=known), \
+                unittest.mock.patch.object(store, "known_releases", return_value=releases or {}), redirect_stdout(out):
             self.assertEqual(main.main(["--version", "--verbose"]), 0)
         return out.getvalue().splitlines()
 
     def test_the_table_it_carries(self):
-        lines = self.report({"1.1.0": "b" * 64, "1.0.0": "a" * 64})
-        self.assertEqual(lines[1:], ["known spec archives: 2", f"  1.0.0  {'a' * 64}", f"  1.1.0  {'b' * 64}"])
+        lines = self.report({"1.1.0": "b" * 64, "1.0.0": "a" * 64},
+                            {"1.9.1": {"cortex-windows-x86_64.zip": "d" * 64, "cortex-linux-x86_64.tar.gz": "c" * 64}})
+        self.assertEqual(lines[1:], ["known spec archives: 2", f"  1.0.0  {'a' * 64}", f"  1.1.0  {'b' * 64}",
+                                     "known binary archives: 2", f"  1.9.1  cortex-linux-x86_64.tar.gz  {'c' * 64}",
+                                     f"  1.9.1  cortex-windows-x86_64.zip  {'d' * 64}"])
 
     def test_none_is_said(self):
-        self.assertTrue(self.report({})[1].startswith("known spec archives: 0 — "))
+        lines = self.report({})
+        self.assertTrue(lines[1].startswith("known spec archives: 0 — "))
+        self.assertEqual(lines[2], "known binary archives: 0 — a self-update to a release before 1.10.0 is refused")
+
+    def test_the_check_binary_yml_runs_reads_what_the_binary_prints(self):
+        # The step that holds a built binary to the table its build was given, run on this report.
+        import json
+        import re
+
+        workflow = (REPO / ".github" / "workflows" / "binary.yml").read_text(encoding="utf-8")
+        script = re.search(r"python - \"\$RUNNER_TEMP/known-specs.json\" \"\$RUNNER_TEMP/known-by-binary.txt\" <<'EOF'\n"
+                           r"(.*?)\n +EOF\n", workflow, re.S).group(1)
+        script = "\n".join(line[10:] for line in script.splitlines())
+        tmp = Path(tempfile.mkdtemp(prefix="cortex-build-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        table = {"1.9.1": {"cortex-spec.tar.gz": "a" * 64, "cortex-linux-x86_64.tar.gz": "c" * 64}}
+        (tmp / "known.json").write_text(json.dumps(table), encoding="utf-8")
+        specs, releases = build.read_known(table)
+        for carried, code in (((specs, releases), 0), ((specs, {}), 1), (({}, releases), 1)):
+            with self.subTest(carried=carried):
+                (tmp / "report.txt").write_text("\n".join(self.report(*carried)) + "\n", encoding="utf-8")
+                done = subprocess.run([sys.executable, "-c", script, str(tmp / "known.json"), str(tmp / "report.txt")],
+                                      capture_output=True, text=True)
+                self.assertEqual(done.returncode, code, done.stdout + done.stderr)
 
 
 if __name__ == "__main__":

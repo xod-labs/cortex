@@ -670,7 +670,7 @@ class CheckoutTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="cortex-devversion-")).resolve()
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        ignored = shutil.ignore_patterns("__pycache__", "_stamp.py", "_known_specs.py", "build")
+        ignored = shutil.ignore_patterns("__pycache__", "_stamp.py", "_known_specs.py", "_known_releases.py", "build")
         shutil.copytree(harness.CORE / "cortex_core", self.tmp / "core" / "cortex_core", ignore=ignored)
         shutil.copytree(harness.CLI / "cortex_cli", self.tmp / "cli" / "cortex_cli", ignore=ignored)
 
