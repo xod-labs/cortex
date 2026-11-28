@@ -7,6 +7,19 @@ release note under [`changelog/`](changelog/).
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-28 — Resistance Is Useless _(Released)_
+[Full notes](changelog/1.10.0.md)
+
+### Added
+- **`cortex validate` checks what a project's files refer to** ([#140](https://github.com/xod-labs/cortex/issues/140)). Every overlay and every custom addition is read for the spec paths, roles, characters tied to a role, and workflows it names; one that names nothing is a new warning, `REFERENCE_NOT_FOUND`, with its line, which `--strict` fails on. A mention that is no dispatch — `@Explore`, a service's `@alias`, an e-mail address — is never counted, nor a reference in a code block or a comment, nor a pattern. ADR-007 is amended.
+- **The runtime's project view is an option** ([#89](https://github.com/xod-labs/cortex/issues/89)). Its three parts, `overview`, `services` and `context`, are each kept or left out — for a deployment with `CORTEX_PROJECT_VIEW`, for a run with `project_view` on the request, which wins. With neither, the prompt is byte for byte what it was; an unknown part is refused, naming the accepted ones; a part left out is not read into the system prompt; to also keep a run from opening its files, leave `code-read` out of the run's autonomy, on the `demo` and `anthropic-api` backends — the `claude-cli` backend reads them whatever. ADR-002 is amended.
+- **`cortex sync` names whom to call when the theme changes** ([#397](https://github.com/xod-labs/cortex/issues/397)), as `cortex init` does, once. The theme read is recorded in `cortex.local.toml` as a comment, `# synced theme:`, which a cortex or a runtime of 1.9.x reads past. ADR-013 is amended.
+
+### Security
+- **A release is signed, and `cortex self-update` checks it** ([ADR-015](docs/adr/ADR-015-release-origin.md), [#275](https://github.com/xod-labs/cortex/issues/275)). The release workflow signs `SHA256SUMS` with an Ed25519 key, in a seventh asset, `SHA256SUMS.sig`; a binary embeds the primary and the backup public keys. `cortex self-update` checks the signature of a release from 1.10.0 on, and a release before it against the checksum it embeds — from GitHub or a mirror — and refuses, naming what was wrong, one unsigned, signed by an unknown key, or changed after it was signed. A mirror copies the seven assets. ADR-008, ADR-009 and ADR-010 are amended.
+- **A host other than GitHub's is named on every spec download** ([#275](https://github.com/xod-labs/cortex/issues/275)). `cortex sync`, `init` and `upgrade` say, once, where a spec comes from when `CORTEX_RELEASES_URL` or the machine's `releases_url` names another host, as `cortex self-update` does for the binary. ADR-010 is amended.
+- **A releases URL with a user part is refused, saying why** ([#275](https://github.com/xod-labs/cortex/issues/275)), redirects included, without printing the password. Such a URL never worked. A releases URL set with an `@` anywhere is refused too.
+
 ## [1.9.1] - 2026-11-21 — Brain the Size of a Planet _(Released)_
 [Full notes](changelog/1.9.1.md)
 
