@@ -66,6 +66,15 @@ def ssl_context() -> ssl.SSLContext:
     return context
 
 
+def _masked(url: str) -> str:
+    """``url`` with what comes before its last @ masked, scheme kept — a user part it may carry
+    never repeated, however malformed the URL (#275)."""
+    if "@" not in url:
+        return url
+    scheme, sep, rest = url.partition("://")
+    return (scheme + sep if sep else "") + "…@" + (rest if sep else url).rpartition("@")[2]
+
+
 def check_url(url: str) -> None:
     """Refuse a URL to download from that is neither https nor http to this machine, or that
     carries a user part — ``https://user:pass@host/``: urllib takes it as part of the host, so it
@@ -74,14 +83,14 @@ def check_url(url: str) -> None:
         parts = urllib.parse.urlsplit(url)
         host = parts.hostname
     except ValueError as error:
-        raise DownloadError(f"{url!r}: {error}")
+        raise DownloadError(f"{_masked(url)!r}: {error}")
     if "@" in parts.netloc:
         shown = urllib.parse.urlunsplit(parts._replace(netloc="…@" + parts.netloc.rpartition("@")[2]))
         raise DownloadError(f"{shown}: a URL with a user part, before @, is not downloaded from — no credentials "
                             "are sent: serve the releases where they can be read without them")
     if parts.scheme == "https" or (parts.scheme == "http" and host in LOOPBACK):
         return
-    raise DownloadError(f"{url}: only https is downloaded from — http only to this machine, for tests")
+    raise DownloadError(f"{_masked(url)}: only https is downloaded from — http only to this machine, for tests")
 
 
 class _CheckedRedirects(urllib.request.HTTPRedirectHandler):

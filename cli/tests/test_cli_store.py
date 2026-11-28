@@ -923,6 +923,17 @@ class NetTests(unittest.TestCase):
                                         "with a user part"):
                 store.releases_url()
 
+    def test_a_user_part_is_never_repeated_when_the_url_is_refused_otherwise(self):
+        # #275: the scheme forgotten, or a URL urllib cannot parse — refused before its user part is seen.
+        for url, shown in (("user:secret@mirror.example/r", "…@mirror.example/r"),
+                           ("https://user:secret@[bad/r", "https://…@[bad/r")):
+            with self.subTest(url=url):
+                with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": url}):
+                    with self.assertRaises(store.StoreError) as raised:
+                        store.releases_url()
+                self.assertNotIn("secret", str(raised.exception))
+                self.assertIn(shown, str(raised.exception))
+
     def test_the_releases_url_is_checked(self):
         from unittest import mock
 
