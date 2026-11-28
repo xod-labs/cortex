@@ -852,7 +852,8 @@ def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err:
     if root is None:
         raise SyncError(config.no_project(cwd))
     with project_lock(Path(root), err):
-        hint = _sync(root, mode, source, out, err, claude_access, notes, locked, announce, said, copilot_access, hints)
+        changed = _sync(root, mode, source, out, err, claude_access, notes, locked, announce, said, copilot_access,
+                        hints)
         if bootstraps is not None and source is None and not locked:
             from . import upgrade       # upgrade imports this module: the bootstraps are its
             project = config.load(root)
@@ -863,8 +864,15 @@ def sync(cwd: str, mode: Optional[str], source: Optional[str], out: TextIO, err:
                 err.write(f"note: {note}\n")
     if registers:
         register(root, out, err)
-    if hint is not None:
-        out.write(f"\n{hint}")         # last: whom to call, once all of the sync is said
+    if changed is not None:
+        hint, theme = changed
+        if hint is not None:
+            out.write(f"\n{hint}")     # last: whom to call, once all of the sync is said
+        # Recorded once said, never before: a step that failed in between would lose the hint for good (#397).
+        with project_lock(Path(root), err):
+            text = config.local_text(root)
+            if text is not None:
+                config.write_local_text(root, config.with_synced_theme(text, theme))
 
 
 def register(root: str, out: TextIO, err: TextIO) -> None:
@@ -1110,9 +1118,11 @@ def synced_record(project: config.Project, reads: str) -> Optional[Dict[str, str
 
 def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, err: TextIO,
           claude_access: Optional[bool], notes: bool, locked: bool = False, announce: bool = True,
-          said: Collection[str] = (), copilot_access: Optional[bool] = None, hints: bool = True) -> Optional[str]:
-    """The sync itself — and whom to call, when ``hints`` and the theme it reads is not the one the last sync
-    recorded: ``None`` when it is, or nothing is recorded yet, or with no personality (#397)."""
+          said: Collection[str] = (), copilot_access: Optional[bool] = None,
+          hints: bool = True) -> Optional[Tuple[Optional[str], str]]:
+    """The sync itself — and, when ``hints`` and the theme it reads is not the one the last sync recorded, whom to
+    call (``None`` with no personality) and that theme, which the caller records once it said whom to call: ``None``
+    when it is the one recorded, or nothing is recorded yet (#397)."""
     if source is None:
         # A version newer than this cortex, said before any key is checked (ADR-013 §3.8) — `--from`
         # checks no version, as before.
@@ -1205,7 +1215,8 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
     # The theme this sync reads, the developer's own over the team's, against the one the last sync recorded (#397).
     theme = project.active_theme
     before = config.synced_theme(config.local_text(root))
-    local_text = config.with_synced_theme(local_text, theme)
+    due = hints and before is not None and before != theme
+    local_text = config.with_synced_theme(local_text, before if due else theme)     # a hint due: recorded once said
     keep, new = False, None
     if mode == "link":
         keep = existing == "link" and os.path.normcase(link_target(target)) == os.path.normcase(str(spec_source))
@@ -1279,9 +1290,9 @@ def _sync(root: str, mode: Optional[str], source: Optional[str], out: TextIO, er
                                                               Path(project.team_dir) / "personalities" / theme)):
         err.write(f'warning: theme "{theme}" is neither in the spec nor in {project.team_folder}/personalities/ — '
                   "the Prompt Manager would not find it\n")
-    if hints and before is not None and before != theme:
+    if due:
         from . import init          # init imports this module: the hint is its
-        return init.theme_hint(Path(root), spec_source)
+        return init.theme_hint(Path(root), spec_source), theme
     return None
 
 

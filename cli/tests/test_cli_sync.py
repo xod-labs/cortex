@@ -1208,6 +1208,27 @@ class LockTests(SyncTestCase):
         self.assertIn("9.9.8", (project / "cortex.toml").read_text(encoding="utf-8"))
 
 
+class ThemeHintTests(SyncTestCase):
+    """Whom to call when the theme changed (#397): the theme recorded once it is said, never before."""
+
+    def test_a_sync_cut_short_after_its_write_leaves_the_hint_to_the_next(self):
+        sync, version = in_process()
+        project = self.project(version=version)
+        with mock.patch.dict(os.environ, {"CORTEX_HOME": str(self.home), "CORTEX_NO_REGISTER": "1"}):
+            sync.sync(str(project), None, None, io.StringIO(), io.StringIO())       # records h2g2
+            toml = project / "cortex.toml"
+            toml.write_text(toml.read_text(encoding="utf-8").replace('"h2g2"', '"breaking-bad"'), encoding="utf-8")
+            # A step after cortex.local.toml is written fails — its own write of Claude Code's settings, say.
+            with mock.patch.object(sync, "_claude", side_effect=OSError(errno.EIO, "cut short")):
+                with self.assertRaises(OSError):
+                    sync.sync(str(project), None, None, io.StringIO(), io.StringIO())
+            self.assertIn("# synced theme: h2g2 ", (project / "cortex.local.toml").read_text(encoding="utf-8"))
+            out = io.StringIO()
+            sync.sync(str(project), None, None, out, io.StringIO())
+        self.assertIn("Theme breaking-bad: @Saul, the prompt manager, takes every request", out.getvalue())
+        self.assertIn("# synced theme: breaking-bad ", (project / "cortex.local.toml").read_text(encoding="utf-8"))
+
+
 class SafetyTests(SyncTestCase):
     """Sync deletes nothing it did not write, and changes nothing before every check passed."""
 
