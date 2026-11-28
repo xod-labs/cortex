@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import http.client
 import os
+import re
 import ssl
 import urllib.error
 import urllib.parse
@@ -71,8 +72,8 @@ def _masked(url: str) -> str:
     never repeated, however malformed the URL (#275)."""
     if "@" not in url:
         return url
-    scheme, sep, rest = url.partition("://")
-    return (scheme + sep if sep else "") + "…@" + (rest if sep else url).rpartition("@")[2]
+    scheme = re.match(r"[A-Za-z][A-Za-z0-9+.-]*://", url)     # a scheme of its own, not a later "://"
+    return (scheme.group(0) if scheme else "") + "…@" + url.rpartition("@")[2]
 
 
 def check_url(url: str) -> None:
@@ -88,6 +89,8 @@ def check_url(url: str) -> None:
         shown = urllib.parse.urlunsplit(parts._replace(netloc="…@" + parts.netloc.rpartition("@")[2]))
         raise DownloadError(f"{shown}: a URL with a user part, before @, is not downloaded from — no credentials "
                             "are sent: serve the releases where they can be read without them")
+    if parts.scheme in ("https", "http") and not host:
+        raise DownloadError(f"{_masked(url)}: names no host — write it https://host/path")
     if parts.scheme == "https" or (parts.scheme == "http" and host in LOOPBACK):
         return
     raise DownloadError(f"{_masked(url)}: only https is downloaded from — http only to this machine, for tests")
@@ -116,12 +119,12 @@ def get(url: str, max_bytes: int, timeout: float = TIMEOUT, redirects: Optional[
         with opener.open(request, timeout=timeout) as response:
             data = response.read(max_bytes + 1)
     except urllib.error.HTTPError as error:
-        raise DownloadError(f"{url}: HTTP {error.code} {error.reason}")
+        raise DownloadError(f"{_masked(url)}: HTTP {error.code} {error.reason}")
     except (urllib.error.URLError, OSError) as error:
         reason = getattr(error, "reason", error)
-        raise DownloadError(f"{url}: {reason}")
+        raise DownloadError(f"{_masked(url)}: {reason}")
     except (ValueError, http.client.HTTPException) as error:   # InvalidURL: a control character in it
         raise DownloadError(f"{url!r}: {error}")
     if len(data) > max_bytes:
-        raise DownloadError(f"{url}: larger than {max_bytes} bytes")
+        raise DownloadError(f"{_masked(url)}: larger than {max_bytes} bytes")
     return data

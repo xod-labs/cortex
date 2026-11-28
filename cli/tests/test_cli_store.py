@@ -926,7 +926,12 @@ class NetTests(unittest.TestCase):
     def test_a_user_part_is_never_repeated_when_the_url_is_refused_otherwise(self):
         # #275: the scheme forgotten, or a URL urllib cannot parse — refused before its user part is seen.
         for url, shown in (("user:secret@mirror.example/r", "…@mirror.example/r"),
-                           ("https://user:secret@[bad/r", "https://…@[bad/r")):
+                           ("https://user:secret@[bad/r", "https://…@[bad/r"),
+                           ("user:secret@host/r?next=https://x", "…@host/r?next=https://x"),
+                           ("user:secret@host/r#https://x", "…@host/r#https://x"),
+                           ("https:/user:secret@host/r", "…@host/r"),
+                           ("https:user:secret@host/r", "…@host/r"),
+                           ("https:///user:secret@host/r", "https://…@host/r")):
             with self.subTest(url=url):
                 with mock.patch.dict(os.environ, {"CORTEX_RELEASES_URL": url}):
                     with self.assertRaises(store.StoreError) as raised:
